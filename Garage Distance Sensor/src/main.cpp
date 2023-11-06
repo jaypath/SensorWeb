@@ -9,6 +9,10 @@
 #define ARDID 70
 #define NUMSERVERS 3
 #define SENSORNUM 3
+#define SCREEN_DRAW 400 //in ms, wait between each screen draw
+#define INVERT //if defined, do inversion when in stop zone
+#define INVERT_TIME 333 //in ms
+
 
 const uint8_t SENSORTYPES[SENSORNUM] = {7,1,2};
 const uint8_t MONITORED_SNS = 255;
@@ -35,10 +39,7 @@ const uint8_t OUTSIDE_SNS = 0;
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
-int16_t tfAddr = 0x10; // Default I2C address
-
-
-#define GOLDILOCKS_ZONE 3 //inches from 0 that are considered perfect
+int16_t tfAddr = 0x10; // Default I2C address for Tfluna
 
 //Code to draw to the screen
 #include <MD_Parola.h>
@@ -61,10 +62,6 @@ int16_t tfAddr = 0x10; // Default I2C address
 #define CLK_PIN     D5
 #define DATA_PIN    D7
 
-#define SCREEN_DRAW 400 //in ms, wait between each screen draw
-
-#define INVERT
-#define INVERT_TIME 333 //in ms
 
 //#define DEBUG
 
@@ -97,6 +94,10 @@ struct IP_TYPE {
 };
 
 //globals
+u8 GOLDILOCKS_ZONE = 3; //inches from 0 that are considered perfect
+u32 CHANGETOCLOCK = 60000; //in sec, time to change to clock if dist hasn't changed
+u8 NOWSHOWINCHES = 24;
+
 //measurements In inches
 IP_TYPE MYIP; //my IP
 IP_TYPE SERVERIP[3];
@@ -104,12 +105,13 @@ SensorVal Sensors[3]; //up to 2 sensors will be monitored
 u32  STABLETIME;
 time_t LASTTIMEUPDATE;
 u8 LASTMINUTEDRAWN = 0;
-i16 OFFSET = 30;
+i16 OFFSET = 28;
 bool INVERTED = false;
 u32 LASTINVERT = 0;
 u32 LASTDRAW = 0;
 i16 OLDDIST= 0;
 i16 DIST = 0;
+
 bool GARAGEOPEN = false;
 char DATESTRING[24]=""; //holds up to hh:nn:ss day mm/dd/yyy
 ESP8266WebServer server(80);
@@ -467,9 +469,9 @@ void distStr(char* msg,  bool showNegatives) {
     return;
   }
 
-  //If distance is less than 12 inches, dislay as X inches
+  //If distance is less than NOWSHOWINCHES inches, dislay as X inches
   //Otherwise display as X feet
-  if (DIST < 12) sprintf(msg, "%i in", DIST);
+  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", DIST);
   else sprintf(msg, "%i ft", (int)(DIST / 12));
 }
 
@@ -477,31 +479,31 @@ void distStr(char* msg,  bool showNegatives) {
 
 void loop()
 {
-  ArduinoOTA.handle();
-  server.handleClient();
-  timeClient.update();
   u32 t = millis();
   u32 n = now();
 
+  char msg[10];
+
+
+//1. get distance, this function also compares to prior dist (OLDDIST) and sets the stabletime to ms if DIST changed
   getDistance();
 
 
-
-  char msg[10];
-
-  if (t - STABLETIME > 15000) {
+  if (t - STABLETIME > CHANGETOCLOCK) { // distance hasn't changed in a while, do stabletime things like draw clock and handle requests
+    ArduinoOTA.handle();
+    server.handleClient();
+    timeClient.update();
     if (n - LASTTIMEUPDATE >3600)       LASTTIMEUPDATE= timeUpdate();
     
-    //distance has been stable for 15 seconds
     if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
     LASTMINUTEDRAWN = minute();
     screen.displayClear();
-    screen.setTextAlignment(PA_CENTER);        
+    screen.setTextAlignment(PA_CENTER);       
+    screen.setInvert(INVERTED = false); 
     sprintf(msg,"%d:%02d",hour(),minute());
     screen.print(msg);
     
-
-    //perform maintenance ... send to server
+    //perform maintenance ... send to server... do stuff that shouldn't be done when in measurement mode
     for (byte k=0;k<SENSORNUM;k++) {
       bool flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
@@ -514,9 +516,11 @@ void loop()
 
   }  
  
-  
-  if (!(millis() - LASTDRAW >= SCREEN_DRAW || (OLDDIST > GOLDILOCKS_ZONE && DIST <= GOLDILOCKS_ZONE ))) return; //don't redraw if it's not time
+  //otherwise, 2. determine if it is time to redraw dist
+  if (!(millis() - LASTDRAW >= SCREEN_DRAW || (OLDDIST > GOLDILOCKS_ZONE && DIST <= GOLDILOCKS_ZONE ))) return; //don't redraw if it's not time or unless we crossed the GL bound
 
+
+//3. show distance measurement. Decide if it should be inverting or not.
   #ifdef DEBUG_
     Serial.print("Dist: ");
     Serial.println(DIST);
@@ -525,11 +529,12 @@ void loop()
 
 
   #ifdef INVERT
-    if ((int) DIST < GOLDILOCKS_ZONE && millis() - LASTINVERT >= INVERT_TIME) {
+    if ((int) DIST <= GOLDILOCKS_ZONE && millis() - LASTINVERT >= INVERT_TIME) {
       INVERTED = !INVERTED;
-      screen.setInvert(INVERTED);
       LASTINVERT = t;
-    } else if (DIST >= GOLDILOCKS_ZONE) screen.setInvert(INVERTED = false);
+    } else INVERTED = false;
+    screen.setInvert(INVERTED);
+
   #endif
 
   distStr(msg,  true);
@@ -542,6 +547,9 @@ void handlePost() {
 
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"OFFSET") OFFSET = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"NOWSHOWINCHES") NOWSHOWINCHES = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"GOLDILOCKS_ZONE") GOLDILOCKS_ZONE = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"CHANGETOCLOCK") CHANGETOCLOCK = server.arg(k).toInt();
   }
 
 
@@ -566,10 +574,17 @@ void handleRoot() {
   currentLine += "<FORM action=\"/POST\" method=\"get\">";
   currentLine += "<p style=\"font-family:monospace\">";
 
-  currentLine += "<label for=\"ZeroOffset\">Zero Offset: </label>";
+  currentLine += "<label for=\"ZeroOffset\">Zero Offset (in): </label>";
   currentLine += "<input type=\"text\" id=\"ZeroOffset\" name=\"OFFSET\" value=\"" + (String) OFFSET  + "\"><br>";  
+  currentLine += "<label for=\"DistToShowInches\">Change to inches at this distance (in): </label>";
+  currentLine += "<input type=\"text\" id=\"DistToShowInches\" name=\"NOWSHOWINCHES\" value=\"" + (String) NOWSHOWINCHES  + "\"><br>";  
+  currentLine += "<label for=\"SHOWSTOP\">Show stop at this distance (in): </label>";
+  currentLine += "<input type=\"text\" id=\"SHOWSTOP\" name=\"GOLDILOCKS_ZONE\" value=\"" + (String) GOLDILOCKS_ZONE  + "\"><br>";  
+  currentLine += "<label for=\"CHANGETOCLOCK\">If no distance change, show clock after (ms): </label>";
+  currentLine += "<input type=\"text\" id=\"CHANGETOCLOCK\" name=\"CHANGETOCLOCK\" value=\"" + (String) CHANGETOCLOCK  + "\"><br>";  
 
-  currentLine += "<button type=\"submit\" formaction=\"/POST\">Change Offset</button><br><br>";
+
+  currentLine += "<button type=\"submit\" formaction=\"/POST\">Update settings</button><br><br>";
 
   currentLine += "</p>";
   currentLine += "</form>";
