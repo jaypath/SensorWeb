@@ -3,7 +3,17 @@
 #include <Wire.h>
 #include <Arduino.h> // Every sketch needs this
 #include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
 #include <ArduinoOTA.h>
+
+//Code to draw to the screen
+#include <MD_Parola.h>
+#include <MD_MAX72xx.h>
+#include <SPI.h>
+
+#include <ESP8266HTTPClient.h>
+
+#include "timesetup.h"
 
 #define ARDID 70
 #define NUMSERVERS 3
@@ -12,7 +22,7 @@
 #define INVERT //if defined, do inversion when in stop zone
 #define INVERT_TIME 333 //in ms
 
-const char* ARDNAME = "GARAGE";
+#define MAX_NEGLIGIBLE_DIST_CHANGE 1 //Max # of inches the distance can change before we consider it a distance change
 
 #define DHT_temp 1
 #define DHT_rh 2
@@ -26,14 +36,22 @@ const char* ARDNAME = "GARAGE";
 #define BME_rh 15
 #define BME_alt 16
 
-const uint8_t SENSORTYPES[SENSORNUM] = {ultrasonic_dist, DHT_temp, DHT_rh};
-const uint8_t MONITORED_SNS = 255;
-const uint8_t OUTSIDE_SNS = 0;
+#define nullpin 0
 
 #define DHTTYPE    DHT22     // DHT11 or DHT22
 #define DHTPIN D6
 #define _USETFLUNA
 
+const char* ARDNAME = "GARAGE";
+
+typedef uint8_t u8;
+typedef int16_t i16;
+// typedef uint16_t u16;
+typedef uint32_t u32;
+
+const u8 SENSORTYPES[SENSORNUM] = {ultrasonic_dist, DHT_temp, DHT_rh};
+const u8 MONITORED_SNS = 255;
+const u8 OUTSIDE_SNS = 0;
 
 #ifdef _USETFLUNA
   #include <TFLI2C.h> // TFLuna-I2C Library v.0.1.0
@@ -44,26 +62,14 @@ const uint8_t OUTSIDE_SNS = 0;
  //  #include <Adafruit_Sensor.h>
   #include <DHT.h>
 
-  DHT dht(DHTPIN,DHTTYPE); //third parameter is for faster cpu, 8266 suggested parameter is 11
+  DHT dht(DHTPIN, DHTTYPE); //third parameter is for faster cpu, 8266 suggested parameter is 11
 #endif
 
 
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
-int16_t tfAddr = 0x10; // Default I2C address for Tfluna
-
-//Code to draw to the screen
-#include <MD_Parola.h>
-#include <MD_MAX72xx.h>
-#include <SPI.h>
-
-#include <ESP8266HTTPClient.h>
-
-
-#include "timesetup.h"
-
-#include <ESP8266WebServer.h>
+i16 tfAddr = 0x10; // Default I2C address for Tfluna
 
 //Defining variables for the LED display:
 //FOR HARDWARE TYPE, only uncomment the only that fits your hardware type
@@ -79,11 +85,6 @@ int16_t tfAddr = 0x10; // Default I2C address for Tfluna
 
 MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
 //MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
-
-typedef uint8_t u8;
-typedef int16_t i16;
-// typedef uint16_t u16;
-typedef uint32_t u32;
 
 struct SensorVal {
   u8  snsType ;
@@ -111,10 +112,10 @@ u32 CHANGETOCLOCK = 60000; //in milliseconds, time to change to clock if dist ha
 u8 NOWSHOWINCHES = 24;
 
 //measurements In inches
-IP_TYPE MYIP; //my IP
+IP_TYPE arduino_IP; //my IP
 IP_TYPE SERVERIP[3];
 SensorVal Sensors[3]; //up to 2 sensors will be monitored
-u32  STABLETIME;
+u32  LAST_DIST_CHANGE = millis();
 time_t LASTTIMEUPDATE;
 u8 LASTMINUTEDRAWN = 0;
 i16 OFFSET = 28;
@@ -125,31 +126,35 @@ i16 OLDDIST= 0;
 i16 DIST = 0;
 
 bool GARAGEOPEN = false;
-char DATESTRING[24]=""; //holds up to hh:nn:ss day mm/dd/yyy
+char DATESTRING[24] = ""; //holds up to hh:nn:ss day mm/dd/yyy
 ESP8266WebServer server(80);
 
 bool ReadData(struct SensorVal*);
 bool SendData(struct SensorVal*);
-void handlePost();
-void handleRoot();              // function prototypes for HTTP handlers
-void handleNotFound();
+void handlePost(void);
+void handleRoot(void);          // function prototypes for HTTP handlers
+void handleNotFound(void);
 String fcnDOW(time_t);
 char* dateify(time_t, String);
 
-void handleNotFound(){
+void handleNotFound(void) {
   server.send(404, "text/plain", "GarageDistance says: 404 Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
 }
 
+String DOWs[7] = {
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat"
+};
 String fcnDOW(time_t t) {
-    if (weekday(t) == 1) return "Sun";
-    if (weekday(t) == 2) return "Mon";
-    if (weekday(t) == 3) return "Tue";
-    if (weekday(t) == 4) return "Wed";
-    if (weekday(t) == 5) return "Thu";
-    if (weekday(t) == 6) return "Fri";
-    if (weekday(t) == 7) return "Sat";
+  int day_of_week = weekday(t);
+  if (day_of_week >= 1 && day_of_week <= 7) return DOWs[day_of_week - 1];
 
-    return "???";
+  return "???";
 }
 
 char* dateify(time_t t, String dateformat) {
@@ -186,21 +191,25 @@ char* dateify(time_t t, String dateformat) {
   return DATESTRING;  
 }
 
-
-
 void getDistance(void) {
   OLDDIST = DIST;
-  tflI2C.getData( DIST, tfAddr);
-  if (DIST<=0) {
+
+  i16 temporary_dist = 0;
+  
+  tflI2C.getData(temporary_dist, tfAddr);
+  if (temporary_dist <= 0) {
     DIST=-1000;
     return;
   }
 
-  DIST=DIST/2.54 - OFFSET;
+  temporary_dist = temporary_dist / 2.54 - OFFSET;
 
-  if (abs(DIST-OLDDIST) > 1)   STABLETIME = millis();
+  //If the distance hasn't changed at all or has changed a negligble amount,
+  //don't update the last distance change time nor the distance.
+  if (abs(temporary_dist - OLDDIST) < MAX_NEGLIGIBLE_DIST_CHANGE)  return;
 
-  return; //return inches
+  LAST_DIST_CHANGE = millis();
+  DIST = temporary_dist;
 }
 
 void initSensor(byte k) {
@@ -212,11 +221,11 @@ void initSensor(byte k) {
   Sensors[k].SendingInt = 0;
   Sensors[k].LastReadTime = 0;
   Sensors[k].LastSendTime = 0;  
-  Sensors[k].Flags =0; 
+  Sensors[k].Flags = 0; 
 }
 
-uint8_t findSensor(byte snsType, byte snsID) {
-  for (byte j=0;j<SENSORNUM;j++)  {
+u8 findSensor(byte snsType, byte snsID) {
+  for (byte j = 0; j < SENSORNUM; j++)  {
     if (Sensors[j].snsID == snsID && Sensors[j].snsType == snsType) return j; 
   }
   return 255;  
@@ -229,7 +238,117 @@ bool checkSensorValFlag(struct SensorVal *P) {
 return bitRead(P->Flags,0);
 
 }
+void initSensorsBasedOnType(void) {
+  for (byte i = 0;i < SENSORNUM; i++) {
+    Sensors[i].snsType=SENSORTYPES[i];
+    Sensors[i].snsID=1; //increment this if there are others of the same type, should not occur
+    Sensors[i].Flags = 0;
+    if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
+    else bitWrite(Sensors[i].Flags,1,0);
+    
+    if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
+    else bitWrite(Sensors[i].Flags,2,0);
 
+    switch (SENSORTYPES[i]) {
+      #ifdef DHTTYPE
+      case DHT_temp:
+          Sensors[i].snsPin=DHTPIN;
+          sprintf(Sensors[i].snsName,"%s_T",ARDNAME);
+          Sensors[i].limitUpper = 90;
+          Sensors[i].limitLower = 45;
+          Sensors[i].PollingInt=60;
+          Sensors[i].SendingInt=5*60;
+        break;
+      case DHT_rh:
+          Sensors[i].snsPin=DHTPIN;
+          sprintf(Sensors[i].snsName,"%s_RH",ARDNAME);
+          Sensors[i].limitUpper = 75;
+          Sensors[i].limitLower = 20;
+          Sensors[i].PollingInt=60;
+          Sensors[i].SendingInt=5*60;
+        break;
+      #endif
+      case ultrasonic_dist:
+        Sensors[i].snsPin = nullpin; //not used
+        sprintf(Sensors[i].snsName,"%s_Dist",ARDNAME);
+        Sensors[i].limitUpper = 250;
+        Sensors[i].limitLower = -5;
+        Sensors[i].PollingInt=60;
+        Sensors[i].SendingInt=5*60;
+        break;
+      case BMP_pressure:
+        Sensors[i].snsPin = 0; //i2c
+        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        Sensors[i].limitUpper = 1022; //normal is 1013
+        Sensors[i].limitLower = 1009;
+        Sensors[i].PollingInt=30*60;
+        Sensors[i].SendingInt=60*60;
+        break;
+      case BMP_temp:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_BMP_t",ARDNAME);
+        Sensors[i].limitUpper = 85;
+        Sensors[i].limitLower = 65;
+        Sensors[i].PollingInt=120;
+        Sensors[i].SendingInt=120;
+        break;
+      case BMP_alt:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        Sensors[i].limitUpper = 100;
+        Sensors[i].limitLower = -5;
+        Sensors[i].PollingInt=60000;
+        Sensors[i].SendingInt=60000;
+        break;
+      case bar_prediction:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_Pred",ARDNAME);
+        Sensors[i].limitUpper = 0;
+        Sensors[i].limitLower = 0; //anything over 0 is an alarm
+        Sensors[i].PollingInt=60*60;
+        Sensors[i].SendingInt=60*60;
+        bitWrite(Sensors[i].Flags,3,1); //calculated
+        bitWrite(Sensors[i].Flags,4,1); //predictive
+        break;
+      case BME_pressure:
+        Sensors[i].snsPin = nullpin; //i2c
+        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        Sensors[i].limitUpper = 1022; //normal is 1013
+        Sensors[i].limitLower = 1009;
+        Sensors[i].PollingInt=30*60;
+        Sensors[i].SendingInt=60*60;
+        break;
+      case BME_temp:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_BMEt",ARDNAME);
+        Sensors[i].limitUpper = 85;
+        Sensors[i].limitLower = 65;
+        Sensors[i].PollingInt=120;
+        Sensors[i].SendingInt=5*60;
+        break;
+      case BME_rh:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_BMErh",ARDNAME);
+        Sensors[i].limitUpper = 65;
+        Sensors[i].limitLower = 25;
+        Sensors[i].PollingInt=120;
+        Sensors[i].SendingInt=5*60;
+        break;
+      case BME_alt:
+        Sensors[i].snsPin = nullpin;
+        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        Sensors[i].limitUpper = 100;
+        Sensors[i].limitLower = -5;
+        Sensors[i].PollingInt=15*60*60;
+        Sensors[i].SendingInt=15*60*60;
+        break;
+    }
+
+    Sensors[i].snsValue=0;
+    Sensors[i].LastReadTime=0;
+    Sensors[i].LastSendTime=0;
+  }
+}
 
 void setup()
 {
@@ -245,15 +364,11 @@ void setup()
     Serial.println("start");
   #endif
 
-
   #ifdef DEBUG_
     Serial.println("try wifi...");
-
   #endif
 
-    WiFi.begin(ESP_SSID, ESP_PASS);
-
-
+  WiFi.begin(ESP_SSID, ESP_PASS);
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(200);
@@ -263,7 +378,7 @@ void setup()
     #endif
   }
 
-  MYIP.IP = WiFi.localIP();
+  arduino_IP.IP = WiFi.localIP();
 
    ArduinoOTA.setHostname("GarageDistance");
   ArduinoOTA.onError([](ota_error_t error) {
@@ -325,124 +440,8 @@ void setup()
 
   for (byte i=0;i<SENSORNUM;i++) {
     initSensor(i);
-  }  
-
-
-
- for (byte i=0;i<SENSORNUM;i++) {
-    Sensors[i].snsType=SENSORTYPES[i];
-    Sensors[i].snsID=1; //increment this if there are others of the same type, should not occur
-    Sensors[i].Flags = 0;
-    if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
-    else bitWrite(Sensors[i].Flags,1,0);
-    
-    if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
-    else bitWrite(Sensors[i].Flags,2,0);
-
-    switch (SENSORTYPES[i]) {
-      case DHT_temp:
-        #ifdef DHTTYPE
-          Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_T",ARDNAME);
-          Sensors[i].limitUpper = 90;
-          Sensors[i].limitLower = 45;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=5*60;          
-        #endif
-        break;
-      case DHT_rh:
-        #ifdef DHTTYPE
-          Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_RH",ARDNAME);
-          Sensors[i].limitUpper = 75;
-          Sensors[i].limitLower = 20;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=5*60;
-        #endif
-        break;
-      case ultrasonic_dist:
-        Sensors[i].snsPin=0; //not used
-        sprintf(Sensors[i].snsName,"%s_Dist",ARDNAME);
-        Sensors[i].limitUpper = 250;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=60;
-        Sensors[i].SendingInt=5*60;
-        break;
-      case BMP_pressure:
-        Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
-        break;
-      case BMP_temp:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMP_t",ARDNAME);
-        Sensors[i].limitUpper = 85;
-        Sensors[i].limitLower = 65;
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=120;
-        break;
-      case BMP_alt:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=60000;
-        Sensors[i].SendingInt=60000;
-        break;
-      case bar_prediction:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_Pred",ARDNAME);
-        Sensors[i].limitUpper = 0;
-        Sensors[i].limitLower = 0; //anything over 0 is an alarm
-        Sensors[i].PollingInt=60*60;
-        Sensors[i].SendingInt=60*60;
-        bitWrite(Sensors[i].Flags,3,1); //calculated
-        bitWrite(Sensors[i].Flags,4,1); //predictive
-        break;
-      case BME_pressure:
-        Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
-        break;
-      case BME_temp:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMEt",ARDNAME);
-        Sensors[i].limitUpper = 85;
-        Sensors[i].limitLower = 65;
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
-        break;
-      case BME_rh:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMErh",ARDNAME);
-        Sensors[i].limitUpper = 65;
-        Sensors[i].limitLower = 25;
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
-        break;
-      case BME_alt:
-        Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=15*60*60;
-        Sensors[i].SendingInt=15*60*60;
-        break;
-    }
-
-    Sensors[i].snsValue=0;
-    Sensors[i].LastReadTime=0;
-    Sensors[i].LastSendTime=0;  
-
   }
-
-
+  initSensorsBasedOnType();
 
   #ifdef DEBUG_
     Serial.println("Set up webserver...");
@@ -467,10 +466,9 @@ void distStr(char* msg,  bool showNegatives) {
     return;
   }
 
-  GARAGEOPEN = false;
-  if (DIST<-500) {
+  GARAGEOPEN = DIST < -500;
+  if (GARAGEOPEN) {
     sprintf(msg, "OPEN");
-    GARAGEOPEN = true;
     return;
   }
 
@@ -491,29 +489,20 @@ void distStr(char* msg,  bool showNegatives) {
 
 void loop()
 {
-  u32 t = millis();
+  u32 current_millis = millis();
   u32 n = now();
 
   char msg[10];
 
-
-//1. get distance, this function also compares to prior dist (OLDDIST) and sets the stabletime to ms if DIST changed
+  //1. get distance, this function also compares to prior dist (OLDDIST) and sets the last distance change time to ms if DIST changed
   getDistance();
 
 
-  if (t - STABLETIME > CHANGETOCLOCK) { // distance hasn't changed in a while, do stabletime things like draw clock and handle requests
+  if (current_millis - LAST_DIST_CHANGE > CHANGETOCLOCK) { // distance hasn't changed in a while, do last didstance change time things like draw clock and handle requests
     ArduinoOTA.handle();
     server.handleClient();
     timeClient.update();
-    if (n - LASTTIMEUPDATE >3600)       LASTTIMEUPDATE= timeUpdate();
-    
-    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
-    LASTMINUTEDRAWN = minute();
-    screen.displayClear();
-    screen.setTextAlignment(PA_CENTER);       
-    screen.setInvert(INVERTED = false); 
-    sprintf(msg,"%d:%02d",hour(),minute());
-    screen.print(msg);
+    if (n - LASTTIMEUPDATE > 3600) LASTTIMEUPDATE = timeUpdate();
     
     //perform maintenance ... send to server... do stuff that shouldn't be done when in measurement mode
     for (byte k=0;k<SENSORNUM;k++) {
@@ -523,6 +512,15 @@ void loop()
       
       if ((Sensors[k].LastSendTime + Sensors[k].SendingInt < n || flagstatus != bitRead(Sensors[k].Flags,0)) || n-Sensors[k].LastSendTime>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
+
+    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
+    LASTMINUTEDRAWN = minute();
+    
+    screen.displayClear();
+    screen.setTextAlignment(PA_CENTER);       
+    screen.setInvert(INVERTED = false); 
+    sprintf(msg,"%d:%02d",hour(),minute());
+    screen.print(msg);
 
     return;
 
@@ -543,7 +541,7 @@ void loop()
   #ifdef INVERT
     if ((int) DIST <= GOLDILOCKS_ZONE && millis() - LASTINVERT >= INVERT_TIME) {
       INVERTED = !INVERTED;
-      LASTINVERT = t;
+      LASTINVERT = current_millis;
     } else INVERTED = false;
     screen.setInvert(INVERTED);
 
@@ -551,11 +549,11 @@ void loop()
 
   distStr(msg,  true);
   screen.print(msg);
-  LASTDRAW = t;
+  LASTDRAW = current_millis;
 
 }
 
-void handlePost() {
+void handlePost(void) {
 
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"OFFSET") OFFSET = server.arg(k).toInt();
@@ -571,14 +569,16 @@ void handlePost() {
 
 }
 
-void handleRoot() {
+void handleRoot(void) {
 
   String currentLine = "<!DOCTYPE html><html><head><title>Garage Distance Sensor</title></head><body>";
 
-  currentLine = currentLine + "<h2>" + dateify(now(),"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br><br>";
+  char* now_date = dateify(now(), "DOW mm/dd/yyyy hh:nn:ss");
+  currentLine = currentLine + "<h2>" + now_date + "</h2><br><br>";
 
-  if (GARAGEOPEN)     currentLine = currentLine + "   GarageDoor: OPEN @" + dateify(now(),"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
-  else currentLine = currentLine + "   GarageDoor: CLOSED @" + dateify(now(),"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  if (GARAGEOPEN)     currentLine = currentLine + "   GarageDoor: OPEN @" + now_date + "<br>";
+  else currentLine = currentLine + "   GarageDoor: CLOSED @" + now_date + "<br>";
+
   currentLine = currentLine + "   CurrentDistance: " + (String) DIST + " inches<br>";
   currentLine = currentLine + "   Garage Temperature: " + (String) Sensors[1].snsValue + "F @" + dateify(Sensors[1].LastReadTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   currentLine = currentLine + "   Garage RH: " + (String) Sensors[2].snsValue + "% @" + dateify(Sensors[2].LastReadTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
@@ -600,8 +600,6 @@ void handleRoot() {
 
   currentLine += "</p>";
   currentLine += "</form>";
-
-
     
   server.send(200, "text/html", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
@@ -623,7 +621,7 @@ bool SendData(struct SensorVal *snsreading) {
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + MYIP.IP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + arduino_IP.IP.toString() + ",&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
