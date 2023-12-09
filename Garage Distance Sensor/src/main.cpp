@@ -86,18 +86,18 @@ typedef int16_t i16;
 typedef uint32_t u32;
 
 struct SensorVal {
-  uint8_t  snsType ;
-  uint8_t snsID;
-  uint8_t snsPin;
+  u8  snsType ;
+  u8 snsID;
+  u8 snsPin;
   char snsName[20];
   double snsValue;
   double limitUpper;
   double limitLower;
   uint16_t PollingInt;
   uint16_t SendingInt;
-  uint32_t LastReadTime;
-  uint32_t LastSendTime;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value
+  u32 LastReadTime;
+  u32 LastSendTime;  
+  u8 Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value
 };
 
 struct IP_TYPE {
@@ -107,7 +107,7 @@ struct IP_TYPE {
 
 //globals
 u8 GOLDILOCKS_ZONE = 3; //inches from 0 that are considered perfect
-u32 CHANGETOCLOCK = 60000; //in sec, time to change to clock if dist hasn't changed
+u32 CHANGETOCLOCK = 60000; //in milliseconds, time to change to clock if dist hasn't changed
 u8 NOWSHOWINCHES = 24;
 
 //measurements In inches
