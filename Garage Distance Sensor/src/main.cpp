@@ -5,7 +5,6 @@
 #include <ESP8266WiFi.h>
 #include <ArduinoOTA.h>
 
-#define ARDNAME "GARAGE"
 #define ARDID 70
 #define NUMSERVERS 3
 #define SENSORNUM 3
@@ -13,8 +12,21 @@
 #define INVERT //if defined, do inversion when in stop zone
 #define INVERT_TIME 333 //in ms
 
+const char* ARDNAME = "GARAGE";
 
-const uint8_t SENSORTYPES[SENSORNUM] = {7,1,2};
+#define DHT_temp 1
+#define DHT_rh 2
+#define ultrasonic_dist 7
+#define BMP_pressure 9
+#define BMP_temp 10
+#define BMP_alt 11
+#define bar_prediction 12
+#define BME_pressure 13
+#define BME_temp 14
+#define BME_rh 15
+#define BME_alt 16
+
+const uint8_t SENSORTYPES[SENSORNUM] = {ultrasonic_dist, DHT_temp, DHT_rh};
 const uint8_t MONITORED_SNS = 255;
 const uint8_t OUTSIDE_SNS = 0;
 
@@ -328,7 +340,7 @@ void setup()
     else bitWrite(Sensors[i].Flags,2,0);
 
     switch (SENSORTYPES[i]) {
-      case 1: //DHT temp
+      case DHT_temp:
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
           sprintf(Sensors[i].snsName,"%s_T",ARDNAME);
@@ -338,7 +350,7 @@ void setup()
           Sensors[i].SendingInt=5*60;          
         #endif
         break;
-      case 2: //DHT RH
+      case DHT_rh:
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
           sprintf(Sensors[i].snsName,"%s_RH",ARDNAME);
@@ -348,7 +360,7 @@ void setup()
           Sensors[i].SendingInt=5*60;
         #endif
         break;
-      case 7: //dist
+      case ultrasonic_dist:
         Sensors[i].snsPin=0; //not used
         sprintf(Sensors[i].snsName,"%s_Dist",ARDNAME);
         Sensors[i].limitUpper = 250;
@@ -356,7 +368,7 @@ void setup()
         Sensors[i].PollingInt=60;
         Sensors[i].SendingInt=5*60;
         break;
-      case 9: //BMP pres
+      case BMP_pressure:
         Sensors[i].snsPin=0; //i2c
         sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
@@ -364,7 +376,7 @@ void setup()
         Sensors[i].PollingInt=30*60;
         Sensors[i].SendingInt=60*60;
         break;
-      case 10: //BMP temp
+      case BMP_temp:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_BMP_t",ARDNAME);
         Sensors[i].limitUpper = 85;
@@ -372,7 +384,7 @@ void setup()
         Sensors[i].PollingInt=120;
         Sensors[i].SendingInt=120;
         break;
-      case 11: //BMP alt
+      case BMP_alt:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
@@ -380,7 +392,7 @@ void setup()
         Sensors[i].PollingInt=60000;
         Sensors[i].SendingInt=60000;
         break;
-      case 12: //Bar prediction
+      case bar_prediction:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_Pred",ARDNAME);
         Sensors[i].limitUpper = 0;
@@ -390,7 +402,7 @@ void setup()
         bitWrite(Sensors[i].Flags,3,1); //calculated
         bitWrite(Sensors[i].Flags,4,1); //predictive
         break;
-      case 13: //BME pres
+      case BME_pressure:
         Sensors[i].snsPin=0; //i2c
         sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
@@ -398,7 +410,7 @@ void setup()
         Sensors[i].PollingInt=30*60;
         Sensors[i].SendingInt=60*60;
         break;
-      case 14: //BMEtemp
+      case BME_temp:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_BMEt",ARDNAME);
         Sensors[i].limitUpper = 85;
@@ -406,7 +418,7 @@ void setup()
         Sensors[i].PollingInt=120;
         Sensors[i].SendingInt=5*60;
         break;
-      case 15: //bme rh
+      case BME_rh:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_BMErh",ARDNAME);
         Sensors[i].limitUpper = 65;
@@ -414,7 +426,7 @@ void setup()
         Sensors[i].PollingInt=120;
         Sensors[i].SendingInt=5*60;
         break;
-      case 16: //bme alt
+      case BME_alt:
         Sensors[i].snsPin=0;
         sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
