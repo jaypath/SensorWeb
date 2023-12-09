@@ -1,4 +1,4 @@
-//#define DEBUG_
+S//#define DEBUG_
 
 #include <Wire.h>
 #include <Arduino.h> // Every sketch needs this
@@ -101,21 +101,16 @@ struct SensorVal {
   u8 Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value
 };
 
-struct IP_TYPE {
-  IPAddress IP;
-  int server_status;
-};
-
 //globals
 u8 GOLDILOCKS_ZONE = 3; //inches from 0 that are considered perfect
 u32 CHANGETOCLOCK = 60000; //in milliseconds, time to change to clock if dist hasn't changed
 u8 NOWSHOWINCHES = 24;
 
 //measurements In inches
-IP_TYPE arduino_IP; //my IP
-IP_TYPE SERVERIP[3];
-SensorVal Sensors[3]; //up to 2 sensors will be monitored
-u32  LAST_DIST_CHANGE = millis();
+IPAddress arduino_IP; //my IP
+IPAddress SERVERIP[3];
+SensorVal Sensors[SENSORNUM]; //up to 2 sensors will be monitored
+u32 LAST_DIST_CHANGE = millis();
 time_t LASTTIMEUPDATE;
 u8 LASTMINUTEDRAWN = 0;
 i16 OFFSET = 28;
@@ -352,9 +347,9 @@ void initSensorsBasedOnType(void) {
 
 void setup()
 {
-  SERVERIP[0].IP = {192,168,68,93};
-  SERVERIP[1].IP = {192,168,68,106};
-  SERVERIP[2].IP = {192,168,68,104};
+  SERVERIP[0] = {192,168,68,93};
+  SERVERIP[1] = {192,168,68,106};
+  SERVERIP[2] = {192,168,68,104};
 
   Wire.begin(); // Initalize Wire library
 
@@ -378,7 +373,7 @@ void setup()
     #endif
   }
 
-  arduino_IP.IP = WiFi.localIP();
+  arduino_IP = WiFi.localIP();
 
    ArduinoOTA.setHostname("GarageDistance");
   ArduinoOTA.onError([](ota_error_t error) {
@@ -621,7 +616,7 @@ bool SendData(struct SensorVal *snsreading) {
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + arduino_IP.IP.toString() + ",&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + arduino_IP.toString() + ",&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -631,7 +626,7 @@ bool SendData(struct SensorVal *snsreading) {
     tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC);
 
     do {
-      URL = "http://" + SERVERIP[ipindex].IP.toString();
+      URL = "http://" + SERVERIP[ipindex].toString();
       URL = URL + tempstring;
     
       http.useHTTP10(true);
@@ -658,10 +653,7 @@ bool SendData(struct SensorVal *snsreading) {
 
         ipindex++;
 
-        if (httpCode == 200) {
-          isGood = true;
-          SERVERIP[ipindex].server_status = httpCode;
-        } 
+        if (httpCode == 200) isGood = true;
     } while(ipindex<NUMSERVERS);
   
     
@@ -834,7 +826,5 @@ bool ReadData(struct SensorVal *P) {
   checkSensorValFlag(P); //sets isFlagged
   P->LastReadTime = now(); //localtime
   
-
-
-return true;
+  return true;
 }
