@@ -1,4 +1,4 @@
-S//#define DEBUG_
+//#define DEBUG_
 
 #include <Wire.h>
 #include <Arduino.h> // Every sketch needs this
@@ -187,35 +187,23 @@ char* dateify(time_t t, String dateformat) {
 }
 
 void getDistance(void) {
-  OLDDIST = DIST;
-<<<<<<< HEAD
-  i16 tflunadist;
-  tflI2C.getData( tflunadist, tfAddr);
-  if (tflunadist<=0) {
-=======
-
+  
   i16 temporary_dist = 0;
   
   tflI2C.getData(temporary_dist, tfAddr);
   if (temporary_dist <= 0) {
->>>>>>> 2f6b7b5b61ad5d2cc77f8b43140a3913d6df9ed3
     DIST=-1000;
     return;
   }
 
-<<<<<<< HEAD
-  DIST=tflunadist/2.54 - OFFSET;
-
-  if (abs(DIST-OLDDIST) > 0.5)   STABLETIME = millis();
-=======
   temporary_dist = temporary_dist / 2.54 - OFFSET;
 
   //If the distance hasn't changed at all or has changed a negligble amount,
   //don't update the last distance change time nor the distance.
   if (abs(temporary_dist - OLDDIST) < MAX_NEGLIGIBLE_DIST_CHANGE)  return;
->>>>>>> 2f6b7b5b61ad5d2cc77f8b43140a3913d6df9ed3
 
   LAST_DIST_CHANGE = millis();
+  OLDDIST = DIST;
   DIST = temporary_dist;
 }
 
@@ -509,19 +497,7 @@ void loop()
     ArduinoOTA.handle();
     server.handleClient();
     timeClient.update();
-<<<<<<< HEAD
-    if (n - LASTTIMEUPDATE >3600)       LASTTIMEUPDATE= timeUpdate();
-    
-    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw or check sensors... if I've already drawn this minute
-    LASTMINUTEDRAWN = minute();
-    screen.displayClear();
-    screen.setTextAlignment(PA_CENTER);       
-    screen.setInvert(INVERTED = false); 
-    sprintf(msg,"%d:%02d",hour(),minute());
-    screen.print(msg);
-=======
     if (n - LASTTIMEUPDATE > 3600) LASTTIMEUPDATE = timeUpdate();
->>>>>>> 2f6b7b5b61ad5d2cc77f8b43140a3913d6df9ed3
     
     //perform maintenance ... send to server... do stuff that shouldn't be done when in measurement mode
     for (byte k=0;k<SENSORNUM;k++) {
