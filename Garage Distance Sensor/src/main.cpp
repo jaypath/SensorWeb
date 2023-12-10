@@ -109,8 +109,8 @@ i16 OFFSET = 28;
 bool INVERTED = false;
 u32 LASTINVERT = 0;
 u32 LASTDRAW = 0;
-i16 OLDDIST= 0;
-i16 DIST = 0;
+double OLDDIST= 0;
+double DIST = 0;
 
 bool GARAGEOPEN = false;
 char DATESTRING[24]=""; //holds up to hh:nn:ss day mm/dd/yyy
@@ -178,15 +178,16 @@ char* dateify(time_t t, String dateformat) {
 
 void getDistance(void) {
   OLDDIST = DIST;
-  tflI2C.getData( DIST, tfAddr);
-  if (DIST<=0) {
+  i16 tflunadist;
+  tflI2C.getData( tflunadist, tfAddr);
+  if (tflunadist<=0) {
     DIST=-1000;
     return;
   }
 
-  DIST=DIST/2.54 - OFFSET;
+  DIST=tflunadist/2.54 - OFFSET;
 
-  if (abs(DIST-OLDDIST) > 1)   STABLETIME = millis();
+  if (abs(DIST-OLDDIST) > 0.5)   STABLETIME = millis();
 
   return; //return inches
 }
@@ -464,14 +465,14 @@ void distStr(char* msg,  bool showNegatives) {
 
 
   if (DIST < 0) {
-    if (showNegatives) sprintf(msg, "%i in", DIST);
+    if (showNegatives) sprintf(msg, "%i in", (int) DIST);
     else sprintf(msg, "STOP");
     return;
   }
 
   //If distance is less than NOWSHOWINCHES inches, dislay as X inches
   //Otherwise display as X feet
-  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", DIST);
+  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", (int) DIST);
   else sprintf(msg, "%i ft", (int)(DIST / 12));
 }
 
@@ -495,7 +496,7 @@ void loop()
     timeClient.update();
     if (n - LASTTIMEUPDATE >3600)       LASTTIMEUPDATE= timeUpdate();
     
-    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
+    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw or check sensors... if I've already drawn this minute
     LASTMINUTEDRAWN = minute();
     screen.displayClear();
     screen.setTextAlignment(PA_CENTER);       

@@ -1,4 +1,4 @@
-#define DEBUG_ 1
+//#define DEBUG_ 1
 #define _USE8266 1
 //#define _USE32
 
@@ -823,6 +823,7 @@ byte i;
           Sensors[i].PollingInt=1*60;
           Sensors[i].SendingInt=5*60;
         #endif
+        break;
       case 5:
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
@@ -832,6 +833,7 @@ byte i;
           Sensors[i].PollingInt=60;
           Sensors[i].SendingInt=300;
         #endif
+        break;
   
 
       case 7: //dist
