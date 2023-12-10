@@ -187,12 +187,14 @@ char* dateify(time_t t, String dateformat) {
 }
 
 void getDistance(void) {
-  
   i16 temporary_dist = 0;
   
   tflI2C.getData(temporary_dist, tfAddr);
+
+  //Error occurred, distance measurement shouldn't be less than zero before accounting for the offset.
+  //Set distance to -10000 to show an error occurred.
   if (temporary_dist <= 0) {
-    DIST=-1000;
+    DIST = -10000;
     return;
   }
 
@@ -493,14 +495,14 @@ void loop()
   getDistance();
 
 
-  if (current_millis - LAST_DIST_CHANGE > CHANGETOCLOCK) { // distance hasn't changed in a while, do last didstance change time things like draw clock and handle requests
+  if (current_millis - LAST_DIST_CHANGE >= CHANGETOCLOCK) { // distance hasn't changed in a while, do last distance change time things like draw clock and handle requests
     ArduinoOTA.handle();
     server.handleClient();
     timeClient.update();
     if (n - LASTTIMEUPDATE > 3600) LASTTIMEUPDATE = timeUpdate();
     
     //perform maintenance ... send to server... do stuff that shouldn't be done when in measurement mode
-    for (byte k=0;k<SENSORNUM;k++) {
+    for (byte k = 0; k < SENSORNUM; k++) {
       bool flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
       if (Sensors[k].LastReadTime + Sensors[k].PollingInt < n || n - Sensors[k].LastReadTime >60*60*24) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
@@ -508,7 +510,7 @@ void loop()
       if ((Sensors[k].LastSendTime + Sensors[k].SendingInt < n || flagstatus != bitRead(Sensors[k].Flags,0)) || n-Sensors[k].LastSendTime>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
 
-    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
+    if (LASTMINUTEDRAWN == minute()) return; //don't redraw if I've already drawn this minute
     LASTMINUTEDRAWN = minute();
     
     screen.displayClear();
