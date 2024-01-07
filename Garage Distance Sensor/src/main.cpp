@@ -22,7 +22,7 @@
 #define INVERT //if defined, do inversion when in stop zone
 #define INVERT_TIME 333 //in ms
 
-#define MAX_NEGLIGIBLE_DIST_CHANGE 1 //Max # of inches the distance can change before we consider it a distance change
+#define MAX_NEGLIGIBLE_DIST_CHANGE 1 //Max # of cm the distance can change before we consider it a distance change
 
 #define DHT_temp 1
 #define DHT_rh 2
@@ -102,23 +102,23 @@ struct SensorVal {
 };
 
 //globals
-u8 GOLDILOCKS_ZONE = 3; //inches from 0 that are considered perfect
+u8 GOLDILOCKS_ZONE = 8; //mm from 0 that are considered perfect; 3 in ~ 8 mm
 u32 CHANGETOCLOCK = 60000; //in milliseconds, time to change to clock if dist hasn't changed
-u8 NOWSHOWINCHES = 24;
+u8 NOWSHOWINCHES = 24; //this is in INCHES (all other units in cm, until display)
 
-//measurements In inches
+//measurements In cm, except display in inches
 IPAddress arduino_IP; //my IP
 IPAddress SERVERIP[3];
 SensorVal Sensors[SENSORNUM]; //up to 2 sensors will be monitored
 u32 LAST_DIST_CHANGE = millis();
 time_t LASTTIMEUPDATE;
 u8 LASTMINUTEDRAWN = 0;
-i16 OFFSET = 28;
+i16 OFFSET = 71;  //in cm
 bool INVERTED = false;
 u32 LASTINVERT = 0;
 u32 LASTDRAW = 0;
-double OLDDIST= 0;
-double DIST = 0;
+double OLDDIST= 0; //in cm
+double DIST = 0; //in cm
 
 bool GARAGEOPEN = false;
 char DATESTRING[24] = ""; //holds up to hh:nn:ss day mm/dd/yyy
@@ -187,22 +187,22 @@ char* dateify(time_t t, String dateformat) {
 }
 
 void getDistance(void) {
+  
   i16 temporary_dist = 0;
   
   tflI2C.getData(temporary_dist, tfAddr);
-
-  //Error occurred, distance measurement shouldn't be less than zero before accounting for the offset.
-  //Set distance to -10000 to show an error occurred.
   if (temporary_dist <= 0) {
-    DIST = -10000;
+    DIST=-1000;
     return;
   }
-
-  temporary_dist = temporary_dist / 2.54 - OFFSET;
 
   //If the distance hasn't changed at all or has changed a negligble amount,
   //don't update the last distance change time nor the distance.
   if (abs(temporary_dist - OLDDIST) < MAX_NEGLIGIBLE_DIST_CHANGE)  return;
+
+//  temporary_dist = temporary_dist / 2.54 - OFFSET;
+temporary_dist = temporary_dist - OFFSET; //in cm!
+
 
   LAST_DIST_CHANGE = millis();
   OLDDIST = DIST;
@@ -471,15 +471,15 @@ void distStr(char* msg,  bool showNegatives) {
 
 
   if (DIST < 0) {
-    if (showNegatives) sprintf(msg, "%i in", (int) DIST);
+    if (showNegatives) sprintf(msg, "%i in", (int) ((double) DIST/2.54));
     else sprintf(msg, "STOP");
     return;
   }
 
   //If distance is less than NOWSHOWINCHES inches, dislay as X inches
   //Otherwise display as X feet
-  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", (int) DIST);
-  else sprintf(msg, "%i ft", (int)(DIST / 12));
+  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", (int) ((double) DIST/2.54));
+  else sprintf(msg, "%i ft", (int)((double) DIST / (2.54 * 12)));
 }
 
 
@@ -495,14 +495,14 @@ void loop()
   getDistance();
 
 
-  if (current_millis - LAST_DIST_CHANGE >= CHANGETOCLOCK) { // distance hasn't changed in a while, do last distance change time things like draw clock and handle requests
+  if (current_millis - LAST_DIST_CHANGE > CHANGETOCLOCK && OLDDIST == DIST) { // distance hasn't changed in a while, do last didstance change time things like draw clock and handle requests
     ArduinoOTA.handle();
     server.handleClient();
     timeClient.update();
     if (n - LASTTIMEUPDATE > 3600) LASTTIMEUPDATE = timeUpdate();
     
     //perform maintenance ... send to server... do stuff that shouldn't be done when in measurement mode
-    for (byte k = 0; k < SENSORNUM; k++) {
+    for (byte k=0;k<SENSORNUM;k++) {
       bool flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
       if (Sensors[k].LastReadTime + Sensors[k].PollingInt < n || n - Sensors[k].LastReadTime >60*60*24) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
@@ -510,7 +510,7 @@ void loop()
       if ((Sensors[k].LastSendTime + Sensors[k].SendingInt < n || flagstatus != bitRead(Sensors[k].Flags,0)) || n-Sensors[k].LastSendTime>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
 
-    if (LASTMINUTEDRAWN == minute()) return; //don't redraw if I've already drawn this minute
+    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I've already drawn this minute
     LASTMINUTEDRAWN = minute();
     
     screen.displayClear();
@@ -524,19 +524,19 @@ void loop()
   }  
  
   //otherwise, 2. determine if it is time to redraw dist
-  if (!(millis() - LASTDRAW >= SCREEN_DRAW || (OLDDIST > GOLDILOCKS_ZONE && DIST <= GOLDILOCKS_ZONE ))) return; //don't redraw if it's not time or unless we crossed the GL bound
+  if (!(current_millis - LASTDRAW >= SCREEN_DRAW || (OLDDIST > GOLDILOCKS_ZONE && DIST <= GOLDILOCKS_ZONE ))) return; //don't redraw if it's not time or unless we crossed the GL bound
 
 
 //3. show distance measurement. Decide if it should be inverting or not.
   #ifdef DEBUG_
-    Serial.print("Dist: ");
+    Serial.print("Dist (cm): ");
     Serial.println(DIST);
   #endif
 
 
 
   #ifdef INVERT
-    if ((int) DIST <= GOLDILOCKS_ZONE && millis() - LASTINVERT >= INVERT_TIME) {
+    if ((int) DIST <= GOLDILOCKS_ZONE && current_millis - LASTINVERT >= INVERT_TIME) {
       INVERTED = !INVERTED;
       LASTINVERT = current_millis;
     } else INVERTED = false;
@@ -553,9 +553,9 @@ void loop()
 void handlePost(void) {
 
   for (byte k=0;k<server.args();k++) {
-    if ((String)server.argName(k) == (String)"OFFSET") OFFSET = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"OFFSET") OFFSET = (int) ((double) 2.54*server.arg(k).toDouble());
     if ((String)server.argName(k) == (String)"NOWSHOWINCHES") NOWSHOWINCHES = server.arg(k).toInt();
-    if ((String)server.argName(k) == (String)"GOLDILOCKS_ZONE") GOLDILOCKS_ZONE = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"GOLDILOCKS_ZONE")  GOLDILOCKS_ZONE = (int) ((double) 2.54*server.arg(k).toDouble());
     if ((String)server.argName(k) == (String)"CHANGETOCLOCK") CHANGETOCLOCK = server.arg(k).toInt();
   }
 
@@ -576,7 +576,7 @@ void handleRoot(void) {
   if (GARAGEOPEN)     currentLine = currentLine + "   GarageDoor: OPEN @" + now_date + "<br>";
   else currentLine = currentLine + "   GarageDoor: CLOSED @" + now_date + "<br>";
 
-  currentLine = currentLine + "   CurrentDistance: " + (String) DIST + " inches<br>";
+  currentLine = currentLine + "   CurrentDistance: " + (String) ((int) DIST/2.54) + " inches<br>";
   currentLine = currentLine + "   Garage Temperature: " + (String) Sensors[1].snsValue + "F @" + dateify(Sensors[1].LastReadTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   currentLine = currentLine + "   Garage RH: " + (String) Sensors[2].snsValue + "% @" + dateify(Sensors[2].LastReadTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
@@ -584,11 +584,11 @@ void handleRoot(void) {
   currentLine += "<p style=\"font-family:monospace\">";
 
   currentLine += "<label for=\"ZeroOffset\">Zero Offset (in): </label>";
-  currentLine += "<input type=\"text\" id=\"ZeroOffset\" name=\"OFFSET\" value=\"" + (String) OFFSET  + "\"><br>";  
+  currentLine += "<input type=\"text\" id=\"ZeroOffset\" name=\"OFFSET\" value=\"" + (String) ((int) OFFSET/2.54)  + "\"><br>";  
   currentLine += "<label for=\"DistToShowInches\">Change to inches at this distance (in): </label>";
   currentLine += "<input type=\"text\" id=\"DistToShowInches\" name=\"NOWSHOWINCHES\" value=\"" + (String) NOWSHOWINCHES  + "\"><br>";  
   currentLine += "<label for=\"SHOWSTOP\">Show stop at this distance (in): </label>";
-  currentLine += "<input type=\"text\" id=\"SHOWSTOP\" name=\"GOLDILOCKS_ZONE\" value=\"" + (String) GOLDILOCKS_ZONE  + "\"><br>";  
+  currentLine += "<input type=\"text\" id=\"SHOWSTOP\" name=\"GOLDILOCKS_ZONE\" value=\"" + (String) ((int) GOLDILOCKS_ZONE/2.54)  + "\"><br>";  
   currentLine += "<label for=\"CHANGETOCLOCK\">If no distance change, show clock after (ms): </label>";
   currentLine += "<input type=\"text\" id=\"CHANGETOCLOCK\" name=\"CHANGETOCLOCK\" value=\"" + (String) CHANGETOCLOCK  + "\"><br>";  
 
@@ -665,8 +665,7 @@ bool SendData(struct SensorVal *snsreading) {
 
 
 bool ReadData(struct SensorVal *P) {
-      double val;
-
+ 
   bitWrite(P->Flags,0,0);
   
   switch (P->snsType) {
