@@ -18,11 +18,10 @@
 #define ARDID 70
 #define NUMSERVERS 3
 #define SENSORNUM 3
-#define SCREEN_DRAW 400 //in ms, wait between each screen draw
 #define INVERT //if defined, do inversion when in stop zone
-#define INVERT_TIME 333 //in ms
 
-#define MAX_NEGLIGIBLE_DIST_CHANGE 1 //Max # of cm the distance can change before we consider it a distance change
+
+#define MAX_NEGLIGIBLE_DIST_CHANGE 2 //Max # of cm the distance can change before we consider it a distance change
 
 #define DHT_temp 1
 #define DHT_rh 2
@@ -81,7 +80,6 @@ i16 tfAddr = 0x10; // Default I2C address for Tfluna
 #define DATA_PIN    D7
 
 
-//#define DEBUG
 
 MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
 //MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
@@ -101,24 +99,29 @@ struct SensorVal {
   u8 Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value
 };
 
+
 //globals
-u8 GOLDILOCKS_ZONE = 8; //mm from 0 that are considered perfect; 3 in ~ 8 mm
-u32 CHANGETOCLOCK = 60000; //in milliseconds, time to change to clock if dist hasn't changed
+int8_t GOLDILOCKS_ZONE = 8; //cm from 0 that are considered perfect; 3 in ~ 8 cm
+int8_t CRITICAL_ZONE = -12; //cm from 0 that are considered perfect; 3 in ~ 8 cm
+uint16_t INVERT_TIME = 500; //in ms
+uint16_t CRITICAL_INVERT_TIME = 250;
+uint16_t SCREEN_DRAW = 250; //in ms, wait between each screen draw
+u32 LAST_DIST_CHANGE = 0;
+u32 LASTINVERT = 0;
+u32 LASTDRAW = 0;
+u32 CHANGETOCLOCK = 30000; //in milliseconds, time to change to clock if dist hasn't changed
 u8 NOWSHOWINCHES = 24; //this is in INCHES (all other units in cm, until display)
 
 //measurements In cm, except display in inches
 IPAddress arduino_IP; //my IP
 IPAddress SERVERIP[3];
 SensorVal Sensors[SENSORNUM]; //up to 2 sensors will be monitored
-u32 LAST_DIST_CHANGE = millis();
 time_t LASTTIMEUPDATE;
 u8 LASTMINUTEDRAWN = 0;
 i16 OFFSET = 71;  //in cm
 bool INVERTED = false;
-u32 LASTINVERT = 0;
-u32 LASTDRAW = 0;
-double OLDDIST= 0; //in cm
-double DIST = 0; //in cm
+int16_t OLDDIST= 10000; //in cm
+int16_t DIST = -10000; //in cm
 
 bool GARAGEOPEN = false;
 char DATESTRING[24] = ""; //holds up to hh:nn:ss day mm/dd/yyy
@@ -186,27 +189,41 @@ char* dateify(time_t t, String dateformat) {
   return DATESTRING;  
 }
 
-void getDistance(void) {
-  
+bool showDistance(uint32_t cm) {  //returns true if show distance, false if show clock
+  bool showdist=true;
+
   i16 temporary_dist = 0;
   
   tflI2C.getData(temporary_dist, tfAddr);
   if (temporary_dist <= 0) {
     DIST=-1000;
-    return;
-  }
-
-  //If the distance hasn't changed at all or has changed a negligble amount,
+    if (OLDDIST != DIST) {
+      OLDDIST = DIST;
+      if (cm-LAST_DIST_CHANGE > CHANGETOCLOCK) showdist= false;
+      else showdist=true;
+      LAST_DIST_CHANGE = cm;
+      return showdist;
+    } else {
+      if (cm-LAST_DIST_CHANGE > CHANGETOCLOCK) return false;
+      else return true;
+    }
+  } 
+  
+  temporary_dist = temporary_dist - OFFSET; //in cm!
+  //If the distance has changed a negligble amount,
   //don't update the last distance change time nor the distance.
-  if (abs(temporary_dist - OLDDIST) < MAX_NEGLIGIBLE_DIST_CHANGE)  return;
 
-//  temporary_dist = temporary_dist / 2.54 - OFFSET;
-temporary_dist = temporary_dist - OFFSET; //in cm!
-
-
-  LAST_DIST_CHANGE = millis();
+  if (abs(temporary_dist - OLDDIST) < MAX_NEGLIGIBLE_DIST_CHANGE)  {
+    //just determine if clock... don't update distance
+    if (cm-LAST_DIST_CHANGE > CHANGETOCLOCK) return false;
+    else return true;
+  }
+  
+  //the distance changed!
   OLDDIST = DIST;
   DIST = temporary_dist;
+  LAST_DIST_CHANGE = cm;
+  return true;
 }
 
 void initSensor(byte k) {
@@ -353,8 +370,11 @@ void setup()
   SERVERIP[1] = {192,168,68,106};
   SERVERIP[2] = {192,168,68,104};
 
-  Wire.begin(); // Initalize Wire library
+  char msg[10];
 
+
+
+  Wire.begin(); // Initalize Wire library
 
   #ifdef DEBUG_
     Serial.begin(115200);
@@ -364,6 +384,22 @@ void setup()
   #ifdef DEBUG_
     Serial.println("try wifi...");
   #endif
+
+  #ifdef DEBUG_
+    Serial.println("try screen...");
+
+  #endif
+
+  //Setting up the LED display
+  screen.begin();
+  screen.setIntensity(1);
+  screen.displayClear();
+  screen.setTextAlignment(PA_CENTER);
+  screen.setInvert(false);
+  screen.displayClear();
+  screen.print("Start");
+
+
 
   WiFi.begin(ESP_SSID, ESP_PASS);
   while (WiFi.status() != WL_CONNECTED)
@@ -376,6 +412,15 @@ void setup()
   }
 
   arduino_IP = WiFi.localIP();
+  screen.displayClear();
+  sprintf(msg,"IP:%i",arduino_IP[3]);
+  screen.print(msg);
+
+  delay(3000);
+
+  screen.displayClear();
+  screen.print("OTA");
+
 
    ArduinoOTA.setHostname("GarageDistance");
   ArduinoOTA.onError([](ota_error_t error) {
@@ -395,18 +440,8 @@ void setup()
 
   #endif
 
-  #ifdef DEBUG_
-    Serial.println("try screen...");
-
-  #endif
-
-  //Setting up the LED display
-  screen.begin();
-  screen.setIntensity(1);
   screen.displayClear();
-  screen.setTextAlignment(PA_CENTER);
-  screen.setInvert(false);
-
+  screen.print("TIME");
 
   #ifdef DEBUG_
     Serial.println("Set up TimeClient...");
@@ -424,6 +459,9 @@ void setup()
   #ifdef DEBUG_
     Serial.println("DHT start...");
   #endif
+  screen.displayClear();
+  screen.print("DHT");
+
   //pinMode(DHTPIN, INPUT);
   dht.begin();
   
@@ -440,6 +478,10 @@ void setup()
   }
   initSensorsBasedOnType();
 
+  screen.displayClear();
+  screen.print("SRVR");
+  server.begin();
+
   #ifdef DEBUG_
     Serial.println("Set up webserver...");
   #endif
@@ -448,38 +490,59 @@ void setup()
   server.onNotFound(handleNotFound);
   server.on("/POST", handlePost);   
   
-  server.begin();
 
 
 
   #ifdef DEBUG_
     Serial.println("Setup end");
   #endif
+    screen.displayClear();
+  screen.print("Done");
+  delay(1000);
+
 }
 
-void distStr(char* msg,  bool showNegatives) {
+void distStr(char* msg,  bool showNegatives, uint32_t cm) {
+
+
+if ( (cm - LASTDRAW) <= SCREEN_DRAW ) return; //not time to redraw
+
+double tempDIST = DIST/2.54;
+double tempOLDDIST = OLDDIST/2.54;
+
+
+
+//if ((int) tempDIST == (int) tempOLDDIST) return; //no effective change in measurement, return 
+
   if (abs(DIST) < GOLDILOCKS_ZONE) {
     sprintf(msg, "STOP");
-    return;
+  } else {
+
+    GARAGEOPEN = false;
+    if (DIST == -1000) {
+      GARAGEOPEN =true; 
+      sprintf(msg, "OPEN");
+    } else {
+
+      if (DIST < 0) {
+        if (showNegatives) sprintf(msg, "%i in", (int) tempDIST);
+        else sprintf(msg, "STOP");
+      } else {
+
+        //If distance is less than NOWSHOWINCHES inches, dislay as X inches
+        //Otherwise display as X feet
+        if (tempDIST < NOWSHOWINCHES) sprintf(msg, "%i in", (int) tempDIST);
+        else sprintf(msg, "%i ft", (int)tempDIST/12);
+      }
+    }
   }
 
-  GARAGEOPEN = DIST < -500;
-  if (GARAGEOPEN) {
-    sprintf(msg, "OPEN");
-    return;
-  }
+  screen.displayClear();
+  screen.setTextAlignment(PA_CENTER);       
+  screen.setInvert(INVERTED);
+  screen.print(msg);
+  LASTDRAW = cm;
 
-
-  if (DIST < 0) {
-    if (showNegatives) sprintf(msg, "%i in", (int) ((double) DIST/2.54));
-    else sprintf(msg, "STOP");
-    return;
-  }
-
-  //If distance is less than NOWSHOWINCHES inches, dislay as X inches
-  //Otherwise display as X feet
-  if (DIST < NOWSHOWINCHES) sprintf(msg, "%i in", (int) ((double) DIST/2.54));
-  else sprintf(msg, "%i ft", (int)((double) DIST / (2.54 * 12)));
 }
 
 
@@ -488,14 +551,51 @@ void loop()
 {
   u32 current_millis = millis();
   u32 n = now();
-
   char msg[10];
 
+  if (current_millis < LAST_DIST_CHANGE) LAST_DIST_CHANGE=0; //last dist rolled over
+  if (current_millis < LASTINVERT) LASTINVERT=0; //last  rolled over
+  if (current_millis < LASTDRAW) LASTDRAW=0; //last  rolled over
+
+
+
   //1. get distance, this function also compares to prior dist (OLDDIST) and sets the last distance change time to ms if DIST changed
-  getDistance();
+
+  if ( showDistance(current_millis)) { // distance has changed (or it isn't clocktime)
+
+    current_millis = millis(); //update, since showdistance could take a while
+    //  Decide if dist should be inverting or not.
+    #ifdef DEBUG_
+      Serial.print("Dist (cm): ");
+      Serial.println(DIST);
+    #endif
+
+    #ifdef INVERT
+      if (DIST == -1000) {
+        INVERTED = true;
+        LASTINVERT = current_millis;     
+      } else {
+
+        if ( DIST > GOLDILOCKS_ZONE) {
+          INVERTED = false;
+          LASTINVERT = current_millis;
+        } else {
+          if ((DIST <= CRITICAL_ZONE && (current_millis - LASTINVERT) >= CRITICAL_INVERT_TIME) || ( DIST <= GOLDILOCKS_ZONE &&  (current_millis - LASTINVERT) >= INVERT_TIME)) {
+            INVERTED = !INVERTED;
+            LASTINVERT = current_millis;
+          }
+        }
+      }
+      
+
+    #endif
+
+    distStr(msg,  true, current_millis);
 
 
-  if (current_millis - LAST_DIST_CHANGE > CHANGETOCLOCK && OLDDIST == DIST) { // distance hasn't changed in a while, do last didstance change time things like draw clock and handle requests
+  } else {
+    //ok to handle tasks
+
     ArduinoOTA.handle();
     server.handleClient();
     timeClient.update();
@@ -516,37 +616,11 @@ void loop()
     screen.displayClear();
     screen.setTextAlignment(PA_CENTER);       
     screen.setInvert(INVERTED = false); 
+    LASTINVERT = current_millis;
     sprintf(msg,"%d:%02d",hour(),minute());
     screen.print(msg);
-
-    return;
-
-  }  
+  }
  
-  //otherwise, 2. determine if it is time to redraw dist
-  if (!(current_millis - LASTDRAW >= SCREEN_DRAW || (OLDDIST > GOLDILOCKS_ZONE && DIST <= GOLDILOCKS_ZONE ))) return; //don't redraw if it's not time or unless we crossed the GL bound
-
-
-//3. show distance measurement. Decide if it should be inverting or not.
-  #ifdef DEBUG_
-    Serial.print("Dist (cm): ");
-    Serial.println(DIST);
-  #endif
-
-
-
-  #ifdef INVERT
-    if ((int) DIST <= GOLDILOCKS_ZONE && current_millis - LASTINVERT >= INVERT_TIME) {
-      INVERTED = !INVERTED;
-      LASTINVERT = current_millis;
-    } else INVERTED = false;
-    screen.setInvert(INVERTED);
-
-  #endif
-
-  distStr(msg,  true);
-  screen.print(msg);
-  LASTDRAW = current_millis;
 
 }
 
@@ -555,8 +629,14 @@ void handlePost(void) {
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"OFFSET") OFFSET = (int) ((double) 2.54*server.arg(k).toDouble());
     if ((String)server.argName(k) == (String)"NOWSHOWINCHES") NOWSHOWINCHES = server.arg(k).toInt();
-    if ((String)server.argName(k) == (String)"GOLDILOCKS_ZONE")  GOLDILOCKS_ZONE = (int) ((double) 2.54*server.arg(k).toDouble());
+    if ((String)server.argName(k) == (String)"GOLDILOCKS_ZONE")  GOLDILOCKS_ZONE = (int16_t) ((double) 2.54*server.arg(k).toDouble());
+    if ((String)server.argName(k) == (String)"CRITICAL_ZONE")  CRITICAL_ZONE = (int16_t) ((double) 2.54*server.arg(k).toDouble());
+    if ((String)server.argName(k) == (String)"INVERT_TIME")  INVERT_TIME = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"CRITICAL_INVERT_TIME")  CRITICAL_INVERT_TIME = server.arg(k).toInt();
+    if ((String)server.argName(k) == (String)"SCREEN_DRAW")  SCREEN_DRAW = server.arg(k).toInt();
     if ((String)server.argName(k) == (String)"CHANGETOCLOCK") CHANGETOCLOCK = server.arg(k).toInt();
+
+
   }
 
 
@@ -571,7 +651,7 @@ void handleRoot(void) {
   String currentLine = "<!DOCTYPE html><html><head><title>Garage Distance Sensor</title></head><body>";
 
   char* now_date = dateify(now(), "DOW mm/dd/yyyy hh:nn:ss");
-  currentLine = currentLine + "<h2>" + now_date + "</h2><br><br>";
+  currentLine = currentLine + "<h1>Garage Distance Sensor</h1><br><br><h2>" + now_date + "</h2><br>";
 
   if (GARAGEOPEN)     currentLine = currentLine + "   GarageDoor: OPEN @" + now_date + "<br>";
   else currentLine = currentLine + "   GarageDoor: CLOSED @" + now_date + "<br>";
@@ -589,6 +669,17 @@ void handleRoot(void) {
   currentLine += "<input type=\"text\" id=\"DistToShowInches\" name=\"NOWSHOWINCHES\" value=\"" + (String) NOWSHOWINCHES  + "\"><br>";  
   currentLine += "<label for=\"SHOWSTOP\">Show stop at this distance (in): </label>";
   currentLine += "<input type=\"text\" id=\"SHOWSTOP\" name=\"GOLDILOCKS_ZONE\" value=\"" + (String) ((int) GOLDILOCKS_ZONE/2.54)  + "\"><br>";  
+  currentLine += "<label for=\"Criticalclose\">Critical close distance (in): </label>";
+  currentLine += "<input type=\"text\" id=\"Criticalclose\" name=\"CRITICAL_ZONE\" value=\"" + (String) ((int) CRITICAL_ZONE/2.54)  + "\"><br>";
+
+  currentLine += "<label for=\"InvertTime\">Goldilocks Flash Time (ms): </label>";
+  currentLine += "<input type=\"text\" id=\"InvertTime\" name=\"INVERT_TIME\" value=\"" + (String) INVERT_TIME  + "\"><br>";  
+  currentLine += "<label for=\"CritTime\">CRITICAL Flash Time (ms): </label>";
+  currentLine += "<input type=\"text\" id=\"CritTime\" name=\"CRITICAL_INVERT_TIME\" value=\"" + (String) CRITICAL_INVERT_TIME  + "\"><br>";  
+  
+  currentLine += "<label for=\"SCREEN_DRAW\">Screen redraw Time (ms): </label>";
+  currentLine += "<input type=\"text\" id=\"SCREEN_DRAW\" name=\"SCREEN_DRAW\" value=\"" + (String) SCREEN_DRAW  + "\"><br>";  
+
   currentLine += "<label for=\"CHANGETOCLOCK\">If no distance change, show clock after (ms): </label>";
   currentLine += "<input type=\"text\" id=\"CHANGETOCLOCK\" name=\"CHANGETOCLOCK\" value=\"" + (String) CHANGETOCLOCK  + "\"><br>";  
 
