@@ -677,6 +677,9 @@ void fcnChooseTxtColor(byte snsIndex) {
   if (bitRead(Sensors[snsIndex].Flags,0)) {
     tft.setTextColor(TFT_RED,TFT_BLACK);
   }
+  else {
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  }
   return;
 }
 
@@ -740,6 +743,7 @@ void drawScreen() {
     
     if (Sensors[i].snsID>0 && Sensors[i].snsType>0 && inIndex(i,used,SENSORNUM) == false && Sensors[i].timeLogged>0 ) {
       used[usedINDEX++] = i;
+      tft.setTextColor(FG_COLOR,BG_COLOR);
       fcnChooseTxtColor(i);
       tft.setTextFont(SMALLFONT);
 
@@ -770,6 +774,7 @@ void drawScreen() {
       for(byte j=i+1;j<SENSORNUM;j++) {
         if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false && Sensors[j].ardID==Sensors[i].ardID) {
           used[usedINDEX++] = j;
+          tft.setTextColor(FG_COLOR,BG_COLOR);
           fcnChooseTxtColor(j);
           tft.setTextFont(SMALLFONT);
 
@@ -798,7 +803,6 @@ void drawScreen() {
         }
       }
     }
-  tft.setTextColor(FG_COLOR,BG_COLOR);
   }
 }
 
