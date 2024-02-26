@@ -1,9 +1,32 @@
-//#define DEBUG_ 1
+#include <Arduino.h>
+
+#define _DEBUG 1
 #define _USE8266 1
 //#define _USE32
 
-#define ARDNAME "ATTIC"
-#define ARDID 111 //unique arduino ID 
+#define ARDNAME "UpHall"
+#define ARDID 101 //unique arduino ID 
+#define SENSORNUM 1 //be sure this matches SENSORTYPES
+
+
+const uint8_t SENSORTYPES[SENSORNUM] = {3};
+
+const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
+const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
+
+//#define DHTTYPE    DHT11     // DHT11 or DHT22
+//#define DHTPIN 2
+//#define _USEBMP  1
+//#define _USEAHT 1
+//#define _USEBME 1
+//#define _USEHCSR04 1 //distance
+#define _USESOIL 1
+//#define _USEBARPRED 1
+//#define _USESSD1306  1
+//#define _OLEDTYPE &Adafruit128x64
+//#define _OLEDTYPE &Adafruit128x32
+//#define _OLEDINVERT 0
+
 
 // SENSORTYPES is an array that defines the sensors. 
 //0 - not defined
@@ -24,26 +47,7 @@
 //15 - BMe humidity
 //16 - BMe altitude
 
-#define SENSORNUM 4 //be sure this matches SENSORTYPES
 
-#include <Arduino.h>
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,12};
-
-const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
-const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
-
-//#define DHTTYPE    DHT11     // DHT11 or DHT22
-//#define DHTPIN 2
-#define _USEBMP  1
-#define _USEAHT 1
-//#define _USEBME 1
-//#define _USEHCSR04 1 //distance
-//#define _USESOIL 1
-#define _USEBARPRED 1
-//#define _USESSD1306  1
-//#define _OLEDTYPE &Adafruit128x64
-//#define _OLEDTYPE &Adafruit128x32
-//#define _OLEDINVERT 0
 
 #ifdef _USESOIL
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
@@ -249,6 +253,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #endif
 
 #ifdef _USEAHT
+  #include <Wire.h>
   #include <AHTxx.h>
   
 
@@ -431,6 +436,12 @@ byte CURRENTSENSOR_WEB = 1;
 
 void setup()
 {
+
+    #ifdef _DEBUG
+    Serial.begin(115200);
+    Serial.println("Begin Setup");
+  #endif
+
 byte i;
 
   SERVERIP[0].IP = {192,168,68,93};
@@ -440,7 +451,7 @@ byte i;
   Wire.begin(); 
   Wire.setClock(400000L);
   
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("oled begin");
     #endif
 
@@ -472,14 +483,6 @@ byte i;
 #endif
 
 
-  
-  #ifdef DEBUG_
-    Serial.begin(115200);
-    Serial.println("Begin Setup");
-  #endif
-
-
-
 
       #ifdef _USESSD1306
         oled.clear();
@@ -488,18 +491,18 @@ byte i;
       #endif
 
   WiFi.begin(ESP_SSID, ESP_PASS);
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("wifi begin");
     #endif
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println();
     Serial.print("Connecting");
   #endif
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(200);
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.print(".");
     #endif
     #ifdef _USESSD1306
@@ -509,14 +512,14 @@ byte i;
 
   MYIP.IP = WiFi.localIP();
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("");
     Serial.print("Wifi OK. IP is ");
     Serial.println(MYIP.IP.toString());
     Serial.println("Connecting ArduinoOTA...");
     #endif
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println("Connected!");
     Serial.println(WiFi.localIP());
   #endif
@@ -539,17 +542,17 @@ byte i;
   // ArduinoOTA.setPassword((const char *)"123");
 
   ArduinoOTA.onStart([]() {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("OTA started");
     #endif
   });
   ArduinoOTA.onEnd([]() {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("OTA End");
     #endif
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
     #endif
     #ifdef _USESSD1306
@@ -563,7 +566,7 @@ byte i;
 
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.printf("Error[%u]: ", error);
       if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
       else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -628,7 +631,7 @@ byte i;
     server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
     server.begin();
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("HTML server started!");
     #endif
 
@@ -667,7 +670,7 @@ byte i;
   #endif
 
   #ifdef DHTTYPE
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("dht begin");
     #endif
     dht.begin();
@@ -675,14 +678,16 @@ byte i;
 
 
   #ifdef _USEBMP
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("bmp begin");
     #endif
-    while (!bmp.begin(0x76)) { //default address is 0x77, but amazon review says this is 0x76
-
+    uint32_t t = millis();
+    uint32_t deltaT = 0;
+    while (!bmp.begin(0x76) and deltaT<15000) { //default address is 0x77, but amazon review says this is 0x76
+      deltaT = millis()-t;
       #ifdef _USESSD1306
         oled.println("BMP failed.");
-        #ifdef DEBUG_
+        #ifdef _DEBUG
             Serial.println("bmp failed.");
         #endif
         delay(500);
@@ -707,7 +712,7 @@ byte i;
 
   #endif
   #ifdef _USEBME
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println("bme begin");
     #endif
 
@@ -743,13 +748,13 @@ byte i;
   LittleFS.setConfig(cfg);
   
   if(!LittleFS.begin()){
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("An Error has occurred while mounting LittleFS");
     #endif
     while (true) {
     }
   } else {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("FileSys OK. Config Wifi");
     #endif
 
@@ -962,6 +967,14 @@ bool checkSensorValFlag(struct SensorVal *P) {
 
 return bitRead(P->Flags,0);
 
+
+    #ifdef _DEBUG
+      Serial.print("Setup ended. Time is ");
+      Serial.println(dateify(now(),"hh:nn:ss"));
+
+    #endif
+
+
 }
 
 uint8_t findSensor(byte snsType, byte snsID) {
@@ -972,7 +985,6 @@ uint8_t findSensor(byte snsType, byte snsID) {
 }
 
 uint16_t findOldestDev() {
-  int thisInd = 0;
   int oldestInd = 0;
   int  i=0;
   for (i=0;i<SENSORNUM;i++) {
@@ -1035,15 +1047,17 @@ void loop() {
   timeClient.update();
 
   time_t t = now(); // store the current time in time variable t
-  time_t t2;
-
-  convertULONG Ltype;
   
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
     bool flagstatus=false;
     
+    #ifdef _DEBUG
+      Serial.print("1 second. Time is ");
+      Serial.println(dateify(t,"hh:nn:ss"));
+
+    #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
       flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
@@ -1073,7 +1087,7 @@ void loop() {
     OldTime[3] = weekday();
   
   //sync time
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       t=now();
       Serial.print("Current time is ");
       Serial.print(hour(t));
@@ -1310,7 +1324,7 @@ currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
     char cbuff[9] = "";
     Byte2Bin(Sensors[j].Flags,cbuff,1);
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.print("SpecType after byte2bin: ");
         Serial.println(cbuff);
     #endif
@@ -1318,7 +1332,7 @@ currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
     currentLine +=  cbuff;
     currentLine += "\n\n";
   }
-   #ifdef DEBUG_
+   #ifdef _DEBUG
       Serial.println(currentLine);
     #endif
   server.send(200, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
@@ -1503,7 +1517,7 @@ strPad(temp,padder,25);
 
 currentLine += "</p></body></html>";
 
-   #ifdef DEBUG_
+   #ifdef _DEBUG
       Serial.println(currentLine);
     #endif
 
@@ -1524,7 +1538,7 @@ bool SendData(struct SensorVal *snsreading) {
     byte ipindex=0;
     bool isGood = false;
 
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println(" ");
       Serial.println("*****************");
       Serial.println("Sending Data");
@@ -1569,7 +1583,7 @@ bool SendData(struct SensorVal *snsreading) {
     //note that I'm coverting lastreadtime to GMT
   
       snsreading->LastSendTime = now();
-        #ifdef DEBUG_
+        #ifdef _DEBUG
             Serial.print("sending this message: ");
             Serial.println(URL.c_str());
         #endif
@@ -1578,7 +1592,7 @@ bool SendData(struct SensorVal *snsreading) {
       httpCode = http.GET();
       payload = http.getString();
       http.end();
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.print("Received: ");
           Serial.println(payload);
           Serial.print("Code: ");
@@ -1635,7 +1649,7 @@ bool ReadData(struct SensorVal *P) {
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
             P->snsValue = (100*(val*9/5+32))/100; 
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Temperature...: "));
               Serial.print(P->snsValue);
               Serial.println(F("F"));
@@ -1643,7 +1657,7 @@ bool ReadData(struct SensorVal *P) {
           }
           else
           {
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Temperature Error"));
             #endif
           }
@@ -1656,7 +1670,7 @@ bool ReadData(struct SensorVal *P) {
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
             P->snsValue = (val*100)/100; 
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT HUmidity...: "));
               Serial.print(P->snsValue);
               Serial.println(F("%"));
@@ -1664,7 +1678,7 @@ bool ReadData(struct SensorVal *P) {
           }
           else
           {
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Humidity Error"));
             #endif
           }
@@ -1828,7 +1842,7 @@ bool ReadData(struct SensorVal *P) {
   P->LastReadTime = now(); //localtime
   
 
-#ifdef DEBUG_
+#ifdef _DEBUG
       Serial.println(" ");
       Serial.println("*****************");
       Serial.println("Reading Sensor");

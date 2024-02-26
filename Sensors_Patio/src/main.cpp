@@ -1,9 +1,32 @@
+#include <Arduino.h>
+
 //#define DEBUG_ 1
 #define _USE8266 1
 //#define _USE32
 
-#define ARDNAME "ATTIC"
-#define ARDID 111 //unique arduino ID 
+#define ARDNAME "Patio"
+#define ARDID 151 //unique arduino ID 
+#define SENSORNUM 5 //be sure this matches SENSORTYPES
+
+
+const uint8_t SENSORTYPES[SENSORNUM] = {1,2,9,10,12};
+
+const uint8_t MONITORED_SNS = 1+2+4+16; //from R to L each bit represents a sensor, 255 means all sensors are monitored
+const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
+
+#define DHTTYPE    DHT22     // DHT11 or DHT22
+#define DHTPIN 0
+#define _USEBMP  1
+//#define _USEAHT 1
+//#define _USEBME 1
+//#define _USEHCSR04 1 //distance
+//#define _USESOIL 1
+#define _USEBARPRED 1
+//#define _USESSD1306  1
+//#define _OLEDTYPE &Adafruit128x64
+//#define _OLEDTYPE &Adafruit128x32
+//#define _OLEDINVERT 0
+
 
 // SENSORTYPES is an array that defines the sensors. 
 //0 - not defined
@@ -24,26 +47,7 @@
 //15 - BMe humidity
 //16 - BMe altitude
 
-#define SENSORNUM 4 //be sure this matches SENSORTYPES
 
-#include <Arduino.h>
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,12};
-
-const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
-const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
-
-//#define DHTTYPE    DHT11     // DHT11 or DHT22
-//#define DHTPIN 2
-#define _USEBMP  1
-#define _USEAHT 1
-//#define _USEBME 1
-//#define _USEHCSR04 1 //distance
-//#define _USESOIL 1
-#define _USEBARPRED 1
-//#define _USESSD1306  1
-//#define _OLEDTYPE &Adafruit128x64
-//#define _OLEDTYPE &Adafruit128x32
-//#define _OLEDINVERT 0
 
 #ifdef _USESOIL
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
@@ -972,7 +976,6 @@ uint8_t findSensor(byte snsType, byte snsID) {
 }
 
 uint16_t findOldestDev() {
-  int thisInd = 0;
   int oldestInd = 0;
   int  i=0;
   for (i=0;i<SENSORNUM;i++) {
@@ -1036,8 +1039,6 @@ void loop() {
 
   time_t t = now(); // store the current time in time variable t
   time_t t2;
-
-  convertULONG Ltype;
   
   if (OldTime[0] != second()) {
     OldTime[0] = second();

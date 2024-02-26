@@ -368,7 +368,7 @@ void setup()
 {
   SERVERIP[0] = {192,168,68,93};
   SERVERIP[1] = {192,168,68,106};
-  SERVERIP[2] = {192,168,68,104};
+  SERVERIP[2] = {192,168,68,100};
 
   char msg[10];
 
