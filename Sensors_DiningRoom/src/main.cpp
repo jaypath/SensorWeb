@@ -11,6 +11,7 @@
 
 const uint8_t SENSORTYPES[SENSORNUM] = {1,2,3};
 
+
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
@@ -20,7 +21,8 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEAHT 1
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
-#define _USESOIL 1
+#define _USESOILCAP 1
+//#define _USESOILRES
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -32,7 +34,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //0 - not defined
 //1 - temp, DHT
 //2 - RH, DHT
-//3 - soil moisture, capacitative
+//3 - soil moisture, capacitative or Resistive
 //4 -  temp, AHT21
 //5 - RH, AHT21
 //6
@@ -49,8 +51,14 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 
 
-#ifdef _USESOIL
+#ifdef _USESOILCAP
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
+#endif
+
+#ifdef _USESOILRES
+  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
+  const int SOILDIO = D5;  // ESP8266 Analog Pin ADC0 = A0
+  #define SOILRESISTANCE 470
 #endif
 
 #ifdef _USEHCSR04
@@ -441,6 +449,10 @@ byte i;
   SERVERIP[1].IP = {192,168,68,106};
   SERVERIP[2].IP = {192,168,68,100};
 
+  #ifdef _USESOILRES
+    pinMode(SOILDIO,OUTPUT);  
+  #endif
+
   Wire.begin(); 
   Wire.setClock(400000L);
   
@@ -776,12 +788,11 @@ byte i;
     if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
     else bitWrite(Sensors[i].Flags,2,0);
 
-
     switch (SENSORTYPES[i]) {
       case 1: //DHT temp
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_T",ARDNAME);
+          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -797,7 +808,7 @@ byte i;
       case 2: //DHT RH
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_RH",ARDNAME);
+          snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 25;
@@ -811,40 +822,49 @@ byte i;
         #endif
         break;
       case 3: //soil
-        #ifdef _USESOIL
+        #ifdef _USESOILCAP
           Sensors[i].snsPin=SOILPIN;
-          sprintf(Sensors[i].snsName,"%s_soil",ARDNAME);
+          snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
           Sensors[i].limitUpper = 290;
           Sensors[i].limitLower = 25;
           Sensors[i].PollingInt=120;
           Sensors[i].SendingInt=600;
         #endif
+        #ifdef _USESOILRES
+          Sensors[i].snsPin=SOILPIN;
+          snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
+          Sensors[i].limitUpper = 2000;
+          Sensors[i].limitLower = 0;
+          Sensors[i].PollingInt=60*60;
+          Sensors[i].SendingInt=60*60;
+        #endif
+
         break;
       case 4: //AHT temp
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
-          sprintf(Sensors[i].snsName,"%s_AHT_T",ARDNAME);
+          snprintf(Sensors[i].snsName,31,"%s_AHT_T",ARDNAME);
           Sensors[i].limitUpper = 115;
           Sensors[i].limitLower = 25;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=5*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=10*60;
         #endif
         break;
       case 5:
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
-          sprintf(Sensors[i].snsName,"%s_AHT_RH",ARDNAME);
+          snprintf(Sensors[i].snsName,31,"%s_AHT_RH",ARDNAME);
           Sensors[i].limitUpper = 85;
           Sensors[i].limitLower = 25;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=10*60;
         #endif
         break;
   
 
       case 7: //dist
         Sensors[i].snsPin=0; //not used
-        sprintf(Sensors[i].snsName,"%s_Dist",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_Dist",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = 10;
         Sensors[i].PollingInt=100;
@@ -852,7 +872,7 @@ byte i;
         break;
       case 9: //BMP pres
         Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
         Sensors[i].limitLower = 1009;
         Sensors[i].PollingInt=30*60;
@@ -860,7 +880,7 @@ byte i;
         break;
       case 10: //BMP temp
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMP_t",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_BMP_t",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -869,12 +889,12 @@ byte i;
             Sensors[i].limitUpper = 80;
             Sensors[i].limitLower = 65;
           }
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=120;
+        Sensors[i].PollingInt=30*60;
+        Sensors[i].SendingInt=60*60;
         break;
       case 11: //BMP alt
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = -5;
         Sensors[i].PollingInt=60000;
@@ -882,7 +902,7 @@ byte i;
         break;
       case 12: //Bar prediction
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_Pred",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_Pred",ARDNAME);
         Sensors[i].limitUpper = 0;
         Sensors[i].limitLower = 0; //anything over 0 is an alarm
         Sensors[i].PollingInt=60*60;
@@ -892,7 +912,7 @@ byte i;
         break;
       case 13: //BME pres
         Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
         Sensors[i].limitLower = 1009;
         Sensors[i].PollingInt=30*60;
@@ -900,7 +920,7 @@ byte i;
         break;
       case 14: //BMEtemp
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMEt",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_BMEt",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -914,7 +934,7 @@ byte i;
         break;
       case 15: //bme rh
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMErh",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_BMErh",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 15;
@@ -928,7 +948,7 @@ byte i;
         break;
       case 16: //bme alt
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = -5;
         Sensors[i].PollingInt=15*60*60;
@@ -998,7 +1018,7 @@ uint16_t findOldestDev() {
 }
 
 void initSensor(byte k) {
-  sprintf(Sensors[k].snsName,"");
+  snprintf(Sensors[k].snsName,20,"");
   Sensors[k].snsID = 0;
   Sensors[k].snsType = 0;
   Sensors[k].snsValue = 0;
@@ -1055,17 +1075,16 @@ void loop() {
     bool flagstatus=false;
     
     #ifdef _DEBUG
-      Serial.print("1 second. Time is ");
-      Serial.println(dateify(t,"hh:nn:ss"));
+      Serial.printf("Time is %s. Sensor #1 is %s.   ",dateify(t,"hh:nn:ss"),Sensors[0].snsName);
 
     #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
       flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
-      if (Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs(Sensors[k].LastReadTime - now())>60*60*24) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs(Sensors[k].LastReadTime - now())>60*60*24 || Sensors[k].LastReadTime ==0) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if ((Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs(Sensors[k].LastSendTime - now())>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if ((Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs(Sensors[k].LastSendTime - now())>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
   }
   
@@ -1135,7 +1154,7 @@ void handleUPDATESENSORPARAMS() {
   byte j = stateSensornum.toInt();
 
   for (uint8_t i = 0; i < server.args(); i++) {
-    if (server.argName(i)=="SensorName") strcpy(Sensors[j].snsName, server.arg(i).c_str());
+    if (server.argName(i)=="SensorName") snprintf(Sensors[j].snsName,31,"%s", server.arg(i).c_str());
 
     if (server.argName(i)=="Monitored") {
       if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,1,0);
@@ -1253,7 +1272,7 @@ byte k;
     byte j=k;
     currentLine += (String) dateify() + "\n";
 
-    currentLine = currentLine + "ARDID:" + String(ARDID, DEC) + "; snsType:"+(String) Sensors[j].snsType+"; snsID:"+ (String) Sensors[j].snsID + "; SnsName:"+Sensors[j].snsName + "; LastRead:"+(String) Sensors[j].LastReadTime+"; LastSend:"+(String) Sensors[j].LastSendTime + "; snsVal:"+(String) Sensors[j].snsValue + "; UpperLim:"+(String) Sensors[j].limitUpper + "; LowerLim:"+(String) Sensors[j].limitLower + "; Flag:"+(String) bitRead(Sensors[j].Flags,0) + "; Monitored: " + (String) bitRead(Sensors[j].Flags,1) + "\n";
+    currentLine = currentLine + "ARDID:" + String(ARDID, DEC) + "; snsType:"+(String) Sensors[j].snsType+"; snsID:"+ (String) Sensors[j].snsID + "; SnsName:"+ (String) Sensors[j].snsName + "; LastRead:"+(String) Sensors[j].LastReadTime+"; LastSend:"+(String) Sensors[j].LastSendTime + "; snsVal:"+(String) Sensors[j].snsValue + "; UpperLim:"+(String) Sensors[j].limitUpper + "; LowerLim:"+(String) Sensors[j].limitLower + "; Flag:"+(String) bitRead(Sensors[j].Flags,0) + "; Monitored: " + (String) bitRead(Sensors[j].Flags,1) + "\n";
     server.send(400, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
   } else {
     server.send(400, "text/plain", "That sensor was not found");   // Send HTTP status 400 as error
@@ -1278,7 +1297,7 @@ currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
 
     currentLine += "     ";
     currentLine +=  "SnsName: ";
-    currentLine +=  Sensors[j].snsName;
+    currentLine +=  (String) Sensors[j].snsName;
     currentLine += "\n";
 
     currentLine += "     ";
@@ -1388,48 +1407,48 @@ currentLine += "<br>-----------------------<br>";
 
 
   char padder[2] = ".";
-  sprintf(temp,"%s","Sensor Name");
+  snprintf(temp,29,"%s","Sensor Name");
   strPad(temp,padder,25);
   currentLine += "<label for=\"MyName\">" + (String) temp + "</label>";
   currentLine += "<input type=\"text\" id=\"MyName\" name=\"SensorName\" value=\"" + String(Sensors[j].snsName) + "\" maxlength=\"30\"><br>";  
 
-  sprintf(temp,"%s","Sensor Value");
+  snprintf(temp,29,"%s","Sensor Value");
   strPad(temp,padder,25);
   currentLine += "<label for=\"Val\">" + (String) temp + " " + String(Sensors[j].snsValue,DEC) + "</label>";
   currentLine +=  "<br>";
   
-  sprintf(temp,"%s","Is Monitored");
+  snprintf(temp,29,"%s","Is Monitored");
   strPad(temp,padder,25);
   currentLine += "<label for=\"Mon\">" + (String) temp + "</label>";
   currentLine += "<input type=\"text\" id=\"Mon\" name=\"Monitored\" value=\"" + String(bitRead(Sensors[j].Flags,1),DEC) + "\"><br>";  
   
-sprintf(temp,"%s","Is Outside");
+snprintf(temp,29,"%s","Is Outside");
 strPad(temp,padder,25);
   currentLine += "<label for=\"Out\">" + (String) temp + "</label>";
   currentLine += "<input type=\"text\" id=\"Out\" name=\"Outside\" value=\"" + String(bitRead(Sensors[j].Flags,2),DEC) + "\"><br>";  
 
-sprintf(temp,"%s","Upper Limit");
+snprintf(temp,29,"%s","Upper Limit");
 strPad(temp,padder,25);
   currentLine += "<label for=\"UL\">" + (String) temp + "</label>";
     currentLine += "<input type=\"text\" id=\"UL\" name=\"UpperLim\" value=\"" + String(Sensors[j].limitUpper,DEC) + "\"><br>";
 
-sprintf(temp,"%s","Lower Limit");
+snprintf(temp,29,"%s","Lower Limit");
 strPad(temp,padder,25);
   currentLine += "<label for=\"LL\">" + (String) temp + "</label>";
     currentLine += "<input type=\"text\" id=\"LL\" name=\"LowerLim\" value=\"" + String(Sensors[j].limitLower,DEC) + "\"><br>";
 
-sprintf(temp,"%s","Poll Int (sec)");
+snprintf(temp,29,"%s","Poll Int (sec)");
 strPad(temp,padder,25);
   currentLine += "<label for=\"POLL\">" + (String) temp + "</label>";
     currentLine += "<input type=\"text\" id=\"POLL\" name=\"PollInt\" value=\"" + String(Sensors[j].PollingInt,DEC) + "\"><br>";
 
-sprintf(temp,"%s","Send Int (Sec)");
+snprintf(temp,29,"%s","Send Int (Sec)");
 strPad(temp,padder,25);
   currentLine += "<label for=\"SEND\">" + (String) temp + "</label>";
     currentLine += "<input type=\"text\" id=\"SEND\" name=\"SendInt\" value=\"" + String(Sensors[j].SendingInt,DEC) + "\"><br>";
 
 /*
-  sprintf(temp,"%s","Recheck Sensor");
+  snprintf(temp,29,"%s","Recheck Sensor");
   strPad(temp,padder,25);
   currentLine += "<label for=\"recheck\" class=\"switch\">" + (String) temp;
   currentLine += "<input id=\"recheck\" type=\"checkbox\" name=\"recheckSensor\"><span class=\"slider round\"></span></label><br>";
@@ -1533,6 +1552,10 @@ void handleNotFound(){
 bool SendData(struct SensorVal *snsreading) {
   if (bitRead(snsreading->Flags,1) == 0) return false;
   
+#ifdef _DEBUG
+  Serial.printf("SENDDATA: Sending data. Sensor is currently named %s. \n", snsreading->snsName);
+#endif
+
   WiFiClient wfclient;
   HTTPClient http;
     
@@ -1588,11 +1611,12 @@ bool SendData(struct SensorVal *snsreading) {
             Serial.print("sending this message: ");
             Serial.println(URL.c_str());
         #endif
-    
+
       http.begin(wfclient,URL.c_str());
-      httpCode = http.GET();
+      httpCode = (int) http.GET();
       payload = http.getString();
       http.end();
+
         #ifdef _DEBUG
           Serial.print("Received: ");
           Serial.println(payload);
@@ -1602,17 +1626,33 @@ bool SendData(struct SensorVal *snsreading) {
           Serial.println(" ");
         #endif
 
-        ipindex++;
+    #ifdef _DEBUG
+      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
+    #endif
 
         if (httpCode == 200) {
           isGood = true;
           SERVERIP[ipindex].server_status = httpCode;
         } 
+    #ifdef _DEBUG
+      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
+    #endif
+
+    #ifdef _DEBUG
+      Serial.printf("SENDDATA: Sent to %d. Sensor is now named %s. \n", ipindex,snsreading->snsName);
+    #endif
+
+      ipindex++;
+
     } while(ipindex<NUMSERVERS);
   
     
   }
-     return isGood;
+#ifdef _DEBUG
+  Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
+#endif
+
+  return isGood;
 }
 
 
@@ -1635,13 +1675,28 @@ bool ReadData(struct SensorVal *P) {
       #endif
       break;
     case 3: //soil
-      #ifdef _USESOIL
+      #ifdef _USESOILCAP
         //soil moisture v1.2
         val = analogRead(P->snsPin);
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
         val =  (int) ((-0.28571*val+228.5714)*100); //round value
         P->snsValue =  val/100;
       #endif
+
+      #ifdef _USESOILRES
+        //soil moisture by stainless steel wire (Resistance)
+        digitalWrite(SOILDIO, HIGH);
+        delay(100);
+        val = analogRead(P->snsPin);
+        digitalWrite(SOILDIO, LOW);
+        //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
+        //so R_soil = R_fixed * (3.3/Vsoil -1)
+      
+        val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
+        P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value
+        
+      #endif
+
       break;
     case 4: //AHT Temp
       #ifdef _USEAHT
@@ -1756,47 +1811,47 @@ bool ReadData(struct SensorVal *P) {
         if (BAR_HX[2]>0) {
           if (BAR_HX[0]-BAR_HX[2] >= 1.1 && BAR_HX[0] >= 1015) {
             P->snsValue = 1;
-            sprintf(WEATHER,"Poor Weather");
+            snprintf(WEATHER,22,"Poor Weather");
           }
           if (BAR_HX[0]-BAR_HX[2] >= 6) {
             P->snsValue = 2;
-            sprintf(WEATHER,"Strong Winds");
+            snprintf(WEATHER,22,"Strong Winds");
           }
           if (BAR_HX[0]-BAR_HX[2] >= 10) {
             P->snsValue = 3;        
-            sprintf(WEATHER,"Gale");
+            snprintf(WEATHER,22,"Gale");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 1.1 && BAR_HX[0] <= 1009) {
             P->snsValue = -1;
-            sprintf(WEATHER,"Rain");
+            snprintf(WEATHER,22,"Rain");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 4 && BAR_HX[0] <= 1023) {
             P->snsValue = -2;
-            sprintf(WEATHER,"Rain");
+            snprintf(WEATHER,22,"Rain");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 4 && BAR_HX[0] <= 1009) {
             P->snsValue = -3;
-            sprintf(WEATHER,"Storm");
+            snprintf(WEATHER,22,"Storm");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 6 && BAR_HX[0] <= 1009) {
             P->snsValue = -4;
-            sprintf(WEATHER,"Strong Storm");
+            snprintf(WEATHER,22,"Strong Storm");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 7 && BAR_HX[0] <= 990) {
             P->snsValue = -5;
-            sprintf(WEATHER,"Very Strong Storm");
+            snprintf(WEATHER,22,"Very Strong Storm");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 10 && BAR_HX[0] <= 1009) {
             P->snsValue = -6;
-            sprintf(WEATHER,"Gale");
+            snprintf(WEATHER,22,"Gale");
           }
           if (BAR_HX[2]-BAR_HX[0] >= 4 && BAR_HX[11]-BAR_HX[0] >= 8 && BAR_HX[0] <= 1005) {
             P->snsValue = -7;
-            sprintf(WEATHER,"TStorm");
+            snprintf(WEATHER,22,"TStorm");
           }
           if (BAR_HX[23]-BAR_HX[0] >= 24) {
             P->snsValue = -8;
-            sprintf(WEATHER,"BOMB");
+            snprintf(WEATHER,22,"BOMB");
           }
         }
       #endif
@@ -1923,7 +1978,7 @@ void pushDoubleArray(double arr[], byte N, double value) {
 }
 
 void Byte2Bin(uint8_t value, char* output, bool invert) {
-  sprintf(output,"00000000");
+  snprintf(output,8,"00000000");
   for (byte i = 0; i < 8; i++) {
     if (invert) {
       if (value & (1 << i)) output[i] = '1';
@@ -1942,28 +1997,28 @@ char* dateify(time_t t, String dateformat) {
 
   char holder[5] = "";
 
-  sprintf(holder,"%02d",month(t));
+  snprintf(holder,4,"%02d",month(t));
   dateformat.replace("mm",holder);
   
-  sprintf(holder,"%02d",day(t));
+  snprintf(holder,4,"%02d",day(t));
   dateformat.replace("dd",holder);
   
-  sprintf(holder,"%02d",year(t));
+  snprintf(holder,4,"%02d",year(t));
   dateformat.replace("yyyy",holder);
   
-  sprintf(holder,"%02d",year(t)-2000);
+  snprintf(holder,4,"%02d",year(t)-2000);
   dateformat.replace("yy",holder);
   
-  sprintf(holder,"%02d",hour(t));
+  snprintf(holder,4,"%02d",hour(t));
   dateformat.replace("hh",holder);
 
-  sprintf(holder,"%02d",minute(t));
+  snprintf(holder,4,"%02d",minute(t));
   dateformat.replace("nn",holder);
 
-  sprintf(holder,"%02d",second(t));
+  snprintf(holder,4,"%02d",second(t));
   dateformat.replace("ss",holder);
   
-  sprintf(DATESTRING,"%s",dateformat.c_str());
+  snprintf(DATESTRING,19,"%s",dateformat.c_str());
   
   return DATESTRING;  
 }
@@ -1978,3 +2033,6 @@ char* strPad(char* str, char* pad, byte L)     // Simple C string function
 
   return str;
 }
+
+
+

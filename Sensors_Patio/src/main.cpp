@@ -1,6 +1,8 @@
+
+
 #include <Arduino.h>
 
-//#define DEBUG_ 1
+//#define _DEBUG 1
 #define _USE8266 1
 //#define _USE32
 
@@ -9,15 +11,15 @@
 #define SENSORNUM 5 //be sure this matches SENSORTYPES
 
 
-const uint8_t SENSORTYPES[SENSORNUM] = {1,2,9,10,12};
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12};
 
-const uint8_t MONITORED_SNS = 1+2+4+16; //from R to L each bit represents a sensor, 255 means all sensors are monitored
+const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-#define DHTTYPE    DHT22     // DHT11 or DHT22
-#define DHTPIN 0
+//#define DHTTYPE    DHT22     // DHT11 or DHT22
+//#define DHTPIN 0
 #define _USEBMP  1
-//#define _USEAHT 1
+#define _USEAHT 1
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOIL 1
@@ -253,6 +255,7 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 #endif
 
 #ifdef _USEAHT
+  #include <Wire.h>
   #include <AHTxx.h>
   
 
@@ -436,6 +439,8 @@ byte CURRENTSENSOR_WEB = 1;
 void setup()
 {
 byte i;
+uint32_t time_limit = millis();
+
 
   SERVERIP[0].IP = {192,168,68,93};
   SERVERIP[1].IP = {192,168,68,106};
@@ -444,7 +449,7 @@ byte i;
   Wire.begin(); 
   Wire.setClock(400000L);
   
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("oled begin");
     #endif
 
@@ -477,7 +482,7 @@ byte i;
 
 
   
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.begin(115200);
     Serial.println("Begin Setup");
   #endif
@@ -491,19 +496,20 @@ byte i;
         oled.println("WiFi Starting.");
       #endif
 
+WiFi.setAutoReconnect(true);
   WiFi.begin(ESP_SSID, ESP_PASS);
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("wifi begin");
     #endif
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println();
     Serial.print("Connecting");
   #endif
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(200);
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.print(".");
     #endif
     #ifdef _USESSD1306
@@ -513,14 +519,14 @@ byte i;
 
   MYIP.IP = WiFi.localIP();
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("");
     Serial.print("Wifi OK. IP is ");
     Serial.println(MYIP.IP.toString());
     Serial.println("Connecting ArduinoOTA...");
     #endif
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println("Connected!");
     Serial.println(WiFi.localIP());
   #endif
@@ -543,17 +549,17 @@ byte i;
   // ArduinoOTA.setPassword((const char *)"123");
 
   ArduinoOTA.onStart([]() {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("OTA started");
     #endif
   });
   ArduinoOTA.onEnd([]() {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.println("OTA End");
     #endif
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
     #endif
     #ifdef _USESSD1306
@@ -567,7 +573,7 @@ byte i;
 
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.printf("Error[%u]: ", error);
       if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
       else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -632,7 +638,7 @@ byte i;
     server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
     server.begin();
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("HTML server started!");
     #endif
 
@@ -661,9 +667,9 @@ byte i;
       LAST_BAR_READ=0; 
     #endif
   
-  
+  time_limit = millis() + 15000;
   #ifdef _USEAHT
-    while (aht21.begin() != true)
+    while (aht21.begin() != true && millis() < time_limit)
     {
       Serial.println(F("AHT2x not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
     }
@@ -671,7 +677,7 @@ byte i;
   #endif
 
   #ifdef DHTTYPE
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("dht begin");
     #endif
     dht.begin();
@@ -679,14 +685,14 @@ byte i;
 
 
   #ifdef _USEBMP
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.println("bmp begin");
     #endif
-    while (!bmp.begin(0x76)) { //default address is 0x77, but amazon review says this is 0x76
-
+    time_limit = millis() + 15000;
+    while (!bmp.begin(0x76) && millis()<time_limit) { //default address is 0x77, but amazon review says this is 0x76
       #ifdef _USESSD1306
         oled.println("BMP failed.");
-        #ifdef DEBUG_
+        #ifdef _DEBUG
             Serial.println("bmp failed.");
         #endif
         delay(500);
@@ -711,11 +717,12 @@ byte i;
 
   #endif
   #ifdef _USEBME
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println("bme begin");
     #endif
 
-    while (!bme.begin()) {
+    time_limit = millis()+15000;
+    while (!bme.begin() && millis()<time_limit) {
       #ifdef _USESSD1306
         oled.println("BME failed.");
         delay(500);
@@ -747,13 +754,13 @@ byte i;
   LittleFS.setConfig(cfg);
   
   if(!LittleFS.begin()){
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("An Error has occurred while mounting LittleFS");
     #endif
     while (true) {
     }
   } else {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("FileSys OK. Config Wifi");
     #endif
 
@@ -779,7 +786,7 @@ byte i;
       case 1: //DHT temp
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_T",ARDNAME);
+          snprintf(Sensors[i].snsName,25,"%s_T",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -795,7 +802,7 @@ byte i;
       case 2: //DHT RH
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
-          sprintf(Sensors[i].snsName,"%s_RH",ARDNAME);
+          snprintf(Sensors[i].snsName,25,"%s_RH",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 25;
@@ -811,7 +818,7 @@ byte i;
       case 3: //soil
         #ifdef _USESOIL
           Sensors[i].snsPin=SOILPIN;
-          sprintf(Sensors[i].snsName,"%s_soil",ARDNAME);
+          snprintf(Sensors[i].snsName,25,"%s_soil",ARDNAME);
           Sensors[i].limitUpper = 290;
           Sensors[i].limitLower = 25;
           Sensors[i].PollingInt=120;
@@ -821,7 +828,7 @@ byte i;
       case 4: //AHT temp
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
-          sprintf(Sensors[i].snsName,"%s_AHT_T",ARDNAME);
+          snprintf(Sensors[i].snsName,25,"%s_AHT_T",ARDNAME);
           Sensors[i].limitUpper = 115;
           Sensors[i].limitLower = 25;
           Sensors[i].PollingInt=1*60;
@@ -831,7 +838,7 @@ byte i;
       case 5:
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
-          sprintf(Sensors[i].snsName,"%s_AHT_RH",ARDNAME);
+          snprintf(Sensors[i].snsName,25,"%s_AHT_RH",ARDNAME);
           Sensors[i].limitUpper = 85;
           Sensors[i].limitLower = 25;
           Sensors[i].PollingInt=60;
@@ -842,7 +849,7 @@ byte i;
 
       case 7: //dist
         Sensors[i].snsPin=0; //not used
-        sprintf(Sensors[i].snsName,"%s_Dist",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_Dist",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = 10;
         Sensors[i].PollingInt=100;
@@ -850,7 +857,7 @@ byte i;
         break;
       case 9: //BMP pres
         Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
         Sensors[i].limitLower = 1009;
         Sensors[i].PollingInt=30*60;
@@ -858,7 +865,7 @@ byte i;
         break;
       case 10: //BMP temp
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMP_t",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_BMP_t",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -872,7 +879,7 @@ byte i;
         break;
       case 11: //BMP alt
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = -5;
         Sensors[i].PollingInt=60000;
@@ -880,7 +887,7 @@ byte i;
         break;
       case 12: //Bar prediction
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_Pred",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_Pred",ARDNAME);
         Sensors[i].limitUpper = 0;
         Sensors[i].limitLower = 0; //anything over 0 is an alarm
         Sensors[i].PollingInt=60*60;
@@ -890,7 +897,7 @@ byte i;
         break;
       case 13: //BME pres
         Sensors[i].snsPin=0; //i2c
-        sprintf(Sensors[i].snsName,"%s_hPa",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
         Sensors[i].limitLower = 1009;
         Sensors[i].PollingInt=30*60;
@@ -898,7 +905,7 @@ byte i;
         break;
       case 14: //BMEtemp
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMEt",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_BMEt",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 35;
@@ -912,7 +919,7 @@ byte i;
         break;
       case 15: //bme rh
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_BMErh",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_BMErh",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 85;
             Sensors[i].limitLower = 15;
@@ -926,7 +933,7 @@ byte i;
         break;
       case 16: //bme alt
         Sensors[i].snsPin=0;
-        sprintf(Sensors[i].snsName,"%s_alt",ARDNAME);
+        snprintf(Sensors[i].snsName,25,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
         Sensors[i].limitLower = -5;
         Sensors[i].PollingInt=15*60*60;
@@ -965,6 +972,14 @@ bool checkSensorValFlag(struct SensorVal *P) {
   else bitWrite(P->Flags,0,0);
 
 return bitRead(P->Flags,0);
+
+
+    #ifdef _DEBUG
+      Serial.print("Setup ended. Time is ");
+      Serial.println(dateify(now(),"hh:nn:ss"));
+
+    #endif
+
 
 }
 
@@ -1038,13 +1053,17 @@ void loop() {
   timeClient.update();
 
   time_t t = now(); // store the current time in time variable t
-  time_t t2;
   
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
     bool flagstatus=false;
     
+    #ifdef _DEBUG
+      Serial.print("1 second. Time is ");
+      Serial.println(dateify(t,"hh:nn:ss"));
+
+    #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
       flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
@@ -1074,7 +1093,7 @@ void loop() {
     OldTime[3] = weekday();
   
   //sync time
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       t=now();
       Serial.print("Current time is ");
       Serial.print(hour(t));
@@ -1311,7 +1330,7 @@ currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
     char cbuff[9] = "";
     Byte2Bin(Sensors[j].Flags,cbuff,1);
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.print("SpecType after byte2bin: ");
         Serial.println(cbuff);
     #endif
@@ -1319,7 +1338,7 @@ currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
     currentLine +=  cbuff;
     currentLine += "\n\n";
   }
-   #ifdef DEBUG_
+   #ifdef _DEBUG
       Serial.println(currentLine);
     #endif
   server.send(200, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
@@ -1504,7 +1523,7 @@ strPad(temp,padder,25);
 
 currentLine += "</p></body></html>";
 
-   #ifdef DEBUG_
+   #ifdef _DEBUG
       Serial.println(currentLine);
     #endif
 
@@ -1525,7 +1544,7 @@ bool SendData(struct SensorVal *snsreading) {
     byte ipindex=0;
     bool isGood = false;
 
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println(" ");
       Serial.println("*****************");
       Serial.println("Sending Data");
@@ -1570,7 +1589,7 @@ bool SendData(struct SensorVal *snsreading) {
     //note that I'm coverting lastreadtime to GMT
   
       snsreading->LastSendTime = now();
-        #ifdef DEBUG_
+        #ifdef _DEBUG
             Serial.print("sending this message: ");
             Serial.println(URL.c_str());
         #endif
@@ -1579,7 +1598,7 @@ bool SendData(struct SensorVal *snsreading) {
       httpCode = http.GET();
       payload = http.getString();
       http.end();
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.print("Received: ");
           Serial.println(payload);
           Serial.print("Code: ");
@@ -1636,7 +1655,7 @@ bool ReadData(struct SensorVal *P) {
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
             P->snsValue = (100*(val*9/5+32))/100; 
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Temperature...: "));
               Serial.print(P->snsValue);
               Serial.println(F("F"));
@@ -1644,7 +1663,7 @@ bool ReadData(struct SensorVal *P) {
           }
           else
           {
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Temperature Error"));
             #endif
           }
@@ -1657,7 +1676,7 @@ bool ReadData(struct SensorVal *P) {
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
             P->snsValue = (val*100)/100; 
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT HUmidity...: "));
               Serial.print(P->snsValue);
               Serial.println(F("%"));
@@ -1665,7 +1684,7 @@ bool ReadData(struct SensorVal *P) {
           }
           else
           {
-            #ifdef DEBUG_
+            #ifdef _DEBUG
               Serial.print(F("AHT Humidity Error"));
             #endif
           }
@@ -1829,7 +1848,7 @@ bool ReadData(struct SensorVal *P) {
   P->LastReadTime = now(); //localtime
   
 
-#ifdef DEBUG_
+#ifdef _DEBUG
       Serial.println(" ");
       Serial.println("*****************");
       Serial.println("Reading Sensor");

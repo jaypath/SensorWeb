@@ -1,8 +1,11 @@
 //#define _DEBUG 99
 #define ARDNAME "GoogleServer"
 #define _USETFT
+#define _USETOUCH
 #define NOISY false
-//#define _USEOTA
+#define _USEOTA
+#define ALTSCREENTIME 30
+
 
 #include <Arduino.h>
 #include <String.h>
@@ -18,6 +21,9 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include "SPI.h"
+#include <SD.h>
+#include <FS.h>
+
 #ifdef _USEOTA
   #include <ArduinoOTA.h>
 #endif
@@ -133,7 +139,7 @@ public:
 static LGFX tft;            // declare display variable
 
 // Variables for touch x,y
-static int32_t x,y;
+int32_t touch_x,touch_y;
 
 //__________________________Graphics
 
@@ -158,7 +164,7 @@ const char PRIVATE_KEY[] PROGMEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgk
 #define USER_EMAIL "jaypath@gmail.com"
 
 
-#define SENSORNUM 30
+#define SENSORNUM 40
 
 
 struct SensorVal {
@@ -192,21 +198,38 @@ union convertBYTE {
 };
 
 
-uint16_t FG_COLOR = TFT_LIGHTGREY; //Foreground color
-uint16_t BG_COLOR = TFT_BLACK; //light gray
+uint16_t FG_COLOR = TFT_BLACK; //Foreground color
+uint16_t BG_COLOR = TFT_LIGHTGREY; //light gray
+int hourly_temp[12];
+int hourly_weatherID[12];
+int daily_weatherID[5];
+int daily_tempMAX[5];
+int daily_tempMIN[5];
 
-bool taskComplete = false;
+
+
+uint32_t ALTSCREEN = 0;
+bool SHOWMAIN = true;
+
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
-uint32_t lastEvent = 0;
+uint32_t lastUploadTime = 0;
+bool lastUploadSuccess = true;
 byte uploadQ = 20; //upload every __ minutes
+byte uploadQFailed = 2; //upload every __ minutes if the last one failed
 int DSTOFFSET = 0;
-char DATESTRING[24]="";
 byte OldTime[5] = {0,0,0,0,0};
 int Ypos = 0;
 bool isFlagged = false;
 char tempbuf[70];          
 
-void drawScreen();
+
+int fcn_write_sensor_data(byte i, int y);
+void drawScreen_list();
+void drawScreen_main();
+void getWeather();
+uint16_t read16(fs::File &f);
+uint32_t read32(fs::File &f);
+
 String file_findSpreadsheetIDByName(String sheetname, bool createfile = false);
 bool file_deleteSpreadsheetByID(String fileID);
 String file_createSpreadsheet(String sheetname, bool addHeader = true);
@@ -230,11 +253,101 @@ int16_t findDev(struct SensorVal *S, bool oldest = false);
 double valSensorType(byte snsType, bool asAvg = false, int isflagged=-1, int isoutdoor=-1, uint32_t MoreRecentThan = 0);
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 bool IPString2ByteArray(String IPstr,byte* IP);
+String fcnMONTH(time_t t);
 String fcnDOW(time_t t);
 bool file_uploadData(void);
 void fcnChooseTxtColor(byte snsIndex);
 String IP2String(byte* IP);
+uint32_t temp2color(int temp);
+uint16_t temp2color16(int temp);
 
+void drawBmp(const char *filename, int16_t x, int16_t y);
+int ID2Icon(int weatherID);
+void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1);
+void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x=-1,int y=-1);
+
+
+void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y) {
+  //print two temperatures with appropriate color, centered at x and y (which are optional)
+//if x and y are not provided, just print at the current x/y position
+
+String temp = (String) value1 + "/" + (String) value2;
+int X,Y;
+if (x>=0 && y>=0) {
+  tft.setTextFont(FNTSZ);
+  X = x-tft.textWidth(temp)/2;
+  if (X<0) X=0;
+  Y = y-tft.fontHeight(FNTSZ)/2;
+  if (Y<0) Y=0;
+} else {
+  X=x;
+  Y=y;
+}
+
+tft.setTextDatum(TL_DATUM);
+
+tft.setCursor(X,Y);
+tft.setTextColor(temp2color(value1));
+tft.print(value1);
+tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.print("/");
+tft.setTextColor(temp2color(value2));
+tft.print(value2);
+tft.setTextColor(FG_COLOR,BG_COLOR);
+
+return;
+}
+
+
+void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y) {
+  //print  temperature with appropriate color, centered at x and y (which are optional)
+//if x and y are not provided, just print at the current x/y position
+
+tft.setTextDatum(MC_DATUM);
+tft.setCursor(x,y);
+tft.setTextColor(temp2color(value),BG_COLOR);
+tft.drawString((String) value,x,y);
+
+tft.setTextColor(FG_COLOR,BG_COLOR);
+
+return;
+}
+
+uint16_t temp2color16(int temp) {
+  uint8_t temp_colors[104] = {
+  20, 255, 0, 255, //20
+  24, 200, 0, 200, //21 - 24
+  27, 200, 0, 100, //25 - 27
+  29, 200, 100, 100, //28 - 29
+  32, 200, 200, 200, //30 - 32
+  34, 150, 150, 200, //33 - 34
+  37, 0, 0, 150, //35 - 37
+  39, 0, 50, 200, //38 - 39
+  42, 0, 100, 200, //40 - 42
+  44, 0, 150, 150, //43 - 44
+  47, 0, 200, 150, //45 - 47
+  51, 0, 200, 100, //48 - 51
+  54, 0, 150, 100, //52 - 54
+  59, 0, 100, 100, //55 - 59
+  64, 0, 100, 50, //60 - 64
+  69, 0, 100, 0, //65 - 69
+  72, 0, 150, 0, //70 - 72
+  75, 0, 200, 0, //73 - 75
+  79, 50, 200, 0, //76 - 79
+  82, 100, 200, 0, //80 - 82
+  84, 150, 200, 0, //83 - 84
+  87, 200, 100, 50, //85 - 87
+  89, 200, 100, 100, //88 - 89
+  92, 200, 50, 50, //90 - 92
+  94, 250, 50, 50, //93 - 94
+  100, 250, 0, 0 //95 - 100
+};
+  byte j = 0;
+  while (temp>temp_colors[j]) {
+    j=j+4;
+  }
+  return tft.color565(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
+}
 
 
 void initSensor(byte k) {
@@ -255,6 +368,35 @@ void initSensor(byte k) {
   Sensors[k].Flags = 0;
 }
 
+String fcnMONTH(time_t t) {
+    byte m=month(t);
+    if (m == 1) return "January";
+    if (m == 2) return "February";
+    if (m == 3) return "March";
+    if (m == 4) return "April";
+    if (m == 5) return "May";
+    if (m == 6) return "June";
+    if (m == 7) return "July";
+    if (m == 8) return "August";
+    if (m == 9) return "September";
+    if (m == 10) return "October";
+    if (m == 11) return "November";
+    if (m == 12) return "December";
+
+    return "???";
+}
+
+String fcnDOW(time_t t) {
+    if (weekday(t) == 1) return "Sun";
+    if (weekday(t) == 2) return "Mon";
+    if (weekday(t) == 3) return "Tue";
+    if (weekday(t) == 4) return "Wed";
+    if (weekday(t) == 5) return "Thu";
+    if (weekday(t) == 6) return "Fri";
+    if (weekday(t) == 7) return "Sat";
+
+    return "???";
+}
 
 uint8_t countDev() {
   uint8_t c = 0;
@@ -330,6 +472,8 @@ void clearTFT() {
 void setup()
 {
 
+
+  SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
  tft.init();
 
   // Setting display to landscape
@@ -338,6 +482,13 @@ void setup()
   clearTFT();
 
   tft.printf("Running setup\n");
+
+  if(!SD.begin(41)){  //CS=41
+    tft.println("SD Mount Failed");
+  } 
+  else {
+    tft.println("SD Mount Succeeded");
+  }
 
   // Get flash size and display
   tft.printf("FLASH size: %d bytes",ESP.getMinFreeHeap());
@@ -522,9 +673,98 @@ delay(2000);
     tft.println(minute());
   #endif
 
-
+getWeather();
 
 }
+
+uint16_t read16(fs::File &f) {
+  uint16_t result;
+  ((uint8_t *)&result)[0] = f.read(); // LSB
+  ((uint8_t *)&result)[1] = f.read(); // MSB
+  return result;
+}
+
+uint32_t read32(fs::File &f) {
+  uint32_t result;
+  ((uint8_t *)&result)[0] = f.read(); // LSB
+  ((uint8_t *)&result)[1] = f.read();
+  ((uint8_t *)&result)[2] = f.read();
+  ((uint8_t *)&result)[3] = f.read(); // MSB
+  return result;
+}
+
+
+void drawBmp(const char *filename, int16_t x, int16_t y) {
+
+  if ((x >= TFT_WIDTH) || (y >= TFT_HEIGHT)) return;
+
+  fs::File bmpFS;
+
+  // Open requested file on SD card
+  bmpFS = SD.open(filename, "r");
+
+  if (!bmpFS)
+  {
+    tft.print(filename);
+    return;
+  }
+
+  uint32_t seekOffset;
+  uint16_t w, h, row, col;
+  uint8_t  r, g, b;
+
+  uint32_t startTime = millis();
+
+  if (read16(bmpFS) == 0x4D42)
+  {
+    read32(bmpFS);
+    read32(bmpFS);
+    seekOffset = read32(bmpFS);
+    read32(bmpFS);
+    w = read32(bmpFS);
+    h = read32(bmpFS);
+
+    if ((read16(bmpFS) == 1) && (read16(bmpFS) == 24) && (read32(bmpFS) == 0))
+    {
+      y += h - 1;
+
+      bool oldSwapBytes = tft.getSwapBytes();
+      tft.setSwapBytes(true);
+      bmpFS.seek(seekOffset);
+
+      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
+      uint8_t lineBuffer[w * 3 + padding];
+
+      for (row = 0; row < h; row++) {
+        
+        bmpFS.read(lineBuffer, sizeof(lineBuffer));
+        uint8_t*  bptr = lineBuffer;
+        uint16_t* tptr = (uint16_t*)lineBuffer;
+        // Convert 24 to 16 bit colours
+        for (uint16_t col = 0; col < w; col++)
+        {
+          b = *bptr++;
+          g = *bptr++;
+          r = *bptr++;
+        
+          *tptr = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+          if (*tptr==0xFFFF) *tptr = BG_COLOR; //convert white pixels to background
+          *tptr++;
+        }
+
+        // Push the pixel row to screen, pushImage will crop the line if needed
+        // y is decremented as the BMP image is drawn bottom up
+        tft.pushImage(x, y--, w, 1, (uint16_t*)lineBuffer);
+      }
+      tft.setSwapBytes(oldSwapBytes);
+      //Serial.print("Loaded in "); Serial.print(millis() - startTime);
+      //Serial.println(" ms");
+    }
+    else tft.println("BMP format not recognized.");
+  }
+  bmpFS.close();
+}
+
 
 void timeUpdate() {
   timeClient.update();
@@ -540,91 +780,94 @@ void loop()
 {
     //Call ready() repeatedly in loop for authentication checking and processing
     bool ready = GSheet.ready();
+  time_t t = now();
+  
 
 #ifdef _USEOTA
   ArduinoOTA.handle();
+#endif
+#ifdef _USETOUCH
+  if (tft.getTouch(&touch_x, &touch_y)) {
+      #ifdef _DEBUG
+        Serial.printf("Touch: X= %d, Y= %d\n",touch_x, touch_y);
+      #endif
+
+    if (SHOWMAIN==false && (touch_x > TFT_WIDTH-40 && touch_y > TFT_HEIGHT-40)) {
+      //upload to gsheet
+      #ifdef _DEBUG
+        Serial.printf("Upload to gsheets requested\n");
+      #endif
+      lastUploadSuccess=file_uploadData();
+      #ifdef _DEBUG
+        Serial.printf("Uploaded to google sheets %s.\n", lastUploadSuccess ? "succeeded" : "failed");
+      #endif
+      
+      drawScreen_list();
+      return;
+    } else {
+
+      ALTSCREEN = t;
+      SHOWMAIN = !SHOWMAIN;
+      if (SHOWMAIN) drawScreen_main();
+      else     drawScreen_list();
+      delay(100);
+    }    
+  }
+
 #endif
 
   server.handleClient();
   timeClient.update();
 
-  time_t t = now();
-  
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
-    uint32_t b = millis()/1000;
-    
-    #ifdef _DEBUG
-    Serial.println("1 second: ");
-    Serial.print(dateify(0,"hh:nn:ss"));
-    Serial.print("  ");
-    Serial.print((uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000);
-    Serial.print("k  ");
-    Serial.print((uint32_t) ESP.getMinFreeHeap()/1000);
-    Serial.print("k");
-    
-    
-    Serial.print("Alive for ");
-    if (b > 86400) {
-      Serial.print((int) (b)/86400);
-      Serial.print("d");
-    } else {
-      if (b > 3600) {
-        Serial.print((int) (b)/3600);
-        Serial.print("h");
-      } else {
-        if (b > 120) {
-          Serial.print((int) (b)/60);
-          Serial.print("m");  
-        } else {
-          Serial.print((int) (b));
-          Serial.println("s");
-        } 
 
-      }
-    }      
-    #endif    
-    tft.setTextColor(FG_COLOR,BG_COLOR);
+    if (t-ALTSCREEN<ALTSCREENTIME && SHOWMAIN==false) {
 
-    tft.setTextFont(SMALLFONT);
-    tft.setCursor(0,440);
-    tft.print(dateify(0,"hh:nn:ss"));
-    tft.print("  ");
-    tft.print((uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000);
-    tft.print("k  ");
-    tft.print((uint32_t) ESP.getMinFreeHeap()/1000);
-    tft.print("k");
-    
-    tft.setCursor(0,440+tft.fontHeight(SMALLFONT)+2);
-    
-    tft.print("Alive for ");
-
-    if (b > 86400) {
-      tft.print((int) (b)/86400);
-      tft.print("d");
-    } else {
-      if (b > 3600) {
-        tft.print((int) (b)/3600);
-        tft.print("h");
-      } else {
-        if (b > 120) {
-          tft.print((int) (b)/60);
-          tft.print("m");  
-        } else {
-          tft.print((int) (b));
-          tft.print("s");
-        } 
-        tft.print("             ");
-      }
-    }
-    
-    tft.setCursor(0,440+2*(tft.fontHeight(SMALLFONT)+2));
-    tft.printf("Next Upload in: %d min",uploadQ - minute(t)%uploadQ);
-
-
-    tft.setCursor(0,Ypos);
+      uint32_t b = millis()/1000;
       
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+
+      tft.setTextFont(SMALLFONT);
+      tft.setCursor(0,440);
+      tft.print(dateify(0,"hh:nn:ss"));
+      tft.print("  ");
+      tft.print((uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000);
+      tft.print("k  ");
+      tft.print((uint32_t) ESP.getMinFreeHeap()/1000);
+      tft.print("k");
+      
+      tft.setCursor(0,440+tft.fontHeight(SMALLFONT)+2);
+      
+      tft.print("Alive for ");
+
+      if (b > 86400) {
+        tft.print((int) (b)/86400);
+        tft.print("d");
+      } else {
+        if (b > 3600) {
+          tft.print((int) (b)/3600);
+          tft.print("h");
+        } else {
+          if (b > 120) {
+            tft.print((int) (b)/60);
+            tft.print("m");  
+          } else {
+            tft.print((int) (b));
+            tft.print("s");
+          } 
+          tft.print("             ");
+        }
+      }
+      
+      tft.setCursor(0,440+2*(tft.fontHeight(SMALLFONT)+2));
+      tft.printf("Last upload: %s @ %d min ago",lastUploadSuccess ? "success" : "fail", (int) ((now()-lastUploadTime)/60) );
+      tft.setCursor(0,440+3*(tft.fontHeight(SMALLFONT)+2));
+      tft.printf("Next Upload in: %d min",uploadQ - minute(t)%uploadQ);
+
+      tft.setCursor(0,Ypos);
+    }      
   }
       
   
@@ -634,9 +877,13 @@ void loop()
   OldTime[1] = minute();
   //do stuff every minute
   
-    drawScreen();
-
-    if (ready && (OldTime[1]%uploadQ)==0) {
+    if (t-ALTSCREEN<ALTSCREENTIME && SHOWMAIN==false) drawScreen_list;
+    else {
+      SHOWMAIN=true;
+      drawScreen_main();
+    }
+    
+    if (ready && ((lastUploadSuccess && (OldTime[1]%uploadQ)==0) || (lastUploadSuccess==false && (OldTime[1]%uploadQFailed)==0))) {
       #ifdef _DEBUG
         Serial.println("uploading to sheets!");
       #endif
@@ -645,12 +892,16 @@ void loop()
         sprintf(tempbuf,"Failed to upload!");
         tft.drawString(tempbuf, 0, Ypos);
         Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+        lastUploadSuccess=false;
+      }
+      else {
+        lastUploadSuccess=true;
       }
     }
 
     if (OldTime[2] != hour()) {
       OldTime[2] = hour(); 
-
+      getWeather();
       timeUpdate();
     }
 
@@ -684,14 +935,263 @@ void fcnChooseTxtColor(byte snsIndex) {
 }
 
 
-void drawScreen() {
+
+void getWeather() {
+  WiFiClient wfclient;
+  HTTPClient http;
+ 
+  if(WiFi.status()== WL_CONNECTED){
+    String payload;
+    String tempstring;
+    int httpCode=404;
+
+    tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=00&hourly_temp=1&hourly_temp=2&hourly_temp=3&hourly_temp=4&hourly_temp=5&hourly_temp=6&hourly_temp=7&hourly_temp=8&hourly_temp=9&hourly_temp=10&hourly_temp=11&hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_weatherID=8&hourly_weatherID=9&hourly_weatherID=10&hourly_weatherID=11&daily_weatherID=0&daily_weatherID=1&daily_weatherID=2&daily_weatherID=3&daily_weatherID=4&daily_tempMax=0&daily_tempMax=1&daily_tempMax=3&daily_tempMax=2&daily_tempMax=4&daily_tempMin=0&daily_tempMin=1&daily_tempMin=2&daily_tempMin=3&daily_tempMin=4";
+    
+    http.begin(wfclient,tempstring.c_str());
+    httpCode = http.GET();
+    payload = http.getString();
+    http.end();
+
+    http.useHTTP10(true);
+
+    for (byte j=0;j<12;j++) {
+      hourly_temp[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    }
+
+    for (byte j=0;j<12;j++) {
+      hourly_weatherID[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    }
+
+    for (byte j=0;j<5;j++) {
+      daily_weatherID[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    }
+
+    for (byte j=0;j<5;j++) {
+      daily_tempMAX[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of ";"
+    }
+
+    for (byte j=0;j<5;j++) {
+      daily_tempMIN[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    }
+
+
+  }
+
+}
+
+uint32_t temp2color(int temp) {
+  uint8_t temp_colors[104] = {
+  20, 255, 0, 255, //20
+  24, 200, 0, 200, //21 - 24
+  27, 200, 0, 100, //25 - 27
+  29, 200, 100, 100, //28 - 29
+  32, 200, 200, 200, //30 - 32
+  34, 150, 150, 200, //33 - 34
+  37, 0, 0, 150, //35 - 37
+  39, 0, 50, 200, //38 - 39
+  42, 0, 100, 200, //40 - 42
+  44, 0, 150, 150, //43 - 44
+  47, 0, 200, 150, //45 - 47
+  51, 0, 200, 100, //48 - 51
+  54, 0, 150, 100, //52 - 54
+  59, 0, 100, 100, //55 - 59
+  64, 0, 100, 50, //60 - 64
+  69, 0, 100, 0, //65 - 69
+  72, 0, 150, 0, //70 - 72
+  75, 0, 200, 0, //73 - 75
+  79, 50, 200, 0, //76 - 79
+  82, 100, 200, 0, //80 - 82
+  84, 150, 200, 0, //83 - 84
+  87, 200, 100, 50, //85 - 87
+  89, 200, 100, 100, //88 - 89
+  92, 200, 50, 50, //90 - 92
+  94, 250, 50, 50, //93 - 94
+  100, 250, 0, 0 //95 - 100
+};
+  byte j = 0;
+  while (temp>temp_colors[j]) {
+    j=j+4;
+  }
+
+  return tft.color888(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
+}
+
+void drawScreen_main() {
+  int Y = 0, X=0 ;
+  BG_COLOR = TFT_LIGHTGREY; //temp2color(hourly_temp[0]);
+  tft.clear(BG_COLOR);
+
+  tft.setTextColor(TFT_BLACK,BG_COLOR);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(8);
+  X = TFT_WIDTH/2;
+  Y=tft.fontHeight(8)/2+1;
+  snprintf(tempbuf,69,"%d:%02d",hour(),minute());
+  tft.drawString(tempbuf,X,Y);
+  Y+=tft.fontHeight(8)/2+5;
+  
+  Y+=tft.fontHeight(4)/2;
+  tft.setTextFont(4);
+  snprintf(tempbuf,69,"%s, %s %d",fcnDOW(now()),fcnMONTH(now()),day());
+  tft.drawString(tempbuf,X,Y);
+
+//  tft.setTextDatum(TL_DATUM);
+
+  Y+=tft.fontHeight(4)/2 + 2;
+
+    
+  snprintf(tempbuf,66,"/Icons/BMP120x120/%d.bmp",ID2Icon(daily_weatherID[0]));
+  drawBmp(tempbuf,(TFT_WIDTH-120)/2,Y);
+   
+  tft.setTextFont(6);
+  Y+=60;
+  X = ((TFT_WIDTH-120)/2)/2;
+  fcnPrintTxtColor(hourly_temp[0],6,X,Y);
+
+  tft.setTextFont(4);
+  X = TFT_WIDTH-((TFT_WIDTH-120)/2)/2;
+  fcnPrintTxtColor(daily_tempMAX[0],4,X,Y-tft.fontHeight(4)/2-5);
+  fcnPrintTxtColor(daily_tempMIN[0],4,X,Y+tft.fontHeight(4)/2+5);
+
+  Y+=60+2;
+  tft.setTextDatum(MC_DATUM);
+ 
+ 
+//draw 60x60 hourly bmps
+  X=TFT_WIDTH/4;
+  for (byte j=1;j<5;j++) {
+    snprintf(tempbuf,55,"/Icons/BMP60x60/%d.bmp",ID2Icon(hourly_weatherID[j*2]));
+    drawBmp(tempbuf,(j-1)*X+X/2-30,Y);
+ //   tft.setTextColor(temp2color(hourly_temp[j]),BG_COLOR);
+ 
+    tft.setTextFont(4);
+    tft.setTextDatum(MC_DATUM);
+    snprintf(tempbuf,55,"%s",dateify((now()+j*2*3600),"hour"));  
+    tft.drawString(tempbuf,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)/2);
+
+    fcnPrintTxtColor(hourly_temp[j*2],4,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)+2+tft.fontHeight(4)/2);
+  }
+
+  Y += 60+2+2*(tft.fontHeight(4)+2);
+
+  tft.setTextFont(2);
+
+  X=TFT_WIDTH/3;
+  for (byte j=1;j<4;j++) {
+    snprintf(tempbuf,65,"/Icons/BMP60x60/%d.bmp",ID2Icon(daily_weatherID[j]));
+    drawBmp(tempbuf,(j-1)*X+X/2-30,Y);
+//    tft.setTextColor(temp2color(daily_tempMAX[j]),BG_COLOR);
+    tft.setTextFont(4);
+    tft.setTextDatum(MC_DATUM);
+    snprintf(tempbuf,55,"%s",fcnDOW(now()+j*86400));
+    tft.drawString(tempbuf,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)/2);
+
+    tft.setTextFont(4);
+    fcnPrintTxtColor2(daily_tempMIN[j],daily_tempMAX[j],4,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)+2+tft.fontHeight(4)/2);
+
+  }
+
+  Y += 60+5+tft.fontHeight(4)+5;
+
+}
+
+int ID2Icon(int weatherID) {
+  //provide a weather ID, obtain an icon ID
+
+  if (weatherID>=200 && weatherID<300) { //t-storm group
+    if (weatherID==200 || weatherID==201 || weatherID==210 || weatherID==211 ||  weatherID>229) {
+      return 200;
+    } else {
+      return 201;
+    }
+  }
+    
+  if (weatherID>=300 && weatherID<400) { //drizzle group
+    return 301;
+  }
+
+  if (weatherID>=500 && weatherID<600) { //rain group
+    if (weatherID==500 || weatherID==520 ) return 500;
+    if (weatherID==501 || weatherID==521) return 501;
+    if (weatherID==502 || weatherID==522) return 502;
+    if (weatherID==503 || weatherID == 504 || weatherID==531) return 503;
+    if (weatherID==511) return 511;
+  }
+    
+  if (weatherID>=600 && weatherID<700) { //snow group
+    if (weatherID==600 || weatherID==615 || weatherID==620 ) return 600;
+    if (weatherID==601 || weatherID==616|| weatherID==621) return 601;
+    if (weatherID==602 || weatherID==622) return 602;
+    return 611; //sleet category
+    
+  }
+
+  if (weatherID>=700 && weatherID<800) { //atm group
+    return 700; //sleet category
+  }
+
+  if (weatherID>=800) { //clear group
+  
+    if (weatherID>=801 && weatherID<803) return 801;
+    return weatherID; //otherwise weatherID matches iconID!
+    
+  }
+
+  return 999;
+}
+
+
+int fcn_write_sensor_data(byte i, int y) {
+    //i is the sensor number, y is Ypos
+    //writes a line of data, then returns the new y pos
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setTextDatum(TL_DATUM);
+      fcnChooseTxtColor(i);
+
+      tft.setTextFont(SMALLFONT);
+
+      snprintf(tempbuf,60,"%d.%d", Sensors[i].ardID,Sensors[i].snsType);
+      tft.drawString(tempbuf, 0, y);
+      
+      dateify(Sensors[i].timeLogged,"hh:nn");
+      tft.drawString(tempbuf, 47, Ypos);
+
+      snprintf(tempbuf,60,"%s", Sensors[i].snsName);
+      tft.drawString(tempbuf, 87, Ypos);
+ 
+      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MIN);
+      tft.drawString(tempbuf, 172, Ypos);
+
+      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue);
+      tft.drawString(tempbuf, 212, Ypos);
+      
+      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MAX);
+      tft.drawString(tempbuf, 252, Ypos);
+
+      snprintf(tempbuf,60,"%s",Sensors[i].isSent ? "**" : "");
+      tft.drawString(tempbuf, 292, Ypos);
+
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+
+      return y + tft.fontHeight(SMALLFONT)+2;
+
+}
+
+void drawScreen_list() {
   clearTFT();
+  BG_COLOR = TFT_LIGHTGRAY;
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setTextFont(4);
   tft.setTextDatum(MC_DATUM);
-  sprintf(tempbuf,"%s",dateify(now(),"hh:nn mm/dd"));
+  dateify(now(),"hh:nn mm/dd"); //puts in tempbuf
   Ypos = Ypos + tft.fontHeight(4)/2;
-  tft.drawString(tempbuf, tft.width() / 2, Ypos);
+  tft.drawString(tempbuf, TFT_WIDTH / 2, Ypos);
   tft.setTextDatum(TL_DATUM);
 
   Ypos += tft.fontHeight(4)/2 + 6;
@@ -736,74 +1236,43 @@ void drawScreen() {
 
   tft.setTextFont(SMALLFONT); //
   byte usedINDEX = 0;  
-  byte used[SENSORNUM];
+  byte snsindex[SENSORNUM];
+
+//initialize index to Sensors 
+  for (byte i=0;i<SENSORNUM;i++) {
+    snsindex[i]=255;
+  }
 
   for(byte i=0;i<SENSORNUM;i++) {
     //march through sensors and list by ArdID
     
-    if (Sensors[i].snsID>0 && Sensors[i].snsType>0 && inIndex(i,used,SENSORNUM) == false && Sensors[i].timeLogged>0 ) {
-      used[usedINDEX++] = i;
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      fcnChooseTxtColor(i);
-      tft.setTextFont(SMALLFONT);
+    if (Sensors[i].snsID>0 && Sensors[i].snsType>0 && inIndex(i,snsindex,SENSORNUM) == false && Sensors[i].timeLogged>0 ) {
+      snsindex[usedINDEX++] = i;
+      Ypos = fcn_write_sensor_data(i,Ypos);
 
-      snprintf(tempbuf,60,"%s", (String) Sensors[i].ardID + (String) "." + (String) Sensors[i].snsType);
-      tft.drawString(tempbuf, 0, Ypos);
-
-      snprintf(tempbuf,60,"%s",dateify(Sensors[i].timeLogged,"hh:nn"));
-      tft.drawString(tempbuf, 47, Ypos);
-
-      snprintf(tempbuf,60,"%s", Sensors[i].snsName);
-      tft.drawString(tempbuf, 87, Ypos);
-
-      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MIN);
-      tft.drawString(tempbuf, 172, Ypos);
-
-      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue);
-      tft.drawString(tempbuf, 212, Ypos);
-
-      snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MAX);
-      tft.drawString(tempbuf, 252, Ypos);
-
-      snprintf(tempbuf,60,"%s",Sensors[i].isSent ? "**" : "");
-      tft.drawString(tempbuf, 292, Ypos);
-
-      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-
-    // organize by sensor 
+      // now find all the remaining sensors for this ardid 
       for(byte j=i+1;j<SENSORNUM;j++) {
-        if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false && Sensors[j].ardID==Sensors[i].ardID) {
-          used[usedINDEX++] = j;
-          tft.setTextColor(FG_COLOR,BG_COLOR);
-          fcnChooseTxtColor(j);
-          tft.setTextFont(SMALLFONT);
+        if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,snsindex,SENSORNUM) == false && Sensors[j].ardID==Sensors[i].ardID) {
+          snsindex[usedINDEX++] = j;
 
-          snprintf(tempbuf,60,"%s", (String) Sensors[j].ardID + (String) "." + (String) Sensors[j].snsType);
-          tft.drawString(tempbuf, 0, Ypos);
-
-          snprintf(tempbuf,60,"%s",dateify(Sensors[j].timeLogged,"hh:nn"));
-          tft.drawString(tempbuf, 47, Ypos);
-
-          snprintf(tempbuf,60,"%s", Sensors[j].snsName);
-          tft.drawString(tempbuf, 87, Ypos);
-
-          snprintf(tempbuf,60,"%d",(int) Sensors[j].snsValue_MIN);
-          tft.drawString(tempbuf, 172, Ypos);
-
-          snprintf(tempbuf,60,"%d",(int) Sensors[j].snsValue);
-          tft.drawString(tempbuf, 212, Ypos);
-
-          snprintf(tempbuf,60,"%d",(int) Sensors[j].snsValue_MAX);
-          tft.drawString(tempbuf, 252, Ypos);
-
-          snprintf(tempbuf,60,"%s",Sensors[j].isSent ? "**" : "");
-          tft.drawString(tempbuf, 292, Ypos);
-
-          Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+          Ypos = fcn_write_sensor_data(j,Ypos);
         }
       }
     }
   }
+
+  //draw rectangle representing button to immediately upload
+  
+  tft.drawRoundRect(TFT_WIDTH-40,TFT_HEIGHT-40,39,39,5,TFT_BLUE);
+  
+  tft.fillRoundRect(TFT_WIDTH-40,TFT_HEIGHT-40,39,39,5,TFT_GOLD);
+  snprintf(tempbuf,60,"Upload");
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_BLUE,TFT_GOLD);
+  
+  tft.drawString(tempbuf, TFT_WIDTH-20,TFT_HEIGHT-20);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  
 }
 
 bool file_deleteSpreadsheetByID(String fileID){
@@ -1007,13 +1476,13 @@ bool file_uploadData(void) {
   time_t t = now();
 
   String logid;
-  String fileID = (String) "ArduinoLog" + dateify(t,"yyyy-mm");
+  String fileID = (String) "ArduinoLog" + (String) dateify(t,"yyyy-mm");
   fileID = file_findSpreadsheetIDByName(fileID,true);
 
   if (fileID=="" || fileID.substring(0,5)=="ERROR") return false;
 
   byte rowInd = 0;
-  byte snsArray[SENSORNUM];
+  byte snsArray[SENSORNUM] = {255};
   for (byte j=0;j<SENSORNUM;j++) snsArray[j]=255;
 
   for (byte j=0;j<SENSORNUM;j++) {
@@ -1042,6 +1511,7 @@ bool file_uploadData(void) {
     for (byte j=0;j<SENSORNUM;j++) {
       if (snsArray[j]!=255)     Sensors[snsArray[j]].isSent = true;
     }
+    lastUploadTime = now(); 
     return true;
 }
 
@@ -1099,9 +1569,33 @@ void handleLIST() {
   
   char tempchar[9] = "";
 
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server LIST</title></head><body><p>";
+  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Sensor Server LIST</title></head><body><p>";
 
-  for (byte j=0;j<SENSORNUM;j++)  {
+  if (server.args()>0) {
+    for (byte j=0;j<SENSORNUM;j++)  {
+        currentLine += (String) Sensors[j].ardID + "<br>";
+        currentLine += IP2String(Sensors[j].IP) + "<br>";
+        currentLine += (String) Sensors[j].snsID + "<br>";
+        currentLine += (String) Sensors[j].snsType + "<br>";
+        currentLine += (String) Sensors[j].snsName + "<br>";
+        currentLine += (String) Sensors[j].snsValue + "<br>";
+        currentLine += (String) Sensors[j].snsValue_MAX + "<br>";
+        currentLine += (String) Sensors[j].snsValue_MIN + "<br>";
+        currentLine += (String) Sensors[j].timeRead + "<br>";
+        currentLine += (String) Sensors[j].timeLogged + "<br>";
+        currentLine += (String) Byte2Bin(Sensors[j].Flags,tempchar,true) + "<br>";
+        currentLine += "<br>";      
+    }
+  } else {
+    String logID; //#.#.# [as string], ARDID, SNStype, SNSID
+    SensorVal S;
+
+    for (byte k=0;k<server.args();k++) {   
+      if ((String)server.argName(k) == (String)"logID")  breakLOGID(String(server.arg(k)),&S.ardID,&S.snsType,&S.snsID);
+    }
+    byte j = findDev(&S, false);
+
+    if (j>=0) { 
       currentLine += (String) Sensors[j].ardID + "<br>";
       currentLine += IP2String(Sensors[j].IP) + "<br>";
       currentLine += (String) Sensors[j].snsID + "<br>";
@@ -1114,27 +1608,22 @@ void handleLIST() {
       currentLine += (String) Sensors[j].timeLogged + "<br>";
       currentLine += (String) Byte2Bin(Sensors[j].Flags,tempchar,true) + "<br>";
       currentLine += "<br>";      
+    }
   }
 currentLine += "</p></body></html>";
   
   server.send(200, "text/html", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
-
-
 }
 
 void handleRoot() {
 
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title></head><body>";
+  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Sensor Server</title></head><body>";
   
-  currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br><p>";
+  currentLine = currentLine + "<h2>" + (String) dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br><p>";
   currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   currentLine += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
   currentLine += "<button type=\"submit\">Update Time</button><br>";
   currentLine += "</FORM><br>";
-
-  #ifdef _WEBDEBUG
-      currentLine = "WEBDEBUG: " + WEBDEBUG + "<br>";
-    #endif
 
   
   currentLine += "<a href=\"/LIST\">List all sensors</a><br>";
@@ -1271,26 +1760,19 @@ void handlePost() {
 SensorVal S;
 uint8_t tempIP[4] = {0,0,0,0};
 
-  for (byte k=0;k<server.args();k++) {
-   #ifdef _WEBDEBUG
-       WEBDEBUG = WEBDEBUG + server.argName(k) + ": " + String(server.arg(k)) + " @" + String(now(),DEC) + "\n";
-    #endif
+  for (byte k=0;k<server.args();k++) {   
 
       #ifdef _DEBUG
-      Serial.print("Received this arg: ");
-      Serial.println(server.arg(k));
+      Serial.print("Received this argname/arg: ");
+      Serial.printf("%s --> %s\n",server.argName(k),server.arg(k).c_str());
       #endif
 
       if ((String)server.argName(k) == (String)"logID")  breakLOGID(String(server.arg(k)),&S.ardID,&S.snsType,&S.snsID);
       if ((String)server.argName(k) == (String)"IP") {
-        IPString2ByteArray(String(server.arg(k)),tempIP);
-        S.IP[0] = tempIP[0];
-        S.IP[1] = tempIP[1];
-        S.IP[2] = tempIP[2];
-        S.IP[3] = tempIP[3];
-        
+        IPString2ByteArray(String(server.arg(k)),S.IP);        
       }
-      if ((String)server.argName(k) == (String)"varName") sprintf(S.snsName,"%s", server.arg(k).substring(0,30).c_str());
+
+      if ((String)server.argName(k) == (String)"varName") snprintf(S.snsName,30,"%s", server.arg(k).c_str());
       if ((String)server.argName(k) == (String)"varValue") S.snsValue = server.arg(k).toDouble();
       if ((String)server.argName(k) == (String)"timeLogged") S.timeRead = server.arg(k).toDouble();      //time logged at sensor is time read by me
       if ((String)server.argName(k) == (String)"Flags") S.Flags = server.arg(k).toInt();
@@ -1335,6 +1817,20 @@ uint8_t tempIP[4] = {0,0,0,0};
 char* dateify(time_t t, String dateformat) {
   if (t==0) t = now();
 
+
+if (dateformat=="hour") {
+    //special format
+    if (hour(t) == 0)   sprintf(tempbuf,"12A");
+    else {
+      if (hour(t) <12) sprintf(tempbuf,"%dA",hour(t));
+      else {
+        if (hour(t)==12) sprintf(tempbuf,"12P");
+        else sprintf(tempbuf,"%dP",hour(t)-12);
+      }
+    }
+  return tempbuf;
+}
+
   char holder[5] = "";
 
   sprintf(holder,"%02d",month(t));
@@ -1361,21 +1857,9 @@ char* dateify(time_t t, String dateformat) {
   sprintf(holder,"%s",fcnDOW(t));
   dateformat.replace("DOW",holder);
   
-  sprintf(DATESTRING,"%s",dateformat.c_str());
+  snprintf(tempbuf,30,"%s",dateformat.c_str());
   
-  return DATESTRING;  
-}
-
-String fcnDOW(time_t t) {
-    if (weekday(t) == 1) return "Sun";
-    if (weekday(t) == 2) return "Mon";
-    if (weekday(t) == 3) return "Tue";
-    if (weekday(t) == 4) return "Wed";
-    if (weekday(t) == 5) return "Thu";
-    if (weekday(t) == 6) return "Fri";
-    if (weekday(t) == 7) return "Sat";
-
-    return "???";
+  return tempbuf;  
 }
 
 char* Byte2Bin(uint8_t value, char* output, bool invert) {
@@ -1459,6 +1943,9 @@ bool IPString2ByteArray(String IPstr,byte* IP) {
         temp = IPstr.substring(0, strOffset);
         IP[j] = temp.toInt();
         IPstr.remove(0, strOffset + 1);
+        #ifdef _DEBUG
+        Serial.printf("%d.",IP[j]);
+        #endif
       }
     }
     
@@ -1512,11 +1999,7 @@ void parseLine_to_Sensor(String token) {
     //element 1 is IP
     logID= token.substring(0,strOffset); //end index is NOT inclusive
     token.remove(0,strOffset+1);
-    IPString2ByteArray(logID,tempIP);
-        S.IP[0] = tempIP[0];
-        S.IP[1] = tempIP[1];
-        S.IP[2] = tempIP[2];
-        S.IP[3] = tempIP[3];
+    IPString2ByteArray(logID,S.IP);
  
     //element2 is logID
     logID= token.substring(0,strOffset); //end index is NOT inclusive
@@ -1553,7 +2036,7 @@ void parseLine_to_Sensor(String token) {
   strOffset = token.indexOf(",",0);
   temp = token.substring(0,strOffset); 
   token.remove(0,strOffset+1);
-  sprintf(S.snsName,"%s",temp.c_str());
+  snprintf(S.snsName,30,"%s",temp.c_str());
   #ifdef _DEBUG
     Serial.print("token: ");
     Serial.println(token);
@@ -1608,7 +2091,7 @@ void parseLine_to_Sensor(String token) {
 }
 
 
-void fcnPrintTxtColor(int value,int alarmMin = 40, int alarmMax = 88,int x=-1,int y=-1) {
+void fcnPrintTxtAlarm(int value,int alarmMin = 40, int alarmMax = 88,int x=-1,int y=-1) {
 
   if (value<alarmMin) {
     tft.setTextColor(TFT_BLUE,TFT_WHITE);

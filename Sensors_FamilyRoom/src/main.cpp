@@ -4,8 +4,8 @@
 #define _USE8266 1
 //#define _USE32
 
-#define ARDNAME "UpHall"
-#define ARDID 101 //unique arduino ID 
+#define ARDNAME "FamRm"
+#define ARDID 50 //unique arduino ID 
 #define SENSORNUM 1 //be sure this matches SENSORTYPES
 
 
