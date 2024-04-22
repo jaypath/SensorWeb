@@ -5,24 +5,24 @@
 //#define _USE32
 
 #define ARDNAME "DiningRm"
-#define ARDID 11 //unique arduino ID 
+#define ARDID 92 //unique arduino ID 
 #define SENSORNUM 3 //be sure this matches SENSORTYPES
 
 
 const uint8_t SENSORTYPES[SENSORNUM] = {1,2,3};
 
-
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 #define DHTTYPE    DHT11     // DHT11 or DHT22
-#define DHTPIN 2
+#define DHTPIN D4
 //#define _USEBMP  1
 //#define _USEAHT 1
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
-#define _USESOILCAP 1
-//#define _USESOILRES
+//#define _USESOILCAP 1
+#define _USESOILRES D5
+#define SOILRESISTANCE 4700
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -57,8 +57,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
-  const int SOILDIO = D5;  // ESP8266 Analog Pin ADC0 = A0
-  #define SOILRESISTANCE 470
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
 
 #ifdef _USEHCSR04
@@ -450,7 +449,7 @@ byte i;
   SERVERIP[2].IP = {192,168,68,100};
 
   #ifdef _USESOILRES
-    pinMode(SOILDIO,OUTPUT);  
+    pinMode(_USESOILRES,OUTPUT);  
   #endif
 
   Wire.begin(); 
@@ -833,7 +832,7 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 2000;
+          Sensors[i].limitUpper = 2500;
           Sensors[i].limitLower = 0;
           Sensors[i].PollingInt=60*60;
           Sensors[i].SendingInt=60*60;
@@ -1652,7 +1651,9 @@ bool SendData(struct SensorVal *snsreading) {
   Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
 #endif
 
-  return isGood;
+     return isGood;
+
+
 }
 
 
@@ -1685,10 +1686,9 @@ bool ReadData(struct SensorVal *P) {
 
       #ifdef _USESOILRES
         //soil moisture by stainless steel wire (Resistance)
-        digitalWrite(SOILDIO, HIGH);
-        delay(100);
+        digitalWrite(_USESOILRES, HIGH);
         val = analogRead(P->snsPin);
-        digitalWrite(SOILDIO, LOW);
+        digitalWrite(_USESOILRES, LOW);
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
       
@@ -2033,6 +2033,3 @@ char* strPad(char* str, char* pad, byte L)     // Simple C string function
 
   return str;
 }
-
-
-

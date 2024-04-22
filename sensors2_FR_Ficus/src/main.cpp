@@ -21,7 +21,8 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOILCAP 1
-#define _USESOILRES
+#define _USESOILRES D5
+#define SOILRESISTANCE 4700
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -56,8 +57,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
-  const int SOILDIO = D5;  // ESP8266 Analog Pin ADC0 = A0
-  #define SOILRESISTANCE 470
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
 
 #ifdef _USEHCSR04
@@ -449,7 +449,7 @@ byte i;
   SERVERIP[2].IP = {192,168,68,100};
 
   #ifdef _USESOILRES
-    pinMode(SOILDIO,OUTPUT);  
+    pinMode(_USESOILRES,OUTPUT);  
   #endif
 
   Wire.begin(); 
@@ -1686,9 +1686,9 @@ bool ReadData(struct SensorVal *P) {
 
       #ifdef _USESOILRES
         //soil moisture by stainless steel wire (Resistance)
-        digitalWrite(SOILDIO, HIGH);
+        digitalWrite(_USESOILRES, HIGH);
         val = analogRead(P->snsPin);
-        digitalWrite(SOILDIO, LOW);
+        digitalWrite(_USESOILRES, LOW);
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
       

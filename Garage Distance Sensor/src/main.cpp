@@ -14,8 +14,9 @@
 #include <ESP8266HTTPClient.h>
 
 #include "timesetup.h"
+#define ARDNAME  "Garage"
 
-#define ARDID 70
+#define ARDID 95
 #define NUMSERVERS 3
 #define SENSORNUM 3
 #define INVERT //if defined, do inversion when in stop zone
@@ -41,7 +42,6 @@
 #define DHTPIN D6
 #define _USETFLUNA
 
-const char* ARDNAME = "GARAGE";
 
 typedef uint8_t u8;
 typedef int16_t i16;

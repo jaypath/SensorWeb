@@ -4,25 +4,25 @@
 #define _USE8266 1
 //#define _USE32
 
-#define ARDNAME "Office"
-#define ARDID 91 //unique arduino ID 
-#define SENSORNUM 3 //be sure this matches SENSORTYPES
+#define ARDNAME "FRBoP"
+#define ARDID 96 //unique arduino ID 
+#define SENSORNUM 1 //be sure this matches SENSORTYPES
 
 
-const uint8_t SENSORTYPES[SENSORNUM] = {1,2,3};
+const uint8_t SENSORTYPES[SENSORNUM] = {3};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-//#define _USELED D4
-#define DHTTYPE    DHT11     // DHT11 or DHT22
-#define DHTPIN D5
+#define _USELED D4
+//#define DHTTYPE    DHT11     // DHT11 or DHT22
+//#define DHTPIN 2
 //#define _USEBMP  1
 //#define _USEAHT 1
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOILCAP 1
-#define _USESOILRES D6
+#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -367,6 +367,8 @@ byte CURRENTSENSOR_WEB = 1;
   #define PI 3.14159265
   #define LEDCOUNT 57 //how many LEDs did you install?
 
+  CRGB LEDARRAY[LEDCOUNT];
+
   //LED Drawing
   typedef struct  {
     //cos(kx +(DIR)* wt) + 0.5; where k - is 2*pi/L [L, lambda, is wavelength]; and w is 2*pi/T [T, period, is time it takes to cycle through one wavelength)so speed is v = w/k; here I am using cos because you can set the inputs to 0 to obtain the static val
@@ -382,59 +384,92 @@ byte CURRENTSENSOR_WEB = 1;
     uint32_t last_LED_update;
     byte LEDredrawRefreshMS;
     CRGB color; //current color 1 
-    CRGB LED_ARRAY[LEDCOUNT];
+    uint32_t  LED_TIMING[LEDCOUNT];
+    
 
     void LED_update(void) {
       uint32_t m = millis();
 
       if (m-this->last_LED_update<this->LEDredrawRefreshMS) return;
 
-      double L1 = (double) 1/this->sin_L, T1 = (double) 1/this->sin_T;
+      double L1,T1;
       int8_t DIR = 0;
 
       for (byte j=0;j<LEDCOUNT;j++) {
 
-        if (animation_style==1) DIR=-1;
-        if (animation_style==2) DIR=1;
-        if (animation_style==3) {
+        if (this->animation_style==1) {
+          DIR=-1;
+          L1 = (double) 1/this->sin_L;
+          T1 = (double) 1/this->sin_T;
+        }
+        if (this->animation_style==2) {
+          DIR=1;
+          L1 = (double) 1/this->sin_L;
+          T1 = (double) 1/this->sin_T;
+        }
+        if (this->animation_style==3) {
           DIR=1;
           L1=0;
+          T1 = (double) 1/this->sin_T;
         }
-        if (animation_style==4) {
+        if (this->animation_style==4) {
           DIR=0;
           L1=0;
+          T1 = 0;
+        }
+        if (this->animation_style==5) {
+          DIR=0;
+          L1=LEDCOUNT*300; //use L1 for limit of random chance
+          T1=750; //use T1 for standard deviaiton of guassian, msec
+          
         }
 
-      #ifdef _DEBUG
-        Serial.printf("LED raw r-color is %d, and LED[%d] before and after r-value: %d ... ",this->color.red,j,this->LED_ARRAY[j].red);
-      #endif
 
-        this->LED_ARRAY[j] = this->LED_setLED(j,L1,T1,DIR,m);
-
-      #ifdef _DEBUG
-        Serial.printf(" %d ... \n ",this->LED_ARRAY[j].red);
-      #endif
+      LEDARRAY[j] = this->LED_setLED(j,L1,T1,DIR,m);
+      
         
       }
+
+
+          #ifdef _DEBUG
+            Serial.printf("global color is %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
+          #endif
 
       FastLED.show();
       this->last_LED_update = m;
 
     }
 
-    CRGB LED_setLED(byte j, double L1, double T1, int8_t DIR, uint32_t m) {
-      CRGB temp;
-      
+    uint32_t LED_setLED(byte j, double L1, double T1, int8_t DIR, uint32_t m) {
+      uint32_t temp;
+      byte brightness;
 
-      if (L1==0 && j>0) return this->LED_ARRAY[0]; //all LEDs are the same, just return the first value
+      if (L1==0 && j>0) return this->LED_TIMING[0]; //all LEDs are the same for this animation style, just return the first value
 
-      if (L1==0 && DIR == 0) {
+      if (this->animation_style==3 || this->animation_style==4) {
         temp = LED_scale_brightness(this->color,this->MaxBrightness);
+        this->LED_TIMING[0] = temp;
         return temp;
       }
 
+      if (this->animation_style==5) {
+        //special case where LED_ARRAY holds the times of the peak display
+        if (this->LED_TIMING[j]==0) {
+          this->LED_TIMING[j]=m + random(25,25+L1);
+          return 0;
+        }
+        //use guassian to determine brightness:
+        brightness = this->MaxBrightness * ((double) pow(2.71828,-1*((pow((double) m-this->LED_TIMING[j],2)/(2*pow(T1,2)))))); //m is current time, led_array is time of peak, T1 is standrad dev
+        if (brightness < this->MinBrightness && this->LED_TIMING[j]<m) { //the peak is in the past, enter a new one
+          this->LED_TIMING[j]=m + random(25,25+L1);
+          return 0;
+        }
+        else {
+          return LED_scale_brightness(this->color,brightness);
+        }
+      }
 
-      byte brightness = (uint8_t) ((double) (this->MaxBrightness-this->MinBrightness) * (cos((double) 2*PI*(j*L1 +(DIR)* m*T1)) + 1)/2 + this->MinBrightness);
+      brightness = (uint8_t) ((double) (this->MaxBrightness-this->MinBrightness) * (cos((double) 2*PI*(j*L1 +(DIR)* m*T1)) + 1)/2 + this->MinBrightness);
       
       temp =  LED_scale_brightness(this->color,brightness);
   
@@ -470,10 +505,7 @@ byte CURRENTSENSOR_WEB = 1;
     }
 
     void LED_set_color_soil(struct SensorVal *sns) {
-      #ifdef _DEBUG
-        Serial.printf("setled soilR is %f\n",soilR);
-      #endif 
-
+      
       byte r=0,g=0,b=0;
       
       byte ii = 0;
@@ -483,8 +515,8 @@ byte CURRENTSENSOR_WEB = 1;
       else {
         if (sns->snsValue>sns->limitUpper) ii=6;
         else {
-          for (byte i=0; i<=6;i++) {
-            if (sns->snsValue<sns->limitLower + (sns->limitUpper-sns->limitLower)*i/6) break;
+          for (byte i=0; i<=5;i++) {
+            if (sns->snsValue<sns->limitLower + (sns->limitUpper-sns->limitLower)*i/5) break;
             ii++;
           }
         }
@@ -493,7 +525,7 @@ byte CURRENTSENSOR_WEB = 1;
       switch (ii) {
         case 6:
           LED_animation_defaults(3);
-          this->MaxBrightness = 50;
+          this->MaxBrightness = 100;
           this->MinBrightness = 10;
           this->sin_T = 1000;
           r=255;
@@ -502,50 +534,50 @@ byte CURRENTSENSOR_WEB = 1;
           
           break;
         case 5:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 10;
+          LED_animation_defaults(2);
+          this->MaxBrightness = 30;
           this->MinBrightness = 5;
           this->sin_T = 1000;
           r=255;
-          g=75;
-          b=0;
+          g=105;
+          b=10;
           break;
         case 4:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 6;
+          LED_animation_defaults(5);
+          this->MaxBrightness = 20;
           this->MinBrightness = 5;
           r=255;
           g=175;
-          b=0;
+          b=20;
           break;
         case 3:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
+          LED_animation_defaults(5);
+          this->MaxBrightness = 10;
+          this->MinBrightness = 5;
           r=255;
           g=255;
           b=0;
           break;
         case 2:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
-          r=0;
+          LED_animation_defaults(5);
+          this->MaxBrightness = 10;
+          this->MinBrightness = 5;
+          r=50;
           g=255;
           b=0;
           break;
         case 1:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
+          LED_animation_defaults(5);
+          this->MaxBrightness = 10;
+          this->MinBrightness = 5;
           r=0;
           g=255;
           b=100;
           break;
         case 0:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
+          LED_animation_defaults(5);
+          this->MaxBrightness = 10;
+          this->MinBrightness = 5;
           r=0;
           g=255;
           b=255;
@@ -578,7 +610,10 @@ byte CURRENTSENSOR_WEB = 1;
         case 4: //const
           MaxBrightness = 5;
           MinBrightness = 5;
-           
+          break;
+        case 5: //random gaussian
+          MaxBrightness = 50;
+          MinBrightness = 5;
             
           break;
       }
@@ -605,7 +640,7 @@ byte i;
   SERVERIP[2].IP = {192,168,68,100};
 
 #ifdef _USELED
-  FastLED.addLeds<WS2813,_USELED,GRB>(LEDs.LED_ARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
+  FastLED.addLeds<WS2813,_USELED,GRB>( LEDARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
 
   LEDs.LED_animation_defaults(1);
   LEDs.LEDredrawRefreshMS=20;
@@ -724,7 +759,7 @@ byte i;
     #endif
     #ifdef _USELED
       for (byte j=0;j<LEDCOUNT;j++) {
-        LEDs.LED_ARRAY[j] = (uint32_t) 0<<16 | 255<<8|0; //green
+        LEDARRAY[j] = (uint32_t) 0<<16 | 255<<8|0; //green
          
       }
       FastLED.show();
@@ -738,8 +773,8 @@ byte i;
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     #ifdef _USELED
       for (byte j=0;j<LEDCOUNT;j++) {
-        LEDs.LED_ARRAY[LEDCOUNT-j-1] = 0;
-        if (j<=(double) LEDCOUNT*progress/total) LEDs.LED_ARRAY[LEDCOUNT-j-1] = (uint32_t) 255 <<16 | 255 << 8 | 255;
+        LEDARRAY[LEDCOUNT-j-1] = 0;
+        if (j<=(double) LEDCOUNT*progress/total) LEDARRAY[LEDCOUNT-j-1] = (uint32_t) 255 <<16 | 255 << 8 | 255;
          
       }
       FastLED.show();
@@ -1012,8 +1047,8 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 1000;
-          Sensors[i].limitLower = 300;
+          Sensors[i].limitUpper = 3500;
+          Sensors[i].limitLower = 1000;
           Sensors[i].PollingInt=60;
           Sensors[i].SendingInt=600;
         #endif

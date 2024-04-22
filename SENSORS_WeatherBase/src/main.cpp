@@ -26,30 +26,32 @@
     server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
 
 
- *Kiyaan server commands: 
- *192.168.68.104
- *  /WEATHERREQUEST?weatherType=xxx
- *   where xxx = temp, feels_like, pressure, humidity, dew_point, uvi, clouds, visibility, wind_speed, wind_deg, wind_gust, pop, last_rain, Next_Precip, weather [requires additional info specified by weatherObjType]
- *     if last_ or Next_Precip then you will receive unixtime of next event (or zero)
- *     if /WEATHERREQUEST?weatherType=weather&weatherObjType=yyy
- *        where yyy can be id, main, description, icon
- *        
- *  /GET?varName=zzz
- *    where zzz is a varName [sensor/arduino value] that I assign. varName can be, at most, 32 char. Example 23.12.2 [which could be arduino 23, sensor type 12, number 2]
- *  
- *  /PUT?varName=zzz&varValue=NUMERIC&logID=FLOAT&timeLogged=UNX&isFlagged=bool
- *    where varName is a 32 char value representing arduino and sensor
- *    varValue is a numeric value (stored on server as float)
- *    logID = int representing the arduino sensor ID
- *    timeLogged is the unixtime (sec), but optional
- *    isFlagged is bool true or false (note lowercase), and is optional
  */
 
 
 /*sens types
-1 - dht temp
-2 - dht rh
-3 - soil
+//0 - not defined
+//1 - temp, DHT
+//2 - RH, DHT
+//3 - soil moisture, capacitative or Resistive
+//4 -  temp, AHT21
+//5 - RH, AHT21
+//6
+//7 - distance, HC-SR04
+//8 - human presence (mm wave)
+//9 - BMP pressure
+//10 - BMP temp
+//11 - BMP altitude
+//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
+//13 - BMe pressure
+//14 - BMe temp
+//15 - BMe humidity
+//16 - BMe altitude
+//17
+18
+19
+20 - water sensor
+99 - any binary sensor
 
 
 */
@@ -83,8 +85,8 @@ ESP8266WebServer server(80);
 TFT_eSPI tft = TFT_eSPI();
 
 
-#define XLIM 240
-#define YLIM 320
+//#define XLIM 240  //use tft.width()
+//#define YLIM 320  //use tft.height()
 
 /*
 //free fonts
@@ -124,23 +126,23 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 //#define ESP_SSID "kandy-hispeed" // Your network name here
 //#define ESP_PASS "manath77" // Your network password here
 
-#define SERVER "192.168.68.104"
+//#define SERVER "192.168.68.104"
 
 #define TIMEOUTHTTP 2000
 
 #define GLOBAL_TIMEZONE_OFFSET  -14400
-
-bool GoogleServer = true;
 
 //wellesley, MA
 #define LAT 42.307614
 #define LON -71.299288
 
 
-#define SENSORNUM 30
+#define SENSORNUM 40
 
 #define NUMSCREEN 2
 #define SECSCREEN 15
+
+#define OLDESTSENSORHR 12 //hours before a sensor is removed
 
 #define NUMWTHRDAYS 7
 
@@ -150,6 +152,7 @@ struct Screen {
     byte wifi;
     byte redraw;
     byte ScreenNum;
+    bool isFlagged;
 };
 
 
@@ -211,22 +214,23 @@ int16_t      daily_weatherID[NUMWTHRDAYS];
 int16_t       daily_pop[NUMWTHRDAYS];
 double        daily_snow[NUMWTHRDAYS];
 
-void timeUpdate(void);
 uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
 String WeatherDescToday = "?"; //current weather desc
 
-bool isFlagged = false;
-
 //uint16_t BG_COLOR = 0xD69A; //light gray
 uint16_t FG_COLOR = TFT_BLACK; //Foreground color
-uint16_t BG_COLOR = TFT_LIGHTGREY; //light gray
-//uint16_t BG_COLOR = TFT_DARKGREY; //Foreground color
+uint16_t BG_COLOR = TFT_LIGHTGREY; //light gray = 211,211,211
+//uint16_t BG_COLOR = TFT_DARKGREY; //Foreground color = 128,128,128
 
 char DATESTRING[24]=""; //holds up to hh:nn:ss day mm/dd/yyy
 
 
 //fuction declarations
+int16_t findDev(struct SensorVal *S, bool oldest = false);
+uint8_t countDev();
+uint32_t set_color(byte r, byte g, byte b);
+void timeUpdate(void);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
 void initSensor(byte k);
@@ -235,8 +239,9 @@ bool inIndex(byte lookfor,byte used[],byte arraysize);
 int ID2Icon(int); //provide a weather ID, obtain an icon ID
 void drawBmp(const char*, int16_t, int16_t);
 bool Server_Message(String* , String* , int* );
-void fcnDrawScreen(bool);
-void fcnDrawWeather();
+void fcnDrawScreen(bool flagon = false);
+void fcnDrawWeather(bool flagged);
+void fcnDrawSensors(int Y);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
 char* Byte2Bin(uint8_t value, char* , bool invert = false);
 void handleLIST();
@@ -254,13 +259,34 @@ String fcnDOW(time_t t, bool caps=false);
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ,int x=-1,int y=-1);
 void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1);
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1);
-
+byte find_sensor_name(String fieldname, byte snsType, byte snsID = 255);
+void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y);
 //uint16_t read16(fs::File);
 //uint32_t read32(fs::File);
 
+byte find_sensor_name(String fieldname,byte snsType,byte snsID) {
+  //return the first sensor that has fieldname within its name
+  //set snsID to 255 to ignore this field (this is an optional field)
+  //returns 255 if no such sensor found
+  String temp;
+  for (byte j=0; j<SENSORNUM;j++) {
+    temp = Sensors[j].snsName; 
+
+    if (snsID==255) {
+      if (temp.indexOf(fieldname)>-1 && Sensors[j].snsType == snsType) return j;
+    } else {
+      if (temp.indexOf(fieldname)>-1 && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
+    }
+  }
+  return 255;
+}
 
 void setup()
 {
+  I.ScreenNum = 0;
+  I.redraw = SECSCREEN;
+  I.isFlagged = false;
+  
   #ifdef DEBUG_
     Serial.begin(115200);
   #endif
@@ -268,6 +294,8 @@ void setup()
   tft.init();
   tft.invertDisplay(1); //colors are inverted using official tft lib.
   tft.setRotation(0);
+  BG_COLOR = set_color(175,175,175); //slightly darker gray
+  
   tft.fillScreen(BG_COLOR);            // Clear screen
 
   tft.setCursor(0,0);
@@ -444,7 +472,6 @@ void initSensor(byte k) {
   
 }
 
-
 uint8_t countDev() {
   uint8_t c = 0;
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -453,7 +480,7 @@ uint8_t countDev() {
   return c;
 }
 
-int16_t findDev(struct SensorVal *S, bool oldest = false) {
+int16_t findDev(struct SensorVal *S, bool oldest) {
   //provide the desired devID and snsname, and will return the index to sensors array that represents that node
   //special cases:
   //  if snsID = 0 then just find the first blank entry
@@ -1070,6 +1097,7 @@ uint32_t read32(fs::File &f) {
 
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x, int y) {
 int X,Y;
+    
 if (x>=0 && y>=0) {
   X = x-tft.textWidth(msg,FNTSZ)/2;
   if (X<0) X=0;
@@ -1079,10 +1107,11 @@ if (x>=0 && y>=0) {
   X=x;
   Y=y;
 }
-
+tft.setTextFont(FNTSZ);
 tft.setCursor(X,Y);
 tft.print(msg.c_str());
-
+tft.setTextDatum(TL_DATUM);
+    
 return;
 
 
@@ -1177,127 +1206,215 @@ uint16_t temp2color(int temp) {
 }
 
 
-void fcnDrawScreen(bool alternate = false) {
-alternate = true; //always show second screen
+void fcnDrawScreen(bool flagon) {
 
-time_t t = now();
-  if (I.redraw == 0) {
-    I.ScreenNum++;
-    if (I.ScreenNum>NUMSCREEN) I.ScreenNum = 1;
-    if (I.ScreenNum == 1) I.redraw = SECSCREEN;
-    else I.redraw = 10;
-
-    tft.setRotation(0);
-    tft.fillScreen(BG_COLOR);            // Clear screen
+  if (I.redraw > 0) return; //not time to redraw
   
-    //draw header    
-    tft.setCursor(0,0);
-    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-    tft.setTextFont(4);
-    tft.setTextDatum(TL_DATUM);
-    tft.print(dateify(t,"dow mm/dd"));
+  time_t t = now();
+  tft.fillScreen(BG_COLOR);            // Clear screen
   
-    //draw a black bar below header
-    tft.fillRect(0,25,240,5, FG_COLOR);
+  //draw header    
+  tft.setCursor(0,0);
+  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+  tft.setTextFont(4);
+  tft.setTextDatum(TL_DATUM);
+  tft.print(dateify(t,"dow mm/dd"));
 
-    if (alternate) {
-      if (I.ScreenNum==1) { 
-        fcnDrawWeather();
-      }
-      if (I.ScreenNum==2) {
-        //fcnDrawSensors();
-        fcnDrawWeather();
-      }
-    } else {
-      fcnDrawWeather();
-    }
+  //draw a black bar below header
+  tft.fillRect(0,25,240,5, FG_COLOR);
+
+
+  if (flagon) {
+    I.ScreenNum=1;
+    I.redraw = SECSCREEN;
+
+/*
+    I.ScreenNum = ((I.ScreenNum+1)%NUMSCREEN);
+
+    if (I.ScreenNum==0) I.redraw = SECSCREEN;
     
+    if (I.ScreenNum==1) I.redraw = SECSCREEN;
+*/
+  } else {
+    I.redraw = 60;
+    I.ScreenNum = 0;
   }
+  fcnDrawWeather(flagon);
+
+
   return;
   
 }
 
-
-void fcnDrawSensors() {
- 
-  int iconID;
-  char tempbuf[32];
-  int Y = 32,Z=0; 
-  
-  int i=0,j=0;
-  byte section_spacer = 5;
-
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  tft.setTextFont(8);
-  tft.setTextDatum(MC_DATUM);
-  snprintf(tempbuf,31,"%s",dateify(now(),"hh:nn"));
-  tft.drawString(tempbuf, tft.width() / 2, Y + tft.fontHeight(8)/2);
-
-  Y+=tft.fontHeight(8)+section_spacer;
-
-  j=8; //space 5 days across width, so start offset
-  for (i=1;i<6;i++) {
-    Z=0;
-    iconID = ID2Icon(daily_weatherID[i]);
-    snprintf(tempbuf,31,"/BMP30x30/%d.bmp",iconID);
-    drawBmp(tempbuf,j,Y);
-    Z+=30+2;
-    tft.setTextFont(2); 
-    tft.setTextDatum(MC_DATUM);
-    snprintf(tempbuf,31,"%s",dateify(now()+i*60*60*24,"DOW"));
-    tft.drawString(tempbuf, j+30 / 2, Y + Z + tft.fontHeight(4)/2);
-    Z+=tft.fontHeight(2)+2;
-
-    tft.setTextFont(2); 
-    if (daily_tempMax[i]>85 || daily_tempMax[i]<40 || daily_tempMin[i]>80 || daily_tempMin[i]<32)   tft.setTextColor(TFT_BLUE,TFT_YELLOW);
-    else tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background    
-    snprintf(tempbuf,31,"%d/%d",daily_tempMax[i],daily_tempMin[i]);
-    
-    tft.drawString(tempbuf,j+30 / 2,Y+Z+tft.fontHeight(2)/2);
-    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-    
-    Z+=tft.fontHeight(2);
-    
-    j+=45;
-  }
-
-  Y+=Z+section_spacer;
-
-  tft.setCursor(0,Y);
-  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-  tft.setTextFont(2); //
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Flagged Sensors:", tft.width()/2, Y + tft.fontHeight(2)/2);
-  Y+=tft.fontHeight(2)+2;
-  tft.setCursor(0,Y);
-
-  tft.setTextColor(TFT_BLUE,TFT_YELLOW);
-  
-  byte used[SENSORNUM];
-  for (byte j=0;j<SENSORNUM-1;j++)  {
-    used[j] = 255;
-  }
-
-  byte usedINDEX = 0;  
-  for(byte i=0;i<SENSORNUM;i++) {
-    //march through sensors and list by ArdID
-    if (Sensors[i].snsID>0 && Sensors[i].snsType>0 && inIndex(i,used,SENSORNUM) == false && Sensors[i].timeLogged>0 && bitRead(Sensors[i].Flags,0)) {
-      used[usedINDEX++] = i;
-      tft.printf("%d %s: %d %s",Sensors[i].ardID, Sensors[i].snsName, (int) Sensors[i].snsValue,dateify(Sensors[i].timeLogged,"hh:nn mm/dd"));
-
-    //if a sns is flagged, check all it's other sensors (so organize by sensor)
-      for(byte j=i+1;j<SENSORNUM;j++) {
-        if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false && Sensors[j].ardID==Sensors[i].ardID && bitRead(Sensors[j].Flags,0)) {
-          used[usedINDEX++] = j;
-          tft.printf("%d %s: %d %s",Sensors[j].ardID, Sensors[j].snsName, (int) Sensors[j].snsValue,dateify(Sensors[j].timeLogged,"hh:nn mm/dd"));
-        }
-      }
-    }
-  }
-  
+uint32_t set_color(byte r, byte g, byte b) {
+  return tft.color565(r,g, b);
 }
 
-void fcnDrawWeather() {
+void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
+  uint32_t box_hot_border = set_color(150,20,20);
+  uint32_t box_hot_fill = set_color(255,100,100);
+  uint32_t box_nl_border = set_color(0,125,0);
+  uint32_t box_nl_fill = set_color(120,255,120);
+  uint32_t box_dry_border = set_color(65,45,20);
+  uint32_t box_dry_fill = set_color(250,170,100);
+
+  bool isHot = 0,isDry=0;
+  int temperature = -900;
+  int soilval = -900;
+
+  byte FNTSZ=2;
+  tft.setTextFont(FNTSZ);
+
+
+  char tempbuf[10];
+
+    //get sensor vals 1, 4, and 3... if any are flagged then set box color
+  byte snsnum = find_sensor_name(roomname,1);
+  if (snsnum != 255) {
+    if (bitRead(Sensors[snsnum].Flags,0)) isHot = true;
+    temperature = Sensors[snsnum].snsValue;
+  } 
+  snsnum = find_sensor_name(roomname,4);
+  if (snsnum != 255) {
+    if (bitRead(Sensors[snsnum].Flags,0)) isHot=true;
+    temperature = Sensors[snsnum].snsValue;
+  } 
+  snsnum = find_sensor_name(roomname,3);
+  if (snsnum != 255) {
+    if (bitRead(Sensors[snsnum].Flags,0)) isDry = true;
+    soilval = Sensors[snsnum].snsValue;
+  } 
+
+
+  //draw  box
+  tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_nl_fill);
+  tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_nl_border);
+  tft.setTextColor(0,box_nl_fill);
+
+  if (isHot) {
+    //draw  box
+    tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_hot_fill);
+    tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_hot_border);
+    tft.setTextColor(0,box_hot_fill);
+  } 
+  
+  if (isDry) {
+    //draw  box
+    tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_dry_fill);
+    tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_dry_border);
+    tft.setTextColor(0,box_dry_fill);
+  } 
+
+  Y+=  2;
+
+  snprintf(tempbuf,7,"%s",roomname);
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+
+  Y+=3+tft.fontHeight(FNTSZ);
+  FNTSZ=1;
+
+  if (temperature>-900) {
+    snprintf(tempbuf,12,"%dF",(int) temperature);
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+    Y+=4+tft.fontHeight(FNTSZ);
+  }    
+
+  if (soilval>-900) {
+    if (isDry)    snprintf(tempbuf,12,"Dry");
+    else    snprintf(tempbuf,12,"Wet");
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+  }
+}
+
+void fcnDrawSensors(int Y) {
+  /*
+  need to show:
+  outside r1/c1
+  attic r1/c2
+  upstairs hall r1/c3
+  Upstairs BR r2/c1
+  FamRm r2/c2
+  DR r2/c3
+  LR r3/c1
+  Office r3/c2
+  Den r3/c3
+*/
+
+   
+  int X = 0;
+  char tempbuf[7];
+//print time at top
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  byte FNTSZ=4;
+
+  X = 3*tft.width()/4;
+  snprintf(tempbuf,6,"%s",dateify(now(),"hh:nn"));
+  tft.setTextFont(FNTSZ);
+
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,tft.fontHeight(FNTSZ)/2);
+
+  byte boxsize_x=60,boxsize_y=50;
+  String roomname;
+
+  X = 0;
+ 
+  byte rows = 3;
+  byte cols = 4;
+
+  for (byte r=0;r<rows;r++) {
+    for (byte c=0;c<cols;c++) {
+      switch (r<<8 | c) {
+        case 0:
+          roomname = "OutWthr";
+          break;
+        case 0<<8 | 1:
+          roomname = "Attic";
+        case 0<<8 | 2:
+          roomname = "UpHall";
+          break;
+        case 0<<8 | 3:
+          roomname = "MastBR";
+          break;
+        case 1<<8 | 0:
+          roomname = "FamRm";
+          break;
+        case 1<<8 | 1:
+          roomname = "FRBoP";
+          break;
+        case 1<<8 | 2:
+          roomname = "DiningRm";
+          break;
+        case 1<<8 | 3:
+          roomname = "LivingRm";
+          break;
+        case 2<<8 | 0:
+          roomname = "Office";
+          break;
+        case 2<<8 | 1:
+          roomname = "Den";
+          break;
+        case 2<<8 | 2:
+          roomname = "Garage";
+          break;
+        case 2<<8 | 3:
+          roomname = "Basement";
+          break;
+      }
+
+
+      drawBox(roomname,  X,  Y,boxsize_x,boxsize_y );
+        
+
+      X=X+boxsize_x;
+    }
+    Y+=boxsize_y;
+    X=0;
+  }
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+
+}
+
+void fcnDrawWeather(bool flagged) {
 
 time_t t = now();
 int X=0,Y = 30,Z=0; //header ends at 30
@@ -1309,25 +1426,6 @@ uint8_t FNTSZ = 0;
 
 byte section_spacer = 1;
 
-//add to header:  pressure, if available
-  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-  FNTSZ = 2;
-  tft.setTextFont(FNTSZ);
-  tempval = valSensorType(13, true,-1,-1, now()-2*60*60); //BME pressure, average multiple values, ignore flagged, ignore outside, within 2 hrs
-  if (tempval <= 0)   tempval = valSensorType(9, true,-1,-1,now()-2*60*60); //BMP pressure
-
-  if (tempval >0) {
-    tft.setCursor(130,0);
-    if (tempval>LAST_BAR+.5) snprintf(tempbuf,31,"%dhPa^",(int) tempval);
-    else if (tempval<LAST_BAR-.5) snprintf(tempbuf,31,"%dhPa_",(int) tempval);
-    else snprintf(tempbuf,31,"%dhPa~",(int) tempval);
-
-    if (Pred>0)   tft.setTextColor(TFT_RED,TFT_WHITE);
-    if (Pred<0)   tft.setTextColor(TFT_BLUE,TFT_YELLOW);
-
-    tft.print(tempbuf);
-  }
-  tft.setTextColor(FG_COLOR,BG_COLOR);
 
 //draw icon for today
   int iconID = ID2Icon(daily_weatherID[0]);
@@ -1406,17 +1504,18 @@ X=120+(tft.width()-120)/2; //midpoint of side
 
   bool USELOCALTEMP = false; //set to true to use BME or dht temps
   FNTSZ = 8;
+  
+  tempval = find_sensor_name("OutWthr", 4); //use only the outside weather sensor
+  
+  if (tempval==255) USELOCALTEMP=false;
+  else USELOCALTEMP=true; 
+
   if (tft.fontHeight(FNTSZ) > 120-Z-section_spacer-tft.fontHeight(4)) FNTSZ = 4;
   tft.setTextFont(FNTSZ);
-
-  if (USELOCALTEMP) {
-    tempval = valSensorType(1, true,-1,1,now()-1*60*60); //outdoor temp, average values that are outside (ignore flagged)
-      
-    if (tempval==-1000) {
-      fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
-    } else {
+    
+  if (USELOCALTEMP) {    
+      tempval = Sensors[(byte) tempval].snsValue;
       fcnPrintTxtColor(tempval,FNTSZ,120+(tft.width()-120)/2,Y+Z+tft.fontHeight(FNTSZ)/2);
-    }
   } else {
       fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
   }  
@@ -1432,6 +1531,41 @@ X=120+(tft.width()-120)/2; //midpoint of side
   Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
   
 //end current wthr
+
+
+//if isflagged, then show rooms with flags. otherwise, show daily weather
+if (flagged) {
+  if (I.ScreenNum==1) {
+    fcnDrawSensors(30+120+section_spacer);
+    return;
+  }
+}
+
+//add to header:  pressure, if available
+  FNTSZ = 2;
+  tft.setTextFont(FNTSZ);
+  
+  //do not average different pressure sensors, as they are at different altitudes
+//  tempval = valSensorType(13, true,-1,-1, now()-2*60*60); //BME pressure, average multiple values, ignore flagged, ignore outside, within 2 hrs
+//  if (tempval <= 0)   tempval = valSensorType(9, true,-1,-1,now()-2*60*60); //BMP pressure
+  tempval = find_sensor_name("OutWthr", 13); //bme pressure
+  if (tempval==255) tempval = find_sensor_name("OutWthr", 9); //bmp pressure
+
+  if (tempval !=255) {
+    tempval = Sensors[(byte) tempval].snsValue;
+    if (tempval>LAST_BAR+.5) snprintf(tempbuf,10,"%dhPa^",(int) tempval);
+    else {
+      if (tempval<LAST_BAR-.5) snprintf(tempbuf,10,"%dhPa_",(int) tempval);
+      else snprintf(tempbuf,10,"%dhPa~",(int) tempval);
+    }
+
+    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+    if (Pred>0)   tft.setTextColor(TFT_RED,TFT_WHITE);
+    if (Pred<0)   tft.setTextColor(TFT_BLUE,TFT_YELLOW);
+    tft.setTextFont(FNTSZ);
+    tft.drawString((String) tempbuf, 3*tft.width()/4,0);
+  }
+  tft.setTextColor(FG_COLOR,BG_COLOR);
 
 
   //now draw weather icons 
@@ -1502,7 +1636,7 @@ X=120+(tft.width()-120)/2; //midpoint of side
     j+=45;
   }
 
-Y+=Z;
+  Y+=Z;
 
  tft.setCursor(0,Y);
  
@@ -1511,7 +1645,7 @@ Y+=Z;
   FNTSZ=6;
   Y = tft.height() - tft.fontHeight(FNTSZ) - 2;
   X = tft.width()/2;
-  snprintf(tempbuf,31,"%s",dateify(now(),"hh:nn"));
+  snprintf(tempbuf,31,"%s",dateify(t,"hh:nn"));
   tft.setTextFont(FNTSZ);
 
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+tft.fontHeight(FNTSZ)/2);
@@ -1531,43 +1665,31 @@ void loop() {
     OldTime[0] = second();
     //do stuff every second    
 
-    isFlagged = false;
-    for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && bitRead(Sensors[i].Flags,0) && Sensors[i].snsType != 2 && (t-Sensors[i].timeLogged)<4*60*60) isFlagged = true; //isflagged set within past 4 hours and not an RH value
-    }
-
-    if (GoogleServer) {
-      tft.fillCircle(240-15,12,6,TFT_GREEN);
-      if (isFlagged) {
-        if (OldTime[0]%2==0) tft.fillCircle(240-15,12,6,TFT_RED);
-        else tft.fillCircle(240-15,12,6,TFT_GREEN);
-      } 
-    } else {
-      tft.fillCircle(240-15,12,6,TFT_BLACK);
-      if (isFlagged) {
-        if (OldTime[0]%2==0) tft.fillCircle(240-15,12,3,TFT_RED);
-        else tft.fillCircle(240-15,12,3,TFT_GREEN);
-      } 
-
-    }
-
-
     if (I.wifi>0) I.wifi--;
-    if (I.redraw>0) I.redraw--;        
+    if (I.redraw>0) I.redraw--;
+    fcnDrawScreen(I.isFlagged);
   }
   
   if (OldTime[1] != minute()) {
+
     OldTime[1] = minute();
     //do stuff every minute
 
-   fcnDrawScreen(isFlagged);
+    I.isFlagged = false;
+    for (byte i=0;i<SENSORNUM;i++)  {
+      if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && bitRead(Sensors[i].Flags,0) ) {
+        if (Sensors[i].snsType == 3  || Sensors[i].snsType == 1 || Sensors[i].snsType == 4)  I.isFlagged = true; 
+      }
+    }
+
+    I.redraw = 0;
+
 
     if(WiFi.status()== WL_CONNECTED){
       I.wifi=10;
     } else {
       I.wifi=0;
     }
-    I.redraw=0;
 
     //check if weather available
     if (hourly_temp[0] == 0 &&  daily_tempMax[0] ==0 &&  daily_tempMin[0] == 0 &&  daily_weatherID[0] == 0) {
@@ -1591,13 +1713,12 @@ void loop() {
     OldTime[2] = hour(); 
 
     timeUpdate();
-    //expire any measurements that are older than 4 hours.
+    //expire any measurements that are older than N hours.
     for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (t-Sensors[i].timeLogged)>4*60*60)  {
-        //remove 4 hour old values 
+      if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (t-Sensors[i].timeLogged)>OLDESTSENSORHR*60*60)  {
+        //remove N hour old values 
         initSensor(i);
       }
-      
     }
 
     
@@ -1746,8 +1867,14 @@ currentLine += "</p></body></html>";
 
 void handleRoot() {
 
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title></head><body>";
+  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
+  currentLine =currentLine  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
+  currentLine =currentLine  + (String) "body {  font-family: arial, sans-serif; }";
+  currentLine =currentLine  + "</style></head>";
+
+currentLine = currentLine + "<body>";
   
+  currentLine = currentLine + "<h1>Pleasant Weather Server</h1><br><p>";
   currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br><p>";
   currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   currentLine += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
@@ -1760,13 +1887,11 @@ void handleRoot() {
 
   
   currentLine += "<a href=\"/LIST\">List all sensors</a><br>";
-  currentLine = currentLine + "isFlagged: " + (String) isFlagged + "<br>";
-  currentLine = currentLine + "Sensor Data: <br>";
-
-  currentLine = currentLine + "----------------------------------<br>";      
+  
+  currentLine = currentLine + "<br>";      
 
   byte used[SENSORNUM];
-  for (byte j=0;j<SENSORNUM-1;j++)  {
+  for (byte j=0;j<SENSORNUM;j++)  {
     used[j] = 255;
   }
 
@@ -1774,10 +1899,45 @@ void handleRoot() {
   char padder[2] = ".";
   char tempchar[9] = "";
   char temp[26];
-        
+
+
+  currentLine = currentLine + "<table id=\"Logs\" style=\"width:70%\">";      
+  currentLine = currentLine + "<tr><th><p><button onclick=\"sortTable(0)\">IP Address</button></p></th><th>ArdID</th><th>Sensor</th><th>Value</th><th><button onclick=\"sortTable(4)\">Sns Type</button></p></th><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th>Last Logged</th><th>Last Recvd</th><th>Flags</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
 //    currentLine += "inIndex: " + (String) j + " " + (String) inIndex(j,used,SENSORNUM) + "<br>";
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
+      used[usedINDEX++] = j;
+      currentLine = currentLine + "<tr><td><a href=\"http://" + (String) Sensors[j].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[j].IP.toString() + "</a></td>";
+      currentLine = currentLine + "<td>" + (String) Sensors[j].ardID + "</td>";
+      currentLine = currentLine + "<td>" + (String) Sensors[j].snsName + "</td>";
+      currentLine = currentLine + "<td>" + (String) Sensors[j].snsValue + "</td>";
+      currentLine = currentLine + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
+      currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,0) + "</td>";
+      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].timeRead,"mm/dd hh:nn:ss") + "</td>";
+      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+      Byte2Bin(Sensors[j].Flags,tempchar,true);
+      currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
+      currentLine = currentLine + "</tr>";
+      
+      for (byte jj=j+1;jj<SENSORNUM;jj++) {
+        if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].ardID==Sensors[j].ardID) {
+          used[usedINDEX++] = jj;
+          currentLine = currentLine + "<tr><td><a href=\"http://" + (String) Sensors[jj].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[jj].IP.toString() + "</a></td>";
+          currentLine = currentLine + "<td>" + (String) Sensors[jj].ardID + "</td>";
+          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsName + "</td>";
+          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsValue + "</td>";
+          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
+          currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
+          currentLine = currentLine + "<td>" +  (String) dateify(Sensors[jj].timeRead,"mm/dd hh:nn:ss") + "</td>";
+          currentLine = currentLine + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+          Byte2Bin(Sensors[jj].Flags,tempchar,true);
+          currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
+          currentLine = currentLine + "</tr>";
+        }
+      }
+
+
+/*
       used[usedINDEX++] = j;
       currentLine += "<FORM action=\"/REQUESTUPDATE\" method=\"get\">";
       currentLine += "<p style=\"font-family:monospace\">";
@@ -1866,11 +2026,18 @@ void handleRoot() {
       currentLine += "<button type=\"submit\">Request Update</button><br>";
 
       currentLine += "</p></form><br>----------------------------------<br>";   
+      */
     }
 
   }
-  
-      currentLine += "</p></body></html>";   
+
+  currentLine += "</table>";   
+
+  currentLine += "</p>";
+  currentLine =currentLine  + "<script>";
+  currentLine += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
+  currentLine += "</script> ";
+currentLine += "</body></html>";   
 
    #ifdef DEBUG_
       Serial.println(currentLine);
@@ -1958,7 +2125,7 @@ char* dateify(time_t t, String dateformat) {
 }
 
 char* Byte2Bin(uint8_t value, char* output, bool invert) {
-  snprintf(output,8,"00000000");
+  snprintf(output,9,"00000000");
   for (byte i = 0; i < 8; i++) {
     if (invert) {
       if (value & (1 << i)) output[i] = '1';

@@ -1,45 +1,45 @@
 #include <Arduino.h>
 
 //#define _DEBUG 1
-#define _USE8266 1
-//#define _USE32
+//#define _USE8266 1
+#define _USE32
 
-#define ARDNAME "Office"
-#define ARDID 91 //unique arduino ID 
-#define SENSORNUM 3 //be sure this matches SENSORTYPES
+#define ARDNAME "GasTest"
+#define ARDID 200 //unique arduino ID 
+#define SENSORNUM 4 //be sure this matches SENSORTYPES
 
 
-const uint8_t SENSORTYPES[SENSORNUM] = {1,2,3};
+const uint8_t SENSORTYPES[SENSORNUM] = {17,18,19,20};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-//#define _USELED D4
-#define DHTTYPE    DHT11     // DHT11 or DHT22
-#define DHTPIN D5
+//#define DHTTYPE    DHT11     // DHT11 or DHT22
+//#define DHTPIN 2
 //#define _USEBMP  1
 //#define _USEAHT 1
 //#define _USEBME 1
+#define _USEBME680 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOILCAP 1
-#define _USESOILRES D6
+//#define _USESOILRES D5
+//#define SOILRESISTANCE 4700
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
 //#define _OLEDTYPE &Adafruit128x32
 //#define _OLEDINVERT 0
 
-
-// SENSORTYPES is an array that defines the sensors. 
+/*sens types
 //0 - not defined
 //1 - temp, DHT
 //2 - RH, DHT
 //3 - soil moisture, capacitative or Resistive
 //4 -  temp, AHT21
 //5 - RH, AHT21
-//6
+//6 - 
 //7 - distance, HC-SR04
-//8
+//8 - human presence (mm wave)
 //9 - BMP pressure
 //10 - BMP temp
 //11 - BMP altitude
@@ -48,6 +48,15 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //14 - BMe temp
 //15 - BMe humidity
 //16 - BMe altitude
+//17 - BME680 temp
+18 - BME680 rh
+19 - BME680 air press
+20  - BME680 gas sensor
+99 - any binary sensor
+
+
+*/
+
 
 
 #ifdef _USESOILCAP
@@ -56,8 +65,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
-  const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
-  #define SOILRESISTANCE 4700 //ohms
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
 
 #ifdef _USEHCSR04
@@ -107,6 +115,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #endif
 //8266... I think they're the same. If not, then use nodemcu or wemos
 #ifdef _USE32
+/*
   static const uint8_t TX = 1;
   static const uint8_t RX = 3;
   static const uint8_t SDA = 21;
@@ -118,7 +127,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
   static const uint8_t SCK   = 18;
   //need to define pin labeled outputs...
   static const uint8_t LED   = 2; //this is true for dev1 board... may be wrong for others
-  
+  */
 #endif
 
 
@@ -144,33 +153,6 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
   
 
-/*
- * Rev history
- * no number (v11) - data sends to server. polling this IP address will result in return of available data. Some settings can be changed/sent over HTTP.
- * 11.2 - data is sent to:
- * (first) arduino server, if available
- * (otherwise) directly to main server
- */
-
-/*
- * 10's = Den
- * 20's = Basement/garage
- * 30's = Living Room
- * 40's = Office
- * 50's = Family Room
- * 60's = Kithcen
- * 70's = dining room
- * 80's = other 1st floor
- * 90's = other 1st floor
- * 100's = upstairs
- * 110's = attic
- * 150's = outside
- */
-
-
-
-
-#include <TimeLib.h>
 #ifdef _USE8266
   #include <ESP8266WiFi.h>
   #include <ESP8266HTTPClient.h>
@@ -193,10 +175,16 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #include "ArduinoOTA.h"
 
 #include <WiFiClient.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 
 #include <Wire.h>
+#include "timesetup.h"
+
+#ifdef _USEBME680
+  #include <Zanshin_BME680.h>
+  BME680_Class BME680;  ///< Create an instance of the BME680 class
+  int32_t temperature, humidity, pressure, gas;
+  uint32_t last_BME680 =0;
+#endif
 
 #ifdef DHTTYPE
   #include <Adafruit_Sensor.h>
@@ -251,14 +239,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #define BG_COLOR 0xD69A
 
 
-//wifi
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov");
-// By default 'pool.ntp.org' is used with 60 seconds update interval and
-// no offset
-// You can specify the time server pool and the offset, (in seconds)
-// additionaly you can specify the update interval (in milliseconds).
-// NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
+
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 //#define ESP_SSID "kandy-hispeed" // Your network name here
@@ -271,7 +252,35 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 #endif
 #ifdef _USE32
   WebServer server(80);
+  WiFiClient wfclient;
+  HTTPClient http;
 #endif
+
+/*
+const char FORM_page[] PROGMEM = R"=====(
+  <FORM action="/UPDATESENSOR" method="get">
+  <input type="hidden" name="SensorNum" value="@@SNSNUM@@"><br>  
+  <label for="Mon">Is Monitored: </label>
+  <input type="text" id="Mon" name="Monitored" value="@@FLAG1@@"><br>  
+  <label for="Out">Is Outside: </label>
+  <input type="text" id="Out" name="Outside" value="@@FLAG2@@"><br>  
+  <label for="UL">Upper Limit:</label>
+  <input type="text" id="UL" name="UpperLim" value="@@UPPERLIM@@"><br>
+  <label for="LL">Lower Limit:</label>
+  <input type="text" id="LL" name="LowerLim" value="@@LOWERLIM@@"><br>
+  <label for="POLL">Poll Interval (sec):</label>
+  <input type="text" id="POLL" name="PollInt" value="@@POLL@@"><br>
+  <label for="SEND">Send Interval (sec):</label>
+  <input type="text" id="SEND" name="SendInt" value="@@SEND@@"><br>
+  <label for="recheck" class="switch">
+  <input id="recheck" type="checkbox" name="recheckSensor"> Recheck Sensor <span class="slider round"></span>
+  </label>
+  <button type="submit">Submit</button>
+  <button type="submit" formaction="/NEXTSNS">Next Sensor</button>
+  <button type="submit" formaction="/LASTSNS">Prior Sensor</button>
+</form>
+)=====";
+*/
 
 
 bool KiyaanServer = false;
@@ -301,7 +310,6 @@ struct IP_TYPE {
   IPAddress IP;
   int server_status;
 };
-
 
 //gen unions
 union convertULONG {
@@ -336,13 +344,13 @@ IP_TYPE SERVERIP[3];
 char DATESTRING[20]="";
 byte OldTime[5] = {0,0,0,0,0};
 
-int DSTOFFSET = 0;
 
 //function declarations
 char* strPad(char*, char*, byte);     // Simple C string function
 bool SendData(struct SensorVal*);
 bool ReadData(struct SensorVal*);
-void timeUpdate(void);
+void read_BME680();
+
 void handleRoot(void);              // function prototypes for HTTP handlers
 void initSensor(byte);
 void handleNotFound(void);
@@ -357,272 +365,39 @@ void pushDoubleArray(double arr[], byte, double);
 void redrawOled(void);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
-uint8_t findSensor(byte snsType, byte snsID);
 
 byte CURRENTSENSOR_WEB = 1;
 
-#ifdef _USELED
-  #include <FastLED.h>
-
-  #define PI 3.14159265
-  #define LEDCOUNT 57 //how many LEDs did you install?
-
-  //LED Drawing
-  typedef struct  {
-    //cos(kx +(DIR)* wt) + 0.5; where k - is 2*pi/L [L, lambda, is wavelength]; and w is 2*pi/T [T, period, is time it takes to cycle through one wavelength)so speed is v = w/k; here I am using cos because you can set the inputs to 0 to obtain the static val
-    //DIR is -1 for right rotation, +1 for left rotation
-    // k = 2*pi/L, where L is in units of number of LEDs
-    //w = 2*pi/T where T is seconds to cycle through a wavelenghth [L]
-    //y(x,t) = (MaxBrightness-MinBrightness) * (cos(kx - wt) + 1)/2 + MinBrightness; here x is LED number, t is time
-    uint8_t  animation_style; //1 = counter clockwise rotation (sin) // 2 = clockwise rotation (sin) // 3 = non-moving pulse // 4 = static
-    uint16_t sin_T; //in other words, T, ms to move through one wavelength
-    uint8_t sin_L; //wavelength, in number of LEDs
-    uint8_t MaxBrightness; //sin amp
-    uint8_t MinBrightness; //sin amp
-    uint32_t last_LED_update;
-    byte LEDredrawRefreshMS;
-    CRGB color; //current color 1 
-    CRGB LED_ARRAY[LEDCOUNT];
-
-    void LED_update(void) {
-      uint32_t m = millis();
-
-      if (m-this->last_LED_update<this->LEDredrawRefreshMS) return;
-
-      double L1 = (double) 1/this->sin_L, T1 = (double) 1/this->sin_T;
-      int8_t DIR = 0;
-
-      for (byte j=0;j<LEDCOUNT;j++) {
-
-        if (animation_style==1) DIR=-1;
-        if (animation_style==2) DIR=1;
-        if (animation_style==3) {
-          DIR=1;
-          L1=0;
-        }
-        if (animation_style==4) {
-          DIR=0;
-          L1=0;
-        }
-
-      #ifdef _DEBUG
-        Serial.printf("LED raw r-color is %d, and LED[%d] before and after r-value: %d ... ",this->color.red,j,this->LED_ARRAY[j].red);
-      #endif
-
-        this->LED_ARRAY[j] = this->LED_setLED(j,L1,T1,DIR,m);
-
-      #ifdef _DEBUG
-        Serial.printf(" %d ... \n ",this->LED_ARRAY[j].red);
-      #endif
-        
-      }
-
-      FastLED.show();
-      this->last_LED_update = m;
-
-    }
-
-    CRGB LED_setLED(byte j, double L1, double T1, int8_t DIR, uint32_t m) {
-      CRGB temp;
-      
-
-      if (L1==0 && j>0) return this->LED_ARRAY[0]; //all LEDs are the same, just return the first value
-
-      if (L1==0 && DIR == 0) {
-        temp = LED_scale_brightness(this->color,this->MaxBrightness);
-        return temp;
-      }
-
-
-      byte brightness = (uint8_t) ((double) (this->MaxBrightness-this->MinBrightness) * (cos((double) 2*PI*(j*L1 +(DIR)* m*T1)) + 1)/2 + this->MinBrightness);
-      
-      temp =  LED_scale_brightness(this->color,brightness);
-  
-  /*
-      #ifdef _DEBUG
-        Serial.printf("LED_setLED: color = %d %d %d\n",temp.red,temp.green,temp.blue);
-      #endif 
-*/
-      
-      return temp;
-    }
-
-    uint32_t LED_scale_brightness(CRGB colorin, byte BRIGHTNESS_SCALE) {
-      double r = (double) colorin.red*BRIGHTNESS_SCALE/100;
-      double g = (double) colorin.green*BRIGHTNESS_SCALE/100;
-      double b = (double) colorin.blue*BRIGHTNESS_SCALE/100;
-
-/*
-      #ifdef _DEBUG
-        Serial.printf("scale brightness: r_in = %d, g_in = %d, b_in = %d, scalereq = %d, r=%d, g=%d, b=%d, and u32 is %d\n",colorin.red, colorin.green, colorin.blue, BRIGHTNESS_SCALE,(byte) r,(byte) g,(byte) b,(uint32_t) ((byte) r << 16 | ((byte) g << 8 |  ((byte) b) )));
-      #endif 
-  */     
-      return  (uint32_t) ((byte) r << 16 | (byte) g << 8 |  ((byte) b));
-    }
-
-    void LED_set_color(byte r, byte g, byte b) {
-      this->color =   (uint32_t) ((byte) r << 16 | (byte) (g) << 8 | (byte) (b));
-
-      #ifdef _DEBUG
-        Serial.printf("LED_set_color R color is now %d.\n",this->color.red);
-      #endif 
-
-    }
-
-    void LED_set_color_soil(struct SensorVal *sns) {
-      #ifdef _DEBUG
-        Serial.printf("setled soilR is %f\n",soilR);
-      #endif 
-
-      byte r=0,g=0,b=0;
-      
-      byte ii = 0;
-
-
-      if (sns->snsValue<sns->limitLower) ii=0;
-      else {
-        if (sns->snsValue>sns->limitUpper) ii=6;
-        else {
-          for (byte i=0; i<=6;i++) {
-            if (sns->snsValue<sns->limitLower + (sns->limitUpper-sns->limitLower)*i/6) break;
-            ii++;
-          }
-        }
-      }
-        
-      switch (ii) {
-        case 6:
-          LED_animation_defaults(3);
-          this->MaxBrightness = 50;
-          this->MinBrightness = 10;
-          this->sin_T = 1000;
-          r=255;
-          g=0;
-          b=0;
-          
-          break;
-        case 5:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 10;
-          this->MinBrightness = 5;
-          this->sin_T = 1000;
-          r=255;
-          g=75;
-          b=0;
-          break;
-        case 4:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 6;
-          this->MinBrightness = 5;
-          r=255;
-          g=175;
-          b=0;
-          break;
-        case 3:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
-          r=255;
-          g=255;
-          b=0;
-          break;
-        case 2:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
-          r=0;
-          g=255;
-          b=0;
-          break;
-        case 1:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
-          r=0;
-          g=255;
-          b=100;
-          break;
-        case 0:
-          LED_animation_defaults(4);
-          this->MaxBrightness = 5;
-          this->MinBrightness = 0;
-          r=0;
-          g=255;
-          b=255;
-          break;
-      }
-      this->LED_set_color(r,g,b);
-    }
-
-    void LED_animation_defaults(byte anim) {
-      this->animation_style = anim;
-      switch (anim) {
-        case 1: //wave clockwise
-          sin_T = 1500; //in other words, T, ms to move through one wavelength
-          sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-          MaxBrightness = 15; //sin amp
-          MinBrightness=5; 
-          break;
-        case 2: //wave counter-clockwise
-          sin_T = 1500; //in other words, T, ms to move through one wavelength
-          sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-          MaxBrightness = 10; //sin amp
-          MinBrightness=1; 
-          break;
-        case 3: //pulse
-          sin_T = 30000; //in other words, T ms to move through one wavelength
-          sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-          MaxBrightness = 10; //sin amp
-          MinBrightness=5; 
-          break;
-        case 4: //const
-          MaxBrightness = 5;
-          MinBrightness = 5;
-           
-            
-          break;
-      }
-    }
-
-
-  } Animation_type;
-
-
-
-Animation_type LEDs;
-
-  
-#endif
-
-
-
 void setup()
 {
-byte i;
+  byte i;
+
+  #ifdef _DEBUG
+    Serial.begin(115200);
+    Serial.println("Begin Setup");
+  #endif
+
+
 
   SERVERIP[0].IP = {192,168,68,93};
   SERVERIP[1].IP = {192,168,68,106};
   SERVERIP[2].IP = {192,168,68,100};
 
-#ifdef _USELED
-  FastLED.addLeds<WS2813,_USELED,GRB>(LEDs.LED_ARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
-
-  LEDs.LED_animation_defaults(1);
-  LEDs.LEDredrawRefreshMS=20;
-  LEDs.LED_set_color(255,255,255); //default is white
-#endif 
-  
-  #ifdef _USESOILRES
-    pinMode(SOILDIO,OUTPUT);
-    digitalWrite(SOILDIO, LOW);  
+  #ifdef _DEBUG
+    Serial.println("servers set");
   #endif
+
+  #ifdef _USESOILRES
+    pinMode(_USESOILRES,OUTPUT);  
+  #endif
+
 
   Wire.begin(); 
   Wire.setClock(400000L);
   
-    #ifdef _DEBUG
-        Serial.println("oled begin");
-    #endif
+  #ifdef _DEBUG
+      Serial.println("oled begin");
+  #endif
 
 #ifdef _USESSD1306
   
@@ -652,21 +427,30 @@ byte i;
 #endif
 
 
-  
-  #ifdef _DEBUG
-    Serial.begin(115200);
-    Serial.println("Begin Setup");
-  #endif
-
-
-
-
-      #ifdef _USESSD1306
-        oled.clear();
-        oled.setCursor(0,0);
-        oled.println("WiFi Starting.");
+#ifdef _USEBME680
+  while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
+      #ifdef _DEBUG
+        Serial.print(F("-  Unable to find BME680. Trying again in 5 seconds.\n"));
       #endif
+      delay(5000);
+    }  // of loop until device is located
+    //Serial.print(F("- Setting 16x oversampling for all sensors\n"));
+    BME680.setOversampling(TemperatureSensor, Oversample16);  // Use enumerated type values
+    BME680.setOversampling(HumiditySensor, Oversample16);     // Use enumerated type values
+    BME680.setOversampling(PressureSensor, Oversample16);     // Use enumerated type values
+    //Serial.print(F("- Setting IIR filter to a value of 4 samples\n"));
+    BME680.setIIRFilter(IIR4);  // Use enumerated type values
+    //Serial.print(F("- Setting gas measurement to 320\xC2\xB0\x43 for 150ms\n"));  // "�C" symbols
+    BME680.setGas(320, 150);  // 320�c for 150 milliseconds
+    // of method setup()
+#endif
 
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+  oled.println("WiFi Starting.");
+#endif
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ESP_SSID, ESP_PASS);
     #ifdef _DEBUG
         Serial.println("wifi begin");
@@ -687,7 +471,6 @@ byte i;
     #endif
   }
 
-//  MYIP.IP = WiFi.localIP();
 
     #ifdef _DEBUG
     Serial.println("");
@@ -696,17 +479,18 @@ byte i;
     Serial.println("Connecting ArduinoOTA...");
     #endif
 
-  #ifdef _DEBUG
-    Serial.println("Connected!");
-    Serial.println(WiFi.localIP());
-  #endif
 
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
       oled.println("WiFi OK.");
-      oled.println("OTA start.");      
+      oled.println("timesetup next.");      
     #endif
+
+  setupTime();
+  #ifdef _DEBUG
+    Serial.println("setuptime done. OTA next.");
+  #endif
 
 
     // Port defaults to 8266
@@ -722,13 +506,6 @@ byte i;
     #ifdef _DEBUG
     Serial.println("OTA started");
     #endif
-    #ifdef _USELED
-      for (byte j=0;j<LEDCOUNT;j++) {
-        LEDs.LED_ARRAY[j] = (uint32_t) 0<<16 | 255<<8|0; //green
-         
-      }
-      FastLED.show();
-    #endif
   });
   ArduinoOTA.onEnd([]() {
     #ifdef _DEBUG
@@ -736,14 +513,6 @@ byte i;
     #endif
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef _USELED
-      for (byte j=0;j<LEDCOUNT;j++) {
-        LEDs.LED_ARRAY[LEDCOUNT-j-1] = 0;
-        if (j<=(double) LEDCOUNT*progress/total) LEDs.LED_ARRAY[LEDCOUNT-j-1] = (uint32_t) 255 <<16 | 255 << 8 | 255;
-         
-      }
-      FastLED.show();
-    #endif
     #ifdef _DEBUG
         Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
     #endif
@@ -792,14 +561,7 @@ byte i;
       oled.println("start time.");
     #endif
 
-    timeClient.begin();
-    timeClient.update();
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
 
-    if (month() < 3 || (month() == 3 &&  day() < 12) || month() ==12 || (month() == 11 && day() > 5)) DSTOFFSET = -1*60*60;
-    else DSTOFFSET = 0;
-
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET); //set stoffregen timelib time once, to get month and day. then reset with DST
 
     //set the stoffregen time library with timezone and dst
     timeUpdate();
@@ -1012,10 +774,10 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 1000;
-          Sensors[i].limitLower = 300;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=600;
+          Sensors[i].limitUpper = 2500;
+          Sensors[i].limitLower = 0;
+          Sensors[i].PollingInt=60*60;
+          Sensors[i].SendingInt=60*60;
         #endif
 
         break;
@@ -1133,6 +895,39 @@ byte i;
         Sensors[i].PollingInt=15*60*60;
         Sensors[i].SendingInt=15*60*60;
         break;
+      case 17: //bme680
+        Sensors[i].snsPin=0;
+        snprintf(Sensors[i].snsName,31,"%s_T",ARDNAME);
+        Sensors[i].limitUpper = 90;
+        Sensors[i].limitLower = 50;
+        Sensors[i].PollingInt=15*60;
+        Sensors[i].SendingInt=15*60;
+        break;
+      case 18: //bme680
+        Sensors[i].snsPin=0;
+        snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
+        Sensors[i].limitUpper = 100;
+        Sensors[i].limitLower = 0;
+        Sensors[i].PollingInt=15*60;
+        Sensors[i].SendingInt=15*60;
+        break;
+      case 19: //bme680
+        Sensors[i].snsPin=0;
+        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
+        Sensors[i].limitUpper = 1020;
+        Sensors[i].limitLower = 1012;
+        Sensors[i].PollingInt=60*60;
+        Sensors[i].SendingInt=60*60;
+        break;
+      case 20: //bme680
+        Sensors[i].snsPin=0;
+        snprintf(Sensors[i].snsName,31,"%s_gas",ARDNAME);
+        Sensors[i].limitUpper = 1000;
+        Sensors[i].limitLower = 50;
+        Sensors[i].PollingInt=1*60;
+        Sensors[i].SendingInt=1*60;
+        break;
+
     }
 
     Sensors[i].snsValue=0;
@@ -1231,27 +1026,15 @@ String fcnDOW(time_t t) {
     return "???";
 }
 
-void timeUpdate() {
-  timeClient.update();
-  if (month() < 3 || (month() == 3 &&  day() < 12) || month() ==12 || (month() == 11 && day() > 5)) DSTOFFSET = -1*60*60;
-  else DSTOFFSET = 0;
-
-  setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-  return;
-}
-
 
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
 
+    
   time_t t = now(); // store the current time in time variable t
   
-  #ifdef _USELED
-    LEDs.LED_update();
-  #endif 
-
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
@@ -1265,9 +1048,9 @@ void loop() {
     for (byte k=0;k<SENSORNUM;k++) {
       flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
-      if (Sensors[k].LastReadTime == 0 || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs(Sensors[k].LastReadTime - t)>60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs((int) ((uint32_t) Sensors[k].LastReadTime - now()))>60*60*24 || Sensors[k].LastReadTime ==0) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if ((Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs(Sensors[k].LastSendTime - t)>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if ((Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs((int) ((uint32_t)Sensors[k].LastSendTime - now()))>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
   }
   
@@ -1736,7 +1519,7 @@ bool SendData(struct SensorVal *snsreading) {
   if (bitRead(snsreading->Flags,1) == 0) return false;
   
 #ifdef _DEBUG
-  Serial.printf("SENDDATA: Sending data from %s. \n", snsreading->snsName);
+  Serial.printf("SENDDATA: Sending data. Sensor is currently named %s. \n", snsreading->snsName);
 #endif
 
   WiFiClient wfclient;
@@ -1840,10 +1623,17 @@ bool SendData(struct SensorVal *snsreading) {
 
 }
 
+void read_BME680() {
+  
+  uint32_t m = millis();
+  
+  if (last_BME680>m || m-last_BME680>500)   BME680.getSensorData(temperature, humidity, pressure, gas);  // Get readings
+  else return;
+  last_BME680=m;
+}
 
 bool ReadData(struct SensorVal *P) {
-      double val;
-
+  double val;
   bitWrite(P->Flags,0,0);
   
   switch (P->snsType) {
@@ -1870,19 +1660,15 @@ bool ReadData(struct SensorVal *P) {
 
       #ifdef _USESOILRES
         //soil moisture by stainless steel wire (Resistance)
-        digitalWrite(SOILDIO, HIGH);
+        digitalWrite(_USESOILRES, HIGH);
         val = analogRead(P->snsPin);
-        digitalWrite(SOILDIO, LOW);
+        digitalWrite(_USESOILRES, LOW);
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
       
         val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
-        P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
+        P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value
         
-        #ifdef _USELED
-          LEDs.LED_set_color_soil(P);
-        #endif 
-
       #endif
 
       break;
@@ -2080,6 +1866,25 @@ bool ReadData(struct SensorVal *P) {
 
       #endif
       break;
+    #ifdef _USEBME680
+    case 17: //bme680 temp
+      read_BME680();
+      P->snsValue = (double) (( ((double) temperature/100) *9/5)+32); //degrees F
+      break;
+    case 18: //bme680 humidity
+      read_BME680();
+      P->snsValue = ((double) humidity/1000); //RH%
+      break;
+    case 19: //bme680 air pressure
+      read_BME680();
+      P->snsValue = ((double) pressure/100); //hPa
+      break;
+    case 20: //bme680 gas
+      read_BME680();
+      P->snsValue = (gas); //milliohms
+      break;
+    #endif
+    
   }
 
   checkSensorValFlag(P); //sets isFlagged
