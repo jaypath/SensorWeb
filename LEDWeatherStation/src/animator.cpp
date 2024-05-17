@@ -11,6 +11,7 @@ const uint rainy = 0;
 const uint snowy = 1;
 const uint sunny = 2;
 const uint cloudy = 3;
+const uint starry = 4;
 
 const float pi = 3.14159;
 const float top_bar_pulse_period = pi / 500;
@@ -86,29 +87,51 @@ void LED_Weather_Animation::set_snowy_status(uint snow_status_) {
   if (snow_status_ == LIGHT_SNOW) this->top_strip_color = Light_Precipitation_Top_Strip_Color;
   else this->top_strip_color = Heavy_Precipitation_Top_Strip_Color;
 };
-void LED_Weather_Animation::set_sunny_status(byte current_hour) {
-  this->anim_status = sunny;
-  if (current_hour>19 || current_hour<7) {
+void LED_Weather_Animation::set_sunny_status() {
+  if (isNight()) {
+    this->anim_status = starry;
     this->top_strip_color = (CRGB)0;
     fill_top_strip(this->top_strip_color);
+    return;
+  } 
+  
+  this->anim_status = sunny;
+  this->top_strip_color = (CRGB)Sun_Top_Strip_Color;
+  fill_top_strip(this->top_strip_color);
 
-  } else{
-    this->top_strip_color = (CRGB)Sun_Top_Strip_Color;
-    fill_top_strip(this->top_strip_color);
-  }
 }
 void LED_Weather_Animation::set_cloudy_status(uint cloud_status_) {
   this->anim_status = cloudy;
-  this->cloud_status = cloud_status_;
-  if (cloud_status_ == HEAVY_CLOUDS)   this->top_strip_color = (CRGB)Cloud_Top_Strip_Color;
-  if (cloud_status_ == LIGHT_CLOUDS)   this->top_strip_color = (CRGB)PartlyCloud_Top_Strip_Color;
+  switch (cloud_status_) {
+    case 801:
+      this->cloud_status = 11;
+      this->top_strip_color = (CRGB)PartlyCloud_Top_Strip_Color;
+      break;
+    case 802:
+      this->cloud_status = 25;
+      this->top_strip_color = (CRGB)PartlyCloud_Top_Strip_Color;
+      break;
+    case 803:
+      this->cloud_status = 50;
+      this->top_strip_color = (CRGB)Cloud_Top_Strip_Color;
+      break;
+    case 804:
+      this->cloud_status = 85;
+      this->top_strip_color = (CRGB)Cloud_Top_Strip_Color;
+      break;
+    default:
+      this->cloud_status = 0;
+      this->top_strip_color = (CRGB) 0;
+  }
   fill_top_strip(this->top_strip_color);
 }
 
-void LED_Weather_Animation::update_weather_status(long weather_status, byte current_hour) {
+void LED_Weather_Animation::update_weather_status(long weather_status, byte current_hour_) {
   #ifdef DEBUG
     Serial.println("Weather status: " + String(weather_status));
   #endif
+
+  this->current_hour = current_hour_;
 
   //Thunderstorm
   if (weather_status >= 200 && weather_status < 300) {
@@ -117,16 +140,8 @@ void LED_Weather_Animation::update_weather_status(long weather_status, byte curr
   }
   //Drizzle
   if (weather_status >= 300 && weather_status < 400) {
-    switch (weather_status) {
-      //Heavy drizzle
-      case 302:
-      case 312:
-      case 314:
-        this->set_rainy_status(HEAVY_RAIN);
-        break;
-      default:
-        this->set_rainy_status(LIGHT_RAIN);
-    }
+    this->set_rainy_status(LIGHT_RAIN);
+    
     return;
   }
   //Rain
@@ -164,17 +179,11 @@ void LED_Weather_Animation::update_weather_status(long weather_status, byte curr
     this->set_rainy_status(LIGHTNING);
   }
   //Clear sky
-  if (weather_status == 800) this->set_sunny_status(current_hour);
+  if (weather_status == 800) this->set_sunny_status();
   //Clouds
   if (weather_status >= 801 && weather_status < 900) {
-    switch (weather_status) {
-      //Heavy clouds
-      case 804:
-        this->set_cloudy_status(HEAVY_CLOUDS);
-        break;
-      default:
-        this->set_cloudy_status(LIGHT_CLOUDS);
-    }
+    this->set_cloudy_status(weather_status);
+    
   }
 };
 
@@ -331,67 +340,139 @@ void LED_Weather_Animation::frame_draw(byte brightness){
 }
 
 
-void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
+void LED_Weather_Animation::animate_stars() {
+
+uint32_t m = millis();
+  frame_fill(0,0);
+  byte brightness=0;
+  //generate starmap, and twinkle stars
+  for (uint x = 0; x < NUMSTARS; x++) {
+    if (stars_c[x]>0) {
+      if (random(0,100)<STAR_DEATH_PROB) stars_c[x] = 0;
+      else {
+        brightness = (byte) ((double) (STAR_BRIGHTNESS_MAX-STAR_BRIGHTNESS_MIN)*(double) cos((double) 2*3.14159*(2) * m + (uint32_t) stars_c[x]) + STAR_BRIGHTNESS_MIN); //stars_x*stars_y adds some randomness to the phase, so all stars aren't pulsing in sync
+        frame_pixel(stars_x[x],stars_y[x],stars_c[x], brightness);
+      }     
+      
+    } else {
+      //add the eliminated star BACk      
+      // stars_x[x] = random(0,2); stay in the same row
+      stars_y[x] = random(0,LEDHEIGHT-1);
+      stars_c[x].red = random(0,255);
+      stars_c[x].green = random(0,255);
+      stars_c[x].blue = random(0,255);
+
+      //there are no green stars! black bodies radiating green radiate as much red
+      if (stars_c[x].green > 1*stars_c[x].red && stars_c[x].green > 1 * stars_c[x].blue) {
+        stars_c[x].green = 0.9*stars_c[x].red;
+      }
+      
+    }
+
+    frame_draw(100);
+    
+
+  }
+
+
+
+}
+
+
+void LED_Weather_Animation::animate_sky(bool add_rays) {
   
   byte global_brightness = 30;
+   
+  //time of day?
+  if (isNight()) {
+    animate_stars();
+    return;
+  }
 
-  //fill the appropriate background... dark with stars 7p - 7a or blue for 7a to 7p
-  if (current_hour>19 || current_hour<7) {  
-    frame_fill(0,0);
+  //fill sky
+  frame_fill(LED_Sky_Color, global_brightness);
 
-    //add and twinkle stars
-    for (uint x = 0; x < NUMSTARS; x++) {
-      CRGB color;
-      byte brightness = (byte)  random(floor((double)(1-STAR_DIM_RANGE)*STAR_BRIGHTNESS),floor((double)(1+STAR_DIM_RANGE)*STAR_BRIGHTNESS));
+  //add sun at the apporpriate position... dawn is 6 dusk 8p
+  byte sun_y = (byte) ((double) (LEDHEIGHT-1)*((double) (20-this->current_hour)/(20-6))); 
+  //the point at which the sun is will be white
+  frame_pixel(1,sun_y,0xffffff, 100); //center of sun is full bright!
+
+  //surrounding LEDs will be light yellow
+  frame_pixel(0,sun_y,0xfdfd22, global_brightness);
+  frame_pixel(2,sun_y,0xfdfd22, global_brightness);
+  frame_pixel(1,sun_y+1,0xfdfd22, global_brightness);
+  frame_pixel(1,sun_y-1,0xfdfd22, global_brightness);
+
+
+  //add center light yellow above and below
+  frame_pixel(1,sun_y-2,0xeeee00, global_brightness);
+  frame_pixel(1,sun_y+2,0xeeee00, global_brightness);
+
+  frame_pixel(0,sun_y-1,0xeeee00, global_brightness);
+  frame_pixel(0,sun_y+1,0xeeee00, global_brightness);
+
+  frame_pixel(2,sun_y-1,0xeeee00, global_brightness);
+  frame_pixel(2,sun_y+1,0xeeee00, global_brightness);
       
-      frame_pixel(stars_x[x],stars_y[x],color, brightness);
-    }
+
+  if (add_rays==false) return;
+
+  //add the rays
+  if (SUNRAY_STATE==0) {
+    //right next to the sun
+    frame_pixel(1,sun_y-3,0xdede00, global_brightness);
+    frame_pixel(1,sun_y+3,0xdede00, global_brightness);
+    frame_pixel(0,sun_y-2,0xdede00, global_brightness);
+    frame_pixel(0,sun_y+2,0xdede00, global_brightness);
+    frame_pixel(2,sun_y-2,0xdede00, global_brightness);
+    frame_pixel(2,sun_y+2,0xdede00, global_brightness);
+
+
+    frame_pixel(1,sun_y+4,LED_Sky_Color, global_brightness);
+    frame_pixel(1,sun_y-4,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y+3,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y-3,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y+3,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y-3,LED_Sky_Color, global_brightness);
+    //next surronud
+    frame_pixel(1,sun_y+5,LED_Sky_Color, global_brightness);
+    frame_pixel(1,sun_y-5,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y+4,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y-4,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y+4,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y-4,LED_Sky_Color, global_brightness);
+    //next surround
+    frame_pixel(1,sun_y+6,LED_Sky_Color, global_brightness);
+    frame_pixel(1,sun_y-6,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y+5,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y-5,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y+5,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y-5,LED_Sky_Color, global_brightness);  
+    //next surround
+    frame_pixel(1,sun_y+7,LED_Sky_Color, global_brightness);
+    frame_pixel(1,sun_y-7,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y+6,LED_Sky_Color, global_brightness);
+    frame_pixel(0,sun_y-6,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y+6,LED_Sky_Color, global_brightness);
+    frame_pixel(2,sun_y-6,LED_Sky_Color, global_brightness);  
+
   } else {
-    //fill sky
-    frame_fill(LED_Sky_Color, global_brightness);
-
-    //add sun at the apporpriate position...
-    byte sun_y = (22-current_hour);
-    //the point at which the sun is will be white
-    frame_pixel(1,sun_y,0xffffff, 100); //center of sun is full bright!
-
-    //surrounding LEDs will be light yellow
-    frame_pixel(0,sun_y,0xfdfd22, global_brightness);
-    frame_pixel(2,sun_y,0xfdfd22, global_brightness);
-    frame_pixel(1,sun_y+1,0xfdfd22, global_brightness);
-    frame_pixel(1,sun_y-1,0xfdfd22, global_brightness);
-
-
-    //add center light yellow above and below
-    frame_pixel(1,sun_y-2,0xeeee00, global_brightness);
-    frame_pixel(1,sun_y+2,0xeeee00, global_brightness);
-
-    frame_pixel(0,sun_y-1,0xeeee00, global_brightness);
-    frame_pixel(0,sun_y+1,0xeeee00, global_brightness);
-
-    frame_pixel(2,sun_y-1,0xeeee00, global_brightness);
-    frame_pixel(2,sun_y+1,0xeeee00, global_brightness);
-        
-
-    if (add_rays==false) return;
-
-    //add the rays
-    if (SUNRAY_STATE==0) {
+    if (SUNRAY_STATE==1) {
       //right next to the sun
-      frame_pixel(1,sun_y-3,0xdede00, global_brightness);
-      frame_pixel(1,sun_y+3,0xdede00, global_brightness);
-      frame_pixel(0,sun_y-2,0xdede00, global_brightness);
-      frame_pixel(0,sun_y+2,0xdede00, global_brightness);
-      frame_pixel(2,sun_y-2,0xdede00, global_brightness);
-      frame_pixel(2,sun_y+2,0xdede00, global_brightness);
+      frame_pixel(1,sun_y-3,LED_Sky_Color, global_brightness);
+      frame_pixel(1,sun_y+3,LED_Sky_Color, global_brightness);
+      frame_pixel(0,sun_y-2,LED_Sky_Color, global_brightness);
+      frame_pixel(0,sun_y+2,LED_Sky_Color, global_brightness);
+      frame_pixel(2,sun_y-2,LED_Sky_Color, global_brightness);
+      frame_pixel(2,sun_y+2,LED_Sky_Color, global_brightness);
 
 
-      frame_pixel(1,sun_y+4,LED_Sky_Color, global_brightness);
-      frame_pixel(1,sun_y-4,LED_Sky_Color, global_brightness);
-      frame_pixel(0,sun_y+3,LED_Sky_Color, global_brightness);
-      frame_pixel(0,sun_y-3,LED_Sky_Color, global_brightness);
-      frame_pixel(2,sun_y+3,LED_Sky_Color, global_brightness);
-      frame_pixel(2,sun_y-3,LED_Sky_Color, global_brightness);
+      frame_pixel(1,sun_y+4,0xEEEE00, global_brightness*.8);
+      frame_pixel(1,sun_y-4,0xEEEE00, global_brightness*.8);
+      frame_pixel(0,sun_y+3,0xEEEE00, global_brightness*.8);
+      frame_pixel(0,sun_y-3,0xEEEE00, global_brightness*.8);
+      frame_pixel(2,sun_y+3,0xEEEE00, global_brightness*.8);
+      frame_pixel(2,sun_y-3,0xEEEE00, global_brightness*.8);
       //next surronud
       frame_pixel(1,sun_y+5,LED_Sky_Color, global_brightness);
       frame_pixel(1,sun_y-5,LED_Sky_Color, global_brightness);
@@ -413,9 +494,8 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
       frame_pixel(0,sun_y-6,LED_Sky_Color, global_brightness);
       frame_pixel(2,sun_y+6,LED_Sky_Color, global_brightness);
       frame_pixel(2,sun_y-6,LED_Sky_Color, global_brightness);  
-
     } else {
-      if (SUNRAY_STATE==1) {
+      if (SUNRAY_STATE==2) {
         //right next to the sun
         frame_pixel(1,sun_y-3,LED_Sky_Color, global_brightness);
         frame_pixel(1,sun_y+3,LED_Sky_Color, global_brightness);
@@ -425,19 +505,19 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
         frame_pixel(2,sun_y+2,LED_Sky_Color, global_brightness);
 
 
-        frame_pixel(1,sun_y+4,0xEEEE00, global_brightness*.8);
-        frame_pixel(1,sun_y-4,0xEEEE00, global_brightness*.8);
-        frame_pixel(0,sun_y+3,0xEEEE00, global_brightness*.8);
-        frame_pixel(0,sun_y-3,0xEEEE00, global_brightness*.8);
-        frame_pixel(2,sun_y+3,0xEEEE00, global_brightness*.8);
-        frame_pixel(2,sun_y-3,0xEEEE00, global_brightness*.8);
+        frame_pixel(1,sun_y+4,LED_Sky_Color, global_brightness);
+        frame_pixel(1,sun_y-4,LED_Sky_Color, global_brightness);
+        frame_pixel(0,sun_y+3,LED_Sky_Color, global_brightness);
+        frame_pixel(0,sun_y-3,LED_Sky_Color, global_brightness);
+        frame_pixel(2,sun_y+3,LED_Sky_Color, global_brightness);
+        frame_pixel(2,sun_y-3,LED_Sky_Color, global_brightness);
         //next surronud
-        frame_pixel(1,sun_y+5,LED_Sky_Color, global_brightness);
-        frame_pixel(1,sun_y-5,LED_Sky_Color, global_brightness);
-        frame_pixel(0,sun_y+4,LED_Sky_Color, global_brightness);
-        frame_pixel(0,sun_y-4,LED_Sky_Color, global_brightness);
-        frame_pixel(2,sun_y+4,LED_Sky_Color, global_brightness);
-        frame_pixel(2,sun_y-4,LED_Sky_Color, global_brightness);
+        frame_pixel(1,sun_y+5,0xEEEE00 , global_brightness*.6);
+        frame_pixel(1,sun_y-5,0xEEEE00 , global_brightness*.6);
+        frame_pixel(0,sun_y+4,0xEEEE00 , global_brightness*.6);
+        frame_pixel(0,sun_y-4,0xEEEE00 , global_brightness*.6);
+        frame_pixel(2,sun_y+4,0xEEEE00 , global_brightness*.6);
+        frame_pixel(2,sun_y-4,0xEEEE00 , global_brightness*.6);
         //next surround
         frame_pixel(1,sun_y+6,LED_Sky_Color, global_brightness);
         frame_pixel(1,sun_y-6,LED_Sky_Color, global_brightness);
@@ -453,7 +533,7 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
         frame_pixel(2,sun_y+6,LED_Sky_Color, global_brightness);
         frame_pixel(2,sun_y-6,LED_Sky_Color, global_brightness);  
       } else {
-        if (SUNRAY_STATE==2) {
+        if (SUNRAY_STATE==3) {
           //right next to the sun
           frame_pixel(1,sun_y-3,LED_Sky_Color, global_brightness);
           frame_pixel(1,sun_y+3,LED_Sky_Color, global_brightness);
@@ -470,19 +550,19 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
           frame_pixel(2,sun_y+3,LED_Sky_Color, global_brightness);
           frame_pixel(2,sun_y-3,LED_Sky_Color, global_brightness);
           //next surronud
-          frame_pixel(1,sun_y+5,0xEEEE00 , global_brightness*.6);
-          frame_pixel(1,sun_y-5,0xEEEE00 , global_brightness*.6);
-          frame_pixel(0,sun_y+4,0xEEEE00 , global_brightness*.6);
-          frame_pixel(0,sun_y-4,0xEEEE00 , global_brightness*.6);
-          frame_pixel(2,sun_y+4,0xEEEE00 , global_brightness*.6);
-          frame_pixel(2,sun_y-4,0xEEEE00 , global_brightness*.6);
+          frame_pixel(1,sun_y+5,LED_Sky_Color, global_brightness);
+          frame_pixel(1,sun_y-5,LED_Sky_Color, global_brightness);
+          frame_pixel(0,sun_y+4,LED_Sky_Color, global_brightness);
+          frame_pixel(0,sun_y-4,LED_Sky_Color, global_brightness);
+          frame_pixel(2,sun_y+4,LED_Sky_Color, global_brightness);
+          frame_pixel(2,sun_y-4,LED_Sky_Color, global_brightness);
           //next surround
-          frame_pixel(1,sun_y+6,LED_Sky_Color, global_brightness);
-          frame_pixel(1,sun_y-6,LED_Sky_Color, global_brightness);
-          frame_pixel(0,sun_y+5,LED_Sky_Color, global_brightness);
-          frame_pixel(0,sun_y-5,LED_Sky_Color, global_brightness);
-          frame_pixel(2,sun_y+5,LED_Sky_Color, global_brightness);
-          frame_pixel(2,sun_y-5,LED_Sky_Color, global_brightness);  
+          frame_pixel(1,sun_y+6,0xEEEE00 , global_brightness*.4);
+          frame_pixel(1,sun_y-6,0xEEEE00 , global_brightness*.4);
+          frame_pixel(0,sun_y+5,0xEEEE00 , global_brightness*.4);
+          frame_pixel(0,sun_y-5,0xEEEE00 , global_brightness*.4);
+          frame_pixel(2,sun_y+5,0xEEEE00 , global_brightness*.4);
+          frame_pixel(2,sun_y-5,0xEEEE00 , global_brightness*.4);  
           //next surround
           frame_pixel(1,sun_y+7,LED_Sky_Color, global_brightness);
           frame_pixel(1,sun_y-7,LED_Sky_Color, global_brightness);
@@ -491,14 +571,14 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
           frame_pixel(2,sun_y+6,LED_Sky_Color, global_brightness);
           frame_pixel(2,sun_y-6,LED_Sky_Color, global_brightness);  
         } else {
-          if (SUNRAY_STATE==3) {
+          if (SUNRAY_STATE==4) {
             //right next to the sun
-            frame_pixel(1,sun_y-3,LED_Sky_Color, global_brightness);
-            frame_pixel(1,sun_y+3,LED_Sky_Color, global_brightness);
-            frame_pixel(0,sun_y-2,LED_Sky_Color, global_brightness);
-            frame_pixel(0,sun_y+2,LED_Sky_Color, global_brightness);
-            frame_pixel(2,sun_y-2,LED_Sky_Color, global_brightness);
-            frame_pixel(2,sun_y+2,LED_Sky_Color, global_brightness);
+            frame_pixel(1,sun_y-3,0xEEEE00, global_brightness*.4);
+            frame_pixel(1,sun_y+3,0xEEEE00, global_brightness*.4);
+            frame_pixel(0,sun_y-2,0xEEEE00, global_brightness*.4);
+            frame_pixel(0,sun_y+2,0xEEEE00, global_brightness*.4);
+            frame_pixel(2,sun_y-2,0xEEEE00, global_brightness*.4);
+            frame_pixel(2,sun_y+2,0xEEEE00, global_brightness*.4);
 
 
             frame_pixel(1,sun_y+4,LED_Sky_Color, global_brightness);
@@ -515,63 +595,25 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
             frame_pixel(2,sun_y+4,LED_Sky_Color, global_brightness);
             frame_pixel(2,sun_y-4,LED_Sky_Color, global_brightness);
             //next surround
-            frame_pixel(1,sun_y+6,0xEEEE00 , global_brightness*.4);
-            frame_pixel(1,sun_y-6,0xEEEE00 , global_brightness*.4);
-            frame_pixel(0,sun_y+5,0xEEEE00 , global_brightness*.4);
-            frame_pixel(0,sun_y-5,0xEEEE00 , global_brightness*.4);
-            frame_pixel(2,sun_y+5,0xEEEE00 , global_brightness*.4);
-            frame_pixel(2,sun_y-5,0xEEEE00 , global_brightness*.4);  
+            frame_pixel(1,sun_y+6,LED_Sky_Color, global_brightness);
+            frame_pixel(1,sun_y-6,LED_Sky_Color, global_brightness);
+            frame_pixel(0,sun_y+5,LED_Sky_Color, global_brightness);
+            frame_pixel(0,sun_y-5,LED_Sky_Color, global_brightness);
+            frame_pixel(2,sun_y+5,LED_Sky_Color, global_brightness);
+            frame_pixel(2,sun_y-5,LED_Sky_Color, global_brightness);  
             //next surround
-            frame_pixel(1,sun_y+7,LED_Sky_Color, global_brightness);
-            frame_pixel(1,sun_y-7,LED_Sky_Color, global_brightness);
-            frame_pixel(0,sun_y+6,LED_Sky_Color, global_brightness);
-            frame_pixel(0,sun_y-6,LED_Sky_Color, global_brightness);
-            frame_pixel(2,sun_y+6,LED_Sky_Color, global_brightness);
-            frame_pixel(2,sun_y-6,LED_Sky_Color, global_brightness);  
-          } else {
-            if (SUNRAY_STATE==4) {
-              //right next to the sun
-              frame_pixel(1,sun_y-3,0xEEEE00, global_brightness*.4);
-              frame_pixel(1,sun_y+3,0xEEEE00, global_brightness*.4);
-              frame_pixel(0,sun_y-2,0xEEEE00, global_brightness*.4);
-              frame_pixel(0,sun_y+2,0xEEEE00, global_brightness*.4);
-              frame_pixel(2,sun_y-2,0xEEEE00, global_brightness*.4);
-              frame_pixel(2,sun_y+2,0xEEEE00, global_brightness*.4);
-
-
-              frame_pixel(1,sun_y+4,LED_Sky_Color, global_brightness);
-              frame_pixel(1,sun_y-4,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y+3,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y-3,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y+3,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y-3,LED_Sky_Color, global_brightness);
-              //next surronud
-              frame_pixel(1,sun_y+5,LED_Sky_Color, global_brightness);
-              frame_pixel(1,sun_y-5,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y+4,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y-4,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y+4,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y-4,LED_Sky_Color, global_brightness);
-              //next surround
-              frame_pixel(1,sun_y+6,LED_Sky_Color, global_brightness);
-              frame_pixel(1,sun_y-6,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y+5,LED_Sky_Color, global_brightness);
-              frame_pixel(0,sun_y-5,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y+5,LED_Sky_Color, global_brightness);
-              frame_pixel(2,sun_y-5,LED_Sky_Color, global_brightness);  
-              //next surround
-              frame_pixel(1,sun_y+7,0xEEEE00 , global_brightness*.25);
-              frame_pixel(1,sun_y-7,0xEEEE00 , global_brightness*.25);
-              frame_pixel(0,sun_y+6,0xEEEE00 , global_brightness*.25);
-              frame_pixel(0,sun_y-6,0xEEEE00 , global_brightness*.25);
-              frame_pixel(2,sun_y+6,0xEEEE00 , global_brightness*.25);
-              frame_pixel(2,sun_y-6,0xEEEE00 , global_brightness*.25);  
-            } 
-          }
+            frame_pixel(1,sun_y+7,0xEEEE00 , global_brightness*.25);
+            frame_pixel(1,sun_y-7,0xEEEE00 , global_brightness*.25);
+            frame_pixel(0,sun_y+6,0xEEEE00 , global_brightness*.25);
+            frame_pixel(0,sun_y-6,0xEEEE00 , global_brightness*.25);
+            frame_pixel(2,sun_y+6,0xEEEE00 , global_brightness*.25);
+            frame_pixel(2,sun_y-6,0xEEEE00 , global_brightness*.25);  
+          } 
         }
       }
     }
   }
+
 
 
     #ifdef DEBUG 
@@ -581,13 +623,18 @@ void LED_Weather_Animation::animate_sky(byte current_hour, bool add_rays) {
 
 }
 
-
-void LED_Weather_Animation::animate_rain(byte current_hour) {
+bool LED_Weather_Animation::isNight() {
+  if (this->current_hour >= 20 || this->current_hour<=6) return true; //it's night, so draw dim clouds
+  return false;
+}
+  
+void LED_Weather_Animation::animate_rain() {
   //FastLED.setBrightness(RAIN_BRIGHTNESS);
   this->animate_precipitation(RAIN_BRIGHTNESS);
-  this->animate_clouds(current_hour,true);
+  this->animate_clouds(true);
   this->progress_anim_columns();
-  this->frame_draw(100);
+  if (isNight())   this->frame_draw(20);
+  else this->frame_draw(100);
 }
 void LED_Weather_Animation::flash_lightning() {
   //Flash every LED white
@@ -603,34 +650,60 @@ void LED_Weather_Animation::animate_snow() {
   this->animate_precipitation(SNOW_BRIGHTNESS);
   //FastLED.setBrightness(SNOW_BRIGHTNESS);
   this->progress_anim_columns();
-  this->frame_draw(100);
+  
+  if (isNight())  this->frame_draw(50);
+  else this->frame_draw(100);
 }
 
-void LED_Weather_Animation::animate_sun(byte current_hour) {
-  if (millis() - this->last_stationary_weather_update>STATIONARY_WEATHER_UPDATE_INTERVAL) {
-    this->last_stationary_weather_update = millis();
-
-    this->animate_sky(current_hour,true);
-    frame_draw(SUN_BRIGHTNESS);
-  }
+void LED_Weather_Animation::animate_sun() {
+  
+  this->animate_sky(true);
+  frame_draw(SUN_BRIGHTNESS);
+  
 }
 
-void LED_Weather_Animation::progress_anim_clouds(byte current_hour, bool rain) {
+void LED_Weather_Animation::progress_anim_clouds( bool rain) {
   byte cloudbase = 0;
 
   if (rain) cloudbase = 16;
   for (byte j=cloudbase;j<LEDHEIGHT;j++) {
     if (clouds_d[j]>1) clouds_x[j]++; //diameter is >1
     else {
-      byte intensity;
-      if (this->cloud_status == LIGHT_CLOUDS && rain==false) {
-        if (random(1,100)>80) clouds_d[j] = random(6,10);
-        intensity = random(15,55);   
-      } else {
-        if (random(1,100)>60) clouds_d[j] = random(10,18);
-        intensity = random(0,45);      
+      byte i=0;
+      byte r=random(1,100);
+      byte d=0;
+      
+      switch (this->cloud_status) {
+        case 11:
+          d=random(4,6);
+          i=random(30,80);
+          break;
+        case 25:
+          d=random(5,7);
+          i=random(25,80);
+          break;
+        case 50:
+          d=random(6,9);
+          i=random(15,70);
+          break;
+        case 85:
+          d=random(7,12);
+          i=random(10,60);
+          break;
+        default:
+          d = 0;
+          i=0;
       }
-      clouds_c[j].setRGB(intensity,intensity,intensity);
+      
+      if (r>this->cloud_status) {
+        clouds_d[j] = d;
+      }
+      else {
+        clouds_d[j] = 0;
+        i=0;
+      }
+
+      clouds_c[j].setRGB(i,i,i);
     }
     
     if (clouds_x[j]>CLOUDWIDTH) {
@@ -640,13 +713,14 @@ void LED_Weather_Animation::progress_anim_clouds(byte current_hour, bool rain) {
   }
 }
 
-void LED_Weather_Animation::animate_clouds(byte current_hour, bool rain) {
-  
+void LED_Weather_Animation::animate_clouds(bool rain) {
+
+//fill cloud buffer
+
   byte cloudbase = 0;
-  if (rain==false)  this->animate_sky(current_hour,false); //create sky
+  if (rain==false)  this->animate_sky(false); //create sky, without sunrays
   else {
     cloudbase = 16;
-    if (current_hour > 20 || current_hour<6) return; //it's night, so don't draw stars or clouds
   }
   //now add clouds
   //cloud array (sparse matrix) passes the LEDs at CLOUDWIDTH/2-1 to CLOUDWIDTH/2+1
@@ -655,7 +729,7 @@ void LED_Weather_Animation::animate_clouds(byte current_hour, bool rain) {
   CRGB color = 0;
 
   for (byte y=cloudbase; y<LEDHEIGHT; y++){
-    if (clouds_d[y]>=0) { //a cloud center exists for this row, if  it is the plotting window then add cloud to array
+    if (clouds_d[y]>=0) { //a cloud  exists for this row, if  it is the plotting window then add cloud to array
       int x_C = clouds_x[y] - (CLOUDWIDTH/2)+1; //this is the center of the cloud, relative to x=0 is the first LED column
       int x_L = x_C - clouds_d[y]/2; //this is the left edge of the cloud
       int x_R = x_C + clouds_d[y]/2; //this is the right edge of the cloud
@@ -672,24 +746,23 @@ void LED_Weather_Animation::animate_clouds(byte current_hour, bool rain) {
     }
   }
 
-  if (millis() - this->last_stationary_weather_update>STATIONARY_WEATHER_UPDATE_INTERVAL) {
-    this->last_stationary_weather_update = millis();
-    progress_anim_clouds(current_hour, rain) ;
-    if (rain) return; //don't draw screen here
-    else       frame_draw(100);
-  }
+  progress_anim_clouds(rain) ;
+  if (rain) return; //don't draw screen here
+  if (isNight())    frame_draw(20);
+  else frame_draw(100);
 
 }
 
 bool LED_Weather_Animation::should_update_LEDs() {
   unsigned long time_since_last_update;
 
+  uint32_t m = millis();
   //Millis has reset
-  if (millis() < this->last_anim_update) {
+  if (m < this->last_anim_update) {
     time_since_last_update = ~((unsigned long)0) - time_since_last_update;
     this->last_anim_update = 0;
   }
-  else time_since_last_update = millis() - this->last_anim_update;
+  else time_since_last_update = m - this->last_anim_update;
 
   switch (this->anim_status) {
     case rainy:
@@ -700,7 +773,7 @@ bool LED_Weather_Animation::should_update_LEDs() {
           return time_since_last_update >= HEAVY_RAIN_UPDATE_INTERVAL;
         case LIGHTNING:
           //Are we in the middle of a lightning strike?
-          if (millis() - this->last_lightning_strike < LIGHTNING_DURATION) return false;
+          if (m - this->last_lightning_strike < LIGHTNING_DURATION) return false;
           return time_since_last_update >= HEAVY_RAIN_UPDATE_INTERVAL;
       }
     case snowy:
@@ -711,21 +784,24 @@ bool LED_Weather_Animation::should_update_LEDs() {
             return time_since_last_update >= HEAVY_SNOW_UPDATE_INTERVAL;
         }
 
-    //If it's sunny or cloudy weather, the LEDs never change, so only update them the first time
     case sunny:
-      return time_since_last_update >= STATIONARY_WEATHER_UPDATE_INTERVAL;
+      return time_since_last_update >= SUN_UPDATE_INTERVAL;
     case cloudy:
-      return time_since_last_update >= STATIONARY_WEATHER_UPDATE_INTERVAL;
+      return time_since_last_update >= CLOUD_UPDATE_INTERVAL;
+    case starry:
+      return time_since_last_update >= STAR_UPDATE_INTERVAL;
   }
 
   return false;
 }
-bool LED_Weather_Animation::update_LEDs(byte current_hour) {
-  this->frame_fill(0,0);
+bool LED_Weather_Animation::update_LEDs() {
   if (!this->should_update_LEDs()) return false;
-
+  
+  uint32_t m = millis();
+  this->frame_fill(0,0);
+  
   if (this->anim_status == rainy || this->anim_status == snowy) {
-    float top_bar_intensity = top_bar_amplitude * sin(top_bar_pulse_period * millis()) + top_bar_midline;
+    float top_bar_intensity = top_bar_amplitude * sin(top_bar_pulse_period * m) + top_bar_midline;
     uint8_t red = this->top_strip_color.red;
     uint8_t green = this->top_strip_color.green;
     uint8_t blue = this->top_strip_color.blue;
@@ -742,30 +818,33 @@ bool LED_Weather_Animation::update_LEDs(byte current_hour) {
 
   switch (this->anim_status) {
     case rainy:
-      //Every five seconds, flash lightning if that weather mode is on
+      //is it a tstorm? Every five seconds, flash lightning if that weather mode is on
       if (
         this->rain_status == LIGHTNING &&
-        (millis() < this->last_lightning_strike || millis() - this->last_lightning_strike > LIGHTNING_INTERVAL)
+        (m < this->last_lightning_strike || m - this->last_lightning_strike > LIGHTNING_INTERVAL)
       ) {
         this->flash_lightning();
         break;
       }
 
-      this->animate_rain(current_hour);
+      this->animate_rain();
       break;
     case snowy:
       this->animate_snow();
       break;
     case sunny:
-      this->animate_sun(current_hour);
+      this->animate_sun();
       break;
     case cloudy:
-      this->animate_clouds(current_hour);
+      this->animate_clouds();
+      break;
+    case starry:
+      this->animate_stars();
       break;
   }
 
   this->last_anim_status = this->anim_status;
-  this->last_anim_update = millis();
+  this->last_anim_update = m;
 
   return true;
 };

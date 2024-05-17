@@ -13,8 +13,6 @@
 #define LIGHT_SNOW 0
 #define HEAVY_SNOW 1
 
-#define LIGHT_CLOUDS 0
-#define HEAVY_CLOUDS 1
 
 #define PRECIP_ANIM_ARRAY_LENGTH 40
 
@@ -28,7 +26,10 @@
 #define LIGHT_SNOW_UPDATE_INTERVAL 80 //ms
 #define HEAVY_SNOW_UPDATE_INTERVAL 50 //ms
 
-#define STATIONARY_WEATHER_UPDATE_INTERVAL 100 //ms
+#define SUN_UPDATE_INTERVAL 100 //ms
+#define CLOUD_UPDATE_INTERVAL 300 //ms
+#define STAR_UPDATE_INTERVAL 100 //ms
+
 
 #define LIGHTNING_DURATION 100 //ms
 #define LIGHTNING_INTERVAL 5000 //ms
@@ -36,9 +37,10 @@
 #define SUN_BRIGHTNESS 100
 #define SNOW_BRIGHTNESS 75
 #define RAIN_BRIGHTNESS 150
-#define CLOUD_BRIGHTNESS 40
-#define STAR_BRIGHTNESS 10 // out of 255
-#define STAR_DIM_RANGE .1 //0 to 1; 0 is no dimming, 1 is range of 100% dimming
+#define STAR_BRIGHTNESS_MIN 3 // out of 100
+#define STAR_BRIGHTNESS_MAX 8 //0 to 100
+#define STAR_DEATH_PROB 3 //0 to 100
+
 
 #define LED_Sky_Color 0x02ccfe
 #define LED_Sun_Color 0xd4db04
@@ -80,6 +82,8 @@ class LED_Weather_Animation {
   uint snow_status;
   uint cloud_status;
 
+  byte current_hour;
+  
   uint anim_status;
   uint last_anim_status = 0;
 
@@ -89,19 +93,20 @@ class LED_Weather_Animation {
 
   //Millis time of last update.
   unsigned long last_anim_update = 0;
-  unsigned long last_stationary_weather_update = 0;
   unsigned long last_lightning_strike = 0;
 
+  bool isNight();
   void progress_anim_columns();
   uint32_t color2uint(CRGB color, byte BRIGHTNESS_SCALE=100);
   void animate_precipitation(byte brightness=100);
-  void animate_sky(byte current_hour, bool add_rays=true);
-  void animate_rain(byte current_hour);
+  void animate_sky( bool add_rays=true);
+  void animate_rain();
+  void animate_stars();
   void flash_lightning();
   void animate_snow();
-  void animate_sun(byte current_hour);
-  void progress_anim_clouds(byte current_hour,bool rain=false);
-  void animate_clouds(byte current_hour,bool rain=false);
+  void animate_sun();
+  void progress_anim_clouds(bool rain=false);
+  void animate_clouds(bool rain=false);
   void frame_fill(CRGB color,byte BRIGHTNESS_SCALE=100);
   void frame_draw(byte brightness=100);
   void frame_pixel(uint16_t x, uint16_t y, CRGB color,byte  brightness);
@@ -116,7 +121,7 @@ class LED_Weather_Animation {
 
   void set_rainy_status(uint rain_status);
   void set_snowy_status(uint snow_status);
-  void set_sunny_status(byte current_hour);
+  void set_sunny_status();
   void set_cloudy_status(uint cloud_status);
 
   void update_weather_status(long weather_status, byte current_hour);
@@ -124,7 +129,7 @@ class LED_Weather_Animation {
   //Returns whether or not enough time has passed to update the LEDs
   bool should_update_LEDs();
   //Returns true if LEDs were updated, returns false if they weren't
-  bool update_LEDs(byte current_hour);
+  bool update_LEDs();
 };
 
 #endif

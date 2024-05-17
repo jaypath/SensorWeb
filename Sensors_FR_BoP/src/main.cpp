@@ -1047,8 +1047,8 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 3500;
-          Sensors[i].limitLower = 1000;
+          Sensors[i].limitUpper = 3600;
+          Sensors[i].limitLower = 1;
           Sensors[i].PollingInt=60;
           Sensors[i].SendingInt=600;
         #endif

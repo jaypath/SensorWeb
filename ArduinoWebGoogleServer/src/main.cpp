@@ -1,4 +1,4 @@
-//#define _DEBUG 99
+#define _DEBUG 99
 #define ARDNAME "GoogleServer"
 #define _USETFT
 #define _USETOUCH
@@ -164,7 +164,7 @@ const char PRIVATE_KEY[] PROGMEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgk
 #define USER_EMAIL "jaypath@gmail.com"
 
 
-#define SENSORNUM 40
+#define SENSORNUM 60
 
 
 struct SensorVal {
@@ -578,6 +578,9 @@ delay(2000);
     #ifdef _DEBUG
     Serial.println("OTA started");
     #endif
+    #ifdef _USETFT
+    tft.drawRect(5,tft.height()/2-5,tft.width()-10,10,TFT_BLACK);
+    #endif  
   });
   ArduinoOTA.onEnd([]() {
     #ifdef _DEBUG
@@ -591,10 +594,16 @@ delay(2000);
     #ifdef _USETFT
       tft.clear();
       tft.setCursor(0,0);
+      tft.setTextFont(4);
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setTextDatum(TL_DATUM);
       tft.println("Receiving OTA:");
-      String strbuff = "Progress: " + (100*progress / total);
-      tft.println("OTA start.");   
-      tft.println(strbuff);
+      //String strbuff = "Progress: " + (100*progress / total);
+      tft.println("OTA start.");
+      
+      tft.fillRect(5,tft.height()/2-5,(int) (double (tft.width()-10)*progress / total),10,TFT_BLACK);
+       
+      //tft.println(strbuff);
     #endif
 
   });
@@ -862,8 +871,11 @@ void loop()
       }
       
       tft.setCursor(0,440+2*(tft.fontHeight(SMALLFONT)+2));
+      if (lastUploadTime>0) {
       tft.printf("Last upload: %s @ %d min ago",lastUploadSuccess ? "success" : "fail", (int) ((now()-lastUploadTime)/60) );
       tft.setCursor(0,440+3*(tft.fontHeight(SMALLFONT)+2));
+      }
+
       tft.printf("Next Upload in: %d min",uploadQ - minute(t)%uploadQ);
 
       tft.setCursor(0,Ypos);
@@ -1512,13 +1524,11 @@ bool file_uploadData(void) {
       if (snsArray[j]!=255)     Sensors[snsArray[j]].isSent = true;
     }
     lastUploadTime = now(); 
-    return true;
 }
 
-return false;
+return success;
 
-          
-
+        
 }
 
 void tokenStatusCallback(TokenInfo info)

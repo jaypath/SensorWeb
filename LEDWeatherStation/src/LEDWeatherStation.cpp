@@ -180,7 +180,7 @@ void loop() {
 
   if (updated_weather) animator.update_weather_status(weather_info.get_weather_id(), weather_info.get_time());
   
-  if (animator.update_LEDs(weather_info.get_time()) || temp_displayer.update_LEDs(weather_info.get_current_temp(), weather_info.get_next_temp())) {
+  if (animator.update_LEDs() || temp_displayer.update_LEDs(weather_info.get_current_temp(), weather_info.get_next_temp())) {
     FastLED.show();
   }
 

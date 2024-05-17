@@ -222,7 +222,7 @@ bool SendData() {
     String tempstring;
     int httpCode=404;
     tempstring = "/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=LEDSTATUS";
-    tempstring = tempstring + "&varValue=1";
+    tempstring = tempstring + "&varValue=";
     tempstring = tempstring + "&Flags=0";
     tempstring = tempstring + "&logID=1.99.1";
     tempstring = tempstring + "&isFlagged=0" ;
