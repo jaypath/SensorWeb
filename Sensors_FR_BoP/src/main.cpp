@@ -1,8 +1,8 @@
 #include <Arduino.h>
 
 //#define _DEBUG 1
-#define _USE8266 1
-//#define _USE32
+//#define _USE8266 1
+#define _USE32
 
 #define ARDNAME "FRBoP"
 #define ARDID 96 //unique arduino ID 
@@ -14,7 +14,7 @@ const uint8_t SENSORTYPES[SENSORNUM] = {3};
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-#define _USELED D4
+#define _USELED 12 //for esp32 //D4 //for 8266
 //#define DHTTYPE    DHT11     // DHT11 or DHT22
 //#define DHTPIN 2
 //#define _USEBMP  1
@@ -22,7 +22,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOILCAP 1
-#define _USESOILRES D5
+#define _USESOILRES 33 //for esp32 //D5 //for esp8266 //this is the pin that turns on to test soil... not to be confused with soilpin, the Analog in pin
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -55,7 +55,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #endif
 
 #ifdef _USESOILRES
-  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
+  const int SOILPIN = A4; //A4 is the same as GPIO 32 on the esp32 //  A0;  // use A0 on ESP8266 Analog Pin ADC0 = A0
   const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
   #define SOILRESISTANCE 4700 //ohms
 #endif
@@ -107,7 +107,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #endif
 //8266... I think they're the same. If not, then use nodemcu or wemos
 #ifdef _USE32
-  static const uint8_t TX = 1;
+/*  static const uint8_t TX = 1;
   static const uint8_t RX = 3;
   static const uint8_t SDA = 21;
   static const uint8_t SCL = 22;
@@ -118,7 +118,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
   static const uint8_t SCK   = 18;
   //need to define pin labeled outputs...
   static const uint8_t LED   = 2; //this is true for dev1 board... may be wrong for others
-  
+  */
 #endif
 
 
@@ -196,7 +196,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 
-#include <Wire.h>
+//#include <Wire.h>
 
 #ifdef DHTTYPE
   #include <Adafruit_Sensor.h>
@@ -364,7 +364,10 @@ byte CURRENTSENSOR_WEB = 1;
 #ifdef _USELED
   #include <FastLED.h>
 
-  #define PI 3.14159265
+  #ifdef _USE8266
+    #define PI 3.14159265
+  #endif
+  
   #define LEDCOUNT 57 //how many LEDs did you install?
 
   CRGB LEDARRAY[LEDCOUNT];
@@ -391,6 +394,8 @@ byte CURRENTSENSOR_WEB = 1;
       uint32_t m = millis();
 
       if (m-this->last_LED_update<this->LEDredrawRefreshMS) return;
+
+      this->last_LED_update = m;
 
       double L1,T1;
       int8_t DIR = 0;
@@ -425,18 +430,17 @@ byte CURRENTSENSOR_WEB = 1;
         }
 
 
-      LEDARRAY[j] = this->LED_setLED(j,L1,T1,DIR,m);
+        LEDARRAY[j] = this->LED_setLED(j,L1,T1,DIR,m);
       
         
       }
 
 
-          #ifdef _DEBUG
-            Serial.printf("global color is %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
-          #endif
+      #ifdef _DEBUG
+        Serial.printf("global color is %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
+      #endif
 
       FastLED.show();
-      this->last_LED_update = m;
 
     }
 
@@ -505,23 +509,27 @@ byte CURRENTSENSOR_WEB = 1;
     }
 
     void LED_set_color_soil(struct SensorVal *sns) {
-      
-      byte r=0,g=0,b=0;
-      
+      //while log(resistivity) is linearly correlated with moiusture, it is roughly linear in our range
+      //let's scale from blue at <=50% max, green <=80%, and then scale the last 20% 
+
+      byte r=0,g=0,b=0;      
       byte ii = 0;
 
-
-      if (sns->snsValue<sns->limitLower) ii=0;
+      double snspct = sns->snsValue / sns->limitUpper; 
+      if (snspct < .5) ii=0;
       else {
-        if (sns->snsValue>sns->limitUpper) ii=6;
+        if (snspct < .8) ii=1;
         else {
-          for (byte i=0; i<=5;i++) {
-            if (sns->snsValue<sns->limitLower + (sns->limitUpper-sns->limitLower)*i/5) break;
-            ii++;
+          if (snspct>=1) ii=6;
+          else {
+            for (byte i=2; i<=5;i++) {
+              if ((double) snspct>=1-(1-0.8)/i) ii=i;
+            }
           }
-        }
+
+        }          
       }
-        
+
       switch (ii) {
         case 6:
           LED_animation_defaults(3);
@@ -652,8 +660,8 @@ byte i;
     digitalWrite(SOILDIO, LOW);  
   #endif
 
-  Wire.begin(); 
-  Wire.setClock(400000L);
+//  Wire.begin(); 
+//  Wire.setClock(400000L);
   
     #ifdef _DEBUG
         Serial.println("oled begin");
@@ -774,7 +782,7 @@ byte i;
     #ifdef _USELED
       for (byte j=0;j<LEDCOUNT;j++) {
         LEDARRAY[LEDCOUNT-j-1] = 0;
-        if (j<=(double) LEDCOUNT*progress/total) LEDARRAY[LEDCOUNT-j-1] = (uint32_t) 255 <<16 | 255 << 8 | 255;
+        if (j<=(double) LEDCOUNT*progress/total) LEDARRAY[LEDCOUNT-j-1] = (uint32_t) 64 <<16 | 64 << 8 | 64;
          
       }
       FastLED.show();
@@ -1047,10 +1055,10 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 3600;
-          Sensors[i].limitLower = 1;
+          Sensors[i].limitUpper = 2000;
+          Sensors[i].limitLower = 1000;
           Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=600;
+          Sensors[i].SendingInt=300;
         #endif
 
         break;
@@ -1277,17 +1285,18 @@ void timeUpdate() {
 
 
 void loop() {
-  ArduinoOTA.handle();
-  server.handleClient();
-  timeClient.update();
-
   time_t t = now(); // store the current time in time variable t
+  ArduinoOTA.handle();
+
+  server.handleClient();
+  
   
   #ifdef _USELED
     LEDs.LED_update();
   #endif 
 
   if (OldTime[0] != second()) {
+  
     OldTime[0] = second();
     //do stuff every second
     bool flagstatus=false;
@@ -1300,9 +1309,9 @@ void loop() {
     for (byte k=0;k<SENSORNUM;k++) {
       flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
 
-      if (Sensors[k].LastReadTime == 0 || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs(Sensors[k].LastReadTime - t)>60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (Sensors[k].LastReadTime == 0 || Sensors[k].LastReadTime > t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || (t - Sensors[k].LastReadTime )>60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if ((Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs(Sensors[k].LastSendTime - t)>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if ((Sensors[k].LastSendTime  == 0 || Sensors[k].LastSendTime > t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || (t - Sensors[k].LastSendTime)>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
   }
   
@@ -1911,9 +1920,15 @@ bool ReadData(struct SensorVal *P) {
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
       
-        val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
-        P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
-        
+        #ifdef _USE32
+          val = val * (3.3 / 4095); //12 bit
+          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
+        #endif
+        #ifdef _USE8266
+          val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
+          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
+        #endif
+
         #ifdef _USELED
           LEDs.LED_set_color_soil(P);
         #endif 

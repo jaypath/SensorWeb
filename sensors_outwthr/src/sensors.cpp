@@ -1,6 +1,7 @@
 #include <sensors.hpp>
 
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
 
 
 #ifdef _USEBME680
@@ -16,15 +17,10 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 
 #ifdef DHTTYPE
-
-
   DHT dht(DHTPIN,DHTTYPE,11); //third parameter is for faster cpu, 8266 suggested parameter is 11
 #endif
 
 #ifdef _USEAHT
-
-  
-
   AHTxx aht21(AHTXX_ADDRESS_X38, AHT2x_SENSOR);
 #endif
 
@@ -57,11 +53,21 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
   SSD1306AsciiWire oled;
 #endif
 
+
+
 void setupSensors() {
+
+#ifdef _CHECKHEAT
+  HEATPIN=0;
+  #endif
+
   for (byte i=0;i<SENSORNUM;i++) {
     Sensors[i].snsType=SENSORTYPES[i];
 
     Sensors[i].Flags = 0;
+    //   Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
+    bitWrite(Sensors[i].Flags,6,1); //flag matters
+
     if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
     else bitWrite(Sensors[i].Flags,1,0);
     
@@ -132,8 +138,8 @@ void setupSensors() {
             Sensors[i].limitUpper = 80;
             Sensors[i].limitLower = 60;
           }
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
         #endif
         break;
       case 5:
@@ -291,15 +297,117 @@ void setupSensors() {
         Sensors[i].SendingInt=1*60;
         break;
 
+      #ifdef _CHECKHEAT
+
+        case 55: //heat
+          Sensors[i].snsPin=DIOPINS[HEATPIN];
+          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[HEATPIN++]);
+          pinMode(Sensors[i].snsPin, INPUT);
+          Sensors[i].limitUpper = 700;
+          Sensors[i].limitLower = -1;
+          Sensors[i].PollingInt=1*60;
+          Sensors[i].SendingInt=10*60;
+          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
+          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
+          break;
+      #endif
+
+
+      #ifdef _CHECKAIRCON
+        case 56: //aircon compressor
+          Sensors[i].snsPin=DIOPINS[0];
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
+          Sensors[i].limitUpper = 700;
+          Sensors[i].limitLower = -1;
+          Sensors[i].PollingInt=1*60;
+          Sensors[i].SendingInt=10*60;
+          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
+          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
+          break;
+        case 57: //aircon fan
+          Sensors[i].snsPin=DIOPINS[1];
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
+          Sensors[i].limitUpper = 700;
+          Sensors[i].limitLower = -1;
+          Sensors[i].PollingInt=1*60;
+          Sensors[i].SendingInt=10*60;
+          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
+          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
+          break;
+
+          
+      #endif
+
+      case 60: //battery
+        #ifdef _USEBATTERY
+          Sensors[i].snsPin=_USEBATTERY;
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
+          Sensors[i].limitUpper = 4.3;
+          Sensors[i].limitLower = 3.7;
+          Sensors[i].PollingInt=1*60;
+          Sensors[i].SendingInt=5*60;
+          
+        #endif
+        break;
+      case 61: //battery percent
+        #ifdef _USEBATTERY
+          Sensors[i].snsPin=_USEBATTERY;
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
+          Sensors[i].limitUpper = 105;
+          Sensors[i].limitLower = 10;
+          Sensors[i].PollingInt=1*60;
+          Sensors[i].SendingInt=5*60;
+          bitWrite(Sensors[i].Flags,3,1); //calculated
+
+        #endif
+        break;
+
+
     }
 
     Sensors[i].snsID=find_sensor_count((String) ARDNAME,Sensors[i].snsType); 
-
+        
     Sensors[i].snsValue=0;
     Sensors[i].LastReadTime=0;
     Sensors[i].LastSendTime=0;  
 
   }
+
+  #ifdef _CHECKHEAT
+    HEATPIN=0;
+  #endif
+
+
+}
+
+int peak_to_peak(int pin, int samples) {
+  //check n (samples) at 1 ms resolution, then return the max-min value (peak to peak value) 
+
+  if (samples==0) samples = 67; //67 samples is 2 cycles of a 60 Hz sin wave
+  int buffer[samples]={0};
+  int maxVal = 0;
+  int minVal=5000;
+
+  uint32_t t0 = millis();
+  uint32_t t1,lastRead=0 ;
+
+  for (byte j=0;j<samples;j++) {
+    t1 = millis();
+    while (t1-t0 <= (lastRead)) {
+      t1 = millis();
+    }
+    lastRead = t1-t0;
+    buffer[j] = analogRead(pin);
+    
+    if (maxVal<buffer[j]) maxVal = buffer[j];
+    if (minVal>buffer[j]) minVal = buffer[j];        
+  }
+
+  return maxVal-minVal;
 
 }
 
@@ -556,6 +664,91 @@ bool ReadData(struct SensorVal *P) {
       P->snsValue = (gas); //milliohms
       break;
     #endif
+
+    case 55: //heat
+
+      val = peak_to_peak(P->snsPin,67);
+      if (val > P->limitUpper) {
+        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
+        bitWrite(P->Flags,0,1); //for heat, flag if on
+      } else {
+        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        bitWrite(P->Flags,0,0); //no heat
+      }
+      break;
+
+    case 56: //aircon compressor
+      val = peak_to_peak(P->snsPin,67);
+      if (val > P->limitUpper) {
+        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
+        bitWrite(P->Flags,0,1); //for ac, flag if on
+      } else {
+        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        bitWrite(P->Flags,0,0); //no ac
+      }
+      break;
+    case 57: //aircon fan
+      val = peak_to_peak(P->snsPin,67);
+      if (val > P->limitUpper) {
+        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
+        bitWrite(P->Flags,0,1); //for ac, flag if on
+      } else {
+        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
+        else bitWrite(P->Flags,7,0); //no change
+
+        bitWrite(P->Flags,0,0); //no ac
+      }
+      break;
+
+    case 60: //lithium battery
+      #ifdef _USEBATTERY
+
+        double m1,m2,m3;
+        m1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        m2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        m3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        P->snsValue = (m1+m2+m3)/3;
+      #endif
+      break;
+    case 61:
+      //_USEBATPCNT
+      #ifdef _USEBATTERY
+        double p1,p2,p3;
+        p1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        p2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        p3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        P->snsValue = (p1+p2+p3)/3;
+        
+
+
+        #define VOLTAGETABLE 21
+        static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
+        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
+
+        for (byte jj=0;jj<VOLTAGETABLE;jj++) {
+          if (P->snsValue> BAT_VOLT[jj]) {
+            P->snsValue = BAT_PCNT[jj];
+            break;
+          } 
+        }
+
+        if (P->snsValue <5) ESP.deepSleep(0); //go to sleep if voltage is too low...
+
+      #endif
+      break;
     
   }
 
@@ -571,6 +764,8 @@ bool ReadData(struct SensorVal *P) {
           Serial.println(P->snsName);
       Serial.print("SnsType: ");
           Serial.println(P->snsType);
+      Serial.print("SnsID: ");
+          Serial.println(P->snsID);
       Serial.print("Value: ");
           Serial.println(P->snsValue);
       Serial.print("LastLogged: ");
@@ -649,26 +844,30 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
 }
 
 bool checkSensorValFlag(struct SensorVal *P) {
+  if (bitRead(P->Flags,6)==0) return false;
+
   if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
+    //flag is true
+    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
+    else bitWrite(P->Flags,7,0);
+
     bitWrite(P->Flags,0,1);
+
+    //if too high, write bit 5
     if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
     else bitWrite(P->Flags,5,0);
   }       
       
-  else {
+  else { //flag is off
+    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,0);
+    else bitWrite(P->Flags,7,1);
+
     bitWrite(P->Flags,0,0);
+
     bitWrite(P->Flags,5,0);
   }
   
-return bitRead(P->Flags,0);
-
-
-    #ifdef _DEBUG
-      Serial.print("Setup ended. Time is ");
-      Serial.println(dateify(now(),"hh:nn:ss"));
-
-    #endif
-
+  return bitRead(P->Flags,0);
 
 }
 

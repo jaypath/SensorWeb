@@ -50,6 +50,14 @@
   extern uint32_t LAST_BAR_READ; //last pressure reading in BAR_HX
 #endif
 
+#ifdef _CHECKAIRCON 
+
+#endif
+
+#ifdef _CHECKHEAT
+  extern uint8_t HEATPIN;
+  extern String HEATZONE[];
+#endif
 
 struct SensorVal {
   uint8_t  snsType ;
@@ -118,6 +126,7 @@ uint16_t findOldestDev();
 uint8_t findSensor(byte snsType, byte snsID);
 bool checkSensorValFlag(struct SensorVal *P);
 void pushDoubleArray(double arr[], byte, double);
+int peak_to_peak(int pin, int samples = 67);
 
 #ifdef _USESSD1306
 void redrawOled(void);

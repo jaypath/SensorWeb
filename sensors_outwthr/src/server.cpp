@@ -20,6 +20,9 @@ bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
 
+
+
+
 bool SendData(struct SensorVal *snsreading) {
 byte arduinoID = MyIP[3];
 #ifdef  ARDID
@@ -305,89 +308,6 @@ byte arduinoID = MyIP[3];
   }
 }
 
-void handleLIST() {
-String currentLine = "";
-byte arduinoID = MyIP[3];
-#ifdef  ARDID
-   arduinoID = ARDID;
-#endif
-
-currentLine =  "IP:" + MyIP.toString() + "\nARDID:" + String(arduinoID, DEC) + "\n";
-currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
-
-  for (byte j=0;j<SENSORNUM;j++)  {
-    currentLine += "     ";
-    currentLine +=  "snsType: ";
-    currentLine += String(Sensors[j].snsType,DEC);
-    currentLine += "\n";
-
-    currentLine += "     ";
-    currentLine += "snsID: ";
-    currentLine +=  String(Sensors[j].snsID,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "SnsName: ";
-    currentLine +=  (String) Sensors[j].snsName;
-    currentLine += "\n";
-
-    currentLine += "     ";
-    currentLine +=  "snsVal: ";
-    currentLine +=  String(Sensors[j].snsValue,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LastRead: ";
-    currentLine += String(Sensors[j].LastReadTime,DEC);
-    currentLine += " = ";
-    currentLine += (String) dateify(Sensors[j].LastReadTime);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LastSend: ";
-    currentLine +=  String(Sensors[j].LastSendTime,DEC);
-    currentLine += " = ";
-    currentLine += (String) dateify(Sensors[j].LastSendTime);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "UpperLim: ";
-    currentLine += String(Sensors[j].limitUpper,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LowerLim: ";
-    currentLine +=  String(Sensors[j].limitLower,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Flag: ";
-    currentLine +=  (String) bitRead(Sensors[j].Flags,0);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Monitored: ";
-    currentLine +=  (String) bitRead(Sensors[j].Flags,1);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Flags: ";
-    char cbuff[9] = "";
-    Byte2Bin(Sensors[j].Flags,cbuff,1);
-
-    #ifdef _DEBUG
-        Serial.print("SpecType after byte2bin: ");
-        Serial.println(cbuff);
-    #endif
-
-    currentLine +=  cbuff;
-    currentLine += "\n\n";
-  }
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
-  server.send(200, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
-}
 
 void handleRoot() {
 byte arduinoID = MyIP[3];
@@ -404,13 +324,9 @@ currentLine += "<body>";
 
 //currentLine += "<h1></h1>";
 
-currentLine =  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
-currentLine += "<p>Current time ";
-currentLine += (String) now();
-currentLine += " = ";
-currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss");
-currentLine += "<br>\n";
-currentLine += "<a href=\"/LIST\">List all sensors</a><br>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
+currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";

@@ -34,7 +34,7 @@
 
 extern bool KiyaanServer;
 extern SensorVal Sensors[SENSORNUM];
-
+extern time_t ALIVESINCE;
 
 struct IP_TYPE {
   IPAddress IP;
@@ -49,7 +49,6 @@ extern IP_TYPE SERVERIP[NUMSERVERS];
 void handleRoot(void);
 void handleNotFound(void);
 void handleSETTHRESH(void);
-void handleLIST(void);
 void handleUPDATESENSORPARAMS(void);
 void handleUPDATEALLSENSORREADS(void);
 void handleUPDATESENSORREAD(void);
