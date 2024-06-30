@@ -208,7 +208,8 @@ Screen I; //here, I is of type Screen (struct)
 
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
 
-uint32_t LAST_BAR_READ=0;
+uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;
+double batteryArray[48] = {0};
 double LAST_BAR=0;
 
 
@@ -283,9 +284,19 @@ bool GetWeather();
 double valSensorType(byte snsType, bool asAvg = false, int isflagged=-1, int isoutdoor=-1, uint32_t MoreRecentThan = 0);
 uint16_t temp2color(int temp);
 String fcnDOW(time_t t, bool caps=false);
+void pushDoubleArray(double,byte,double);
 //uint16_t read16(fs::File);
 //uint32_t read32(fs::File);
 
+void pushDoubleArray(double arr[], byte N, double value) { //array variable, size of array, value to push
+  for (byte i = N-1; i > 0 ; i--) {
+    arr[i] = arr[i-1];
+  }
+  arr[0] = value;
+
+  return ;
+
+}
 
 void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, byte* snsIndexLow){
   //returns index to the highest flagged sensorval and lowest flagged sensorval with name like snsname and type like snsType. index is 255 if no lowval is flagged
@@ -1467,10 +1478,10 @@ void fcnDrawScreen() {
 
   time_t t = now();
   
-  I.localWeather = 255; //set to true to use BME or dht temps    
+  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
   I.localWeather=find_sensor_name("Outside", 4);
   if (I.localWeather<255) {
-    if (t-Sensors[I.localWeather].timeRead>60*10) I.localWeather = 255; //localweather is only useful if <10 minutes old 
+    if (t-Sensors[I.localWeather].timeRead>60*30) I.localWeather = 255; //localweather is only useful if <30 minutes old 
   }
 
   tft.fillScreen(BG_COLOR);            // Clear screen
@@ -2202,6 +2213,7 @@ void handleRoot() {
   currentLine =currentLine  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
   currentLine =currentLine  + (String) "body {  font-family: arial, sans-serif; }";
   currentLine =currentLine  + "</style></head>";
+  currentLine =currentLine  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
 
   currentLine = currentLine + "<body>";
   
@@ -2219,6 +2231,11 @@ void handleRoot() {
   currentLine = currentLine + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
   currentLine = currentLine + "<br>";      
+
+  //add chart
+  currentLine += "<br>-----------------------<br>\n";
+  currentLine += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
+  currentLine += "<br>-----------------------<br>\n";
 
   byte used[SENSORNUM];
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -2276,9 +2293,37 @@ void handleRoot() {
     #endif
 
   currentLine =currentLine  + "<script>";
+
+  //chart functions
+    currentLine =currentLine  + "google.charts.load('current',{packages:['corechart']});\n";
+    currentLine =currentLine  + "google.charts.setOnLoadCallback(drawChart);\n";
+    
+    currentLine += "function drawChart() {\n";
+
+    currentLine += "const data = google.visualization.arrayToDataTable([\n";
+    currentLine += "['t','val'],\n";
+    for (int jj = 48-1;jj>=0;jj--) {
+      currentLine += "[" + (String) ((int) ((uint32_t) (LAST_BAT_READ - 60*60*jj)-now())/60) + "," + (String) batteryArray[jj] + "]";
+      if (jj>0) currentLine += ",";
+      currentLine += "\n";
+    }
+    currentLine += "]);\n\n";
+
+    
+    // Set Options
+    currentLine += "const options = {\n";
+    currentLine += "hAxis: {title: 'min from now'}, \n";
+    currentLine += "vAxis: {title: 'Battery%'},\n";
+    currentLine += "legend: 'none'\n};\n";
+
+    currentLine += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
+    currentLine += "chart.draw(data, options);\n"; 
+    currentLine += "}\n";
+
+
   currentLine += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
-  currentLine += "</script> ";
-  currentLine += "</body></html>";   
+  currentLine += "</script> \n";
+  currentLine += "</body></html>\n";   
 
    #ifdef DEBUG_
       Serial.println(currentLine);
@@ -2320,6 +2365,12 @@ uint8_t tempIP[4] = {0,0,0,0};
     LAST_BAR_READ = S.timeRead;
     LAST_BAR = S.snsValue;
   }
+
+  if((S.snsType==61 ) && LAST_BAT_READ < now() - 60*60) { //battery
+    LAST_BAT_READ = S.timeRead;
+    pushDoubleArray(batteryArray,48,S.snsValue);
+  }
+
 
   if (sn<0) return;
   Sensors[sn] = S;

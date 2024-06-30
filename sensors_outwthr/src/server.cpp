@@ -315,14 +315,18 @@ byte arduinoID = MyIP[3];
    arduinoID = ARDID;
 #endif
 
-String currentLine = "<!DOCTYPE html><html><head><title>" + (String) ARDNAME + " Page</title>\n";
+String currentLine = "<!DOCTYPE html><html>\n";
+#ifdef _WEBCHART
+  currentLine =currentLine  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+#endif
+
+
+currentLine +=  "<head><title>" + (String) ARDNAME + " Page</title>\n";
 currentLine += (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}\n";
 currentLine += (String) "input[type='text'] { font-family: arial, sans-serif; font-size: 10px; }\n";
 currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
-
-//currentLine += "<h1></h1>";
 
 currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
@@ -330,6 +334,7 @@ currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";
+
 
 
   byte used[SENSORNUM];
@@ -341,10 +346,6 @@ currentLine += "<br>-----------------------<br>\n";
   
     //add form tags
   }
-
-
-
-//currentLine = currentLine + "<FORM action=\"/UPDATESENSORPARAMS\" method=\"get\"><input type=\"hidden\" name=\"SensorNum\" value=\"" + (String) j + "\">";
       
   byte usedINDEX = 0;  
   
@@ -413,6 +414,17 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine += "</p>\n";
 
+
+
+#ifdef _WEBCHART
+  //add charts if indicated
+  currentLine += "<br>-----------------------<br>\n";
+  for (byte j=0;j<_WEBCHART;j++)    currentLine += "<div id=\"myChart" + (String) j + "\" style=\"width:100%; max-width:800px; height:500px;\"></div>\n";
+  currentLine += "<br>-----------------------<br>\n";
+#endif
+
+
+
   #ifdef _USEBARPRED
     currentLine += "<p>";
     currentLine += "Hourly_air_pressures (most recent [top] entry was ";
@@ -429,7 +441,38 @@ currentLine += "<br>-----------------------<br>\n";
 
   #endif 
 
-  currentLine =currentLine  + "<script>";
+  currentLine =currentLine  + "<script>\n";
+
+  #ifdef _WEBCHART
+    currentLine =currentLine  + "google.charts.load('current',{packages:['corechart']});\n";
+    currentLine =currentLine  + "google.charts.setOnLoadCallback(drawChart);\n";
+    
+    currentLine += "function drawChart() {\n";
+
+    for (byte j=0;j<_WEBCHART;j++) {
+      currentLine += "const data" + (String) j + " = google.visualization.arrayToDataTable([\n";
+      currentLine += "['t','val'],\n";
+
+      for (int jj = _NUMWEBCHARTPNTS-1;jj>=0;jj--) {
+        currentLine += "[" + (String) ((int) ((uint32_t) (SensorCharts[j].lastRead - SensorCharts[j].interval*jj)-now())/60) + "," + (String) SensorCharts[j].values[jj] + "]";
+        if (jj>0) currentLine += ",";
+        currentLine += "\n";
+      }
+      currentLine += "]);\n\n";
+
+    
+    // Set Options
+      currentLine += "const options" + (String) j + " = {\n";
+      currentLine += "hAxis: {title: 'min from now'}, \n";
+      currentLine += "vAxis: {title: '" + (String) Sensors[SensorCharts[j].snsNum].snsName + "'},\n";
+      currentLine += "legend: 'none'\n};\n";
+
+      currentLine += "const chart" + (String) j + " = new google.visualization.LineChart(document.getElementById('myChart" + (String) j + "'));\n";
+      currentLine += "chart" + (String) j + ".draw(data" + (String) j + ", options" + (String) j + ");\n"; 
+    }
+      currentLine += "}\n";
+  #endif
+
   currentLine += "function sortTable(col) {\nvar table, rows, switching, i, x, y, shouldSwitch;\ntable = document.getElementById(\"Logs\");\nswitching = true;\nwhile (switching) {\nswitching = false;\nrows = table.rows;\nfor (i = 1; i < (rows.length - 1); i++) {\nshouldSwitch = false;\nx = rows[i].getElementsByTagName(\"TD\")[col];\ny = rows[i + 1].getElementsByTagName(\"TD\")[col];\nif (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {\nshouldSwitch = true;\nbreak;\n}\n}\nif (shouldSwitch) {\nrows[i].parentNode.insertBefore(rows[i + 1], rows[i]);\nswitching = true;\n}\n}\n}\n";
   currentLine += "</script>\n ";
 
@@ -442,6 +485,7 @@ currentLine += "<br>-----------------------<br>\n";
     //IF USING PROGMEM: use send_p   !!
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
+
 
 void handleNotFound(){
   server.send(404, "text/plain", "Arduino says 404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request

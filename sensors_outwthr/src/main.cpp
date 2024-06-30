@@ -495,14 +495,14 @@ void setup()
 
 
 
-
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
 
-
   if (MyIP != WiFi.localIP())    MyIP = WiFi.localIP(); //update if wifi changed
+
+
     
   time_t t = now(); // store the current time in time variable t
   
@@ -517,10 +517,38 @@ void loop() {
 
     for (byte k=0;k<SENSORNUM;k++) {
     
-      if (Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 || Sensors[k].LastReadTime ==0) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
+
+      //if low power mode
+  #ifdef _USELOWPOWER
+    #ifdef _DEBUG
+      Serial.printf("\nChecking battery power for need for sleep. ");
+    #endif
+
+    String tempstr = (String) ARDNAME + (String) "_bpct";
+    byte batpow = find_sensor_name(tempstr,61,1);
+
+    if (batpow<255) { //found a batter sensor
+      #ifdef _DEBUG
+        Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
+      #endif
+
+      if (Sensors[batpow].snsValue>_USELOWPOWER) {
+        ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds each minute
+      } else {
+        ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
+      }
+    } else {
+        #ifdef _DEBUG
+          Serial.printf("Did not find battery.\n");
+        #endif
+
+    }  
+  #endif
+
   }
   
   if (OldTime[1] != minute()) {
@@ -535,39 +563,6 @@ void loop() {
       redrawOled();
     #endif
 
-    //if low power mode
-    #ifdef _USELOWPOWER
-      #ifdef _DEBUG
-        Serial.printf("\nChecking battery power for need for sleep. ");
-
-      #endif
-      String tempstr = (String) ARDNAME + (String) "_bpct";
-      byte batpow = find_sensor_name(tempstr,61,1);
-      if (batpow<255) {
-        #ifdef _DEBUG
-          Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
-        #endif
-
-        #ifdef _DEBUG
-        if (Sensors[batpow].snsValue<20)           Serial.printf("Going to sleep.\n");
-        #endif
-
-        if (Sensors[batpow].snsValue<10) {
-          ESP.deepSleep(_USELOWPOWER*100); //sleep for a long interval between measures
-        } else {
-          if (Sensors[batpow].snsValue<15) {
-            ESP.deepSleep(_USELOWPOWER*10);
-          } else {
-            if (Sensors[batpow].snsValue<20) ESP.deepSleep(_USELOWPOWER);
-          }
-        }
-      } else {
-          #ifdef _DEBUG
-            Serial.printf("Did not find battery.\n");
-          #endif
-
-      }  
-    #endif
 
 
   }

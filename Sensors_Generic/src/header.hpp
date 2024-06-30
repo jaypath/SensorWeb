@@ -1,5 +1,6 @@
 #ifndef HEADER_HPP
 #define HEADER_HPP
+
 #include <Arduino.h>
 
 //#define _DEBUG 1
@@ -8,7 +9,8 @@
 #define _WEBCHART 2
 
 #ifdef _WEBCHART
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,60}; //which sensors should be stored for charting?
+  #define _NUMWEBCHARTPNTS 50
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,61}; //which sensors should be stored for charting?
 #endif
 
 
@@ -21,8 +23,6 @@ const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12,60,61};
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-
-
 //#define _USEDHT 1
 #define _USEAHT 1
 #define _USEBMP  1
@@ -34,8 +34,10 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 #define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
-//#define _USEBATTERY  A0 //set to the pin that is analogin
-//#define _USELOWPOWER 10e6 //must also have _USEBATTERY
+#define _USEBATTERY  A0 //set to the pin that is analogin
+#define _USELOWPOWER 25 //must also have _USEBATTERY. this is the batpcnt at which to sleep
+#define _LONGSLEEPTIME 15e6 //this is seconds to sleep each minute
+#define _REGSLEEPTIME 15e6 //this is seconds to sleep each minute
 
 //binary switches
 //#define _CHECKAIRCON 1

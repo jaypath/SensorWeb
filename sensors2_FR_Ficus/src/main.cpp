@@ -110,8 +110,16 @@ union convertINT {
 #endif
 
 
+#ifdef _CHECKHEAT
+  String HEATZONE[6] = {"FamRm","DinRm","Office","MastBR","Upstrs","Den"};
+  uint8_t HEATPIN = 0;
+#endif
+
+
 byte OldTime[5] = {0,0,0,0,0};
 IPAddress MyIP;
+
+time_t ALIVESINCE = 0;
 
 
 //function declarations
@@ -146,11 +154,11 @@ void setup()
   Wire.begin(); 
   Wire.setClock(400000L);
   
+
+#ifdef _USESSD1306
   #ifdef _DEBUG
       Serial.println("oled begin");
   #endif
-
-#ifdef _USESSD1306
   
   #if INCLUDE_SCROLLING == 0
   #error INCLUDE_SCROLLING must be non-zero. Edit SSD1306Ascii.h
@@ -344,7 +352,7 @@ void setup()
     //set the stoffregen time library with timezone and dst
     timeUpdate();
 
-
+    ALIVESINCE = now();
 
     #ifdef _USESSD1306
       oled.clear();
@@ -356,7 +364,6 @@ void setup()
     server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
     server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
     server.on("/SETTHRESH", handleSETTHRESH);               
-    server.on("/LIST", handleLIST);
     server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
     server.on("/NEXTSNS", handleNEXT);
     server.on("/LASTSNS", handleLAST);
@@ -488,67 +495,140 @@ void setup()
 
 
 
-
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
 
   if (MyIP != WiFi.localIP())    MyIP = WiFi.localIP(); //update if wifi changed
+
+
     
   time_t t = now(); // store the current time in time variable t
   
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
-    bool flagstatus=false;
     
     #ifdef _DEBUG
-      Serial.printf("Time is %s. Sensor #1 is %s.   ",dateify(t,"hh:nn:ss"),Sensors[0].snsName);
+      Serial.printf(".");
 
     #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
-      flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
-
-      if (Sensors[k].LastReadTime + Sensors[k].PollingInt < t || abs((int) ((uint32_t) Sensors[k].LastReadTime - now()))>60*60*24 || Sensors[k].LastReadTime ==0) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+    
+      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if ((Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || abs((int) ((uint32_t)Sensors[k].LastSendTime - now()))>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
+
+      //if low power mode
+  #ifdef _USELOWPOWER
+    #ifdef _DEBUG
+      Serial.printf("\nChecking battery power for need for sleep. ");
+    #endif
+
+    String tempstr = (String) ARDNAME + (String) "_bpct";
+    byte batpow = find_sensor_name(tempstr,61,1);
+
+    if (batpow<255) { //found a batter sensor
+      #ifdef _DEBUG
+        Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
+      #endif
+
+      if (Sensors[batpow].snsValue>_USELOWPOWER) {
+        ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds each minute
+      } else {
+        ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
+      }
+    } else {
+        #ifdef _DEBUG
+          Serial.printf("Did not find battery.\n");
+        #endif
+
+    }  
+  #endif
+
   }
   
   if (OldTime[1] != minute()) {
     OldTime[1] = minute();
 
+    #ifdef _DEBUG
+      Serial.printf("\nTime is %s. \n",dateify(t,"hh:nn:ss"));
+
+    #endif
+
     #ifdef _USESSD1306
       redrawOled();
     #endif
 
+
+
   }
   
   if (OldTime[2] != hour()) {
+    #ifdef _DEBUG
+      Serial.printf("\nNew hour... TimeUpdate running. \n");
+
+    #endif
     OldTime[2] = hour();
     timeUpdate();
 
   }
   
   if (OldTime[3] != weekday()) {
-    OldTime[3] = weekday();
+    //once per day
+
   
-  //sync time
+    //reset heat and ac values
     #ifdef _DEBUG
-      t=now();
-      Serial.print("Current time is ");
-      Serial.print(hour(t));
-      Serial.print(":");
-      Serial.print(minute(t));
-      Serial.print(":");
-      Serial.println(second(t));
+      Serial.printf("\nNew day... ");
+
+    #endif
+    #ifdef _CHECKAIRCON
+        #ifdef _DEBUG
+          Serial.printf("Reset AC...");
+
+        #endif
+
+     for (byte j=0;j<SENSORNUM;j++)  {
+      if (Sensors[j].snsType == 56) {
+        SendData(&Sensors[j]);
+        Sensors[j].snsValue = 0;
+      }
+
+      if (Sensors[j].snsType == 57) {
+        SendData(&Sensors[j]);
+        Sensors[j].snsValue = 0;
+      }
+     }
+
     #endif
 
-  }
+    #ifdef _CHECKHEAT
+    #ifdef _DEBUG
+      Serial.printf("Reset heater time.");
+
+    #endif
+
+
+     for (byte j=0;j<SENSORNUM;j++)  {
+      if (Sensors[j].snsType == 55) {
+        SendData(&Sensors[j]);
+        Sensors[j].snsValue = 0;
+      }
+     }
+    #endif
+
+    #ifdef _DEBUG
+      Serial.printf("\n");
+
+    #endif
+
+    OldTime[3] = weekday();
   
+  
+  } 
+
 }
-
-
-

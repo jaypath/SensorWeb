@@ -495,13 +495,14 @@ void setup()
 
 
 
-
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
 
   if (MyIP != WiFi.localIP())    MyIP = WiFi.localIP(); //update if wifi changed
+
+
     
   time_t t = now(); // store the current time in time variable t
   
@@ -533,39 +534,34 @@ void loop() {
     #ifdef _USESSD1306
       redrawOled();
     #endif
-    
-        //if low power mode
-    #ifdef _USELOWPOWER
-      #ifdef _DEBUG
-        Serial.printf("\nChecking battery power for need for sleep. ");
 
+
+  //if low power mode
+  #ifdef _USELOWPOWER
+    #ifdef _DEBUG
+      Serial.printf("\nChecking battery power for need for sleep. ");
+    #endif
+
+    String tempstr = (String) ARDNAME + (String) "_bpct";
+    byte batpow = find_sensor_name(tempstr,61,1);
+
+    if (batpow<255) { //found a batter sensor
+      #ifdef _DEBUG
+        Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
       #endif
-      String tempstr = (String) ARDNAME + (String) "_bpct";
-      byte batpow = find_sensor_name(tempstr,61,1);
-      if (batpow<255) {
+
+      if (Sensors[batpow].snsValue>_USELOWPOWER) {
+        ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds each minute
+      } else {
+        ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
+      }
+    } else {
         #ifdef _DEBUG
-          Serial.printf("Battery is %d.",Sensors[batpow].snsValue);
+          Serial.printf("Did not find battery.\n");
         #endif
 
-        if (Sensors[batpow].snsValue<10) {
-          ESP.deepSleep(_USELOWPOWER);
-          #ifdef _DEBUG
-            Serial.printf("Going to sleep.\n");
-          #endif
-
-        } else {
-          #ifdef _DEBUG
-            Serial.printf("Not going to sleep.\n");
-          #endif
-
-        }
-      } else {
-          #ifdef _DEBUG
-            Serial.printf("Did not find battery.\n");
-          #endif
-
-      }  
-    #endif
+    }  
+  #endif
 
   }
   

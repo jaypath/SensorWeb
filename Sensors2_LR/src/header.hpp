@@ -14,14 +14,14 @@
 #endif
 
 
-#define ARDNAME "FamRm" //unique name
+#define ARDNAME "LivRm" //unique name
 #define SENSORNUM 3 //be sure this matches SENSORTYPES
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,3};
+
 //#define ARDID 94 //unique arduino ID //deprecated - now ardid is last 3 of wifi IP. if this is defined it will override wifi id
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
-
-const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
 
 //#define _USEDHT 1
 #define _USEAHT 1
@@ -35,9 +35,7 @@ const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
 //#define _USEBATTERY  A0 //set to the pin that is analogin
-//#define _USELOWPOWER 25 //must also have _USEBATTERY. this is the batpcnt at which to sleep
-//#define _LONGSLEEPTIME 5e6 //this is uS  to sleep each second
-//#define _REGSLEEPTIME 500000 //this is us to sleep each second
+//#define _USELOWPOWER 10e6 //must also have _USEBATTERY
 
 //binary switches
 //#define _CHECKAIRCON 1
@@ -45,8 +43,8 @@ const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
 
 
 #ifdef _USESOILRES
-  #define SOILRESISTANCE 470
-  #define SOILR_MAX 1200
+  #define SOILRESISTANCE 4700
+  #define SOILR_MAX 2000
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
   //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
