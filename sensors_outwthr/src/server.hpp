@@ -46,6 +46,7 @@ extern IP_TYPE SERVERIP[NUMSERVERS];
 
 //extern const char HTTP_OK_response_header[60];
 
+bool Server_Message(String* URL, String* payload, int* httpCode);
 void handleRoot(void);
 void handleNotFound(void);
 void handleSETTHRESH(void);

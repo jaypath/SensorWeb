@@ -21,6 +21,21 @@ byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
 
 
+bool Server_Message(String* URL, String* payload, int* httpCode) {
+  WiFiClient wfclient;
+  HTTPClient http;
+  
+  if(WiFi.status()== WL_CONNECTED){
+     http.useHTTP10(true);
+     http.begin(wfclient,URL->c_str());
+     *httpCode = http.GET();
+     *payload = http.getString();
+     http.end();
+     return true;
+  } 
+
+  return false;
+}
 
 
 bool SendData(struct SensorVal *snsreading) {

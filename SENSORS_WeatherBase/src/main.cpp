@@ -16,17 +16,6 @@
 
 /*
 
-/*local server commands:
-    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-    server.on("/POST", handlePost);   
-    server.on("/REQUESTUPDATE",handleREQUESTUPDATE);
-    server.on("/CLEARSENSOR",handleCLEARSENSOR);
-    server.on("/TIMEUPDATE",handleTIMEUPDATE);
-    server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
-
-
- */
-
 
 /*sens types
 //0 - not defined
@@ -132,7 +121,6 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 //#define ESP_SSID "kandy-hispeed" // Your network name here
 //#define ESP_PASS "manath77" // Your network password here
 
-//#define SERVER "192.168.68.104"
 
 #define TIMEOUTHTTP 2000
 
@@ -211,7 +199,7 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this
 uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;
 double batteryArray[48] = {0};
 double LAST_BAR=0;
-
+uint32_t LAST_WEB_REQUEST = 0;
 
 uint32_t daily_time = 0;
 uint32_t hourly_time = 0;
@@ -274,6 +262,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
 char* Byte2Bin(uint8_t value, char* , bool invert = false);
 void handleNotFound();
+void handleGETSTATUS();
 void handlePost();
 void handleRoot();
 void handleREQUESTUPDATE();
@@ -491,7 +480,8 @@ tft.println("Connecting ArduinoOTA...");
     server.on("/CLEARSENSOR",handleCLEARSENSOR);
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
     server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
-
+    server.on("/GETSTATUS",handleGETSTATUS);
+    
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
@@ -2159,6 +2149,19 @@ void handleREQUESTUPDATE() {
   return;
 }
 
+void handleGETSTATUS() {
+  //someone requested the server's status
+  String currentLine = "";
+  currentLine = "STATUS:" + (String) LAST_WEB_REQUEST + ";";
+  currentLine += "ALIVESINCE:" + (String) ALIVESINCE + ";";
+  currentLine += "NUMDEVS:" + (String) countDev() + ";";
+  
+  server.send(200, "text/plain", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+  return;
+
+}
+
 void handleREQUESTWEATHER() {
 //if no parameters passed, return current temp, max, min, today weather ID, pop, and snow amount
 //otherwise, return the index value for the requested value
@@ -2208,6 +2211,7 @@ void handleTIMEUPDATE() {
 
 
 void handleRoot() {
+  LAST_WEB_REQUEST = now(); //this is the time of the last web request
 
   String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
   currentLine =currentLine  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
@@ -2303,7 +2307,7 @@ void handleRoot() {
     currentLine += "const data = google.visualization.arrayToDataTable([\n";
     currentLine += "['t','val'],\n";
     for (int jj = 48-1;jj>=0;jj--) {
-      currentLine += "[" + (String) ((int) ((uint32_t) (LAST_BAT_READ - 60*60*jj)-now())/60) + "," + (String) batteryArray[jj] + "]";
+      currentLine += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-now())/60)) + "," + (String) batteryArray[jj] + "]";
       if (jj>0) currentLine += ",";
       currentLine += "\n";
     }
@@ -2360,6 +2364,7 @@ uint8_t tempIP[4] = {0,0,0,0};
   
   
   int sn = findDev(&S,true);
+
 
   if((S.snsType==9 || S.snsType == 13) && LAST_BAR_READ < now() - 60*60) { //pressure
     LAST_BAR_READ = S.timeRead;

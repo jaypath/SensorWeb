@@ -120,7 +120,8 @@ byte OldTime[5] = {0,0,0,0,0};
 IPAddress MyIP;
 
 time_t ALIVESINCE = 0;
-
+bool SERVERIMMINENT = true;
+uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 
 //function declarations
 
@@ -502,10 +503,38 @@ void loop() {
 
   if (MyIP != WiFi.localIP())    MyIP = WiFi.localIP(); //update if wifi changed
 
-
-    
   time_t t = now(); // store the current time in time variable t
-  
+
+
+  #ifdef _USELOWPOWER
+    if (t-LAST_SERVER_STATUS_UPDATE > 600) { //check server status every 10 minutes      
+      SERVERIMMINENT=false;
+      
+      //check if a web requst is imminent
+      String payload;
+      int httpCode;
+      String URL = "192.168.68.93/GETSTATUS";
+      String tempstr = "";
+      int delim = 0;
+      if (Server_Message(&URL, &payload, &httpCode)) {
+        //check if httpcode is 200
+        if (httpCode == 200) SERVERIMMINENT = true;
+        delim = payload.indexOf(";",0); //find first ";"
+        tempstr = payload.substring(0,delim);
+        payload.remove(0,delim+1);
+        delim = tempstr.indexOf(":",0);
+        tempstr = tempstr.substring(delim+1);
+        LAST_SERVER_STATUS_UPDATE = tempstr.toInt(); //this is the last time of the web page
+        if ((t-LAST_SERVER_STATUS_UPDATE) < 600) SERVERIMMINENT=true; //if the web server was checked within 10 minutes
+        else SERVERIMMINENT=false;
+      } 
+    } else {
+      SERVERIMMINENT=true;      
+    }
+
+  #endif
+
+
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
@@ -523,31 +552,36 @@ void loop() {
     }
 
       //if low power mode
-  #ifdef _USELOWPOWER
-    #ifdef _DEBUG
-      Serial.printf("\nChecking battery power for need for sleep. ");
-    #endif
-
-    String tempstr = (String) ARDNAME + (String) "_bpct";
-    byte batpow = find_sensor_name(tempstr,61,1);
-
-    if (batpow<255) { //found a batter sensor
+    #ifdef _USELOWPOWER
       #ifdef _DEBUG
-        Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
+        Serial.printf("\nChecking battery power for need for sleep. ");
       #endif
 
-      if (Sensors[batpow].snsValue>_USELOWPOWER) {
-        ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds each minute
-      } else {
-        ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
-      }
-    } else {
-        #ifdef _DEBUG
-          Serial.printf("Did not find battery.\n");
-        #endif
+      if (SERVERIMMINENT==false) {
 
-    }  
-  #endif
+        String tempstr = (String) ARDNAME + (String) "_bpct";
+        byte batpow = find_sensor_name(tempstr,61,1);
+
+        if (batpow<255) { //found a batter sensor
+          #ifdef _DEBUG
+            Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
+          #endif
+
+
+          if (Sensors[batpow].snsValue>_USELOWPOWER) { //bat power is above the extra low threshold
+            ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
+          } else {
+            ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
+          }
+        }
+
+      } else {
+          #ifdef _DEBUG
+            Serial.printf("Did not find battery.\n");
+          #endif
+
+      }  
+    #endif
 
   }
   
@@ -562,8 +596,6 @@ void loop() {
     #ifdef _USESSD1306
       redrawOled();
     #endif
-
-
 
   }
   
