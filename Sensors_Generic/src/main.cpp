@@ -507,7 +507,8 @@ void loop() {
 
 
   #ifdef _USELOWPOWER
-    if (t-LAST_SERVER_STATUS_UPDATE > 600) { //check server status every 10 minutes      
+    
+    if (t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
       SERVERIMMINENT=false;
       
       //check if a web requst is imminent
@@ -560,16 +561,15 @@ void loop() {
       if (SERVERIMMINENT==false) {
 
         String tempstr = (String) ARDNAME + (String) "_bpct";
-        byte batpow = find_sensor_name(tempstr,61,1);
+        byte batpow = find_sensor_name(ARDNAME,61,1);
 
         if (batpow<255) { //found a batter sensor
           #ifdef _DEBUG
             Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
           #endif
 
-
           if (Sensors[batpow].snsValue>_USELOWPOWER) { //bat power is above the extra low threshold
-            ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
+            if (_REGSLEEPTIME>0) ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
           } else {
             ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
           }

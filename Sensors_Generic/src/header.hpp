@@ -25,7 +25,7 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 
 //#define _USEDHT 1
 #define _USEAHT 1
-//#define _USEBMP  1
+#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
@@ -35,9 +35,9 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
 #define _USEBATTERY  A0 //set to the pin that is analogin
-#define _USELOWPOWER 25 //must also have _USEBATTERY. this is the batpcnt at which to sleep
-#define _LONGSLEEPTIME 300e6 //this is seconds to sleep each time if bat is lower than uselowpower level
-#define _REGSLEEPTIME 30e6 //this is seconds to sleep each time
+#define _USELOWPOWER 33 //must also have _USEBATTERY. this is the batpcnt at which to sleep
+#define _LONGSLEEPTIME 120e6 //this is seconds to sleep each time if bat is lower than uselowpower level
+#define _REGSLEEPTIME 0 //this is seconds to sleep each time
 
 //binary switches
 //#define _CHECKAIRCON 1
@@ -144,6 +144,8 @@ GPIO27 - Supports internal pull-up resistor
 57 - a/c fan on/off
 58 - leak yes/no
 60 - lithium battery power
+61 - lipo percent
+90 - current status (0 if awake, >0 for time that I went to sleep)
 99 = any numerical value
 
 */
