@@ -16,12 +16,23 @@
   #include <WebServer.h>
   #include <HTTPClient.h>
 
+  #include <MPU6500_WE.h>
+
+#define MPU6500_ADDR 0x68
+MPU6500_WE mpu = MPU6500_WE(MPU6500_ADDR);
+
+
+
+
+
 SSD1306AsciiWire oled;
 
 
+
+
 //Code to draw to the screen
-  //#define _OLEDTYPE &Adafruit128x64
-  #define _OLEDTYPE &Adafruit128x32
+  #define _OLEDTYPE &Adafruit128x64
+//  #define _OLEDTYPE &Adafruit128x32
   #define _OLEDINVERT 0
 
 
@@ -30,9 +41,38 @@ typedef int16_t i16;
 // typedef uint16_t u16;
 typedef uint32_t u32;
 
-const u8 SENSORTYPES[SENSORNUM] = {ultrasonic_dist, DHT_temp, DHT_rh};
-const u8 MONITORED_SNS = 255;
-const u8 OUTSIDE_SNS = 0;
+  String MSG;
+String HEADER2 = ""; //line 2 of header
+u32 TIMESINCE = 0;
+
+
+struct SensorStruct {
+  byte MYID;
+  bool  HASWIFI;
+  bool HASMPU;
+  bool HASBMP;
+  u32 LASTSCREENDRAW;
+  byte SCREENREFRESH;
+  u32 LASTBUTTON;
+  
+};
+
+#define _NUMREADINGS 6
+struct MPUStruct {
+  uint32_t LASTREAD;
+  byte RATE_MS; //ms between readings
+  uint8_t MPUREADING; //bit 0 = R, 1 = L, 2 = u, 3 = d
+  //byte INDEX; //index to mpu values
+  //float VALS_LR[_NUMREADINGS]; //store last 6 LR values
+  //float VALS_UD[_NUMREADINGS];
+  uint8_t LOCKOUT_MS; //ms to not read after a value has been registered. This is needed because a jerk has both + and - accel, just want first one
+  float MPUACC_y ; //cut off for acceleration to register
+  float MPUACC_x ;
+  int TEMPERATURE;
+};
+
+SensorStruct INFO;
+MPUStruct MPUINFO;
 
 
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
@@ -40,29 +80,67 @@ const u8 OUTSIDE_SNS = 0;
 
 
 
+void printLine(String s) {
+    oled.print(s.c_str());
+    oled.clearToEOL();
+    oled.println();
+}
+void printHeader() {
+  oled.setFont(System5x7);
+  oled.set1X();
+  oled.setCursor(0,0);
+
+  if (INFO.HASWIFI)   {
+    INFO.MYID = WiFi.localIP()[3];
+    oled.print("ID:");
+    oled.print(INFO.MYID);
+  }  else {
+    INFO.MYID=0;
+    oled.print("Wifi-");
+  }
+
+  if (INFO.HASMPU) {
+    oled.print(" Acc+");
+    
+  }  else {
+    oled.print(" Acc-");    
+  }
+
+  if (INFO.HASBMP) {
+    oled.print(" BMP+");
+    
+  }  else {
+    oled.print(" BMP-");    
+  }
+
+  oled.clearToEOL();
+  oled.println();
+
+  oled.print(HEADER2.c_str());
+  oled.clearToEOL();
+  oled.println(); //now we are at the top of the print area
+
+
+}
+
 
 void setup()
 {
 
+  INFO.HASBMP = false;
+  INFO.HASMPU = false;
+  INFO.HASWIFI = false;
+  INFO.SCREENREFRESH = 100; //ms for screen refresh
   
-  #if INCLUDE_SCROLLING == 0
-  #error INCLUDE_SCROLLING must be non-zero. Edit SSD1306Ascii.h
-  #elif INCLUDE_SCROLLING == 1
-    // Scrolling is not enable by default for INCLUDE_SCROLLING set to one.
-    oled.setScrollMode(SCROLL_MODE_AUTO);
-  #else  // INCLUDE_SCROLLING
-    // Scrolling is enable by default for INCLUDE_SCROLLING greater than one.
-  #endif
+  Wire.begin(); // Initalize Wire library
+  Wire.setClock(400000L);
 
   #if RST_PIN >= 0
-    oled.begin(_OLEDTYPE, I2C_OLED, RST_PIN);
+    oled.begin(&Adafruit128x64, I2C_OLED, RST_PIN);
   #else // RST_PIN >= 0
-    oled.begin(_OLEDTYPE, I2C_OLED);
+    oled.begin(&Adafruit128x64, I2C_OLED);
   #endif // RST_PIN >= 0
-  #ifdef _OLEDINVERT
-    oled.ssd1306WriteCmd(SSD1306_SEGREMAP); // colAddr 0 mapped to SEG0 (RESET)
-    oled.ssd1306WriteCmd(SSD1306_COMSCANINC); // Scan from COM0 to COM[N –1], normal (RESET)
-  #endif
+
 
   oled.setFont(System5x7);
   oled.set1X();
@@ -70,11 +148,6 @@ void setup()
   oled.setCursor(0,0);
 
 
-  char msg[10];
-
-
-
-  Wire.begin(); // Initalize Wire library
 
   #ifdef DEBUG_
     Serial.begin(115200);
@@ -90,68 +163,203 @@ void setup()
 
   #endif
 
+  oled.println("NICE! Screen works!");
+  delay(500);
+  MSG = "Trying to\nestablish WIFI...";
+  oled.println(MSG.c_str());
+  byte r = oled.row();
+  
+  
   WiFi.begin(ESP_SSID, ESP_PASS);
-  while (WiFi.status() != WL_CONNECTED)
-  {
+  TIMESINCE = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-TIMESINCE<5000)
+    {
     delay(200);
     
     #ifdef DEBUG_
     Serial.print(".");
     #endif
+    oled.setCursor(r,0);
+
+    oled.print("No WIFI...");
+    oled.clearToEOL();
+    oled.println();
   }
 
-  arduino_IP = WiFi.localIP();
-  sprintf(msg,"IP:%i",arduino_IP[3]);
+  if(WiFi.status() == WL_CONNECTED) {
+    INFO.HASWIFI = true;
+    INFO.MYID = WiFi.localIP()[3];
+  }
 
-  delay(3000);
+  
+  oled.clear();
+  oled.setCursor(0,0);
+
+  
+  if (INFO.MYID>0) {
+//    oled.print("Setting up OTA");
+
+    ArduinoOTA.setHostname(MSG.c_str());
+    ArduinoOTA.onStart([]() {
+      #ifdef _DEBUG
+      Serial.println("OTA started");
+      #endif
+      HEADER2 = "OTA started";
+      printHeader();
+    });
+    ArduinoOTA.onEnd([]() {
+      #ifdef _DEBUG
+      Serial.println("OTA End");
+      #endif
+      HEADER2 = "OTA End";
+      printHeader();
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      #ifdef _DEBUG
+          Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+      #endif
+      HEADER2 = "Progress: " + String (100*progress / total);
+      printHeader();      
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+      #ifdef DEBUG_
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+      #endif
+        if (error == OTA_AUTH_ERROR) HEADER2 = "Auth Failed";
+        else if (error == OTA_BEGIN_ERROR) HEADER2 = "Begin Failed";
+        else if (error == OTA_CONNECT_ERROR) HEADER2 = "Connect Failed";
+        else if (error == OTA_RECEIVE_ERROR) HEADER2 = "Receive Failed";
+        else if (error == OTA_END_ERROR) HEADER2 = "End Failed";
+
+        printHeader();
+    });
+      ArduinoOTA.begin();
+      oled.println("... OK");
+  } else {
+    oled.println(" failed");
+  }
 
 
+    INFO.HASMPU = false;
+    if (!mpu.init()) {  // if failed no mpu
+      INFO.HASMPU = false;
+    } else {
+      INFO.HASMPU = true;
+    }
 
-   ArduinoOTA.setHostname("thisisatemp");
-  ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef DEBUG_
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    #endif
-  });
-    ArduinoOTA.begin();
+    if(INFO.HASMPU) {
+      MPUINFO.LASTREAD = 0;
+//      MPUINFO.INDEX=0;
+      MPUINFO.LOCKOUT_MS = 250; //do not register another reading for this long
+      MPUINFO.MPUACC_x= 0.0000015*16384;
+      MPUINFO.MPUACC_y = 0.0000015*16384;
+      MPUINFO.RATE_MS = 20;
+      
 
-  #ifdef DEBUG_
-    Serial.println("init done...");
+      delay(1000);
+      mpu.autoOffsets();
 
-  #endif
+      mpu.enableGyrDLPF();
+      mpu.setGyrDLPF(MPU6500_DLPF_6);
+      mpu.setSampleRateDivider(5);
+      mpu.setGyrRange(MPU6500_GYRO_RANGE_250);
+      mpu.setAccRange(MPU6500_ACC_RANGE_2G); //16384 units/g in the +/- 2g range
+      mpu.enableAccDLPF(true);
+      mpu.setAccDLPF(MPU6500_DLPF_6);
+      delay(200);
+    }
 
+  HEADER2 = "";
+  printHeader();  
 
   #ifdef DEBUG_
     Serial.println("Set up TimeClient...");
   #endif
 
+  INFO.LASTSCREENDRAW = millis();
 
-
-  #ifdef DEBUG_
-    Serial.println("Setup end");
-  #endif
-  delay(1000);
-
+  INFO.LASTBUTTON = 0;
+  pinMode(0,INPUT_PULLUP);
 }
 
 
 
+float averageArrayF(float* t,byte n,bool init) {
+  float avgF = 0;
+  for (byte j=0;j<n;j++) {
+    avgF+=t[j];
+    if (init) t[j] = 0;
+  }
+  return avgF/n;
+
+}
 void loop()
 {
-  u32 current_millis = millis();
-  u32 n = now();
-  char msg[10];
+  ArduinoOTA.handle();
 
-if (millis()%1000==0) {
-  oled.clear();
+  u32 m = millis();
 
-  oled.printf("Hello %d",millis());
+  if (digitalRead(0) == LOW) {
+    INFO.LASTBUTTON = m;    
+  }
+//  HEADER2 = "Button@" + (String) ((m-INFO.LASTBUTTON)/1000) + "s ago";
+  
 
+  if (INFO.HASMPU && (m-MPUINFO.LASTREAD) > MPUINFO.RATE_MS) {
+    if (m-MPUINFO.LASTREAD > MPUINFO.LOCKOUT_MS) {       
+      xyzFloat gValue = mpu.getGValues();
+      xyzFloat gyr = mpu.getGyrValues();
+      float temp = mpu.getTemperature();
+      float resultantG = mpu.getResultantG(gValue);
+
+      if ((float) abs(gValue.y) > MPUINFO.MPUACC_y || (float) abs(gValue.x) > MPUINFO.MPUACC_x) { //that equates to 0.000001*4g 
+        MPUINFO.LASTREAD = m;
+        MPUINFO.MPUREADING=0;
+        if ((float) abs(gValue.y) >  abs(gValue.x) ) { //LR movement
+          if (gValue.y>0) {
+            bitWrite(MPUINFO.MPUREADING,1,1);
+          }        else {
+            bitWrite(MPUINFO.MPUREADING,0,1);
+          }
+        } else {
+          if (gValue.x>0) {
+            bitWrite(MPUINFO.MPUREADING,2,1);
+          }        else {
+            bitWrite(MPUINFO.MPUREADING,3,1);
+          }
+        }
+      }
+      
+      MPUINFO.TEMPERATURE= ((int) temp*9/5+32);
+  
+    }
+  }
+
+  if (m > INFO.LASTSCREENDRAW + INFO.SCREENREFRESH) {
+    if (INFO.HASMPU) {
+      HEADER2 = "T=" + (String) (int) MPUINFO.TEMPERATURE + "F";
+      
+      if ((uint32_t) m < MPUINFO.LASTREAD+500) {        
+        if (bitRead(MPUINFO.MPUREADING,0))       HEADER2 += " RIGHT";
+        else if (bitRead(MPUINFO.MPUREADING,1)) HEADER2 += "LEFT";
+
+        if (bitRead(MPUINFO.MPUREADING,2)) HEADER2 += "UP";
+        else if (bitRead(MPUINFO.MPUREADING,3)) HEADER2 += "DOWN";
+      }
+    }
+
+      for (byte j=0;j<8;j++) printLine("");
+
+      
+
+  }
+
+  printHeader();
+  HEADER2 = "";
 }
 
-}
