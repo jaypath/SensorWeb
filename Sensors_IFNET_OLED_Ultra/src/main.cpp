@@ -255,7 +255,7 @@ void setup()
     if(INFO.HASMPU) {
       MPUINFO.LASTREAD = 0;
 //      MPUINFO.INDEX=0;
-      MPUINFO.LOCKOUT_MS = 250; //do not register another reading for this long
+      MPUINFO.LOCKOUT_MS = 175; //do not register another reading for this long
       MPUINFO.MPUACC_x= 0.0000015*16384;
       MPUINFO.MPUACC_y = 0.0000015*16384;
       MPUINFO.RATE_MS = 20;
