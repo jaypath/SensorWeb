@@ -11,7 +11,7 @@
 
 #include <ArduinoOTA.h>
 
-
+ #include <Adafruit_BMP280.h>
   #include <WiFi.h> //esp32
   #include <WebServer.h>
   #include <HTTPClient.h>
@@ -27,7 +27,7 @@ MPU6500_WE mpu = MPU6500_WE(MPU6500_ADDR);
 
 SSD1306AsciiWire oled;
 
-
+Adafruit_BMP280 bmp; // I2C
 
 
 //Code to draw to the screen
@@ -98,6 +98,8 @@ void printHeader() {
     INFO.MYID=0;
     oled.print("Wifi-");
   }
+
+
 
   if (INFO.HASMPU) {
     oled.print(" Acc+");
@@ -191,7 +193,18 @@ void setup()
     INFO.MYID = WiFi.localIP()[3];
   }
 
-  
+  if (!bmp.begin(0x76) ) {
+    INFO.HASBMP=false;
+  } else {
+    INFO.HASBMP=true;
+   /* Default settings from datasheet. */
+    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+  }
+
   oled.clear();
   oled.setCursor(0,0);
 
@@ -341,6 +354,9 @@ void loop()
   }
 
   if (m > INFO.LASTSCREENDRAW + INFO.SCREENREFRESH) {
+    if (INFO.HASBMP) {
+      HEADER2 = (String) (bmp.readPressure()/100); //in hPa
+    }
     if (INFO.HASMPU) {
       HEADER2 = "T=" + (String) (int) MPUINFO.TEMPERATURE + "F";
       
