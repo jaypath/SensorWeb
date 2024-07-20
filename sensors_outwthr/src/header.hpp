@@ -36,8 +36,8 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 //#define _USESSD1306  1
 #define _USEBATTERY  A0 //set to the pin that is analogin
 #define _USELOWPOWER 25 //must also have _USEBATTERY. this is the batpcnt at which to sleep
-#define _LONGSLEEPTIME 300e6 //this is uS  to sleep each second
-#define _REGSLEEPTIME 60e6 //this is us to sleep each second
+#define _LONGSLEEPTIME 120e6 //this is uS  to sleep each second
+#define _REGSLEEPTIME 0 //this is us to sleep each second
 
 //binary switches
 //#define _CHECKAIRCON 1

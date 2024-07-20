@@ -507,7 +507,7 @@ void loop() {
 
 
   #ifdef _USELOWPOWER
-    if (t-LAST_SERVER_STATUS_UPDATE > 600) { //check server status every 10 minutes      
+    if (t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
       SERVERIMMINENT=false;
       
       //check if a web requst is imminent
@@ -569,7 +569,7 @@ void loop() {
 
 
           if (Sensors[batpow].snsValue>_USELOWPOWER) { //bat power is above the extra low threshold
-            ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
+            if (_REGSLEEPTIME>0) ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
           } else {
             ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
           }
