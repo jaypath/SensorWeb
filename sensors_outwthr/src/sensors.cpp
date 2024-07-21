@@ -889,7 +889,6 @@ bool ReadData(struct SensorVal *P) {
           } 
         }
 
-        if (P->snsValue <5) ESP.deepSleep(0);
 
       #endif
       break;

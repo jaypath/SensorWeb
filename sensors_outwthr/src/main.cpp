@@ -414,9 +414,12 @@ void setup()
   
   
   #ifdef _USEAHT
-    while (aht21.begin() != true)
+    if (aht21.begin() != true)
     {
-      Serial.println(F("AHT2x not connected or fail to load calibration coefficient")); //(F()) save string to flash & keeps dynamic memory free
+      for (byte retry = 0;retry<10;retry++) {
+        Serial.printf("AHT2x not connected or failed to load calibration coefficient. Retry number %i\n",retry); //(F()) save string to flash & keeps dynamic memory free
+        if (aht21.begin() == true) continue;
+      }
     }
 
   #endif
@@ -435,22 +438,18 @@ void setup()
     #endif
     uint32_t t = millis();
     uint32_t deltaT = 0;
-    while (!bmp.begin(0x76) and deltaT<15000) { //default address is 0x77, but amazon review says this is 0x76
+    while (!bmp.begin(0x76) && deltaT<5000) { //default address is 0x77, but amazon review says this is 0x76
       deltaT = millis()-t;
       #ifdef _USESSD1306
         oled.println("BMP failed.");
         #ifdef _DEBUG
             Serial.println("bmp failed.");
         #endif
-        delay(500);
+        delay(100);
         oled.clear();
         oled.setCursor(0,0);
-        delay(500);
       #else
-        digitalWrite(LED,HIGH);
-        delay(500);
-        digitalWrite(LED,LOW);
-        delay(500);
+        delay(100);
       #endif
     }
  
@@ -520,6 +519,10 @@ void loop() {
 
   #ifdef _USELOWPOWER
 
+    #ifdef _DEBUG
+      Serial.println("Checking for low power state.\n");
+    #endif
+
     uint16_t rtc_temp; 
 
     for (byte rtcind=0;rtcind<4;rtcind++) {
@@ -532,18 +535,29 @@ void loop() {
     }
 
     ESP.rtcUserMemoryRead(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this read, as it occupies the entire memory block
-
+    #ifdef _DEBUG
+      Serial.printf("Last server state in RTC: %d\n",LAST_SERVER_STATUS_UPDATE);
+    #endif
     bool SERVERIMMINENT = false;
-    if (abs(t-LAST_SERVER_STATUS_UPDATE) > 300) { //check server status every 5 minutes      
-      String payload;
-      int httpCode;
-      String GETSTATUSURL = "192.168.68.93/GETSTATUS";
-      String tempstr = "";
-      int delim = 0;
+    String payload;
+    int httpCode;
+    String GETSTATUSURL = "http://192.168.68.93/GETSTATUS";
+    String tempstr = "";
+    int delim = 0;
+    
+    if (t<LAST_SERVER_STATUS_UPDATE || t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
       
+      #ifdef _DEBUG
+      Serial.printf("Sending for webrequests\n");
+    #endif
         
       //check if a web request is imminent (as in, someone is or recently used server)
-      if (Server_Message(&GETSTATUSURL, &payload, &httpCode)) {
+      if (Server_Message(GETSTATUSURL, &payload, &httpCode)) {
+        #ifdef _DEBUG
+          Serial.printf("Web httpcode was: %i",httpCode);
+        
+          Serial.printf("Web payload was: %s",payload.c_str());
+        #endif
         //check if httpcode is 200
         if (httpCode == 200) SERVERIMMINENT = true;
         delim = payload.indexOf(";",0); //find first ";"
@@ -554,7 +568,12 @@ void loop() {
         LAST_SERVER_STATUS_UPDATE = tempstr.toInt(); //this is the last time of the web page
         if ((t-LAST_SERVER_STATUS_UPDATE) < 600) SERVERIMMINENT=true; //if the web server was checked within 10 minutes
         else SERVERIMMINENT=false;
-      } 
+      }
+      #ifdef _DEBUG
+        Serial.printf("Last server state after update: %i\n",LAST_SERVER_STATUS_UPDATE);
+        Serial.printf("Server imminent: %i\n",SERVERIMMINENT);
+      #endif
+ 
       ESP.rtcUserMemoryWrite(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this, as it occupies the entire memory block
 
     } else {
@@ -572,13 +591,19 @@ void loop() {
       //read and send everything now if sleep was long enough
       if (_USELOWPOWER >= 60e6 ) {
         for (byte k=0;k<SENSORNUM;k++) {
+          #ifdef _DEBUG
+            Serial.printf("Going to attempt read and write if sensor %i\n",k);
+          #endif
         
           ReadData(&Sensors[k]); //read value if sleep was at least 1 minutes
           SendData(&Sensors[k]); //send value
         }
       }
 
-
+#ifdef _DEBUG
+  Serial.println("Entering sleep.");
+  Serial.flush();
+#endif
       ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
 //will awaken with a soft reset, no need to do anything else
 
