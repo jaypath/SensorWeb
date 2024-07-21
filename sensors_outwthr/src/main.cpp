@@ -534,53 +534,59 @@ void loop() {
       }
     }
 
-    ESP.rtcUserMemoryRead(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this read, as it occupies the entire memory block
-    #ifdef _DEBUG
-      Serial.printf("Last server state in RTC: %d\n",LAST_SERVER_STATUS_UPDATE);
-    #endif
     bool SERVERIMMINENT = false;
-    String payload;
-    int httpCode;
-    String GETSTATUSURL = "http://192.168.68.93/GETSTATUS";
-    String tempstr = "";
-    int delim = 0;
-    
-    if (t<LAST_SERVER_STATUS_UPDATE || t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
-      
+
+    #ifdef _IGNOREME
+      ESP.rtcUserMemoryRead(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this read, as it occupies the entire memory block
       #ifdef _DEBUG
-      Serial.printf("Sending for webrequests\n");
-    #endif
-        
-      //check if a web request is imminent (as in, someone is or recently used server)
-      if (Server_Message(GETSTATUSURL, &payload, &httpCode)) {
-        #ifdef _DEBUG
-          Serial.printf("Web httpcode was: %i",httpCode);
-        
-          Serial.printf("Web payload was: %s",payload.c_str());
-        #endif
-        //check if httpcode is 200
-        if (httpCode == 200) SERVERIMMINENT = true;
-        delim = payload.indexOf(";",0); //find first ";"
-        tempstr = payload.substring(0,delim);
-        payload.remove(0,delim+1);
-        delim = tempstr.indexOf(":",0);
-        tempstr = tempstr.substring(delim+1);
-        LAST_SERVER_STATUS_UPDATE = tempstr.toInt(); //this is the last time of the web page
-        if ((t-LAST_SERVER_STATUS_UPDATE) < 600) SERVERIMMINENT=true; //if the web server was checked within 10 minutes
-        else SERVERIMMINENT=false;
-      }
-      #ifdef _DEBUG
-        Serial.printf("Last server state after update: %i\n",LAST_SERVER_STATUS_UPDATE);
-        Serial.printf("Server imminent: %i\n",SERVERIMMINENT);
+        Serial.printf("Last server state in RTC: %d\n",LAST_SERVER_STATUS_UPDATE);
       #endif
- 
-      ESP.rtcUserMemoryWrite(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this, as it occupies the entire memory block
 
-    } else {
-      SERVERIMMINENT=true;      
-    }
+      String payload;
+      int httpCode;
+      String GETSTATUSURL = "http://192.168.68.93/GETSTATUS";
+      String tempstr = "";
+      int delim = 0;
+      
+      if (t<LAST_SERVER_STATUS_UPDATE || t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
+        
+        #ifdef _DEBUG
+        Serial.printf("Sending for webrequests\n");
+      #endif
+          
+        //check if a web request is imminent (as in, someone is or recently used server)
+        if (Server_Message(GETSTATUSURL, &payload, &httpCode)) {
+          #ifdef _DEBUG
+            Serial.printf("Web httpcode was: %i",httpCode);
+          
+            Serial.printf("Web payload was: %s",payload.c_str());
+          #endif
+          //check if httpcode is 200
+          if (httpCode == 200) SERVERIMMINENT = true;
+          delim = payload.indexOf(";",0); //find first ";"
+          tempstr = payload.substring(0,delim);
+          payload.remove(0,delim+1);
+          delim = tempstr.indexOf(":",0);
+          tempstr = tempstr.substring(delim+1);
+          LAST_SERVER_STATUS_UPDATE = tempstr.toInt(); //this is the last time of the web page
+          if ((t-LAST_SERVER_STATUS_UPDATE) < 600) SERVERIMMINENT=true; //if the web server was checked within 10 minutes
+          else SERVERIMMINENT=false;
+        }
+        #ifdef _DEBUG
+          Serial.printf("Last server state after update: %i\n",LAST_SERVER_STATUS_UPDATE);
+          Serial.printf("Server imminent: %i\n",SERVERIMMINENT);
+        #endif
+  
+        ESP.rtcUserMemoryWrite(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this, as it occupies the entire memory block
 
-    if (SERVERIMMINENT==false) {// do not sleep... serverimminent
+      } else {
+        SERVERIMMINENT=true;      
+      }
+    #endif
+
+
+
+    if (SERVERIMMINENT==false) {// do not sleep if serverimminent
 
       if (!readRtcMem(&SleepCounter,0))     writeRtcMem(&SleepCounter,0);
       else {
@@ -592,7 +598,7 @@ void loop() {
       if (_USELOWPOWER >= 60e6 ) {
         for (byte k=0;k<SENSORNUM;k++) {
           #ifdef _DEBUG
-            Serial.printf("Going to attempt read and write if sensor %i\n",k);
+            Serial.printf("Going to attempt read and write sensor %i\n",k);
           #endif
         
           ReadData(&Sensors[k]); //read value if sleep was at least 1 minutes
@@ -600,10 +606,10 @@ void loop() {
         }
       }
 
-#ifdef _DEBUG
-  Serial.println("Entering sleep.");
-  Serial.flush();
-#endif
+      #ifdef _DEBUG
+        Serial.println("Entering sleep.");
+        Serial.flush();
+      #endif
       ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
 //will awaken with a soft reset, no need to do anything else
 
