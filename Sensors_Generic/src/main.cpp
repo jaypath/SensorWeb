@@ -83,6 +83,8 @@
 
 
 
+
+
 //wellesley, MA
 #define LAT 42.307614
 #define LON -71.299288
@@ -117,16 +119,45 @@ union convertINT {
 
 
 byte OldTime[5] = {0,0,0,0,0};
-IPAddress MyIP;
 
 time_t ALIVESINCE = 0;
-bool SERVERIMMINENT = true;
 uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 
 //function declarations
 
 
+#ifdef _USELOWPOWER
 
+uint16_t SleepCounter = 0;
+// Write 16 bit int to RTC memory with checksum, return true if verified OK
+// Slot 0-127
+// (C) Turo Heikkinen 2019
+bool writeRtcMem(uint16_t *inVal, uint8_t slot = 0) {
+  uint32_t valToStore = *inVal | ((*inVal ^ 0xffff) << 16); //Add checksum
+  uint32_t valFromMemory;
+  if (ESP.rtcUserMemoryWrite(slot, &valToStore, sizeof(valToStore)) &&
+      ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
+      valToStore == valFromMemory) {
+        return true;
+  }
+  return false;
+}
+
+// Read 16 bit int from RTC memory, return true if checksum OK
+// Only overwrite variable, if checksum OK
+// Slot 0-127
+// (C) Turo Heikkinen 2019
+bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
+  uint32_t valFromMemory;
+  if (ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
+      ((valFromMemory >> 16) ^ (valFromMemory & 0xffff)) == 0xffff) {
+        *inVal = valFromMemory;
+        return true;
+  }
+  return false;
+}
+
+#endif
 
 void setup()
 {
@@ -237,47 +268,28 @@ void setup()
   oled.setCursor(0,0);
   oled.println("WiFi Starting.");
 #endif
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ESP_SSID, ESP_PASS);
-    #ifdef _DEBUG
-        Serial.println("wifi begin");
-    #endif
-
-  #ifdef _DEBUG
-    Serial.println();
-    Serial.print("Connecting");
-  #endif
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(200);
-    #ifdef _DEBUG
-    Serial.print(".");
-    #endif
-    #ifdef _USESSD1306
-      oled.print(".");
-    #endif
+  WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
+  while (connectWiFi() != 0) {
+    connectWiFi();
   }
-    MyIP = WiFi.localIP();
+    
 
-    #ifdef _DEBUG
-    Serial.println("");
-    Serial.print("Wifi OK. IP is ");
-    Serial.println(MyIP.toString());
-    Serial.println("Connecting ArduinoOTA...");
-    #endif
-
-
-    #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      oled.println("WiFi OK.");
-      oled.println("timesetup next.");      
-    #endif
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+  oled.println("set up time.");
+#endif
 
   setupTime();
   #ifdef _DEBUG
     Serial.println("setuptime done. OTA next.");
   #endif
+
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+  oled.println("OTA Starting.");
+#endif
 
 
     // Port defaults to 8266
@@ -487,7 +499,7 @@ void setup()
   #ifdef _USESSD1306
     oled.clear();
     oled.setCursor(0,0);
-    oled.println(MyIP.toString());
+    oled.println(WIFI_INFO.MYIP.toString());
     oled.print(hour());
     oled.print(":");
     oled.println(minute());
@@ -497,27 +509,41 @@ void setup()
 
 
 void loop() {
+
+
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
-
-  if (MyIP != WiFi.localIP())    MyIP = WiFi.localIP(); //update if wifi changed
+  if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
 
   time_t t = now(); // store the current time in time variable t
 
-
   #ifdef _USELOWPOWER
-    
-    if (t-LAST_SERVER_STATUS_UPDATE > 300) { //check server status every 5 minutes      
-      SERVERIMMINENT=false;
-      
-      //check if a web requst is imminent
+
+    uint16_t rtc_temp; 
+
+    for (byte rtcind=0;rtcind<4;rtcind++) {
+      if (!readRtcMem(&rtc_temp,rtcind+1)) {
+        rtc_temp = OldTime[rtcind];
+        writeRtcMem(&rtc_temp,rtcind+1);
+      } else {
+        OldTime[rtcind] = rtc_temp;
+      }
+    }
+
+    ESP.rtcUserMemoryRead(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this read, as it occupies the entire memory block
+
+    bool SERVERIMMINENT = false;
+    if (abs(t-LAST_SERVER_STATUS_UPDATE) > 300) { //check server status every 5 minutes      
       String payload;
       int httpCode;
-      String URL = "192.168.68.93/GETSTATUS";
+      String GETSTATUSURL = "192.168.68.93/GETSTATUS";
       String tempstr = "";
       int delim = 0;
-      if (Server_Message(&URL, &payload, &httpCode)) {
+      
+        
+      //check if a web request is imminent (as in, someone is or recently used server)
+      if (Server_Message(&GETSTATUSURL, &payload, &httpCode)) {
         //check if httpcode is 200
         if (httpCode == 200) SERVERIMMINENT = true;
         delim = payload.indexOf(";",0); //find first ";"
@@ -529,12 +555,42 @@ void loop() {
         if ((t-LAST_SERVER_STATUS_UPDATE) < 600) SERVERIMMINENT=true; //if the web server was checked within 10 minutes
         else SERVERIMMINENT=false;
       } 
+      ESP.rtcUserMemoryWrite(5,&LAST_SERVER_STATUS_UPDATE,sizeof(LAST_SERVER_STATUS_UPDATE)); //no crc for this, as it occupies the entire memory block
+
     } else {
       SERVERIMMINENT=true;      
     }
 
+    if (SERVERIMMINENT==false) {// do not sleep... serverimminent
+
+      if (!readRtcMem(&SleepCounter,0))     writeRtcMem(&SleepCounter,0);
+      else {
+        SleepCounter++;
+        writeRtcMem(&SleepCounter,0);
+      }
+
+      //read and send everything now if sleep was long enough
+      if (_USELOWPOWER >= 60e6 ) {
+        for (byte k=0;k<SENSORNUM;k++) {
+        
+          ReadData(&Sensors[k]); //read value if sleep was at least 1 minutes
+          SendData(&Sensors[k]); //send value
+        }
+      }
+
+
+      ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
+//will awaken with a soft reset, no need to do anything else
+
+    }
+
+
   #endif
 
+
+
+
+  
 
   if (OldTime[0] != second()) {
     OldTime[0] = second();
@@ -552,42 +608,27 @@ void loop() {
       if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
     }
 
-      //if low power mode
-    #ifdef _USELOWPOWER
-      #ifdef _DEBUG
-        Serial.printf("\nChecking battery power for need for sleep. ");
-      #endif
 
-      if (SERVERIMMINENT==false) {
+  #ifdef _USELOWPOWER
+    //update second in rtc
+    rtc_temp = OldTime[0];
+    writeRtcMem(&rtc_temp,1);
 
-        String tempstr = (String) ARDNAME + (String) "_bpct";
-        byte batpow = find_sensor_name(ARDNAME,61,1);
 
-        if (batpow<255) { //found a batter sensor
-          #ifdef _DEBUG
-            Serial.printf("Battery is %f.",Sensors[batpow].snsValue);
-          #endif
+  #endif
 
-          if (Sensors[batpow].snsValue>_USELOWPOWER) { //bat power is above the extra low threshold
-            if (_REGSLEEPTIME>0) ESP.deepSleep(_REGSLEEPTIME); //sleep for xx seconds 
-          } else {
-            ESP.deepSleep(_LONGSLEEPTIME); //sleep for a long interval between measures
-          }
-        }
 
-      } else {
-          #ifdef _DEBUG
-            Serial.printf("Did not find battery.\n");
-          #endif
-
-      }  
-    #endif
 
   }
   
   if (OldTime[1] != minute()) {
     OldTime[1] = minute();
 
+    #ifdef _USELOWPOWER
+      //update  in rtc
+      rtc_temp = OldTime[1];
+      writeRtcMem(&rtc_temp,2);
+    #endif
     #ifdef _DEBUG
       Serial.printf("\nTime is %s. \n",dateify(t,"hh:nn:ss"));
 
@@ -598,19 +639,35 @@ void loop() {
     #endif
 
   }
-  
+
+
   if (OldTime[2] != hour()) {
     #ifdef _DEBUG
       Serial.printf("\nNew hour... TimeUpdate running. \n");
 
     #endif
     OldTime[2] = hour();
+
+    #ifdef _USELOWPOWER
+      //update  in rtc
+      rtc_temp = OldTime[2];
+      writeRtcMem(&rtc_temp,3);
+    #endif
+
     timeUpdate();
 
   }
   
   if (OldTime[3] != weekday()) {
     //once per day
+
+    OldTime[3] = weekday();
+    #ifdef _USELOWPOWER
+      //update  in rtc
+      rtc_temp = OldTime[3];
+      writeRtcMem(&rtc_temp,4);
+    #endif
+
 
   
     //reset heat and ac values
@@ -658,9 +715,11 @@ void loop() {
 
     #endif
 
-    OldTime[3] = weekday();
   
-  
+
   } 
+
+
+
 
 }

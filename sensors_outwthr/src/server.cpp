@@ -4,7 +4,6 @@
 #include "server.hpp"
 #include <timesetup.hpp>
 
-extern IPAddress MyIP;
 
 //this server
 #ifdef _USE8266
@@ -19,6 +18,98 @@ extern IPAddress MyIP;
 bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
+
+WiFi_type WIFI_INFO;
+
+void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
+  //ip is a 4 byte array
+  ip[0] = m1;
+  ip[1] = m2;
+  ip[2] = m3;
+  ip[3] = m4;
+}
+
+uint8_t connectWiFi()
+{
+  //rerturn 0 if connected, else number of times I tried and failed
+  uint8_t retries = 100;
+  byte connected = 0;
+  IPAddress temp;
+
+  assignIP(WIFI_INFO.DHCP,192,168,68,1);
+  assignIP(WIFI_INFO.DNS,192,168,68,1);
+  assignIP(WIFI_INFO.GATEWAY,192,168,68,1);
+  assignIP(WIFI_INFO.SUBNET,255,255,252,0);
+
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WIFI_INFO.MYIP = WiFi.localIP();
+    WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    return connected;
+  } else {
+    if (ASSIGNEDIP[0]==0) {
+      WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
+    } else {
+      WIFI_INFO.MYIP[0] = ASSIGNEDIP[0];    
+      WIFI_INFO.MYIP[1] = ASSIGNEDIP[1];    
+      WIFI_INFO.MYIP[2] = ASSIGNEDIP[2];    
+      WIFI_INFO.MYIP[3] = ASSIGNEDIP[3];    
+
+      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    }
+  }
+  
+  WiFi.mode(WIFI_STA);
+  #ifdef _DEBUG
+        Serial.println("wifi begin");
+  #endif
+
+  WiFi.begin(ESP_SSID, ESP_PASS);
+
+  if (WiFi.status() != WL_CONNECTED)  {
+    #ifdef _DEBUG
+      Serial.println();
+      Serial.print("Connecting");
+    #endif
+    #ifdef _USESSD1306
+      oled.print("Connecting");
+    #endif
+    for (byte j=0;j<retries;j++) {
+      #ifdef _DEBUG
+      Serial.print(".");
+      #endif
+      #ifdef _USESSD1306
+        oled.print(".");
+      #endif
+
+      delay(250);
+      if (WiFi.status() == WL_CONNECTED) {
+        WIFI_INFO.MYIP = WiFi.localIP();
+        
+        #ifdef _DEBUG
+        Serial.println("");
+        Serial.print("Wifi OK. IP is ");
+        Serial.println(WIFI_INFO.MYIP.toString());
+        Serial.println("Connecting ArduinoOTA...");
+        #endif
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          oled.println("WiFi OK.");
+          oled.println("timesetup next.");      
+        #endif
+
+        return 0;
+      }
+      connected = j;
+    }
+        
+  }
+
+  return connected;
+
+}
+
 
 
 bool Server_Message(String* URL, String* payload, int* httpCode) {
@@ -39,7 +130,7 @@ bool Server_Message(String* URL, String* payload, int* httpCode) {
 
 
 bool SendData(struct SensorVal *snsreading) {
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -84,7 +175,7 @@ byte arduinoID = MyIP[3];
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + MyIP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + WIFI_INFO.MYIP.toString() + "," + "&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -276,7 +367,7 @@ double limitUpper=-1, limitLower=-1;
 uint16_t PollingInt=0;
   uint16_t SendingInt=0;
 byte k;
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -325,7 +416,7 @@ byte arduinoID = MyIP[3];
 
 
 void handleRoot() {
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -343,7 +434,7 @@ currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
 
-currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";

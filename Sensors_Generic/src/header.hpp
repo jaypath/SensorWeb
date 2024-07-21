@@ -5,8 +5,13 @@
 
 //#define _DEBUG 1
 //#define _WEBDEBUG
+//#define _WEBCHART 2
 
-#define _WEBCHART 2
+const byte ASSIGNEDIP[4] = {192,168,68,101}; //assign here if this sensor has a dedicated IP.
+#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
+#define ESP_PASS "snakesquirrel" // Your network password here
+//#define ESP_SSID "kandy-hispeed" // Your network name here
+//#define ESP_PASS "manath77" // Your network password here
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
@@ -35,9 +40,7 @@ const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
 #define _USEBATTERY  A0 //set to the pin that is analogin
-#define _USELOWPOWER 33 //must also have _USEBATTERY. this is the batpcnt at which to sleep
-#define _LONGSLEEPTIME 120e6 //this is seconds to sleep each time if bat is lower than uselowpower level
-#define _REGSLEEPTIME 0 //this is seconds to sleep each time
+#define _USELOWPOWER 300e6 //must also have _USEBATTERY. this is the number fo uS to sleep
 
 //binary switches
 //#define _CHECKAIRCON 1

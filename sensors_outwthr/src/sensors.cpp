@@ -453,6 +453,22 @@ uint  sc_interval;
 
         #endif
         break;
+      case 90: //Sleep info
+
+          sc_interval=60*30;//seconds 
+
+          Sensors[i].snsPin=0;
+          //pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_sleep",ARDNAME);
+          Sensors[i].limitUpper = 14400;
+          Sensors[i].limitLower = 0;
+          Sensors[i].PollingInt=10*60; //these don't matter
+          Sensors[i].SendingInt=10*60; //these don't matter
+          bitWrite(Sensors[i].Flags,3,1); //calculated
+
+        
+        break;
+
     }
 
     Sensors[i].snsID=find_sensor_count((String) ARDNAME,Sensors[i].snsType); 
@@ -877,6 +893,10 @@ bool ReadData(struct SensorVal *P) {
 
       #endif
       break;
+    case 90:
+      //don't do anything here
+      //I'm set manually!
+      break;
     
   }
 
@@ -989,6 +1009,8 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
   //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
   //returns 255 if no such sensor found
   String temp;
+
+  if (snsname=="") snsname = ARDNAME;
   for (byte j=0; j<SENSORNUM;j++) {
     temp = Sensors[j].snsName; 
 

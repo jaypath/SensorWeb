@@ -454,6 +454,7 @@ uint  sc_interval;
         #endif
         break;
       case 90: //Sleep info
+
           sc_interval=60*30;//seconds 
 
           Sensors[i].snsPin=0;
@@ -465,7 +466,7 @@ uint  sc_interval;
           Sensors[i].SendingInt=10*60; //these don't matter
           bitWrite(Sensors[i].Flags,3,1); //calculated
 
-        #endif
+        
         break;
 
     }
