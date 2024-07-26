@@ -2248,7 +2248,7 @@ void handleRoot() {
 
   byte usedINDEX = 0;  
   char tempchar[9] = "";
-  
+  time_t t=now();
 
   currentLine = currentLine + "<p><table id=\"Logs\" style=\"width:70%\">";      
   currentLine = currentLine + "<tr><th><p><button onclick=\"sortTable(0)\">IP Address</button></p></th><th>ArdID</th><th>Sensor</th><th>Value</th><th><button onclick=\"sortTable(4)\">Sns Type</button></p></th><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th>Last Logged</th><th>Last Recvd</th><th>Flags</th></tr>"; 
@@ -2306,8 +2306,9 @@ void handleRoot() {
 
     currentLine += "const data = google.visualization.arrayToDataTable([\n";
     currentLine += "['t','val'],\n";
+
     for (int jj = 48-1;jj>=0;jj--) {
-      currentLine += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-now())/60)) + "," + (String) batteryArray[jj] + "]";
+      currentLine += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-t)/60)) + "," + (String) batteryArray[jj] + "]";
       if (jj>0) currentLine += ",";
       currentLine += "\n";
     }
@@ -2359,19 +2360,20 @@ uint8_t tempIP[4] = {0,0,0,0};
       if ((String)server.argName(k) == (String)"timeLogged") S.timeRead = server.arg(k).toDouble();      //time logged at sensor is time read by me
       if ((String)server.argName(k) == (String)"Flags") S.Flags = server.arg(k).toInt();
   }
-  S.timeLogged = now(); //time logged by me is when I received this.
-  if (S.timeRead == 0)     S.timeRead = now();
+  time_t t = now();
+  S.timeLogged = t; //time logged by me is when I received this.
+  if (S.timeRead == 0  || S.timeRead < t-24*60*60 || S.timeRead > t+24*60*60)     S.timeRead = t;
   
   
   int sn = findDev(&S,true);
 
 
-  if((S.snsType==9 || S.snsType == 13) && LAST_BAR_READ < now() - 60*60) { //pressure
+  if((S.snsType==9 || S.snsType == 13) && (LAST_BAR_READ==0 || LAST_BAR_READ < t - 60*60)) { //pressure
     LAST_BAR_READ = S.timeRead;
     LAST_BAR = S.snsValue;
   }
 
-  if((S.snsType==61 ) && LAST_BAT_READ < now() - 60*60) { //battery
+  if((S.snsType==61 ) && (LAST_BAT_READ==0 || LAST_BAT_READ < t - 60*60 || LAST_BAT_READ > t)) { //battery
     LAST_BAT_READ = S.timeRead;
     pushDoubleArray(batteryArray,48,S.snsValue);
   }
