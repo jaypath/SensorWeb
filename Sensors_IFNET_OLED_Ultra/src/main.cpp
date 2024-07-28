@@ -65,7 +65,7 @@ struct MPUStruct {
   //byte INDEX; //index to mpu values
   //float VALS_LR[_NUMREADINGS]; //store last 6 LR values
   //float VALS_UD[_NUMREADINGS];
-  uint8_t LOCKOUT_MS; //ms to not read after a value has been registered. This is needed because a jerk has both + and - accel, just want first one
+  uint8_t LOCKOUT_MS; //10's of ms to not read after a value has been registered. This is needed because a jerk has both + and - accel, just want first one. Note that 3 is 30ms and 30 is 300ms
   float MPUACC_y ; //cut off for acceleration to register
   float MPUACC_x ;
   int TEMPERATURE;
@@ -75,8 +75,8 @@ SensorStruct INFO;
 MPUStruct MPUINFO;
 
 
-#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
-#define ESP_PASS "snakesquirrel" // Your network password here
+#define ESP_SSID "IFNET_ELECTRONICS" // Your network name here
+#define ESP_PASS "IFNET2024" // Your network password here
 
 
 
@@ -174,7 +174,7 @@ void setup()
   
   WiFi.begin(ESP_SSID, ESP_PASS);
   TIMESINCE = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-TIMESINCE<5000)
+  while (WiFi.status() != WL_CONNECTED && millis()-TIMESINCE<10000)
     {
     delay(200);
     
@@ -191,6 +191,9 @@ void setup()
   if(WiFi.status() == WL_CONNECTED) {
     INFO.HASWIFI = true;
     INFO.MYID = WiFi.localIP()[3];
+  } else {
+    INFO.HASWIFI = false;
+    INFO.MYID = 0;
   }
 
   if (!bmp.begin(0x76) ) {
@@ -268,10 +271,10 @@ void setup()
     if(INFO.HASMPU) {
       MPUINFO.LASTREAD = 0;
 //      MPUINFO.INDEX=0;
-      MPUINFO.LOCKOUT_MS = 175; //do not register another reading for this long
-      MPUINFO.MPUACC_x= 0.0000015*16384;
-      MPUINFO.MPUACC_y = 0.0000015*16384;
-      MPUINFO.RATE_MS = 20;
+      MPUINFO.LOCKOUT_MS = 35; //do not register another reading for this long
+      MPUINFO.MPUACC_x= 0.05; //0.1g
+      MPUINFO.MPUACC_y = 0.05;  //0.1g
+      MPUINFO.RATE_MS = 50;
       
 
       delay(1000);
@@ -324,16 +327,16 @@ void loop()
   
 
   if (INFO.HASMPU && (m-MPUINFO.LASTREAD) > MPUINFO.RATE_MS) {
-    if (m-MPUINFO.LASTREAD > MPUINFO.LOCKOUT_MS) {       
+    if (m-MPUINFO.LASTREAD > MPUINFO.LOCKOUT_MS*10) {       
       xyzFloat gValue = mpu.getGValues();
       xyzFloat gyr = mpu.getGyrValues();
       float temp = mpu.getTemperature();
       float resultantG = mpu.getResultantG(gValue);
 
-      if ((float) abs(gValue.y) > MPUINFO.MPUACC_y || (float) abs(gValue.x) > MPUINFO.MPUACC_x) { //that equates to 0.000001*4g 
+      if ((float) abs(gValue.y) > MPUINFO.MPUACC_y || (float) abs(gValue.x) > MPUINFO.MPUACC_x) { 
         MPUINFO.LASTREAD = m;
         MPUINFO.MPUREADING=0;
-        if ((float) abs(gValue.y) >  abs(gValue.x) ) { //LR movement
+        if ((float) abs(gValue.y) >  abs(gValue.x) ) { //LR movement or up move
           if (gValue.y>0) {
             bitWrite(MPUINFO.MPUREADING,1,1);
           }        else {
