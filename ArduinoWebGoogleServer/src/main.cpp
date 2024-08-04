@@ -1,4 +1,4 @@
-#define _DEBUG 99
+//#define _DEBUG 99
 #define ARDNAME "GoogleServer"
 #define _USETFT
 #define _USETOUCH
@@ -664,6 +664,10 @@ delay(2000);
 
 
     timeUpdate();
+    OldTime[0] = 61; //force sec update, but all else will be preset.
+    OldTime[2] = minute();
+    OldTime[2] = hour();
+    OldTime[3] = weekday();
 
     tft.print("TimeClient OK. I will pull from server... ");
 
@@ -918,8 +922,12 @@ void loop()
     }
 
     if (OldTime[3] != weekday()) {
+      //reset once a day... brute force fix for some problem where device locks up periodically (mem leak? loses google credentials?)
+      ESP.restart();
+
       OldTime[3] = weekday();
       //daily
+
 
       for (byte j=0;j<SENSORNUM;j++) {
         Sensors[j].snsValue_MAX = -10000;
@@ -928,6 +936,8 @@ void loop()
         if (t>86400 && Sensors[j].timeLogged<(t-86400)) initSensor(j);
 
       }
+
+      
 
     }
   }
