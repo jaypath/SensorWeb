@@ -1,5 +1,5 @@
 //#define _DEBUG
-#define VERSION "1A"
+#define VERSION "4A"
 
 #include "ArduinoOTA.h"
 
@@ -171,20 +171,19 @@ void printHeader() {
 
 
   if (INFO.HASMPU) {
-    oled.print(" Acc+");
+    oled.print(" Acc+ ");
     
   }  else {
-    oled.print(" Acc-");    
-  }
-
-  if (INFO.HASBMP) {
-    oled.print(" BMP+");
+    if (INFO.HASBMP) {
+      oled.print(" BMP+ ");  
+    } else {
+      oled.print(" noSns! ");
+    }
     
-  }  else {
-    oled.print(" BMP-");    
   }
-
     oled.print(VERSION);    
+    oled.print(" ");
+    if (millis()-MPUINFO.LASTREAD<MPUINFO.LOCKOUT_MS*10) oled.print("X");
 
 
 
@@ -213,6 +212,8 @@ void initGame() {
   GAME.bestScore=0;
   GAME.isAlive = true;
 
+  INFO.SIMONSCORE=0;
+  INFO.SIMONLEVEL=0;
 }
 
 void setup()
@@ -367,10 +368,10 @@ void setup()
     if(INFO.HASMPU) {
       MPUINFO.LASTREAD = 0;
 //      MPUINFO.INDEX=0;
-      MPUINFO.LOCKOUT_MS = 50; //do not register another reading for this long
-      MPUINFO.MPUACC_x= 0.05; //0.1g
-      MPUINFO.MPUACC_y = 0.05;  //0.1g
-      MPUINFO.RATE_MS = 50;
+      MPUINFO.LOCKOUT_MS = 55; //do not register another reading for this long*10 ms
+      MPUINFO.MPUACC_x= 0.015; //in g's
+      MPUINFO.MPUACC_y = 0.015;  //in g's
+      MPUINFO.RATE_MS = 25;
       
 
       delay(1000);
@@ -486,6 +487,11 @@ void loop()
             MSG = "Push Boot Button|to take quiz.";
             INFO.displaying=true;
           }
+          if (INFO.SIMONSCOREBEST<INFO.SIMONSCORE) {
+            INFO.SIMONSCOREBEST=INFO.SIMONSCORE;
+            INFO.SIMONLEVELBEST=INFO.SIMONLEVEL;  
+            NEWDATA=true;
+          }
         }
       } else {
         if (PLAYMODE==2) {
@@ -514,6 +520,10 @@ void loop()
 bool sendData() {
   WiFiClient wfclient;
   HTTPClient http;
+  if (INFO.SIMONSCOREBEST<INFO.SIMONSCORE) {
+    INFO.SIMONSCOREBEST=INFO.SIMONSCORE;
+    INFO.SIMONLEVELBEST=INFO.SIMONLEVEL;  
+  }
 
   if(WiFi.status()== WL_CONNECTED){
     String payload;
@@ -613,6 +623,13 @@ if (GAME.isAlive == false) {
     delay(GAME.nextMsgUpdate-m);  
     GAME.nextMsgUpdate=0;
   }
+
+  if (INFO.SIMONSCOREBEST<INFO.SIMONSCORE) {
+    INFO.SIMONSCOREBEST=INFO.SIMONSCORE;
+    INFO.SIMONLEVELBEST=INFO.SIMONLEVEL;  
+    NEWDATA=true;
+  }
+
   return false; //do not play simon
 }
 
@@ -623,7 +640,6 @@ if (GAME.nextMsgUpdate>m) {
 }
 
 if (GAME.tries>=3) {
-  NEWDATA=true;
   GAME.round++;
   GAME.tries=0;
   
@@ -640,15 +656,18 @@ if (GAME.tries>=3) {
   
 }
 
+if (INFO.SIMONSCOREBEST<INFO.SIMONSCORE) {
+  INFO.SIMONSCOREBEST=INFO.SIMONSCORE;
+  INFO.SIMONLEVELBEST=INFO.SIMONLEVEL;  
+  NEWDATA=true;
+}
+
 if (GAME.stage==0) { //step 0 - display instructions
   MSG = "I will show you|a series of moves|to make.|Good luck!";
   INFO.displaying = true;
   GAME.nextMsgUpdate = m+DELAYREGULAR;
   GAME.stage++;
-  if (INFO.SIMONSCOREBEST<INFO.SIMONSCORE) {
-    INFO.SIMONSCOREBEST=INFO.SIMONSCORE;
-    INFO.SIMONLEVELBEST=INFO.SIMONLEVEL;
-  }
+
 
   return true;
 } else {
@@ -790,7 +809,9 @@ if (GAME.stage==0) { //step 0 - display instructions
                           //game over
                             MSG+= "|Game over!";
                             GAME.nextMsgUpdate=m+DELAYLONG;          
-                            GAME.isAlive=false;                            
+                            GAME.isAlive=false;        
+                            INFO.SIMONSCORE+=GAME.bestScore;   
+                            NEWDATA=true;                    
                         } else {
                           if (GAME.tries<3) {
                             MSG += "|Try again!";
@@ -921,9 +942,9 @@ if (GAME.stage==0) { //step 0 - display instructions
         answer=getTrueFalse();  
         if (answer>0 || m>GAME.nextMsgUpdate) {          
           GAME.stage++;
-          if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
+          if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++; //wrong answers
           else GAME.bestScore++;
-          MSG = "You said " + (String) (answer=='T')?"True":"False";
+          MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
         }
@@ -945,7 +966,7 @@ if (GAME.stage==0) { //step 0 - display instructions
               GAME.stage++;
               if (m>GAME.nextMsgUpdate || answer=='T') GAME.guessindex++;
               else GAME.bestScore++;
-                        MSG = "You said " + (String) (answer=='T')?"True":"False";
+                        MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -968,7 +989,7 @@ GAME.round++;
                   GAME.stage++;
                   if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
                   else GAME.bestScore++;
-                            MSG = "You said " + (String) (answer=='T')?"True":"False";
+                            MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -991,7 +1012,7 @@ GAME.round++;
                       GAME.stage++;
                       if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
                       else GAME.bestScore++;
-                                MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1014,7 +1035,7 @@ GAME.round++;
                           GAME.stage++;
                           if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
                           else GAME.bestScore++;
-                                    MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                    MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1036,7 +1057,7 @@ GAME.round++;
                               GAME.stage++;
                               if (m>GAME.nextMsgUpdate || answer=='T') GAME.guessindex++;
                               else GAME.bestScore++;
-                                        MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                        MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1058,7 +1079,7 @@ GAME.round++;
                                   GAME.stage++;
                                   if (m>GAME.nextMsgUpdate || answer=='T') GAME.guessindex++;
                                   else GAME.bestScore++;
-                                            MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                            MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1080,7 +1101,7 @@ GAME.round++;
                                       GAME.stage++;
                                       if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
                                       else GAME.bestScore++;
-                                                MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                                MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1102,7 +1123,7 @@ GAME.round++;
                                           GAME.stage++;
                                           if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
                                           else GAME.bestScore++;
-                                                    MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                                    MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 
@@ -1112,7 +1133,7 @@ GAME.round++;
                                                   if (m<GAME.nextMsgUpdate) return true;
 GAME.round++;
     
-                                          MSG = "I2C allows chips|to talk to each other.|It requires 2 wires.|<<True--False>>";
+                                          MSG = "I2C allows chips|to talk to each other.|It requires 3 wires.|<<True--False>>";
                                           GAME.nextMsgUpdate=m+DELAYLONG;
                                           INFO.displaying=true;
                                           GAME.stage++;
@@ -1122,9 +1143,9 @@ GAME.round++;
                                             answer=getTrueFalse();
                                             if (answer>0 || m>GAME.nextMsgUpdate) {          
                                               GAME.stage++;
-                                              if (m>GAME.nextMsgUpdate || answer=='F') GAME.guessindex++;
+                                              if (m>GAME.nextMsgUpdate || answer=='T') GAME.guessindex++;
                                               else GAME.bestScore++;
-                                                        MSG = "You said " + (String) (answer=='T')?"True":"False";
+                                                        MSG = "You said |" + (String) ((answer=='T')?"True":"False");
           GAME.nextMsgUpdate=m+DELAYREGULAR;
           INFO.displaying=true;          
 

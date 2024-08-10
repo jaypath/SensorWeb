@@ -1,4 +1,4 @@
-#define _DEBUG 99
+//#define _DEBUG 99
 #define ARDNAME "IFNETSERVER"
 #define _USETFT
 #define _USETOUCH
@@ -157,9 +157,15 @@ struct SensorVal {
   uint8_t  QuizScore ;
   uint8_t SimonLevel;
   uint8_t SimonScore;
-  char UserName[12];
   uint32_t timeLogged;  
 };
+
+struct SensorStat {
+  uint8_t ID_FIRST; //first to login
+  uint8_t ID_SIMON; //highest simon score
+  uint8_t ID_QUIZ;  //highest quiz score
+};
+
 
 // unions
 union convertULONG {
@@ -185,6 +191,7 @@ uint32_t OldTime[2] = {999999,999999};
 bool SHOWMAIN = true;
 
 SensorVal DEVICES[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
+SensorStat SUMMARY; //summary stats for devices
 uint8_t SIMONCHALLENGE[10] = {0};
 
 int Ypos = 0;
@@ -219,7 +226,6 @@ if (k==255) {
   return;
 }
 
-  sprintf(DEVICES[k].UserName,"");
   DEVICES[k].ID=0;
   DEVICES[k].QuizScore=0;
   DEVICES[k].SimonLevel=0;
@@ -446,6 +452,10 @@ if (!WiFi.config(local_IP, gateway, subnet)) {
     server.begin();
     //init globals
     initDevices(255);
+    SUMMARY.ID_FIRST=0;
+    SUMMARY.ID_QUIZ=0;
+    SUMMARY.ID_SIMON=0;
+
 
 
 
@@ -460,7 +470,6 @@ if (!WiFi.config(local_IP, gateway, subnet)) {
 
 
 }
-
 
 void loop()
 {
@@ -552,6 +561,7 @@ void drawScreen_list(bool forceredraw) {
   }
   NEWDATA=false;
   Ypos=0;
+  byte fntsize=1;
 
   BG_COLOR = TFT_LIGHTGRAY;
   tft.clear(BG_COLOR);
@@ -572,20 +582,42 @@ void drawScreen_list(bool forceredraw) {
   Ypos += 4;
 
 if (m<DRAWALT+5000) {
-    tft.setTextFont(3);
+    fntsize=4;
+    tft.setTextFont(fntsize);
     //draw alternate screen with info
-    snprintf(tempbuf,60,"WiFi Connected: %s",(WiFi.status() == WL_CONNECTED) ? "T" : "F");
+    snprintf(tempbuf,60,"WiFi Connected: %s",(WiFi.status() == WL_CONNECTED) ? "True" : "False");
     tft.drawString(tempbuf, 0, Ypos);
-    Ypos += tft.fontHeight(3) + 2;
+    Ypos += tft.fontHeight(fntsize) + 2;
     
-    snprintf(tempbuf,60,"MY IP: %s",WiFi.localIP().toString().c_str());
+    fntsize=4;
+    snprintf(tempbuf,60,"MY IP:");
     tft.drawString(tempbuf, 0, Ypos);
-    Ypos += tft.fontHeight(3) + 2;
-
-    snprintf(tempbuf,60,"MY MAC: %s",WiFi.macAddress().c_str());
+    Ypos += tft.fontHeight(fntsize) + 2;
+    snprintf(tempbuf,60,"%s",WiFi.localIP().toString().c_str());
     tft.drawString(tempbuf, 0, Ypos);
-    Ypos += tft.fontHeight(3) + 2;
+    Ypos += tft.fontHeight(fntsize) + 2;
+    Ypos += tft.fontHeight(fntsize) + 2;
 
+    snprintf(tempbuf,60,"MY MAC:");
+    tft.drawString(tempbuf, 0, Ypos);
+    Ypos += tft.fontHeight(fntsize) + 2;
+    snprintf(tempbuf,60,"%s",WiFi.macAddress().c_str());
+    tft.drawString(tempbuf, 0, Ypos);
+    Ypos += tft.fontHeight(fntsize) + 2;
+    Ypos += tft.fontHeight(fntsize) + 2;
+
+    fntsize=4;
+    snprintf(tempbuf,60,"First to register: %i",DEVICES[SUMMARY.ID_FIRST].ID);
+    tft.drawString(tempbuf, 0, Ypos);
+    Ypos += tft.fontHeight(fntsize) + 2;
+
+    snprintf(tempbuf,60,"Highest Simon: %i",DEVICES[SUMMARY.ID_SIMON].ID);
+    tft.drawString(tempbuf, 0, Ypos);
+    Ypos += tft.fontHeight(fntsize) + 2;
+
+    snprintf(tempbuf,60,"Highest quiz: %i",DEVICES[SUMMARY.ID_QUIZ].ID);
+    tft.drawString(tempbuf, 0, Ypos);
+    Ypos += tft.fontHeight(fntsize) + 2;
 
     return;
   }
@@ -672,7 +704,6 @@ void handleRoot() {
       currentLine += (String) DEVICES[j].SimonLevel + "<br>";
       currentLine += (String) DEVICES[j].SimonScore + "<br>";
       currentLine += (String) DEVICES[j].timeLogged + "<br>";
-      currentLine += (String) DEVICES[j].UserName + "<br>";
       currentLine += "<br>";      
   }
  
@@ -694,6 +725,8 @@ void handlePost() {
         #endif
 
 SensorVal S;
+bool isSimon=false;
+bool isQuiz = false;
 
   for (byte k=0;k<server.args();k++) {   
 
@@ -711,7 +744,7 @@ SensorVal S;
       if ((String)server.argName(k) == (String)"QuizScore")  S.QuizScore = server.arg(k).toInt();
       if ((String)server.argName(k) == (String)"SimonLevel")  S.SimonLevel = server.arg(k).toInt();
       if ((String)server.argName(k) == (String)"SimonScore")  S.SimonScore = server.arg(k).toInt();
-      if ((String)server.argName(k) == (String)"UserName")  snprintf(S.UserName,11,"%s", server.arg(k).c_str());
+      
       
   }
   
@@ -721,7 +754,6 @@ SensorVal S;
         #endif
 
   S.timeLogged = millis(); //time logged by me is when I received this.
-
 
   
         #ifdef _DEBUG
@@ -733,11 +765,27 @@ SensorVal S;
           Serial.printf("Finddev returned %i\n",sn);
         #endif
 
-  if (sn<0 || sn >= SENSORNUM) {
+  if (sn<0 || sn >= SENSORNUM) {    
     sn = findEmptyDevSlot();
     if (sn<0 || sn >= SENSORNUM) return; //failed 
 
   }; //not registered
+
+  if (countDev()==0) {
+    SUMMARY.ID_FIRST = sn;
+    SUMMARY.ID_QUIZ=sn;
+    SUMMARY.ID_SIMON=sn;
+  } else {
+    isSimon=true;
+    isQuiz=true;
+    for (byte j=0;j<SENSORNUM;j++)  {
+      if (DEVICES[j].SimonScore>S.SimonScore) isSimon=false;
+      if (DEVICES[j].QuizScore>S.QuizScore) isQuiz=false;       
+    }
+
+    if (isSimon) SUMMARY.ID_SIMON=sn;
+    if (isQuiz) SUMMARY.ID_QUIZ=sn;
+  }
 
 
   DEVICES[sn] = S;
