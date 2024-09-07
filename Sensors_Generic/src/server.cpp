@@ -135,6 +135,9 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 
 
 bool SendData(struct SensorVal *snsreading) {
+
+if (checkTime()==false) return false;
+
 byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
@@ -216,21 +219,11 @@ byte arduinoID = WIFI_INFO.MYIP[3];
           Serial.println(" ");
         #endif
 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
 
         if (httpCode == 200) {
           isGood = true;
           SERVERIP[ipindex].server_status = httpCode;
         } 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
-
-    #ifdef _DEBUG
-      Serial.printf("SENDDATA: Sent to %d. Sensor is now named %s. \n", ipindex,snsreading->snsName);
-    #endif
 
       ipindex++;
 
@@ -238,9 +231,6 @@ byte arduinoID = WIFI_INFO.MYIP[3];
   
     
   }
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
-#endif
 
      return isGood;
 
@@ -589,9 +579,6 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine += "</body>\n</html>\n";
 
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
 
     //IF USING PROGMEM: use send_p   !!
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client

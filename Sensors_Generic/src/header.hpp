@@ -5,42 +5,42 @@
 
 //#define _DEBUG 1
 //#define _WEBDEBUG
-//#define _WEBCHART 2
 
-const byte ASSIGNEDIP[4] = {192,168,68,101}; //assign here if this sensor has a dedicated IP.
-#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
-#define ESP_PASS "snakesquirrel" // Your network password here
-//#define ESP_SSID "kandy-hispeed" // Your network name here
-//#define ESP_PASS "manath77" // Your network password here
+#define _WEBCHART 2
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,61}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,3}; //which sensors should be stored for charting?
 #endif
 
+const byte ASSIGNEDIP[4] = {192,168,68,102}; //assign here if this sensor has a dedicated IP.
+#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
+#define ESP_PASS "snakesquirrel" // Your network password here
 
-#define ARDNAME "Outside" //unique name
-#define SENSORNUM 7 //be sure this matches SENSORTYPES
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12,60,61};
+
+#define ARDNAME "MastBR" //unique name
+#define SENSORNUM 3 //be sure this matches SENSORTYPES
+
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,3};
 
 //#define ARDID 94 //unique arduino ID //deprecated - now ardid is last 3 of wifi IP. if this is defined it will override wifi id
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
-const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
+const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
 #define _USEAHT 1
-#define _USEBMP  1
+//#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-//#define _USESOILRES D5
-#define _USEBARPRED 1
+#define _USESOILRES D4
+//#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
-#define _USEBATTERY  A0 //set to the pin that is analogin
-#define _USELOWPOWER 300e6 //must also have _USEBATTERY. this is the number fo uS to sleep
+//#define _USEBATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 10e6 //must also have _USEBATTERY
 
 //binary switches
 //#define _CHECKAIRCON 1
@@ -147,8 +147,6 @@ GPIO27 - Supports internal pull-up resistor
 57 - a/c fan on/off
 58 - leak yes/no
 60 - lithium battery power
-61 - lipo percent
-90 - current status (0 if awake, >0 for time that I went to sleep)
 99 = any numerical value
 
 */

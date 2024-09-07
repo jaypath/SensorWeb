@@ -2098,7 +2098,7 @@ void loop() {
 
       #ifdef DEBUG_
         for (int i=0;i<24;i++) {
-          t2 = now() + i*3600;
+          t2 = t + i*3600;
           Serial.print(hour(t2));
           Serial.print("@");
           Serial.print(hourly_temp[i]);
@@ -2110,6 +2110,8 @@ void loop() {
   }
   
   if (OldTime[3] != weekday()) {
+    if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
+
     OldTime[3] = weekday();
   }
 
@@ -2223,14 +2225,14 @@ void handleRoot() {
   
   currentLine = currentLine + "<h1>Pleasant Weather Server</h1>";
   currentLine = currentLine + "<br>";
-  currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>";
-  
+  currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  currentLine = currentLine + "Free Heap Memory: " + ESP.getFreeHeap() + "</h2><br>";  
+
   currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   currentLine += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
   currentLine += "<button type=\"submit\">Update Time</button><br>";
   currentLine += "</FORM><br>";
 
-  
   currentLine += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   currentLine = currentLine + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   

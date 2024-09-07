@@ -280,7 +280,6 @@ void setup()
   oled.println("set up time.");
 #endif
 
-  setupTime();
   #ifdef _DEBUG
     Serial.println("setuptime done. OTA next.");
   #endif
@@ -361,9 +360,7 @@ void setup()
     #endif
 
 
-
-    //set the stoffregen time library with timezone and dst
-    timeUpdate();
+    setupTime();
 
     ALIVESINCE = now();
 
@@ -509,9 +506,17 @@ void setup()
 
 void loop() {
 
+  if (checkTime()==false) {
+    #ifdef _DEBUG
+      Serial.print("Restarting because unixtime is ");
+      Serial.println(now());   
+    #endif
+    ESP.restart();
+  }
 
   ArduinoOTA.handle();
   server.handleClient();
+  
   timeClient.update();
   if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
 
@@ -633,10 +638,13 @@ void loop() {
     #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
-    
-      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      bool goodread = false;
+
+      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) goodread = ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if (goodread == true) {
+        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      }
     }
 
 

@@ -7,7 +7,7 @@
 //#define _WEBDEBUG
 #define _WEBCHART 2
 
-const byte ASSIGNEDIP[4] = {192,168,68,101}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,94}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 //#define ESP_SSID "kandy-hispeed" // Your network name here
@@ -19,8 +19,8 @@ const byte ASSIGNEDIP[4] = {192,168,68,101}; //assign here if this sensor has a 
 #endif
 
 
-#define ARDNAME "Outside" //unique name
-#define SENSORNUM 7 //be sure this matches SENSORTYPES
+#define ARDNAME "FamRm" //unique name
+#define SENSORNUM 3 //be sure this matches SENSORTYPES
 const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
 
 //#define ARDID 94 //unique arduino ID //deprecated - now ardid is last 3 of wifi IP. if this is defined it will override wifi id
@@ -49,7 +49,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   #define SOILRESISTANCE 470
-  #define SOILR_MAX 2000
+  #define SOILR_MAX 1500
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
   //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif

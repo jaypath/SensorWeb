@@ -530,8 +530,6 @@ int peak_to_peak(int pin, int ms) {
 
 
 bool ReadData(struct SensorVal *P) {
-  if (checkTime()==false) return false;
-
   double val;
   bitWrite(P->Flags,0,0);
   
