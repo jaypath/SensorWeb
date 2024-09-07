@@ -14,7 +14,7 @@
 #endif
 
 
-const byte ASSIGNEDIP[4] = {192,168,68,94}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,97}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
