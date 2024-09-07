@@ -4,7 +4,6 @@
 #include "server.hpp"
 #include <timesetup.hpp>
 
-extern IPAddress MyIP;
 
 //this server
 #ifdef _USE8266
@@ -20,8 +19,126 @@ bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
 
+WiFi_type WIFI_INFO;
+
+void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
+  //ip is a 4 byte array
+  ip[0] = m1;
+  ip[1] = m2;
+  ip[2] = m3;
+  ip[3] = m4;
+}
+
+uint8_t connectWiFi()
+{
+  //rerturn 0 if connected, else number of times I tried and failed
+  uint8_t retries = 100;
+  byte connected = 0;
+  IPAddress temp;
+
+  assignIP(WIFI_INFO.DHCP,192,168,68,1);
+  assignIP(WIFI_INFO.DNS,192,168,68,1);
+  assignIP(WIFI_INFO.GATEWAY,192,168,68,1);
+  assignIP(WIFI_INFO.SUBNET,255,255,252,0);
+
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WIFI_INFO.MYIP = WiFi.localIP();
+    WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    return connected;
+  } else {
+    if (ASSIGNEDIP[0]==0) {
+      WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
+    } else {
+      WIFI_INFO.MYIP[0] = ASSIGNEDIP[0];    
+      WIFI_INFO.MYIP[1] = ASSIGNEDIP[1];    
+      WIFI_INFO.MYIP[2] = ASSIGNEDIP[2];    
+      WIFI_INFO.MYIP[3] = ASSIGNEDIP[3];    
+
+      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    }
+  }
+  
+  WiFi.mode(WIFI_STA);
+  #ifdef _DEBUG
+        Serial.println("wifi begin");
+  #endif
+
+  WiFi.begin(ESP_SSID, ESP_PASS);
+
+  if (WiFi.status() != WL_CONNECTED)  {
+    #ifdef _DEBUG
+      Serial.println();
+      Serial.print("Connecting");
+    #endif
+    #ifdef _USESSD1306
+      oled.print("Connecting");
+    #endif
+    for (byte j=0;j<retries;j++) {
+      #ifdef _DEBUG
+      Serial.print(".");
+      #endif
+      #ifdef _USESSD1306
+        oled.print(".");
+      #endif
+
+      delay(250);
+      if (WiFi.status() == WL_CONNECTED) {
+        WIFI_INFO.MYIP = WiFi.localIP();
+        
+        #ifdef _DEBUG
+        Serial.println("");
+        Serial.print("Wifi OK. IP is ");
+        Serial.println(WIFI_INFO.MYIP.toString());
+        Serial.println("Connecting ArduinoOTA...");
+        #endif
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          oled.println("WiFi OK.");
+          oled.println("timesetup next.");      
+        #endif
+
+        return 0;
+      }
+      connected = j;
+    }
+        
+  }
+
+        #ifdef _DEBUG
+          Serial.printf("Failed to connect after %d trials.\n",connected);
+          #endif
+
+  return connected;
+
+}
+
+
+
+bool Server_Message(String URL, String* payload, int* httpCode) {
+  WiFiClient wfclient;
+  HTTPClient http;
+
+
+  if(WiFi.status()== WL_CONNECTED){
+     http.useHTTP10(true);
+     http.begin(wfclient,URL.c_str());
+     *httpCode = http.GET();
+     *payload = http.getString();
+     http.end();
+     return true;
+  } 
+
+  return false;
+}
+
+
 bool SendData(struct SensorVal *snsreading) {
-byte arduinoID = MyIP[3];
+
+if (checkTime()==false) return false;
+
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -66,7 +183,7 @@ byte arduinoID = MyIP[3];
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + MyIP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + WIFI_INFO.MYIP.toString() + "," + "&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -102,21 +219,11 @@ byte arduinoID = MyIP[3];
           Serial.println(" ");
         #endif
 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
 
         if (httpCode == 200) {
           isGood = true;
           SERVERIP[ipindex].server_status = httpCode;
         } 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
-
-    #ifdef _DEBUG
-      Serial.printf("SENDDATA: Sent to %d. Sensor is now named %s. \n", ipindex,snsreading->snsName);
-    #endif
 
       ipindex++;
 
@@ -124,9 +231,6 @@ byte arduinoID = MyIP[3];
   
     
   }
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
-#endif
 
      return isGood;
 
@@ -258,7 +362,7 @@ double limitUpper=-1, limitLower=-1;
 uint16_t PollingInt=0;
   uint16_t SendingInt=0;
 byte k;
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -305,115 +409,33 @@ byte arduinoID = MyIP[3];
   }
 }
 
-void handleLIST() {
-String currentLine = "";
-byte arduinoID = MyIP[3];
-#ifdef  ARDID
-   arduinoID = ARDID;
-#endif
-
-currentLine =  "IP:" + MyIP.toString() + "\nARDID:" + String(arduinoID, DEC) + "\n";
-currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "\n";
-
-  for (byte j=0;j<SENSORNUM;j++)  {
-    currentLine += "     ";
-    currentLine +=  "snsType: ";
-    currentLine += String(Sensors[j].snsType,DEC);
-    currentLine += "\n";
-
-    currentLine += "     ";
-    currentLine += "snsID: ";
-    currentLine +=  String(Sensors[j].snsID,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "SnsName: ";
-    currentLine +=  (String) Sensors[j].snsName;
-    currentLine += "\n";
-
-    currentLine += "     ";
-    currentLine +=  "snsVal: ";
-    currentLine +=  String(Sensors[j].snsValue,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LastRead: ";
-    currentLine += String(Sensors[j].LastReadTime,DEC);
-    currentLine += " = ";
-    currentLine += (String) dateify(Sensors[j].LastReadTime);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LastSend: ";
-    currentLine +=  String(Sensors[j].LastSendTime,DEC);
-    currentLine += " = ";
-    currentLine += (String) dateify(Sensors[j].LastSendTime);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "UpperLim: ";
-    currentLine += String(Sensors[j].limitUpper,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "LowerLim: ";
-    currentLine +=  String(Sensors[j].limitLower,DEC);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Flag: ";
-    currentLine +=  (String) bitRead(Sensors[j].Flags,0);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Monitored: ";
-    currentLine +=  (String) bitRead(Sensors[j].Flags,1);
-    currentLine +=  "\n";
-
-    currentLine += "     ";
-    currentLine +=  "Flags: ";
-    char cbuff[9] = "";
-    Byte2Bin(Sensors[j].Flags,cbuff,1);
-
-    #ifdef _DEBUG
-        Serial.print("SpecType after byte2bin: ");
-        Serial.println(cbuff);
-    #endif
-
-    currentLine +=  cbuff;
-    currentLine += "\n\n";
-  }
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
-  server.send(200, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
-}
 
 void handleRoot() {
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
 
-String currentLine = "<!DOCTYPE html><html><head><title>" + (String) ARDNAME + " Page</title>\n";
+String currentLine = "<!DOCTYPE html><html>\n";
+#ifdef _WEBCHART
+  currentLine =currentLine  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+#endif
+
+
+currentLine +=  "<head><title>" + (String) ARDNAME + " Page</title>\n";
 currentLine += (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}\n";
 currentLine += (String) "input[type='text'] { font-family: arial, sans-serif; font-size: 10px; }\n";
 currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
 
-//currentLine += "<h1></h1>";
-
-currentLine =  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
-currentLine += "<p>Current time ";
-currentLine += (String) now();
-currentLine += " = ";
-currentLine += (String) dateify(now(),"mm/dd/yyyy hh:nn:ss");
-currentLine += "<br>\n";
-currentLine += "<a href=\"/LIST\">List all sensors</a><br>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
+currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";
+
 
 
   byte used[SENSORNUM];
@@ -425,10 +447,6 @@ currentLine += "<br>-----------------------<br>\n";
   
     //add form tags
   }
-
-
-
-//currentLine = currentLine + "<FORM action=\"/UPDATESENSORPARAMS\" method=\"get\"><input type=\"hidden\" name=\"SensorNum\" value=\"" + (String) j + "\">";
       
   byte usedINDEX = 0;  
   
@@ -497,6 +515,17 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine += "</p>\n";
 
+
+
+#ifdef _WEBCHART
+  //add charts if indicated
+  currentLine += "<br>-----------------------<br>\n";
+  for (byte j=0;j<_WEBCHART;j++)    currentLine += "<div id=\"myChart" + (String) j + "\" style=\"width:100%; max-width:800px; height:500px;\"></div>\n";
+  currentLine += "<br>-----------------------<br>\n";
+#endif
+
+
+
   #ifdef _USEBARPRED
     currentLine += "<p>";
     currentLine += "Hourly_air_pressures (most recent [top] entry was ";
@@ -513,19 +542,48 @@ currentLine += "<br>-----------------------<br>\n";
 
   #endif 
 
-  currentLine =currentLine  + "<script>";
+  currentLine =currentLine  + "<script>\n";
+
+  #ifdef _WEBCHART
+    currentLine =currentLine  + "google.charts.load('current',{packages:['corechart']});\n";
+    currentLine =currentLine  + "google.charts.setOnLoadCallback(drawChart);\n";
+    
+    currentLine += "function drawChart() {\n";
+
+    for (byte j=0;j<_WEBCHART;j++) {
+      currentLine += "const data" + (String) j + " = google.visualization.arrayToDataTable([\n";
+      currentLine += "['t','val'],\n";
+
+      for (int jj = _NUMWEBCHARTPNTS-1;jj>=0;jj--) {
+        currentLine += "[" + (String) ((int) ((uint32_t) (SensorCharts[j].lastRead - SensorCharts[j].interval*jj)-now())/60) + "," + (String) SensorCharts[j].values[jj] + "]";
+        if (jj>0) currentLine += ",";
+        currentLine += "\n";
+      }
+      currentLine += "]);\n\n";
+
+    
+    // Set Options
+      currentLine += "const options" + (String) j + " = {\n";
+      currentLine += "hAxis: {title: 'min from now'}, \n";
+      currentLine += "vAxis: {title: '" + (String) Sensors[SensorCharts[j].snsNum].snsName + "'},\n";
+      currentLine += "legend: 'none'\n};\n";
+
+      currentLine += "const chart" + (String) j + " = new google.visualization.LineChart(document.getElementById('myChart" + (String) j + "'));\n";
+      currentLine += "chart" + (String) j + ".draw(data" + (String) j + ", options" + (String) j + ");\n"; 
+    }
+      currentLine += "}\n";
+  #endif
+
   currentLine += "function sortTable(col) {\nvar table, rows, switching, i, x, y, shouldSwitch;\ntable = document.getElementById(\"Logs\");\nswitching = true;\nwhile (switching) {\nswitching = false;\nrows = table.rows;\nfor (i = 1; i < (rows.length - 1); i++) {\nshouldSwitch = false;\nx = rows[i].getElementsByTagName(\"TD\")[col];\ny = rows[i + 1].getElementsByTagName(\"TD\")[col];\nif (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {\nshouldSwitch = true;\nbreak;\n}\n}\nif (shouldSwitch) {\nrows[i].parentNode.insertBefore(rows[i + 1], rows[i]);\nswitching = true;\n}\n}\n}\n";
   currentLine += "</script>\n ";
 
   currentLine += "</body>\n</html>\n";
 
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
 
     //IF USING PROGMEM: use send_p   !!
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
+
 
 void handleNotFound(){
   server.send(404, "text/plain", "Arduino says 404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request

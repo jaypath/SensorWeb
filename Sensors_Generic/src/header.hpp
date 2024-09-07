@@ -13,12 +13,13 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,3}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {192,168,68,102}; //assign here if this sensor has a dedicated IP.
+
+const byte ASSIGNEDIP[4] = {192,168,68,94}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "MastBR" //unique name
+#define ARDNAME "Den" //unique name
 #define SENSORNUM 3 //be sure this matches SENSORTYPES
 
 const uint8_t SENSORTYPES[SENSORNUM] = {4,5,3};
@@ -35,7 +36,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-#define _USESOILRES D4
+#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
@@ -49,7 +50,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   #define SOILRESISTANCE 4700
-  #define SOILR_MAX 2000
+  #define SOILR_MAX 1600
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
   //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif

@@ -9,13 +9,30 @@ int DSTOFFSET = 0;
 
 char DATESTRING[20]="";
 
+
+
+bool checkTime(void) {
+  double td = abs(now()-1725745604)/86400; //1725745604 is 9/7/2024, so this is days from 9/7/24
+  td = td/365; //years from 9/7/24
+  if (td<20) return true;
+
+  return false;
+}
+
 //Time fcn
 time_t timeUpdate(void) {
+
+  
   timeClient.update();
+
+        
   if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >= 3)) DSTOFFSET = -1*60*60; //2024 DST offset
   else DSTOFFSET = 0;
 
   setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+
+  if (checkTime()==false) return 0; //not a possible time
+
   return now();
 }
 
@@ -23,6 +40,8 @@ time_t timeUpdate(void) {
 time_t setupTime(void) {
     timeClient.begin();
     timeClient.update();
+
+
     setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
 
     if (month() < 3 || (month() == 3 &&  day() < 12) || month() ==12 || (month() == 11 && day() >= 5)) DSTOFFSET = -1*60*60;
@@ -30,9 +49,9 @@ time_t setupTime(void) {
 
     setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET); //set stoffregen timelib time once, to get month and day. then reset with DST
 
-    //set the stoffregen time library with timezone and dst
-    time_t t = timeUpdate();
-    return t;
+    if (checkTime()==false) return 0;
+
+    return now();
 }
 
 String fcnDOW(time_t t) {
