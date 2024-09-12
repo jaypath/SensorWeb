@@ -239,7 +239,7 @@ byte find_sensor_count(String snsname,byte snsType);
 void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, byte* snsIndexLow);
 uint8_t countDev();
 uint32_t set_color(byte r, byte g, byte b);
-void timeUpdate(void);
+void timeUpdate(byte counter=0);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
 void initSensor(byte k);
@@ -491,9 +491,6 @@ tft.println("Connecting ArduinoOTA...");
     tft.println("Set up TimeClient...");
 
     timeClient.begin();
-    timeClient.update();
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
-
 
     timeUpdate();
 
@@ -638,12 +635,22 @@ double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uin
 
 
 //Time fcn
-void timeUpdate() {
+void timeUpdate(byte counter) {
+  counter++;
+  if (counter>20) ESP.restart(); //attempt to get time 20 times
+
   timeClient.update();
+
   if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >=3)) DSTOFFSET = -1*60*60; //2024 DST
   else DSTOFFSET = 0;
 
   setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+
+
+ 
+  if (WiFi.status() == WL_CONNECTED && (now()>2208992400 || now()<1704070800)) timeUpdate(counter); //time not in a realistic  despite wifi
+
+
   return;
 }
 
@@ -2069,7 +2076,6 @@ void loop() {
   if (OldTime[2] != hour()) {
     OldTime[2] = hour(); 
 
-    timeUpdate();
     //expire any measurements that are older than N hours.
     for (byte i=0;i<SENSORNUM;i++)  {
       if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (t-Sensors[i].timeLogged)>OLDESTSENSORHR*60*60)  {
@@ -2111,7 +2117,9 @@ void loop() {
   
   if (OldTime[3] != weekday()) {
     if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
-
+    
+    timeUpdate();
+    
     OldTime[3] = weekday();
   }
 

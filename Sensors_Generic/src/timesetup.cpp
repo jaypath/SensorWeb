@@ -12,7 +12,9 @@ char DATESTRING[20]="";
 
 
 bool checkTime(void) {
-  double td = abs(now()-1725745604)/86400; //1725745604 is 9/7/2024, so this is days from 9/7/24
+  uint32_t td = abs(now()-1725745604)/; //1725745604 is 9/7/2024 
+  td = td/86400;//, so this is days from 9/7/24
+  
   td = td/365; //years from 9/7/24
   if (td<20) return true;
 
