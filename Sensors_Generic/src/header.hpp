@@ -13,35 +13,33 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,3}; //which sensors should be stored for charting?
 #endif
 
-
-const byte ASSIGNEDIP[4] = {192,168,68,94}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {0,0,0,0}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "Den" //unique name
-#define SENSORNUM 3 //be sure this matches SENSORTYPES
+#define ARDNAME "BAT" //unique name
+#define SENSORNUM 2 //be sure this matches SENSORTYPES
 
 const uint8_t SENSORTYPES[SENSORNUM] = {4,5,3};
-
-//#define ARDID 94 //unique arduino ID //deprecated - now ardid is last 3 of wifi IP. if this is defined it will override wifi id
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
-#define _USEAHT 1
+//#define _USEAHT 1
 //#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-#define _USESOILRES D5
+//#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
-//#define _USEBATTERY  A0 //set to the pin that is analogin
-//#define _USELOWPOWER 10e6 //must also have _USEBATTERY
+//#define _USELIBATTERY  A0 //set to the pin that is analogin
+//#define _USESLABATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 10e6 //in microsec. Make sure GPIO16 is connected to rst on 8266, and XXX is connected to reset on esp32
 
 //binary switches
 //#define _CHECKAIRCON 1
@@ -50,7 +48,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _USESOILRES
   #define SOILRESISTANCE 4700
-  #define SOILR_MAX 1600
+  #define SOILR_MAX 2000
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
   //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
@@ -147,7 +145,8 @@ GPIO27 - Supports internal pull-up resistor
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
 58 - leak yes/no
-60 - lithium battery power
+60 -  battery power
+61 - battery %
 99 = any numerical value
 
 */

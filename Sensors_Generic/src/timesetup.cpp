@@ -2,6 +2,8 @@
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <server.hpp>
+
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP,"time.nist.gov");
@@ -12,13 +14,13 @@ char DATESTRING[20]="";
 
 
 bool checkTime(void) {
-  uint32_t td = abs(now()-1725745604)/; //1725745604 is 9/7/2024 
-  td = td/86400;//, so this is days from 9/7/24
-  
-  td = td/365; //years from 9/7/24
-  if (td<20) return true;
 
-  return false;
+  uint32_t td = now(); 
+  
+  if ( WifiStatus()  && (td>2208992400 || td<1704070800)) return false;
+  return true;
+
+  
 }
 
 //Time fcn

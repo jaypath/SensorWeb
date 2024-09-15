@@ -29,6 +29,12 @@ void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   ip[3] = m4;
 }
 
+
+bool WifiStatus(void) {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  return false;
+  
+}
 uint8_t connectWiFi()
 {
   //rerturn 0 if connected, else number of times I tried and failed
@@ -42,7 +48,7 @@ uint8_t connectWiFi()
   assignIP(WIFI_INFO.SUBNET,255,255,252,0);
 
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WifiStatus()) {
     WIFI_INFO.MYIP = WiFi.localIP();
     WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
     return connected;
@@ -83,7 +89,7 @@ uint8_t connectWiFi()
       #endif
 
       delay(250);
-      if (WiFi.status() == WL_CONNECTED) {
+      if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
         #ifdef _DEBUG
@@ -135,6 +141,9 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 
 
 bool SendData(struct SensorVal *snsreading) {
+
+if (checkTime()==false) return false;
+
 byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
@@ -216,21 +225,11 @@ byte arduinoID = WIFI_INFO.MYIP[3];
           Serial.println(" ");
         #endif
 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
 
         if (httpCode == 200) {
           isGood = true;
           SERVERIP[ipindex].server_status = httpCode;
         } 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
-
-    #ifdef _DEBUG
-      Serial.printf("SENDDATA: Sent to %d. Sensor is now named %s. \n", ipindex,snsreading->snsName);
-    #endif
 
       ipindex++;
 
@@ -238,9 +237,6 @@ byte arduinoID = WIFI_INFO.MYIP[3];
   
     
   }
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
-#endif
 
      return isGood;
 
@@ -536,6 +532,8 @@ currentLine += "<br>-----------------------<br>\n";
 
 
 
+/* do not do this. Use sensor charts instead
+
   #ifdef _USEBARPRED
     currentLine += "<p>";
     currentLine += "Hourly_air_pressures (most recent [top] entry was ";
@@ -550,7 +548,8 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine += "</p>\n";
 
 
-  #endif 
+  #endif
+  */ 
 
   currentLine =currentLine  + "<script>\n";
 
@@ -589,9 +588,6 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine += "</body>\n</html>\n";
 
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
 
     //IF USING PROGMEM: use send_p   !!
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client

@@ -29,6 +29,12 @@ void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   ip[3] = m4;
 }
 
+
+bool WifiStatus(void) {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  return false;
+  
+}
 uint8_t connectWiFi()
 {
   //rerturn 0 if connected, else number of times I tried and failed
@@ -42,7 +48,7 @@ uint8_t connectWiFi()
   assignIP(WIFI_INFO.SUBNET,255,255,252,0);
 
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WifiStatus()) {
     WIFI_INFO.MYIP = WiFi.localIP();
     WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
     return connected;
@@ -83,7 +89,7 @@ uint8_t connectWiFi()
       #endif
 
       delay(250);
-      if (WiFi.status() == WL_CONNECTED) {
+      if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
         #ifdef _DEBUG
@@ -526,6 +532,8 @@ currentLine += "<br>-----------------------<br>\n";
 
 
 
+/* do not do this. Use sensor charts instead
+
   #ifdef _USEBARPRED
     currentLine += "<p>";
     currentLine += "Hourly_air_pressures (most recent [top] entry was ";
@@ -540,7 +548,8 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine += "</p>\n";
 
 
-  #endif 
+  #endif
+  */ 
 
   currentLine =currentLine  + "<script>\n";
 
