@@ -261,6 +261,7 @@ void fcnPressureTxt(char* tempPres, uint32_t* fg, uint32_t* bg);
 void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
 char* Byte2Bin(uint8_t value, char* , bool invert = false);
+void handleReboot();
 void handleNotFound();
 void handleGETSTATUS();
 void handlePost();
@@ -481,6 +482,7 @@ tft.println("Connecting ArduinoOTA...");
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
     server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
     server.on("/GETSTATUS",handleGETSTATUS);
+    server.on("/REBOOT",handleReboot);
     
     server.onNotFound(handleNotFound);
     server.begin();
@@ -2125,6 +2127,13 @@ void loop() {
 
 
  
+}
+
+
+void handleReboot() {
+  server.send(200, "text/plain", "Rebooting in 10 sec");  //This returns to the main page
+  delay(10000);
+  ESP.restart();
 }
 
 void handleCLEARSENSOR() {

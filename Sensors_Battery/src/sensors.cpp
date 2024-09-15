@@ -420,6 +420,18 @@ uint  sc_interval;
 
           
       #endif
+      case 58: //leak
+        #ifdef _USELEAK
+          sc_interval=60*60;//seconds 
+          Sensors[i].snsPin=_USELEAK;
+          pinMode(Sensors[i].snsPin,INPUT_PULLUP);
+          snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
+          Sensors[i].limitUpper = 1;
+          Sensors[i].limitLower = -1;
+          Sensors[i].PollingInt=60*60;
+          Sensors[i].SendingInt=60*60;
+          break;
+        #endif
 
       case 60: //battery
         #ifdef _USELIBATTERY
@@ -600,7 +612,7 @@ bool ReadData(struct SensorVal *P) {
           P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
         #endif
         #ifdef _USE8266
-          val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
+          val = val * (3.3 / _ADCRATE); //it's _ADCRATE because the value 1024 is overflow
           P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
         #endif
 
@@ -887,22 +899,28 @@ bool ReadData(struct SensorVal *P) {
         bitWrite(P->Flags,0,0); //no ac
       }
       break;
+    case 58: //Leak detection
+      if (digitalRead(_USELEAK)==LOW) P->snsValue =1;
+      else P->snsValue =0;
+      
+      break;
+
 
     case 60: // battery
       #ifdef _USELIBATTERY
-
+        //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
         double m1,m2,m3;
-        m1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        m1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        m2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        m3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
         P->snsValue = (m1+m2+m3)/3;
       #endif
       #ifdef _USESLABATTERY
 
         double m1,m2,m3;
-        m1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        m2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        m3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        m1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        m2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        m3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
         P->snsValue = (m1+m2+m3)/3;
       #endif
 
@@ -912,9 +930,9 @@ bool ReadData(struct SensorVal *P) {
       //_USEBATPCNT
       #ifdef _USELIBATTERY
         double p1,p2,p3;
-        p1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        p1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        p2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
+        p3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
         P->snsValue = (p1+p2+p3)/3;
         
 
@@ -935,16 +953,16 @@ bool ReadData(struct SensorVal *P) {
 
       #ifdef _USESLABATTERY
         double p1,p2,p3;
-        p1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        p2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        p3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        p1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        p2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
+        p3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
         P->snsValue = (p1+p2+p3)/3;
         
 
 
         #define VOLTAGETABLE 21
-        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.835,12.78,12.715,12.65,12.58,12.51,12.460,12.41,12.32,12.23,12.17,12.11,12.035,11.96,11.885,11.81,11.765,11.70,11.665,11.63};
-        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
+        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.835,12.78,12.715,12.65,12.58,12.51,12.460,12.41,12.32,12.23,12.17,12.11,12.035,11.96,11.885,11.81,11.765,11.70,11.665,0};
+        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0};
         for (byte jj=0;jj<VOLTAGETABLE;jj++) {
           if (P->snsValue> BAT_VOLT[jj]) {
             P->snsValue = BAT_PCNT[jj];
