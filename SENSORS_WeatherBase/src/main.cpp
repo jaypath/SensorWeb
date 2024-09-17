@@ -1545,6 +1545,9 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   //get sensor vals 1, 4, 3, 58, 61... if any are flagged then set box color
   //temperature
+    isHigh = 255;
+  isLow = 255;
+
   find_limit_sensortypes(roomname,1,&isHigh,&isLow);
   if (isLow != 255) {
     temperature = Sensors[isLow].snsValue;
@@ -1566,6 +1569,9 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
     rgb_fill[1] = box_high_fill[1];
     rgb_fill[2] = box_high_fill[2];
   }
+    isHigh = 255;
+  isLow = 255;
+
   find_limit_sensortypes(roomname,4,&isHigh,&isLow);
   if (isLow != 255) {
     temperature = Sensors[isLow].snsValue;
@@ -1590,6 +1596,8 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   //soil
   isHigh = 255;
+  isLow = 255;
+
   find_limit_sensortypes(roomname,3,&isHigh,&isLow);    
   if (isHigh != 255) {
     soilval = Sensors[isHigh].snsValue;
