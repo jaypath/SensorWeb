@@ -2255,10 +2255,6 @@ void handleRoot() {
   
   currentLine = currentLine + "<br>";      
 
-  //add chart
-  currentLine += "<br>-----------------------<br>\n";
-  currentLine += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
-  currentLine += "<br>-----------------------<br>\n";
 
   byte used[SENSORNUM];
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -2308,6 +2304,12 @@ void handleRoot() {
   }
 
   currentLine += "</table>";   
+
+  //add chart
+  currentLine += "<br>-----------------------<br>\n";
+  currentLine += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
+  currentLine += "<br>-----------------------<br>\n";
+
 
   currentLine += "</p>";
 
@@ -2392,7 +2394,8 @@ uint8_t tempIP[4] = {0,0,0,0};
     LAST_BAR = S.snsValue;
   }
 
-  if((S.snsType==61 ) && (LAST_BAT_READ==0 || LAST_BAT_READ < t - 60*60 || LAST_BAT_READ > t)) { //battery
+  String stemp = S.snsName;
+  if((stemp.indexOf("Outside")>-1 && S.snsType==61 ) && (LAST_BAT_READ==0 || LAST_BAT_READ < t - 60*60 || LAST_BAT_READ > t)) { //outside battery
     LAST_BAT_READ = S.timeRead;
     pushDoubleArray(batteryArray,48,S.snsValue);
   }
@@ -2416,7 +2419,7 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%02d",day(t));
   dateformat.replace("dd",holder);
   
-  snprintf(holder,4,"%02d",year(t));
+  snprintf(holder,5,"%02d",year(t));
   dateformat.replace("yyyy",holder);
   
   snprintf(holder,4,"%02d",year(t)-2000);
