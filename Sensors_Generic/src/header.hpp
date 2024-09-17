@@ -6,41 +6,41 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
-//#define _WEBCHART 2
+#define _WEBCHART 2
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {3,4}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {0,0,0,0}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,0}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "Bmnt" //unique name
+#define ARDNAME "XXX" //unique name
 #define SENSORNUM 3 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {58,60,61};
+const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
-//#define _USEAHT 1
+#define _USEAHT 1
 //#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-//#define _USESOILRES D5
+#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
-#define _USESLABATTERY  A0 //set to the pin that is analogin
-#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-#define _USELEAK D7
+//#define _USESLABATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
+//#define _USELEAK D7
 //binary switches
 //#define _CHECKAIRCON 1
 //#define _CHECKHEAT 1

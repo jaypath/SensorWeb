@@ -1,5 +1,6 @@
 #ifndef SENSORS_HPP
 #define SENSORS_HPP
+
 #include <Arduino.h>
 #include <header.hpp>
 #include <timesetup.hpp>
@@ -50,6 +51,14 @@
   extern uint32_t LAST_BAR_READ; //last pressure reading in BAR_HX
 #endif
 
+#ifdef _CHECKAIRCON 
+
+#endif
+
+#ifdef _CHECKHEAT
+  extern uint8_t HEATPIN;
+  extern String HEATZONE[];
+#endif
 
 struct SensorVal {
   uint8_t  snsType ;
@@ -67,6 +76,21 @@ struct SensorVal {
 };
 
 extern SensorVal Sensors[SENSORNUM];
+
+#ifdef _WEBCHART
+  struct SensorChart {
+    uint8_t snsType;
+    uint8_t snsNum;
+//    double offset; //baseline to add
+ //   double multiplier; //multiply by this
+  //  uint8_t values[50]; //store 50 values... 2 days at hourly. To convert FROM double, value = (orig+offset)/multiplier. to convert TO double... orig = (value*multiplier)-offset
+    double values[50];
+    uint16_t interval; //save every interval seconds
+    uint32_t lastRead; //last read time
+  };
+
+  extern SensorChart SensorCharts[_WEBCHART];
+#endif
 
 #ifdef _USEBME680
   extern BME680_Class BME680;  ///< Create an instance of the BME680 class
@@ -111,6 +135,8 @@ bool ReadData(struct SensorVal *P);
 byte find_limit_sensortypes(String snsname, byte snsType,bool highest);
 byte find_sensor_count(String snsname,byte snsType);
 byte find_sensor_name(String snsname,byte snsType,byte snsID);
+byte find_sensor_type(byte snsType,byte snsID=255);
+
 uint8_t countDev();
 void setupSensors();
 void initSensor(byte k);
@@ -118,6 +144,8 @@ uint16_t findOldestDev();
 uint8_t findSensor(byte snsType, byte snsID);
 bool checkSensorValFlag(struct SensorVal *P);
 void pushDoubleArray(double arr[], byte, double);
+void pushByteArray(byte arr[], byte, byte);
+int peak_to_peak(int pin, int ms = 50);
 
 #ifdef _USESSD1306
 void redrawOled(void);

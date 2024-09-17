@@ -900,9 +900,10 @@ bool ReadData(struct SensorVal *P) {
       }
       break;
     case 58: //Leak detection
-      if (digitalRead(_USELEAK)==LOW) P->snsValue =1;
-      else P->snsValue =0;
-      
+      #ifdef _USELEAK
+        if (digitalRead(_USELEAK)==LOW) P->snsValue =1;
+        else P->snsValue =0;
+      #endif     
       break;
 
 

@@ -13,6 +13,7 @@ extern NTPClient timeClient;
 extern int DSTOFFSET;
 extern char DATESTRING[];
 
+bool checkTime();
 time_t timeUpdate();
 time_t setupTime(void);
 String fcnDOW(time_t t);
