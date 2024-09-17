@@ -136,7 +136,7 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 
 
 
-#define SENSORNUM 50
+#define SENSORNUM 70
 
 #define NUMSCREEN 2
 #define SECSCREEN 15
@@ -224,7 +224,7 @@ uint16_t FG_COLOR = TFT_BLACK; //Foreground color
 uint16_t BG_COLOR = TFT_LIGHTGREY; //light gray = 211,211,211
 //uint16_t BG_COLOR = TFT_DARKGREY; //Foreground color = 128,128,128
 
-char DATESTRING[24]=""; //holds up to hh:nn:ss day mm/dd/yyy
+char DATESTRING[30]=""; //holds up to hh:nn:ss day mm/dd/yyyy
 
 uint8_t Heat=0,Cool=0,Fan=0;
 
@@ -1515,56 +1515,77 @@ uint32_t set_color(byte r, byte g, byte b) {
 }
 
 void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
-  uint32_t box_high_border = set_color(150,20,20);
-  uint32_t box_high_fill = set_color(255,100,100);
-  uint32_t box_low_border = set_color(20,20,150);
-  uint32_t box_low_fill = set_color(150,150,255);
-  uint32_t box_nl_border = set_color(0,125,0);
-  uint32_t box_nl_fill = set_color(120,255,120);
-  uint32_t box_dry_border = set_color(65,45,20);
-  uint32_t box_dry_fill = set_color(250,170,100);
-  uint32_t box_border = box_nl_border;
-  uint32_t box_fill = box_nl_fill;
-  uint32_t text_temp_color = TFT_BLACK;
-  uint32_t text_soil_color = TFT_BLACK;
+  uint8_t box_nl_border[3] = {0,125,0};
+  uint8_t box_nl_fill[3] = {120,255,120};
+  uint8_t box_high_border[3] = {150,20,20}; //r,g,b
+  uint8_t box_high_fill[3] = {255,100,100};
+  uint8_t box_low_border[3] = {20,20,150};
+  uint8_t box_low_fill[3] = {150,150,255};
+  uint8_t box_dry_border[3] = {65,45,20};
+  uint8_t box_dry_fill[3] = {250,170,100};
+  uint8_t box_wet_border[3] = {0,0,255};
+  uint8_t box_wet_fill[3] = {0,190,255};
+  
+  
+  uint32_t box_border = set_color(box_nl_border[0],box_nl_border[1],box_nl_border[2]);
+  uint32_t box_fill = set_color(box_nl_fill[0],box_nl_fill[1],box_nl_fill[2]);
+  uint32_t text_color;
 
 
   byte isHigh = 255,isLow=255;
   int temperature = -900;
   int soilval = -900;
+  int leakval = -900;
   int batval = -900;
   byte FNTSZ=2;
   tft.setTextFont(FNTSZ);
 
   char tempbuf[10];
+  byte rgb_box[3],rgb_fill[3];
 
-  //get sensor vals 1, 4, and 3 and 60 and 61... if any are flagged then set box color
+  //get sensor vals 1, 4, 3, 58, 61... if any are flagged then set box color
   //temperature
   find_limit_sensortypes(roomname,1,&isHigh,&isLow);
   if (isLow != 255) {
     temperature = Sensors[isLow].snsValue;
-    box_border = box_low_border;
-    box_fill = box_low_fill;
-    text_temp_color = set_color(50,50,150);
+    rgb_box[0] = box_low_border[0];
+    rgb_box[1] = box_low_border[1];
+    rgb_box[2] = box_low_border[2];
+
+    rgb_fill[0] = box_low_fill[0];
+    rgb_fill[1] = box_low_fill[1];
+    rgb_fill[2] = box_low_fill[2];
   }
   if (isHigh != 255) {
     temperature = Sensors[isHigh].snsValue;
-    box_border = box_high_border;
-    box_fill = box_high_fill;
-    text_temp_color = set_color(150,50,50);
+    rgb_box[0] = box_high_border[0];
+    rgb_box[1] = box_high_border[1];
+    rgb_box[2] = box_high_border[2];
+
+    rgb_fill[0] = box_high_fill[0];
+    rgb_fill[1] = box_high_fill[1];
+    rgb_fill[2] = box_high_fill[2];
   }
   find_limit_sensortypes(roomname,4,&isHigh,&isLow);
   if (isLow != 255) {
     temperature = Sensors[isLow].snsValue;
-    box_border = box_low_border;
-    box_fill = box_low_fill;
-    text_temp_color = set_color(50,50,150);
+    rgb_box[0] = box_low_border[0];
+    rgb_box[1] = box_low_border[1];
+    rgb_box[2] = box_low_border[2];
+
+    rgb_fill[0] = box_low_fill[0];
+    rgb_fill[1] = box_low_fill[1];
+    rgb_fill[2] = box_low_fill[2];
   }
   if (isHigh != 255) {
     temperature = Sensors[isHigh].snsValue;
-    box_border = box_high_border;
-    box_fill = box_high_fill;
-    text_temp_color = set_color(150,50,50);
+    rgb_box[0] = box_high_border[0];
+    rgb_box[1] = box_high_border[1];
+    rgb_box[2] = box_high_border[2];
+
+    rgb_fill[0] = box_high_fill[0];
+    rgb_fill[1] = box_high_fill[1];
+    rgb_fill[2] = box_high_fill[2];
   }
 
   //soil
@@ -1572,10 +1593,31 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   find_limit_sensortypes(roomname,3,&isHigh,&isLow);    
   if (isHigh != 255) {
     soilval = Sensors[isHigh].snsValue;
-    box_border = box_dry_border;
-    box_fill = box_dry_fill;
-    text_soil_color = set_color(65,45,20);
+    rgb_box[0] = box_dry_border[0];
+    rgb_box[1] = box_dry_border[1];
+    rgb_box[2] = box_dry_border[2];
+
+    rgb_fill[0] = box_dry_fill[0];
+    rgb_fill[1] = box_dry_fill[1];
+    rgb_fill[2] = box_dry_fill[2];
   } 
+
+  //leak
+  isHigh = 255;
+  isLow = 255;
+  find_limit_sensortypes(roomname,58,&isHigh,&isLow);    
+  if (isHigh != 255) {
+    leakval = Sensors[isHigh].snsValue;
+    rgb_box[0] = box_wet_border[0];
+    rgb_box[1] = box_wet_border[1];
+    rgb_box[2] = box_wet_border[2];
+
+    rgb_fill[0] = box_wet_fill[0];
+    rgb_fill[1] = box_wet_fill[1];
+    rgb_fill[2] = box_wet_fill[2];
+
+  }
+ 
 
   //bat
   isHigh = 255;
@@ -1583,9 +1625,18 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   find_limit_sensortypes(roomname,61,&isHigh,&isLow);    
   if (isLow != 255) {
     batval = Sensors[isLow].snsValue;
+    rgb_box[0] = box_low_border[0];
+    rgb_box[1] = box_low_border[1];
+    rgb_box[2] = box_low_border[2];
+
+    rgb_fill[0] = box_low_fill[0];
+    rgb_fill[1] = box_low_fill[1];
+    rgb_fill[2] = box_low_fill[2];
   }
 
-
+  box_border = set_color(rgb_box[0],rgb_box[1],rgb_box[2]);
+  box_fill = set_color(rgb_fill[0],rgb_fill[1],rgb_fill[2]);
+  text_color = set_color(255-rgb_fill[0],255-rgb_fill[1],255-rgb_fill[2]);
 
   //draw  box
   tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_fill);
@@ -1599,23 +1650,28 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   Y+=3+tft.fontHeight(FNTSZ);
   FNTSZ=1;
+  tft.setTextColor(text_color,box_fill);
 
   if (temperature>-900) {
-    tft.setTextColor(text_temp_color,box_fill);
     snprintf(tempbuf,12,"%dF",(int) temperature);
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
     Y+=4+tft.fontHeight(FNTSZ);
   }    
 
   if (soilval>-900) {
-    tft.setTextColor(text_soil_color,box_fill);
-    snprintf(tempbuf,12,"Dry");
+    snprintf(tempbuf,12,"DRY");
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+    Y+=2+tft.fontHeight(FNTSZ);
+  }
+
+  if (leakval>-900) {
+    snprintf(tempbuf,12,"LEAK");
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
     Y+=2+tft.fontHeight(FNTSZ);
   }
 
   if (batval>-900) {
-    snprintf(tempbuf,12,"%dV",(int) batval);
+    snprintf(tempbuf,12,"%d%%",(int) batval);
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
     Y+=2+tft.fontHeight(FNTSZ);
   }
@@ -1659,7 +1715,7 @@ void fcnDrawSensors(int Y) {
 
   for (byte r=0;r<rows;r++) {
     for (byte c=0;c<cols;c++) {
-      switch (r<<8 | c) {
+      switch ((uint16_t) r<<8 | c) {
         case 0:
           roomname = "Outside";
           break;
@@ -2243,7 +2299,8 @@ void handleRoot() {
   currentLine = currentLine + "<h1>Pleasant Weather Server</h1>";
   currentLine = currentLine + "<br>";
   currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
-  currentLine = currentLine + "Free Heap Memory: " + ESP.getFreeHeap() + "</h2><br>";  
+  currentLine = currentLine + "Free Heap Memory: " + ESP.getFreeHeap() + "<br>";  
+  currentLine = currentLine + "Free stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
 
   currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   currentLine += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
@@ -2440,7 +2497,7 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%s",fcnDOW(t,false).c_str());
   dateformat.replace("dow",holder);
 
-  snprintf(DATESTRING,23,"%s",dateformat.c_str());
+  snprintf(DATESTRING,25,"%s",dateformat.c_str());
   
   return DATESTRING;  
 }
