@@ -2,6 +2,8 @@
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <server.hpp>
+
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP,"time.nist.gov");
@@ -9,13 +11,32 @@ int DSTOFFSET = 0;
 
 char DATESTRING[20]="";
 
+
+
+bool checkTime(void) {
+
+  uint32_t td = now(); 
+  
+  if ( WifiStatus()  && (td>2208992400 || td<1704070800)) return false;
+  return true;
+
+  
+}
+
 //Time fcn
 time_t timeUpdate(void) {
+
+  
   timeClient.update();
+
+        
   if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >= 3)) DSTOFFSET = -1*60*60; //2024 DST offset
   else DSTOFFSET = 0;
 
   setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+
+  if (checkTime()==false) return 0; //not a possible time
+
   return now();
 }
 
@@ -23,6 +44,8 @@ time_t timeUpdate(void) {
 time_t setupTime(void) {
     timeClient.begin();
     timeClient.update();
+
+
     setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
 
     if (month() < 3 || (month() == 3 &&  day() < 12) || month() ==12 || (month() == 11 && day() >= 5)) DSTOFFSET = -1*60*60;
@@ -30,9 +53,9 @@ time_t setupTime(void) {
 
     setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET); //set stoffregen timelib time once, to get month and day. then reset with DST
 
-    //set the stoffregen time library with timezone and dst
-    time_t t = timeUpdate();
-    return t;
+    if (checkTime()==false) return 0;
+
+    return now();
 }
 
 String fcnDOW(time_t t) {
@@ -58,7 +81,7 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%02d",day(t));
   dateformat.replace("dd",holder);
   
-  snprintf(holder,4,"%02d",year(t));
+  snprintf(holder,5,"%02d",year(t));
   dateformat.replace("yyyy",holder);
   
   snprintf(holder,4,"%02d",year(t)-2000);
