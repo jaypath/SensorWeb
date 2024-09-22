@@ -13,7 +13,7 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {0,0,0,0}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,120}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
@@ -40,11 +40,15 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
 #define _USESLABATTERY  A0 //set to the pin that is analogin
 #define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-#define _USELEAK D7
+#define _USELEAK 
 //binary switches
 //#define _CHECKAIRCON 1
 //#define _CHECKHEAT 1
 
+#ifdef _USELEAK
+  #define _LEAKPIN 12
+  #define _LEAKDIO 13
+#endif
 
 #ifdef _USESOILRES
   #define SOILRESISTANCE 4700

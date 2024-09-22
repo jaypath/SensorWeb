@@ -128,7 +128,7 @@ uint  sc_interval;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
         #ifdef _USESOILCAP
-          Sensors[i].snsPin=SOILPIN;
+          Sensors[i].snsPin=SOILPIN; //input, usually A0
           snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
           Sensors[i].limitUpper = 290;
           Sensors[i].limitLower = 25;
@@ -136,6 +136,8 @@ uint  sc_interval;
           Sensors[i].SendingInt=600;
         #endif
         #ifdef _USESOILRES
+          pinMode(_USESOILRES,OUTPUT);  
+
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
           Sensors[i].limitUpper = SOILR_MAX;
@@ -423,11 +425,13 @@ uint  sc_interval;
       case 58: //leak
         #ifdef _USELEAK
           sc_interval=60*60;//seconds 
-          Sensors[i].snsPin=_USELEAK;
-          pinMode(Sensors[i].snsPin,INPUT_PULLUP);
+          Sensors[i].snsPin=_LEAKPIN;
+          pinMode(Sensors[i].snsPin,INPUT);
+          pinMode(_LEAKDIO,OUTPUT);
+          digitalWrite(_LEAKDIO, LOW);
           snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
-          Sensors[i].limitUpper = 1;
-          Sensors[i].limitLower = -1;
+          Sensors[i].limitUpper = 0.5;
+          Sensors[i].limitLower = -0.5;
           Sensors[i].PollingInt=60*60;
           Sensors[i].SendingInt=60*60;
           break;
@@ -900,28 +904,26 @@ bool ReadData(struct SensorVal *P) {
       }
       break;
     case 58: //Leak detection
-      if (digitalRead(_USELEAK)==LOW) P->snsValue =1;
-      else P->snsValue =0;
-      
+      #ifdef _USELEAK
+        digitalWrite(_LEAKDIO, HIGH);
+        if (digitalRead(_LEAKPIN)==HIGH) P->snsValue =1;
+        else P->snsValue =0;
+        digitalWrite(_LEAKDIO, LOW);
+
+      #endif
+
       break;
 
 
     case 60: // battery
       #ifdef _USELIBATTERY
         //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
-        double m1,m2,m3;
-        m1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        P->snsValue = (m1+m2+m3)/3;
+        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+         
       #endif
       #ifdef _USESLABATTERY
-
-        double m1,m2,m3;
-        m1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        m2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        m3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        P->snsValue = (m1+m2+m3)/3;
+        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+        
       #endif
 
 
@@ -929,13 +931,7 @@ bool ReadData(struct SensorVal *P) {
     case 61:
       //_USEBATPCNT
       #ifdef _USELIBATTERY
-        double p1,p2,p3;
-        p1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        P->snsValue = (p1+p2+p3)/3;
-        
-
+        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
 
         #define VOLTAGETABLE 21
         static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
@@ -952,24 +948,17 @@ bool ReadData(struct SensorVal *P) {
       #endif
 
       #ifdef _USESLABATTERY
-        double p1,p2,p3;
-        p1 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        p2 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        p3 = (double) (3.3* 5 * (double) analogRead(P->snsPin)/_ADCRATE);//0 to _ADCRATE, where _ADCRATE = 3.3v max //note that there is a voltage divider cutting the bat voltage in 5
-        P->snsValue = (p1+p2+p3)/3;
-        
+        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
 
-
-        #define VOLTAGETABLE 21
-        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.835,12.78,12.715,12.65,12.58,12.51,12.460,12.41,12.32,12.23,12.17,12.11,12.035,11.96,11.885,11.81,11.765,11.70,11.665,0};
-        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0};
+        #define VOLTAGETABLE 11
+        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+        static byte BAT_PCNT[VOLTAGETABLE] = {100,90,80,70,60,50,40,30,20,10,0};
         for (byte jj=0;jj<VOLTAGETABLE;jj++) {
-          if (P->snsValue> BAT_VOLT[jj]) {
+          if (P->snsValue>= BAT_VOLT[jj]) {
             P->snsValue = BAT_PCNT[jj];
             break;
           } 
         }
-
 
       #endif
 
@@ -1189,6 +1178,25 @@ void pushDoubleArray(double arr[], byte N, double value) { //array variable, siz
 
   return ;
 
+}
+
+float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN) {
+  /*
+    R1 is first resistor
+    R2 is second resistor (which we are measuring voltage across)
+    snsPin is the pin to measure the voltage, Vo
+    ADCRATE is the max ADCRATE
+    Vm is the ADC max voltage (1 for esp12e, 3.3 for NodeMCU, 3.3 for ESP)
+    avgN is the number of times to avg
+    */
+
+  float Vo = 0;
+
+  for (byte i=0;i<avgN;i++) {
+    Vo += (float) Vm * ((R2+R1)/R2) * analogRead(snsPin)/_ADCRATE;
+  }
+
+  return  Vo/avgN;
 }
 
 

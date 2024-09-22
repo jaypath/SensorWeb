@@ -13,21 +13,21 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {0,0,0,0}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,120}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
 #define ARDNAME "Bmnt" //unique name
-#define SENSORNUM 3 //be sure this matches SENSORTYPES
+#define SENSORNUM 5 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {58,60,61};
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,58,60,61};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
-//#define _USEAHT 1
+#define _USEAHT 1
 //#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
@@ -40,11 +40,15 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
 #define _USESLABATTERY  A0 //set to the pin that is analogin
 #define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-#define _USELEAK D7
+#define _USELEAK 
 //binary switches
 //#define _CHECKAIRCON 1
 //#define _CHECKHEAT 1
 
+#ifdef _USELEAK
+  #define _LEAKPIN 12
+  #define _LEAKDIO 13
+#endif
 
 #ifdef _USESOILRES
   #define SOILRESISTANCE 4700
@@ -169,7 +173,7 @@ GPIO27 - Supports internal pull-up resistor
 */
 
 /* for ESP8266 12e
-D0 is GPIO 16, and is used for wake. Does not support interrupt
+D0 is GPIO 16, and is used for wake. Does not support interrupt. must be pulled high (along with EN) at start. connect 16 to EN for low power state
 D1 is GPIO5 and is SCL
 D2 is GPIO4 and is SDA
 D3 is GPIO0 and is connected to flash. It is pulled high internally, so should not be used as read (ok for output). if low will not boot

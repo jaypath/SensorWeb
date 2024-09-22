@@ -21,6 +21,14 @@ IP_TYPE SERVERIP[NUMSERVERS];
 
 WiFi_type WIFI_INFO;
 
+
+void SerialWrite(String msg) {
+  #ifdef _DEBUG
+    Serial.printf("%s",msg.c_str());
+  #endif
+  return;
+}
+
 void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   //ip is a 4 byte array
   ip[0] = m1;
@@ -66,24 +74,18 @@ uint8_t connectWiFi()
   }
   
   WiFi.mode(WIFI_STA);
-  #ifdef _DEBUG
-        Serial.println("wifi begin");
-  #endif
-
+  SerialWrite((String) "wifi begin\n");
+  
   WiFi.begin(ESP_SSID, ESP_PASS);
 
   if (WiFi.status() != WL_CONNECTED)  {
-    #ifdef _DEBUG
-      Serial.println();
-      Serial.print("Connecting");
-    #endif
+    SerialWrite((String) "Connecting\n");
+    
     #ifdef _USESSD1306
       oled.print("Connecting");
     #endif
     for (byte j=0;j<retries;j++) {
-      #ifdef _DEBUG
-      Serial.print(".");
-      #endif
+      SerialWrite((String) ".");
       #ifdef _USESSD1306
         oled.print(".");
       #endif
@@ -92,12 +94,8 @@ uint8_t connectWiFi()
       if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
-        #ifdef _DEBUG
-        Serial.println("");
-        Serial.print("Wifi OK. IP is ");
-        Serial.println(WIFI_INFO.MYIP.toString());
-        Serial.println("Connecting ArduinoOTA...");
-        #endif
+        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ". Connecting ArduinoOTA...\n");
+
         #ifdef _USESSD1306
           oled.clear();
           oled.setCursor(0,0);
@@ -112,9 +110,8 @@ uint8_t connectWiFi()
         
   }
 
-        #ifdef _DEBUG
-          Serial.printf("Failed to connect after %d trials.\n",connected);
-          #endif
+  SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
+          
 
   return connected;
 
@@ -149,38 +146,36 @@ byte arduinoID = WIFI_INFO.MYIP[3];
    arduinoID = ARDID;
 #endif
 
-  if (bitRead(snsreading->Flags,1) == 0) return false;
+if (bitRead(snsreading->Flags,1) == 0) return false;
+
+SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
+
+WiFiClient wfclient;
+HTTPClient http;
   
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: Sending data. Sensor is currently named %s. \n", snsreading->snsName);
-#endif
+byte ipindex=0;
+bool isGood = false;
 
-  WiFiClient wfclient;
-  HTTPClient http;
-    
-    byte ipindex=0;
-    bool isGood = false;
+  #ifdef _DEBUG
+    Serial.println(" ");
+  Serial.println("*****************");
+  Serial.println("Sending Data");
+  Serial.print("Device: ");
+      Serial.println(snsreading->snsName);
+  Serial.print("SnsType: ");
+      Serial.println(snsreading->snsType);
+  Serial.print("Value: ");
+      Serial.println(snsreading->snsValue);
+  Serial.print("LastLogged: ");
+      Serial.println(snsreading->LastReadTime);
+  Serial.print("isFlagged: ");
+      Serial.println(bitRead(snsreading->Flags,0));
+  Serial.print("isMonitored: ");
+      Serial.println(bitRead(snsreading->Flags,1));
+  Serial.print("Flags: ");
+      Serial.println(snsreading->Flags);          
 
-      #ifdef _DEBUG
-        Serial.println(" ");
-      Serial.println("*****************");
-      Serial.println("Sending Data");
-      Serial.print("Device: ");
-          Serial.println(snsreading->snsName);
-      Serial.print("SnsType: ");
-          Serial.println(snsreading->snsType);
-      Serial.print("Value: ");
-          Serial.println(snsreading->snsValue);
-      Serial.print("LastLogged: ");
-          Serial.println(snsreading->LastReadTime);
-      Serial.print("isFlagged: ");
-          Serial.println(bitRead(snsreading->Flags,0));
-      Serial.print("isMonitored: ");
-          Serial.println(bitRead(snsreading->Flags,1));
-      Serial.print("Flags: ");
-          Serial.println(snsreading->Flags);          
-
-      #endif
+  #endif
 
 
   

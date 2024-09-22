@@ -126,6 +126,9 @@ uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 //function declarations
 
 
+
+
+
 #ifdef _USELOWPOWER
 
 uint16_t SleepCounter = 0;
@@ -174,9 +177,7 @@ void setup()
   SERVERIP[1].IP = {192,168,68,106};
   SERVERIP[2].IP = {192,168,68,100};
 
-  #ifdef _DEBUG
-    Serial.println("servers set");
-  #endif
+  SerialWrite((String) "servers set");
 
   #ifdef _USESOILRES
     pinMode(_USESOILRES,OUTPUT);  
@@ -188,9 +189,7 @@ void setup()
   
 
 #ifdef _USESSD1306
-  #ifdef _DEBUG
-      Serial.println("oled begin");
-  #endif
+  SerialWrite((String)"oled begin");
   
   #if INCLUDE_SCROLLING == 0
   #error INCLUDE_SCROLLING must be non-zero. Edit SSD1306Ascii.h
@@ -247,9 +246,8 @@ void setup()
   #ifdef _USEBME680
 
   while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
-      #ifdef _DEBUG
-        Serial.print(F("-  Unable to find BME680. Trying again in 5 seconds.\n"));
-      #endif
+        SerialWrite((String)"-  Unable to find BME680. Trying again in 5 seconds.\n"));
+
       delay(5000);
     }  // of loop until device is located
     //Serial.print(F("- Setting 16x oversampling for all sensors\n"));
@@ -271,6 +269,7 @@ void setup()
   WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
   while (connectWiFi() != 0) {
     connectWiFi();
+    
   }
     
 
@@ -280,10 +279,8 @@ void setup()
   oled.println("set up time.");
 #endif
 
-  #ifdef _DEBUG
-    Serial.println("setuptime done. OTA next.");
-  #endif
-
+    SerialWrite((String)"setuptime done. OTA next.\n");
+ 
 #ifdef _USESSD1306
   oled.clear();
   oled.setCursor(0,0);
@@ -367,22 +364,23 @@ void setup()
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
-      oled.println("start Server.");
     #endif
 
-    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-    server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
-    server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
-    server.on("/SETTHRESH", handleSETTHRESH);               
-    server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
-    server.on("/NEXTSNS", handleNEXT);
-    server.on("/LASTSNS", handleLAST);
-    server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
-    server.begin();
 
-    #ifdef _DEBUG
-      Serial.println("HTML server started!");
+    #ifndef _USELOWPOWER
+      SerialWrite((String) "set up HTML server... ");
+      server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+      server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
+      server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
+      server.on("/SETTHRESH", handleSETTHRESH);               
+      server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
+      server.on("/NEXTSNS", handleNEXT);
+      server.on("/LASTSNS", handleLAST);
+      server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
+      server.begin();
+      SerialWrite((String) "HTML server started!\n");
     #endif
+
 
 
   /*
@@ -414,7 +412,7 @@ void setup()
     if (aht21.begin() != true)
     {
       for (byte retry = 0;retry<10;retry++) {
-        Serial.printf("AHT2x not connected or failed to load calibration coefficient. Retry number %i\n",retry); //(F()) save string to flash & keeps dynamic memory free
+        SerialWrite((String) "AHT2x not connected or failed to load calibration coefficient. Retry number " + (String) retry + "\n"); //(F()) save string to flash & keeps dynamic memory free
         if (aht21.begin() == true) continue;
       }
     }
@@ -422,9 +420,8 @@ void setup()
   #endif
 
   #ifdef DHTTYPE
-    #ifdef _DEBUG
-        Serial.println("dht begin");
-    #endif
+    SerialWrite((String) "dht begin\n");
+
     dht.begin();
   #endif
 
@@ -460,10 +457,7 @@ void setup()
 
   #endif
   #ifdef _USEBME
-      #ifdef _DEBUG
-        Serial.println("bme begin");
-    #endif
-
+    SerialWrite((String) "bme begin\n");
     while (!bme.begin()) {
       #ifdef _USESSD1306
         oled.println("BME failed.");
@@ -507,15 +501,11 @@ void setup()
 void loop() {
 
   if (checkTime()==false) {
-    #ifdef _DEBUG
-      Serial.print("Restarting because unixtime is ");
-      Serial.println(now());   
-    #endif
+    SerialWrite((String)"Restarting because unixtime is " + (String) now() + "\n");
     ESP.restart();
   }
 
   ArduinoOTA.handle();
-  server.handleClient();
   
   timeClient.update();
   if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
@@ -524,9 +514,7 @@ void loop() {
 
   #ifdef _USELOWPOWER
 
-    #ifdef _DEBUG
-      Serial.println("Checking for low power state.\n");
-    #endif
+    SerialWrite((String)"Checking for low power state.\n");
 
 
     /*
@@ -551,31 +539,29 @@ void loop() {
 
       //read and send everything now if sleep was long enough
         for (byte k=0;k<SENSORNUM;k++) {
-          #ifdef _DEBUG
-            Serial.printf("Going to attempt read and write if sensor %i\n",k);
-          #endif
+          SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\n");
         
           ReadData(&Sensors[k]); //read value 
           SendData(&Sensors[k]); //send value
         }
 
-      #ifdef _DEBUG
-        Serial.println("Entering sleep.");
-        Serial.flush();
-      #endif
+        SerialWrite((String) "Entering sleep.\n");
+      //  Serial.flush();
+      
       ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
 //will awaken with a soft reset, no need to do anything else
 
+  #endif
+
+  #ifndef _USELOWPOWER
+    server.handleClient();
   #endif
 
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
     
-    #ifdef _DEBUG
-      Serial.printf(".");
-
-    #endif
+    SerialWrite((String) ".");
 
     for (byte k=0;k<SENSORNUM;k++) {
       bool goodread = false;
@@ -608,10 +594,8 @@ void loop() {
 
 
   if (OldTime[2] != hour()) {
-    #ifdef _DEBUG
-      Serial.printf("\nNew hour... TimeUpdate running. \n");
+    SerialWrite((String) "\nNew hour... TimeUpdate running. \n");
 
-    #endif
     OldTime[2] = hour();
 
 
@@ -631,10 +615,8 @@ void loop() {
 
     #endif
     #ifdef _CHECKAIRCON
-        #ifdef _DEBUG
-          Serial.printf("Reset AC...");
 
-        #endif
+      SerialWrite((String) "Reset AC...\n");
 
      for (byte j=0;j<SENSORNUM;j++)  {
       if (Sensors[j].snsType == 56) {
@@ -651,18 +633,13 @@ void loop() {
     #endif
 
     #ifdef _CHECKHEAT
-    #ifdef _DEBUG
-      Serial.printf("Reset heater time.");
-
-    #endif
-
-
-     for (byte j=0;j<SENSORNUM;j++)  {
-      if (Sensors[j].snsType == 55) {
-        SendData(&Sensors[j]);
-        Sensors[j].snsValue = 0;
+      SerialWrite((String) "Reset heater time.\n");
+      for (byte j=0;j<SENSORNUM;j++)  {
+        if (Sensors[j].snsType == 55) {
+          SendData(&Sensors[j]);
+          Sensors[j].snsValue = 0;
+        }
       }
-     }
     #endif
 
     #ifdef _DEBUG
