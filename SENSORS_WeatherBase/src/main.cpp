@@ -2363,10 +2363,12 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Free stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
 
-  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
+/*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   WEBHTML += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
   WEBHTML += "<button type=\"submit\">Update Time</button><br>";
   WEBHTML += "</FORM><br>";
+*/
+
 
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";

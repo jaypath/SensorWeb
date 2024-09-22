@@ -6,24 +6,25 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
-//#define _WEBCHART 2
+#define _WEBCHART 2
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,9}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {0,168,68,90}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,90}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "At2" //unique name
-#define SENSORNUM 7 //be sure this matches SENSORTYPES
+#define ARDNAME "Att" //unique name
+#define SENSORNUM 5 //be sure this matches SENSORTYPES
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12,56,57};
+//const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12,56,57};
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12};
 
 //#define _USEDHT 1
 #define _USEAHT 1
@@ -40,7 +41,7 @@ const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,10,12,56,57};
 //#define _USELOWPOWER 10e6 //must also have _USEBATTERY
 
 //binary switches
-#define _CHECKAIRCON 1
+//#define _CHECKAIRCON 1
 //#define _CHECKHEAT 1
 
 #ifdef _USELEAK
