@@ -128,7 +128,7 @@ uint  sc_interval;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
         #ifdef _USESOILCAP
-          Sensors[i].snsPin=SOILPIN;
+          Sensors[i].snsPin=SOILPIN; //input, usually A0
           snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
           Sensors[i].limitUpper = 290;
           Sensors[i].limitLower = 25;
@@ -136,6 +136,8 @@ uint  sc_interval;
           Sensors[i].SendingInt=600;
         #endif
         #ifdef _USESOILRES
+          pinMode(_USESOILRES,OUTPUT);  
+
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
           Sensors[i].limitUpper = SOILR_MAX;

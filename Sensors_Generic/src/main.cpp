@@ -179,9 +179,6 @@ void setup()
 
   SerialWrite((String) "servers set");
 
-  #ifdef _USESOILRES
-    pinMode(_USESOILRES,OUTPUT);  
-  #endif
 
 
   Wire.begin(); 
@@ -266,6 +263,7 @@ void setup()
   oled.setCursor(0,0);
   oled.println("WiFi Starting.");
 #endif
+
   WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
   while (connectWiFi() != 0) {
     connectWiFi();
@@ -288,67 +286,6 @@ void setup()
 #endif
 
 
-    // Port defaults to 8266
-  // ArduinoOTA.setPort(8266);
-
-  // Hostname defaults to esp8266-[ChipID]
-   ArduinoOTA.setHostname(ARDNAME);
-
-  // No authentication by default
-  // ArduinoOTA.setPassword((const char *)"123");
-
-  ArduinoOTA.onStart([]() {
-    #ifdef _DEBUG
-    Serial.println("OTA started");
-    #endif
-  });
-  ArduinoOTA.onEnd([]() {
-    #ifdef _DEBUG
-    Serial.println("OTA End");
-    #endif
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef _DEBUG
-        Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-    #endif
-    #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      oled.println("Receiving OTA:");
-      String strbuff = "Progress: " + (100*progress / total);
-      oled.println("OTA start.");   
-      oled.println(strbuff);
-    #endif
-
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef _DEBUG
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    #endif
-    #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      String strbuff;
-      strbuff = "Error[%u]: " + (String) error + " ";
-      oled.print(strbuff);
-      if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
-      else if (error == OTA_END_ERROR) oled.println("End Failed");
-    #endif
-  });
-  ArduinoOTA.begin();
-    #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      oled.println("OTA OK.");      
-    #endif
 
     #ifdef _USESSD1306
       oled.clear();
@@ -368,6 +305,70 @@ void setup()
 
 
     #ifndef _USELOWPOWER
+      //OTA
+        // Port defaults to 8266
+      // ArduinoOTA.setPort(8266);
+
+      // Hostname defaults to esp8266-[ChipID]
+      ArduinoOTA.setHostname(ARDNAME);
+
+      // No authentication by default
+      // ArduinoOTA.setPassword((const char *)"123");
+
+      ArduinoOTA.onStart([]() {
+        #ifdef _DEBUG
+        Serial.println("OTA started");
+        #endif
+      });
+      ArduinoOTA.onEnd([]() {
+        #ifdef _DEBUG
+        Serial.println("OTA End");
+        #endif
+      });
+      ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        #ifdef _DEBUG
+            Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+        #endif
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          oled.println("Receiving OTA:");
+          String strbuff = "Progress: " + (100*progress / total);
+          oled.println("OTA start.");   
+          oled.println(strbuff);
+        #endif
+
+      });
+      ArduinoOTA.onError([](ota_error_t error) {
+        #ifdef _DEBUG
+          Serial.printf("Error[%u]: ", error);
+          if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+          else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+          else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+          else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+          else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        #endif
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          String strbuff;
+          strbuff = "Error[%u]: " + (String) error + " ";
+          oled.print(strbuff);
+          if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
+          else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
+          else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
+          else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
+          else if (error == OTA_END_ERROR) oled.println("End Failed");
+        #endif
+      });
+      ArduinoOTA.begin();
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          oled.println("OTA OK.");      
+        #endif
+
+
       SerialWrite((String) "set up HTML server... ");
       server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
       server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
@@ -505,9 +506,14 @@ void loop() {
     ESP.restart();
   }
 
-  ArduinoOTA.handle();
   
   timeClient.update();
+  #ifndef _USELOWPOWER
+    ArduinoOTA.handle();
+    server.handleClient();
+  #endif
+
+
   if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
 
   time_t t = now(); // store the current time in time variable t
@@ -553,10 +559,7 @@ void loop() {
 
   #endif
 
-  #ifndef _USELOWPOWER
-    server.handleClient();
-  #endif
-
+  
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second

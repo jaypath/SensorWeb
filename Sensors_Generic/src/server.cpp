@@ -94,7 +94,7 @@ uint8_t connectWiFi()
       if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
-        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ". Connecting ArduinoOTA...\n");
+        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
 
         #ifdef _USESSD1306
           oled.clear();

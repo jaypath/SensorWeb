@@ -1,7 +1,7 @@
 //#define DEBUG_ 0
 //#define _WEBDEBUG 0
 
-//Version 11.31 - 
+//Version 12 - 
 /*
  * v11.1
  * now obtains info from Kiyaan's server
@@ -12,6 +12,8 @@
  * Receives data directly from sensors
  * 
  * v11.3 new sensor sending definition, including flags
+ * 
+ * v12 - many changes. sends daa to google drive connected arduino
   */
 
 /*
@@ -183,8 +185,8 @@ union convertBYTE {
   char str;
   uint8_t  val;
 };
-
-union convertSensorVal {
+ 
+union convertSensorVal {./
   SensorVal a;
   uint8_t b[14];
 };
@@ -2107,7 +2109,7 @@ void loop() {
         if (Sensors[i].snsID>0 && t-Sensors[i].timeLogged<3600 && bitRead(Sensors[i].Flags,0) ) { //only care about flags if the reading was within an hour
           I.isFlagged = true; //only flag for soil or temp or battery
           #ifdef _WEBDEBUG
-            WEBDEBUG = WEBDEBUG + "FLAGED SENSOR: " + (String) Sensors[i].ardID + " " + (String) Sensors[i].snsName + "<br>";  
+            WEBDEBUG = WEBDEBUG + "FLAGGED SENSOR: " + (String) Sensors[i].ardID + " " + (String) Sensors[i].snsName + "<br>";  
           #endif
         }
       }

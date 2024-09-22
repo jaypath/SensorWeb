@@ -6,11 +6,11 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
-#define _WEBCHART 2
+//#define _WEBCHART 2
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {3,4}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
 const byte ASSIGNEDIP[4] = {192,168,68,120}; //assign here if this sensor has a dedicated IP.
@@ -18,10 +18,10 @@ const byte ASSIGNEDIP[4] = {192,168,68,120}; //assign here if this sensor has a 
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "XXX" //unique name
-#define SENSORNUM 3 //be sure this matches SENSORTYPES
+#define ARDNAME "Bmnt" //unique name
+#define SENSORNUM 5 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5};
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,58,60,61};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
@@ -33,7 +33,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-#define _USESOILRES D5
+//#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
@@ -173,7 +173,7 @@ GPIO27 - Supports internal pull-up resistor
 */
 
 /* for ESP8266 12e
-D0 is GPIO 16, and is used for wake. Does not support interrupt
+D0 is GPIO 16, and is used for wake. Does not support interrupt. must be pulled high (along with EN) at start. connect 16 to EN for low power state
 D1 is GPIO5 and is SCL
 D2 is GPIO4 and is SDA
 D3 is GPIO0 and is connected to flash. It is pulled high internally, so should not be used as read (ok for output). if low will not boot
