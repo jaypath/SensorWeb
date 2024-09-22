@@ -138,7 +138,7 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 
 
 
-#define SENSORNUM 70
+#define SENSORNUM 60
 
 #define NUMSCREEN 2
 #define SECSCREEN 15
@@ -171,6 +171,7 @@ struct SensorVal {
 };
 
 
+/*
 //gen unions
 union convertULONG {
   char str[4];
@@ -186,10 +187,11 @@ union convertBYTE {
   uint8_t  val;
 };
  
-union convertSensorVal {./
+union convertSensorVal {
   SensorVal a;
   uint8_t b[14];
 };
+*/
 
 //globals
 int DSTOFFSET = 0;
@@ -232,6 +234,7 @@ uint8_t Heat=0,Cool=0,Fan=0;
 
 time_t ALIVESINCE = 0;
 
+String WEBHTML;
 
 //fuction declarations
 int16_t findDev(struct SensorVal *S, bool oldest = false);
@@ -365,7 +368,8 @@ void setup()
   I.ScreenNum = 0;
   I.redraw = SECSCREEN;
   I.isFlagged = false;
-  
+  WEBHTML.reserve(7500);
+
   #ifdef DEBUG_
     Serial.begin(115200);
   #endif
@@ -2236,12 +2240,11 @@ void handleREQUESTUPDATE() {
 
 void handleGETSTATUS() {
   //someone requested the server's status
-  String currentLine = "";
-  currentLine = "STATUS:" + (String) LAST_WEB_REQUEST + ";";
-  currentLine += "ALIVESINCE:" + (String) ALIVESINCE + ";";
-  currentLine += "NUMDEVS:" + (String) countDev() + ";";
+  WEBHTML = "STATUS:" + (String) LAST_WEB_REQUEST + ";";
+  WEBHTML += "ALIVESINCE:" + (String) ALIVESINCE + ";";
+  WEBHTML += "NUMDEVS:" + (String) countDev() + ";";
   
-  server.send(200, "text/plain", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  server.send(200, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
   return;
 
@@ -2251,34 +2254,34 @@ void handleREQUESTWEATHER() {
 //if no parameters passed, return current temp, max, min, today weather ID, pop, and snow amount
 //otherwise, return the index value for the requested value
 
-  String currentLine = "";
+  WEBHTML = "";
 
   if (server.args()==0) {
-        currentLine += (String) hourly_temp[0] + ";"; //current temp
-        currentLine += (String) daily_tempMax[0] + ";"; //dailymax
-        currentLine += (String) daily_tempMin[0] + ";"; //dailymin
-        currentLine += (String) daily_weatherID[0] + ";"; //dailyID
-        currentLine += (String) daily_pop[0] + ";"; //POP
-        currentLine += (String) daily_snow[0] + ";"; //snow
+        WEBHTML += (String) hourly_temp[0] + ";"; //current temp
+        WEBHTML += (String) daily_tempMax[0] + ";"; //dailymax
+        WEBHTML += (String) daily_tempMin[0] + ";"; //dailymin
+        WEBHTML += (String) daily_weatherID[0] + ";"; //dailyID
+        WEBHTML += (String) daily_pop[0] + ";"; //POP
+        WEBHTML += (String) daily_snow[0] + ";"; //snow
   } else {
     for (uint8_t i = 0; i < server.args(); i++) {
-      if (server.argName(i)=="hourly_temp") currentLine += (String) hourly_temp[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="daily_tempMax") currentLine += (String) daily_tempMax[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="daily_tempMin") currentLine += (String) daily_tempMin[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="daily_weatherID") currentLine += (String) daily_weatherID[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="hourly_weatherID") currentLine += (String) hourly_weatherID[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="daily_pop") currentLine += (String) daily_pop[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="hourly_pop") currentLine += (String) hourly_pop[server.arg(i).toInt()] + ";";
-      if (server.argName(i)=="daily_snow") currentLine += (String) daily_snow[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="hourly_temp") WEBHTML += (String) hourly_temp[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="daily_tempMax") WEBHTML += (String) daily_tempMax[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="daily_tempMin") WEBHTML += (String) daily_tempMin[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="daily_weatherID") WEBHTML += (String) daily_weatherID[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) hourly_weatherID[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="daily_pop") WEBHTML += (String) daily_pop[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="hourly_pop") WEBHTML += (String) hourly_pop[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="daily_snow") WEBHTML += (String) daily_snow[server.arg(i).toInt()] + ";";
       if (server.argName(i)=="hour") {
         uint32_t temptime = server.arg(i).toDouble();
-        if (temptime==0) currentLine += (String) hour() + ";";
-        else currentLine += (String) hour(temptime) + ";";
+        if (temptime==0) WEBHTML += (String) hour() + ";";
+        else WEBHTML += (String) hour(temptime) + ";";
       }
     }
   }
   
-  server.send(200, "text/plain", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  server.send(200, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
   return;
 }
@@ -2298,29 +2301,28 @@ void handleTIMEUPDATE() {
 void handleRoot() {
   LAST_WEB_REQUEST = now(); //this is the time of the last web request
 
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
-  currentLine =currentLine  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
-  currentLine =currentLine  + (String) "body {  font-family: arial, sans-serif; }";
-  currentLine =currentLine  + "</style></head>";
-  currentLine =currentLine  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+  WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
+  WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
+  WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
+  WEBHTML =WEBHTML  + "</style></head>";
+  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
 
-  currentLine = currentLine + "<body>";
+  WEBHTML = WEBHTML + "<body>";
   
-  currentLine = currentLine + "<h1>Pleasant Weather Server</h1>";
-  currentLine = currentLine + "<br>";
-  currentLine = currentLine + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
-  currentLine = currentLine + "Free Heap Memory: " + ESP.getFreeHeap() + "<br>";  
-  currentLine = currentLine + "Free stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
+  WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
+  WEBHTML = WEBHTML + "<br>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Free stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
 
-  currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
-  currentLine += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
-  currentLine += "<button type=\"submit\">Update Time</button><br>";
-  currentLine += "</FORM><br>";
+  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
+  WEBHTML += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
+  WEBHTML += "<button type=\"submit\">Update Time</button><br>";
+  WEBHTML += "</FORM><br>";
 
-  currentLine += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
-  currentLine = currentLine + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
+  WEBHTML += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
+  WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
-  currentLine = currentLine + "<br>";      
+  WEBHTML = WEBHTML + "<br>";      
 
 
   byte used[SENSORNUM];
@@ -2332,97 +2334,91 @@ void handleRoot() {
   char tempchar[9] = "";
   time_t t=now();
 
-  currentLine = currentLine + "<p><table id=\"Logs\" style=\"width:70%\">";      
-  currentLine = currentLine + "<tr><th><p><button onclick=\"sortTable(0)\">IP Address</button></p></th><th>ArdID</th><th>Sensor</th><th>Value</th><th><button onclick=\"sortTable(4)\">Sns Type</button></p></th><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th>Last Logged</th><th>Last Recvd</th><th>Flags</th></tr>"; 
+  WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
 
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
       used[usedINDEX++] = j;
-      currentLine = currentLine + "<tr><td><a href=\"http://" + (String) Sensors[j].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[j].IP.toString() + "</a></td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].ardID + "</td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsName + "</td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsValue + "</td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
-      currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,7) ? "*" : "" ) + "</td>";
-      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].timeRead,"mm/dd hh:nn:ss") + "</td>";
-      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-      Byte2Bin(Sensors[j].Flags,tempchar,true);
-      currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
-      currentLine = currentLine + "</tr>";
+      WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[j].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[j].IP.toString() + "</a></td>";
+      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,7) ? "*" : "" ) + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+      WEBHTML = WEBHTML + "</tr>";
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
         if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].ardID==Sensors[j].ardID) {
           used[usedINDEX++] = jj;
-          currentLine = currentLine + "<tr><td><a href=\"http://" + (String) Sensors[jj].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[jj].IP.toString() + "</a></td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].ardID + "</td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsName + "</td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsValue + "</td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
-          currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
-          currentLine = currentLine + "<td>" +  (String) dateify(Sensors[jj].timeRead,"mm/dd hh:nn:ss") + "</td>";
-          currentLine = currentLine + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-          Byte2Bin(Sensors[jj].Flags,tempchar,true);
-          currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
-          currentLine = currentLine + "</tr>";
+          WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[jj].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[jj].IP.toString() + "</a></td>";
+          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].ardID + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsName + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsValue + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
+          WEBHTML = WEBHTML + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+          WEBHTML = WEBHTML + "</tr>";
         }
       }
     }
 
   }
 
-  currentLine += "</table>";   
+  WEBHTML += "</table>";   
 
   //add chart
-  currentLine += "<br>-----------------------<br>\n";
-  currentLine += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
-  currentLine += "<br>-----------------------<br>\n";
+  WEBHTML += "<br>-----------------------<br>\n";
+  WEBHTML += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
+  WEBHTML += "<br>-----------------------<br>\n";
 
 
-  currentLine += "</p>";
+  WEBHTML += "</p>";
 
   #ifdef _WEBDEBUG
-      currentLine += "<p>WEBDEBUG: <br>"+ WEBDEBUG + "</p><br>";
+      WEBHTML += "<p>WEBDEBUG: <br>"+ WEBDEBUG + "</p><br>";
     #endif
 
-  currentLine =currentLine  + "<script>";
+  WEBHTML =WEBHTML  + "<script>";
 
   //chart functions
-    currentLine =currentLine  + "google.charts.load('current',{packages:['corechart']});\n";
-    currentLine =currentLine  + "google.charts.setOnLoadCallback(drawChart);\n";
+    WEBHTML =WEBHTML  + "google.charts.load('current',{packages:['corechart']});\n";
+    WEBHTML =WEBHTML  + "google.charts.setOnLoadCallback(drawChart);\n";
     
-    currentLine += "function drawChart() {\n";
+    WEBHTML += "function drawChart() {\n";
 
-    currentLine += "const data = google.visualization.arrayToDataTable([\n";
-    currentLine += "['t','val'],\n";
+    WEBHTML += "const data = google.visualization.arrayToDataTable([\n";
+    WEBHTML += "['t','val'],\n";
 
     for (int jj = 48-1;jj>=0;jj--) {
-      currentLine += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-t)/60)) + "," + (String) batteryArray[jj] + "]";
-      if (jj>0) currentLine += ",";
-      currentLine += "\n";
+      WEBHTML += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-t)/60)) + "," + (String) batteryArray[jj] + "]";
+      if (jj>0) WEBHTML += ",";
+      WEBHTML += "\n";
     }
-    currentLine += "]);\n\n";
+    WEBHTML += "]);\n\n";
 
     
     // Set Options
-    currentLine += "const options = {\n";
-    currentLine += "hAxis: {title: 'min from now'}, \n";
-    currentLine += "vAxis: {title: 'Battery%'},\n";
-    currentLine += "legend: 'none'\n};\n";
+    WEBHTML += "const options = {\n";
+    WEBHTML += "hAxis: {title: 'min from now'}, \n";
+    WEBHTML += "vAxis: {title: 'Battery%'},\n";
+    WEBHTML += "legend: 'none'\n};\n";
 
-    currentLine += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
-    currentLine += "chart.draw(data, options);\n"; 
-    currentLine += "}\n";
+    WEBHTML += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
+    WEBHTML += "chart.draw(data, options);\n"; 
+    WEBHTML += "}\n";
 
 
-  currentLine += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
-  currentLine += "</script> \n";
-  currentLine += "</body></html>\n";   
+  WEBHTML += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
+  WEBHTML += "</script> \n";
+  WEBHTML += "</body></html>\n";   
 
    #ifdef DEBUG_
-      Serial.println(currentLine);
+      Serial.println(WEBHTML);
     #endif
     
-  server.send(200, "text/html", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  server.send(200, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
 }
 
