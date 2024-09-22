@@ -112,12 +112,6 @@ union convertINT {
 #endif
 
 
-#ifdef _CHECKHEAT
-  String HEATZONE[6] = {"FamRm","DinRm","Office","MastBR","Upstrs","Den"};
-  uint8_t HEATPIN = 0;
-#endif
-
-
 byte OldTime[5] = {0,0,0,0,0};
 
 time_t ALIVESINCE = 0;
