@@ -136,6 +136,7 @@ byte find_limit_sensortypes(String snsname, byte snsType,bool highest);
 byte find_sensor_count(String snsname,byte snsType);
 byte find_sensor_name(String snsname,byte snsType,byte snsID);
 byte find_sensor_type(byte snsType,byte snsID=255);
+float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 
 uint8_t countDev();
 void setupSensors();

@@ -81,7 +81,7 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%02d",day(t));
   dateformat.replace("dd",holder);
   
-  snprintf(holder,5,"%02d",year(t));
+  snprintf(holder,4,"%02d",year(t));
   dateformat.replace("yyyy",holder);
   
   snprintf(holder,4,"%02d",year(t)-2000);

@@ -13,6 +13,10 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,3}; //which sensors should be stored for charting?
 #endif
 
+const byte ASSIGNEDIP[4] = {192,168,68,104}; //assign here if this sensor has a dedicated IP.
+#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
+#define ESP_PASS "snakesquirrel" // Your network password here
+
 
 #define ARDNAME "LivRm" //unique name
 #define SENSORNUM 3 //be sure this matches SENSORTYPES
@@ -148,13 +152,17 @@ GPIO27 - Supports internal pull-up resistor
 
 
 //automatically detect arduino type
+//automatically detect arduino type
 #if defined (ARDUINO_ARCH_ESP8266)
   #define _USE8266 1
+  #define _ADCRATE 1023
 #elif defined(ESP32)
   #define _USE32
+  #define _ADCRATE 4095
 #else
   #error Arduino architecture unrecognized by this code.
 #endif
+
 
 
 #endif

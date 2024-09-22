@@ -4,7 +4,6 @@
 #include "server.hpp"
 #include <timesetup.hpp>
 
-extern IPAddress MyIP;
 
 //this server
 #ifdef _USE8266
@@ -20,47 +19,163 @@ bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
 
+WiFi_type WIFI_INFO;
 
+
+void SerialWrite(String msg) {
+  #ifdef _DEBUG
+    Serial.printf("%s",msg.c_str());
+  #endif
+  return;
+}
+
+void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
+  //ip is a 4 byte array
+  ip[0] = m1;
+  ip[1] = m2;
+  ip[2] = m3;
+  ip[3] = m4;
+}
+
+
+bool WifiStatus(void) {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  return false;
+  
+}
+uint8_t connectWiFi()
+{
+  //rerturn 0 if connected, else number of times I tried and failed
+  uint8_t retries = 100;
+  byte connected = 0;
+  IPAddress temp;
+
+  assignIP(WIFI_INFO.DHCP,192,168,68,1);
+  assignIP(WIFI_INFO.DNS,192,168,68,1);
+  assignIP(WIFI_INFO.GATEWAY,192,168,68,1);
+  assignIP(WIFI_INFO.SUBNET,255,255,252,0);
+
+
+  if (WifiStatus()) {
+    WIFI_INFO.MYIP = WiFi.localIP();
+    WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    return connected;
+  } else {
+    if (ASSIGNEDIP[0]==0) {
+      WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
+    } else {
+      WIFI_INFO.MYIP[0] = ASSIGNEDIP[0];    
+      WIFI_INFO.MYIP[1] = ASSIGNEDIP[1];    
+      WIFI_INFO.MYIP[2] = ASSIGNEDIP[2];    
+      WIFI_INFO.MYIP[3] = ASSIGNEDIP[3];    
+
+      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+    }
+  }
+  
+  WiFi.mode(WIFI_STA);
+  SerialWrite((String) "wifi begin\n");
+  
+  WiFi.begin(ESP_SSID, ESP_PASS);
+
+  if (WiFi.status() != WL_CONNECTED)  {
+    SerialWrite((String) "Connecting\n");
+    
+    #ifdef _USESSD1306
+      oled.print("Connecting");
+    #endif
+    for (byte j=0;j<retries;j++) {
+      SerialWrite((String) ".");
+      #ifdef _USESSD1306
+        oled.print(".");
+      #endif
+
+      delay(250);
+      if (WifiStatus()) {
+        WIFI_INFO.MYIP = WiFi.localIP();
+        
+        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
+
+        #ifdef _USESSD1306
+          oled.clear();
+          oled.setCursor(0,0);
+          oled.println("WiFi OK.");
+          oled.println("timesetup next.");      
+        #endif
+
+        return 0;
+      }
+      connected = j;
+    }
+        
+  }
+
+  SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
+          
+
+  return connected;
+
+}
+
+
+
+bool Server_Message(String URL, String* payload, int* httpCode) {
+  WiFiClient wfclient;
+  HTTPClient http;
+
+
+  if(WiFi.status()== WL_CONNECTED){
+     http.useHTTP10(true);
+     http.begin(wfclient,URL.c_str());
+     *httpCode = http.GET();
+     *payload = http.getString();
+     http.end();
+     return true;
+  } 
+
+  return false;
+}
 
 
 bool SendData(struct SensorVal *snsreading) {
-byte arduinoID = MyIP[3];
+
+if (checkTime()==false) return false;
+
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
 
-  if (bitRead(snsreading->Flags,1) == 0) return false;
+if (bitRead(snsreading->Flags,1) == 0) return false;
+
+SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
+
+WiFiClient wfclient;
+HTTPClient http;
   
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: Sending data. Sensor is currently named %s. \n", snsreading->snsName);
-#endif
+byte ipindex=0;
+bool isGood = false;
 
-  WiFiClient wfclient;
-  HTTPClient http;
-    
-    byte ipindex=0;
-    bool isGood = false;
+  #ifdef _DEBUG
+    Serial.println(" ");
+  Serial.println("*****************");
+  Serial.println("Sending Data");
+  Serial.print("Device: ");
+      Serial.println(snsreading->snsName);
+  Serial.print("SnsType: ");
+      Serial.println(snsreading->snsType);
+  Serial.print("Value: ");
+      Serial.println(snsreading->snsValue);
+  Serial.print("LastLogged: ");
+      Serial.println(snsreading->LastReadTime);
+  Serial.print("isFlagged: ");
+      Serial.println(bitRead(snsreading->Flags,0));
+  Serial.print("isMonitored: ");
+      Serial.println(bitRead(snsreading->Flags,1));
+  Serial.print("Flags: ");
+      Serial.println(snsreading->Flags);          
 
-      #ifdef _DEBUG
-        Serial.println(" ");
-      Serial.println("*****************");
-      Serial.println("Sending Data");
-      Serial.print("Device: ");
-          Serial.println(snsreading->snsName);
-      Serial.print("SnsType: ");
-          Serial.println(snsreading->snsType);
-      Serial.print("Value: ");
-          Serial.println(snsreading->snsValue);
-      Serial.print("LastLogged: ");
-          Serial.println(snsreading->LastReadTime);
-      Serial.print("isFlagged: ");
-          Serial.println(bitRead(snsreading->Flags,0));
-      Serial.print("isMonitored: ");
-          Serial.println(bitRead(snsreading->Flags,1));
-      Serial.print("Flags: ");
-          Serial.println(snsreading->Flags);          
-
-      #endif
+  #endif
 
 
   
@@ -69,7 +184,7 @@ byte arduinoID = MyIP[3];
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + MyIP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + WIFI_INFO.MYIP.toString() + "," + "&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -105,21 +220,11 @@ byte arduinoID = MyIP[3];
           Serial.println(" ");
         #endif
 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
 
         if (httpCode == 200) {
           isGood = true;
           SERVERIP[ipindex].server_status = httpCode;
         } 
-    #ifdef _DEBUG
-      Serial.printf("------>SENDDATA: Sensor is now named %s. \n", snsreading->snsName);
-    #endif
-
-    #ifdef _DEBUG
-      Serial.printf("SENDDATA: Sent to %d. Sensor is now named %s. \n", ipindex,snsreading->snsName);
-    #endif
 
       ipindex++;
 
@@ -127,9 +232,6 @@ byte arduinoID = MyIP[3];
   
     
   }
-#ifdef _DEBUG
-  Serial.printf("SENDDATA: End of sending data. Sensor is now named %s. \n", snsreading->snsName);
-#endif
 
      return isGood;
 
@@ -261,7 +363,7 @@ double limitUpper=-1, limitLower=-1;
 uint16_t PollingInt=0;
   uint16_t SendingInt=0;
 byte k;
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -310,7 +412,7 @@ byte arduinoID = MyIP[3];
 
 
 void handleRoot() {
-byte arduinoID = MyIP[3];
+byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
    arduinoID = ARDID;
 #endif
@@ -328,7 +430,7 @@ currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
 
-currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + MyIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
@@ -425,6 +527,8 @@ currentLine += "<br>-----------------------<br>\n";
 
 
 
+/* do not do this. Use sensor charts instead
+
   #ifdef _USEBARPRED
     currentLine += "<p>";
     currentLine += "Hourly_air_pressures (most recent [top] entry was ";
@@ -439,7 +543,8 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine += "</p>\n";
 
 
-  #endif 
+  #endif
+  */ 
 
   currentLine =currentLine  + "<script>\n";
 
@@ -478,9 +583,6 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine += "</body>\n</html>\n";
 
-   #ifdef _DEBUG
-      Serial.println(currentLine);
-    #endif
 
     //IF USING PROGMEM: use send_p   !!
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client

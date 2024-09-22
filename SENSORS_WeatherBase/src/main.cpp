@@ -238,6 +238,7 @@ String WEBHTML;
 
 //fuction declarations
 int16_t findDev(struct SensorVal *S, bool oldest = false);
+int16_t findSns(byte snstype, bool newest = false);
 void checkHeat(byte* heat, byte* cool, byte* fan);
 byte find_sensor_name(String snsname, byte snsType, byte snsID = 255);
 byte find_sensor_count(String snsname,byte snsType);
@@ -270,7 +271,9 @@ void handleReboot();
 void handleNotFound();
 void handleGETSTATUS();
 void handlePost();
-void handleRoot();
+void handleRoot(void);
+void handleALL(void);
+void handlerForRoot(bool allsensors=false);
 void handleREQUESTUPDATE();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
@@ -368,7 +371,7 @@ void setup()
   I.ScreenNum = 0;
   I.redraw = SECSCREEN;
   I.isFlagged = false;
-  WEBHTML.reserve(7000);
+
 
   #ifdef DEBUG_
     Serial.begin(115200);
@@ -482,6 +485,7 @@ tft.println("Connecting ArduinoOTA...");
 
 
     server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+    server.on("/ALLSENSORS", handleALL);               // Call the 'handleall' function when a client requests URI "/"
     server.on("/POST", handlePost);   
     server.on("/REQUESTUPDATE",handleREQUESTUPDATE);
     server.on("/CLEARSENSOR",handleCLEARSENSOR);
@@ -503,12 +507,11 @@ tft.println("Connecting ArduinoOTA...");
     timeUpdate();
 
     tft.print("TimeClient OK.  ");
-    ALIVESINCE = now();
-  
-
     tft.println("Starting...");
 
     delay(250);
+
+    ALIVESINCE = now();
 
 }
 
@@ -600,7 +603,42 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
   return -1; //dev not found
 }
 
+int16_t findSns(byte snstype, bool newest) {
+  //find the first (or newest) instance of a sensor of tpe snstype
+  
+  if (snstype==0) {
+        #ifdef DEBUG_
+          Serial.println("FINDDEV: you passed a zero index.");
+        #endif
+
+    return -1;  //can't find a 0 id sensor!
+  }
+
+  uint16_t newestInd = -1;
+  uint32_t newestTime = 0;
+
+  for (int j=0;j<SENSORNUM;j++)  {
+      if (Sensors[j].snsType == snstype && Sensors[j].timeLogged > newestTime) {
+        if (newest==false) return j;
+        newestInd = j;
+        newestTime = Sensors[j].timeLogged;
+
+
+        #ifdef DEBUG_
+          Serial.print("FINDSNS: I foud this dev, and the index is: ");
+          Serial.println(j);
+        #endif
+
+      }
+  }
+        
+  return newestInd;
+
+}  
+
+
 double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uint32_t MoreRecentThan) {
+  //return average of snstype
   double val = 0;
   byte count = 0;
   bool flagstat = true;
@@ -2298,9 +2336,20 @@ void handleTIMEUPDATE() {
 }
 
 
-void handleRoot() {
+void handleRoot(void) {
+  handlerForRoot(false);
+}
+
+void handleALL(void) {
+  handlerForRoot(true);
+}
+
+void handlerForRoot(bool allsensors) {
+  WEBHTML.reserve(7000);
+
   LAST_WEB_REQUEST = now(); //this is the time of the last web request
 
+  WEBHTML = "";
   WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
   WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
   WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
@@ -2319,7 +2368,7 @@ void handleRoot() {
   WEBHTML += "<button type=\"submit\">Update Time</button><br>";
   WEBHTML += "</FORM><br>";
 
-  WEBHTML += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
+  WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
   WEBHTML = WEBHTML + "<br>";      
@@ -2336,7 +2385,7 @@ void handleRoot() {
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
-
+    if (allsensors && bitRead(Sensors[j].Flags,1)==0) continue;
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
       used[usedINDEX++] = j;
       WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[j].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[j].IP.toString() + "</a></td>";
@@ -2349,6 +2398,7 @@ void handleRoot() {
       WEBHTML = WEBHTML + "</tr>";
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
+        if (allsensors && bitRead(Sensors[jj].Flags,1)==0) continue;
         if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].ardID==Sensors[j].ardID) {
           used[usedINDEX++] = jj;
           WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[jj].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[jj].IP.toString() + "</a></td>";
@@ -2362,7 +2412,6 @@ void handleRoot() {
         }
       }
     }
-
   }
 
   WEBHTML += "</table>";   
@@ -2450,6 +2499,50 @@ uint8_t tempIP[4] = {0,0,0,0};
   
   int sn = findDev(&S,true);
 
+  //special cases
+
+  //bmp temp received... check for AHT
+  if (S.snsType == 10 && findSns(4,false)>-1) {
+    if (sn>=0) {
+      //already stored a bmp, so erase that
+      initSensor(findSns(10,false));
+    }
+    server.send(202, "text/plain", "Received, but rejected the data because this is BMP and you sent AHT"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    return;
+  }
+
+  //AHT_T received... check for BMP
+  if (S.snsType == 4 && findSns(10,false)>-1) {
+    if (sn<0)    sn = findSns(10,false); //replace BMP_t with AHT_t
+    else {
+      //AHT was present so I will replace with this read, but bmp was ALSO present... erase that
+      initSensor(findSns(10,false));
+    }
+  }
+
+  //battery voltage received... check for bat %
+  if (S.snsType == 60 && findSns(61,false)>-1) {
+    if (sn>=0) {
+      //already stored a voltage, so erase that
+      initSensor(findSns(60,false));
+    }
+    
+    server.send(202, "text/plain", "Received, but rejected the data because this is voltage and you sent %"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    return;
+  }
+
+  //baT % received... check for voltage
+  if (S.snsType == 61 && findSns(60,false)>-1) {
+    if (sn<0)    sn = findSns(60,false); //replace volt with %
+    else {
+      //% was present so I will replace with this read, but volt was ALSO present... erase that
+      initSensor(findSns(60,false));
+    }
+  }
+
+// END special cases
+
+ 
 
   if((S.snsType==9 || S.snsType == 13) && (LAST_BAR_READ==0 || LAST_BAR_READ < t - 60*60)) { //pressure
     LAST_BAR_READ = S.timeRead;
@@ -2463,7 +2556,10 @@ uint8_t tempIP[4] = {0,0,0,0};
   }
 
 
-  if (sn<0) return;
+  if (sn<0) {
+    server.send(201, "text/plain", "Received, but rejected the data because I could not add another sensor"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    return;
+  }
   Sensors[sn] = S;
 
   server.send(200, "text/plain", "Received Data"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request

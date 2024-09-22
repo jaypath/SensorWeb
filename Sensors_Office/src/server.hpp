@@ -50,6 +50,7 @@ struct WiFi_type {
 extern WiFi_type WIFI_INFO;
 
 //extern const char HTTP_OK_response_header[60];
+void SerialWrite(String);
 bool WifiStatus(void);
 bool Server_Message(String URL, String* payload, int* httpCode);
 void handleRoot(void);
