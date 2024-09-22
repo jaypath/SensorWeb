@@ -82,7 +82,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #ifdef _CHECKHEAT
   const uint8_t DIO_INPUTS=6; //6 sensors
-  const uint8_t DIOPINS[6] = {34,35,36,37,38,39}; //fix this
+  const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
   
 #endif
 
@@ -172,6 +172,8 @@ GPIO15 (often labeled as "D15" on development boards) - Supports both internal p
 GPIO25 - Supports internal pull-up resistor.
 GPIO26 - Supports internal pull-up resistor.
 GPIO27 - Supports internal pull-up resistor
+
+ADC pins are labeled as their GPIO. NOTE: ADC bank 2 cannot be used with wifi, use bank 1 instead (which is pins 36, 39, 34, 35,32,33 numbered starting from the pin next to EN)
 */
 
 /* for ESP8266 12e
