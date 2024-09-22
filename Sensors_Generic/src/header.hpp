@@ -147,7 +147,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 #endif
 
-  /*
+   /*
   FOR ESP32:
   //16-33 are valid pins, though not all are exposed. For example, 15 is usable but must be high at boot. 14 goes high at boot 
 GPIO 0 (must be LOW to enter boot mode)
@@ -160,6 +160,8 @@ GPIO 15 (must be HIGH during boot)
 GPIO 1,3,5,6-11,14,15 are HIGH at boot
 GPIO 2,4,5,12,13,14,15 support pullup and pulldown
   
+
+GPIO21 is SDA and 22 is SCL
   GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO4 (often labeled as "D4" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO5 (often labeled as "D5" on development boards) - Supports both internal pull-up and pull-down resistors.
