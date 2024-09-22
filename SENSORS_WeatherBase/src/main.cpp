@@ -368,7 +368,7 @@ void setup()
   I.ScreenNum = 0;
   I.redraw = SECSCREEN;
   I.isFlagged = false;
-  WEBHTML.reserve(7500);
+  WEBHTML.reserve(7000);
 
   #ifdef DEBUG_
     Serial.begin(115200);
@@ -2331,7 +2331,6 @@ void handleRoot() {
   }
 
   byte usedINDEX = 0;  
-  char tempchar[9] = "";
   time_t t=now();
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
