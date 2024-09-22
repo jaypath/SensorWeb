@@ -84,9 +84,6 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
   const uint8_t DIO_INPUTS=6; //6 sensors
   const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
 
-  String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
-  uint8_t HEATPIN = 0; //this will be used as index to heatzone names
-
 #endif
 
 

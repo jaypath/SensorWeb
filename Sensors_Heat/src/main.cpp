@@ -2,6 +2,7 @@
 
 #include <Wire.h>
 
+#include <header.hpp>
 #include <sensors.hpp>
 #include <server.hpp>
 #include <timesetup.hpp>
@@ -81,7 +82,10 @@
 #define FileSys LittleFS
 #define BG_COLOR 0xD69A
 
-
+#ifdef _CHECKHEAT
+  String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+  uint8_t HEATPIN = 0; //this will be used as index to heatzone names
+#endif
 
 
 
