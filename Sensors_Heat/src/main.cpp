@@ -82,12 +82,6 @@
 #define FileSys LittleFS
 #define BG_COLOR 0xD69A
 
-#ifdef _CHECKHEAT
-  String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
-  uint8_t HEATPIN = 0; //this will be used as index to heatzone names
-#endif
-
-
 
 //wellesley, MA
 #define LAT 42.307614
@@ -122,10 +116,6 @@ time_t ALIVESINCE = 0;
 uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 
 //function declarations
-
-
-
-
 
 #ifdef _USELOWPOWER
 

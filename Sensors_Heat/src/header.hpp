@@ -13,7 +13,7 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {0,168,68,105}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
@@ -83,8 +83,10 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #ifdef _CHECKHEAT
   const uint8_t DIO_INPUTS=6; //6 sensors
   const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
-
+  extern const String HEATZONE[];
+  extern uint8_t HEATPIN; //this will be used as index to heatzone names
 #endif
+
 
 
 #ifdef _USEDHT
