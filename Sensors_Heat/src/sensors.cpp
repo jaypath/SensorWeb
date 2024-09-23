@@ -566,13 +566,13 @@ int peak_to_peak(int pin, int ms) {
   uint32_t t0, t1;
   
   t0 = millis();
-  t1 = millis();
+  t1 = t1;
 
   while (t1<=t0+ms) { 
-    t1 = millis();
     buffer = analogRead(pin);
     if (maxVal<buffer) maxVal = buffer;
-    if (minVal>buffer) minVal = buffer;        
+    if (minVal>buffer) minVal = buffer;
+    t1 = millis();        
   }
   
 

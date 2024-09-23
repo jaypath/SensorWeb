@@ -14,8 +14,7 @@ extern int DSTOFFSET;
 extern char DATESTRING[];
 
 bool checkTime();
-time_t timeUpdate();
-time_t setupTime(void);
+void checkDST(void);
 String fcnDOW(time_t t);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
 #endif

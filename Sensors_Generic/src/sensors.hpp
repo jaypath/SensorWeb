@@ -57,7 +57,7 @@
 
 #ifdef _CHECKHEAT
   extern uint8_t HEATPIN;
-  extern String HEATZONE[];
+  extern const String HEATZONE[];
 #endif
 
 struct SensorVal {

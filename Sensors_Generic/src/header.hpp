@@ -13,21 +13,21 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {192,168,68,120}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "Bmnt" //unique name
-#define SENSORNUM 5 //be sure this matches SENSORTYPES
+#define ARDNAME "Heat" //unique name
+#define SENSORNUM 6 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,58,60,61};
+const uint8_t SENSORTYPES[SENSORNUM] = {55,55,55,55,55,55};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
-#define _USEAHT 1
+//#define _USEAHT 1
 //#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
@@ -38,12 +38,12 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
-#define _USESLABATTERY  A0 //set to the pin that is analogin
-#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-#define _USELEAK 
+//#define _USESLABATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
+//#define _USELEAK 
 //binary switches
 //#define _CHECKAIRCON 1
-//#define _CHECKHEAT 1
+#define _CHECKHEAT 1
 
 #ifdef _USELEAK
   #define _LEAKPIN 12
@@ -83,8 +83,10 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #ifdef _CHECKHEAT
   const uint8_t DIO_INPUTS=6; //6 sensors
   const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
-  
+  extern const String HEATZONE[];
+  extern uint8_t HEATPIN; //this will be used as index to heatzone names
 #endif
+
 
 
 #ifdef _USEDHT

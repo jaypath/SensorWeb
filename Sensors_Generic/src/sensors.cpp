@@ -388,8 +388,8 @@ uint  sc_interval;
           pinMode(Sensors[i].snsPin, INPUT);
           Sensors[i].limitUpper = 700; //this is the difference needed in the analog read of the induction sensor to decide if device is powered
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -406,8 +406,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -420,8 +420,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -438,8 +438,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
           Sensors[i].limitUpper = 0.5;
           Sensors[i].limitLower = -0.5;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=10*60;
           break;
         #endif
 
@@ -566,13 +566,13 @@ int peak_to_peak(int pin, int ms) {
   uint32_t t0, t1;
   
   t0 = millis();
-  t1 = millis();
+  t1 = t1;
 
   while (t1<=t0+ms) { 
-    t1 = millis();
     buffer = analogRead(pin);
     if (maxVal<buffer) maxVal = buffer;
-    if (minVal>buffer) minVal = buffer;        
+    if (minVal>buffer) minVal = buffer;
+    t1 = millis();        
   }
   
 

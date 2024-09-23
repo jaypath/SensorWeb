@@ -6,7 +6,7 @@
 #include <server.hpp>
 #include <timesetup.hpp>
 
-#define GLOBAL_TIMEZONE_OFFSET  -14400
+#define GLOBAL_TIMEZONE_OFFSET  -18000
 
 #ifdef _USE8266 
   //static const uint8_t A0   = A0;

@@ -6,7 +6,7 @@
 
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov");
+NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,10800000); //3rd param is offset, 4th param is update frequency
 int DSTOFFSET = 0;
 
 char DATESTRING[20]="";
@@ -20,43 +20,48 @@ bool checkTime(void) {
   if ( WifiStatus()  && (td>2208992400 || td<1704070800)) return false;
   return true;
 
-  
 }
 
+
+
 //Time fcn
-time_t timeUpdate(void) {
 
-  
-  timeClient.update();
+void checkDST(void) {
 
-        
-  if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >= 3)) DSTOFFSET = -1*60*60; //2024 DST offset
-  else DSTOFFSET = 0;
+//check if time offset is EST (-5h) or EDT (-4h)
+int m = month();
+int d = day();
+int dow = weekday(); //1 is sunday
+
+  DSTOFFSET = 0;
+  if (m > 3 && m < 11) DSTOFFSET = 3600;
+  else {
+    if (month() == 3) {
+      //need to figure out if it is past the second sunday at 2 am
+      if (d<8) DSTOFFSET = 0;
+      else {
+        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
+        else {
+          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
+          else DSTOFFSET = 0;
+        }
+      }
+    }
+
+    if (month() == 11) {
+      //need to figure out if it is past the first sunday at 2 am
+      if (d>7)  DSTOFFSET = 3600; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
+      else {
+        if ((int) d-dow+1>1) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
+        else DSTOFFSET = 0;
+      }
+    }
+  }
 
   setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
 
-  if (checkTime()==false) return 0; //not a possible time
-
-  return now();
 }
 
-
-time_t setupTime(void) {
-    timeClient.begin();
-    timeClient.update();
-
-
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
-
-    if (month() < 3 || (month() == 3 &&  day() < 12) || month() ==12 || (month() == 11 && day() >= 5)) DSTOFFSET = -1*60*60;
-    else DSTOFFSET = 0;
-
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET); //set stoffregen timelib time once, to get month and day. then reset with DST
-
-    if (checkTime()==false) return 0;
-
-    return now();
-}
 
 String fcnDOW(time_t t) {
     if (weekday(t) == 1) return "Sun";
