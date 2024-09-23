@@ -7,7 +7,7 @@
 #include <server.hpp>
 #include <timesetup.hpp>
 
-#define GLOBAL_TIMEZONE_OFFSET  -14400
+#define GLOBAL_TIMEZONE_OFFSET  -18000
 
 #ifdef _USE8266 
   //static const uint8_t A0   = A0;
@@ -86,20 +86,6 @@
 //wellesley, MA
 #define LAT 42.307614
 #define LON -71.299288
-
-//gen global types
-
-
-//gen unions
-union convertULONG {
-  char str[4];
-  unsigned long val;
-};
-union convertINT {
-  char str[2];
-  int16_t val;
-};
-
 
 
 //globals
@@ -294,12 +280,9 @@ void setup()
 
     //set time
     timeClient.begin();
-    timeClient.update();
-
+    
     checkDST();
   
-    if (checkTime()==false) ESP.restart();
-
     ALIVESINCE = now();
 
     #ifdef _USESSD1306
@@ -517,7 +500,9 @@ void setup()
 
 void loop() {
 
-  timeClient.update();
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
 
   
   #ifndef _USELOWPOWER
@@ -625,14 +610,16 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
     SerialWrite((String) "\nNew hour... TimeUpdate running. \n");
     #endif
   
-    checkDST();
-
     OldTime[2] = hour();
 
   }
   
   if (OldTime[3] != weekday()) {
     //once per day
+
+
+    checkDST();
+
 
     OldTime[3] = weekday();
 

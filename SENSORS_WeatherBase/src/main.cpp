@@ -110,11 +110,13 @@ use tft.setFreeFont(FSS9);
 */
 
 
+#define GLOBAL_TIMEZONE_OFFSET  -18000
+
 //wifi
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov");
-// By default 'pool.ntp.org' is used with 60 seconds update interval and
-// no offset
+NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,10800000);
+// By default 'pool.ntp.org' is used with X seconds update interval and
+// Y offset
 // You can specify the time server pool and the offset, (in seconds)
 // additionaly you can specify the update interval (in milliseconds).
 // NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
@@ -126,7 +128,6 @@ NTPClient timeClient(ntpUDP,"time.nist.gov");
 
 #define TIMEOUTHTTP 2000
 
-#define GLOBAL_TIMEZONE_OFFSET  -14400
 
 //wellesley, MA
 #define LAT 42.307614
@@ -245,7 +246,8 @@ byte find_sensor_count(String snsname,byte snsType);
 void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, byte* snsIndexLow);
 uint8_t countDev();
 uint32_t set_color(byte r, byte g, byte b);
-void timeUpdate(byte counter=0);
+void checkDST(void);
+bool checkTime(void);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
 void initSensor(byte k);
@@ -503,8 +505,8 @@ tft.println("Connecting ArduinoOTA...");
     tft.println("Set up TimeClient...");
 
     timeClient.begin();
-
-    timeUpdate();
+    
+    checkDST();
 
     tft.print("TimeClient OK.  ");
     tft.println("Starting...");
@@ -681,23 +683,52 @@ double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uin
 
 
 //Time fcn
-void timeUpdate(byte counter) {
-  counter++;
-  if (counter>20) ESP.restart(); //attempt to get time 20 times
+void checkDST(void) {
 
-  timeClient.update();
+setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
 
-  if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >=3)) DSTOFFSET = -1*60*60; //2024 DST
-  else DSTOFFSET = 0;
+//check if time offset is EST (-5h) or EDT (-4h)
+int m = month();
+int d = day();
+int dow = weekday(); //1 is sunday
+
+  DSTOFFSET = 0;
+  if (m > 3 && m < 11) DSTOFFSET = 3600;
+  else {
+    if (m == 3) {
+      //need to figure out if it is past the second sunday at 2 am
+      if (d<8) DSTOFFSET = 0;
+      else {
+        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
+        else {
+          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
+          else DSTOFFSET = 0;
+        }
+      }
+    }
+
+    if (m == 11) {
+      //need to figure out if it is past the first sunday at 2 am
+      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
+      else {
+        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
+        else DSTOFFSET = 3600;
+      }
+    }
+  }
+
 
   setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+  
+}
 
 
- 
-  if (WiFi.status() == WL_CONNECTED && (now()>2208992400 || now()<1704070800)) timeUpdate(counter); //time not in a realistic  despite wifi
+bool checkTime(void) {
+  uint32_t n = now();
+  if (WiFi.status() == WL_CONNECTED && (n>2208992400 || n<1704070800)) return false; //time not in a realistic  despite wifi
 
 
-  return;
+  return true;
 }
 
 
@@ -2127,8 +2158,11 @@ void loop() {
 
   ArduinoOTA.handle();
   server.handleClient();
- 
- 
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+
+
   time_t t = now(); // store the current time in time variable t
   
   if (OldTime[0] != second()) {
@@ -2183,7 +2217,9 @@ void loop() {
     
   }
   
+
   if (OldTime[2] != hour()) {
+ 
     OldTime[2] = hour(); 
 
     //expire any measurements that are older than N hours.
@@ -2228,13 +2264,9 @@ void loop() {
   if (OldTime[3] != weekday()) {
     if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
     
-    timeUpdate();
-    
+    checkDST();
     OldTime[3] = weekday();
   }
-
-
- 
 }
 
 
@@ -2327,7 +2359,7 @@ void handleREQUESTWEATHER() {
 void handleTIMEUPDATE() {
 
 
-  timeUpdate();
+  timeClient.forceUpdate();
 
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Updated-- Press Back Button");  //This returns to the main page
