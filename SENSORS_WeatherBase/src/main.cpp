@@ -719,6 +719,7 @@ bool updateTime(byte retries,uint16_t waittime) {
 
 void checkDST(void) {
   timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+  setTime(timeClient.getEpochTime());
 #ifdef _DEBUG
   Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
 #endif
@@ -754,7 +755,6 @@ int dow = weekday(); //1 is sunday
   }
 
     timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-    //timeClient.forceUpdate();
     setTime(timeClient.getEpochTime());
 
     #ifdef _DEBUG
