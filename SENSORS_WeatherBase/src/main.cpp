@@ -1,4 +1,4 @@
-//#define DEBUG_ 0
+#define _DEBUG 0
 //#define _WEBDEBUG 0
 
 //Version 12 - 
@@ -111,14 +111,14 @@ use tft.setFreeFont(FSS9);
 
 
 #define GLOBAL_TIMEZONE_OFFSET  -18000
-
+#define TIMEUPDATEINT 60000
 //wifi
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,10800000);
+NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //utc time to start [have to spec the third param!]
 // By default 'pool.ntp.org' is used with X seconds update interval and
 // Y offset
 // You can specify the time server pool and the offset, (in seconds)
-// additionaly you can specify the update interval (in milliseconds).
+// additionaly you can specify the update interval (in units).
 // NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
@@ -144,7 +144,7 @@ NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,10800000);
 #define NUMSCREEN 2
 #define SECSCREEN 15
 
-#define OLDESTSENSORHR 12 //hours before a sensor is removed
+#define OLDESTSENSORHR 24 //hours before a sensor is removed
 
 #define NUMWTHRDAYS 7
 
@@ -247,6 +247,7 @@ void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, by
 uint8_t countDev();
 uint32_t set_color(byte r, byte g, byte b);
 void checkDST(void);
+bool updateTime(byte retries=10,uint16_t waittime=250);
 bool checkTime(void);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
@@ -368,6 +369,7 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
   return 255;
 }
 
+
 void setup()
 {
   I.ScreenNum = 0;
@@ -375,7 +377,7 @@ void setup()
   I.isFlagged = false;
 
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.begin(115200);
   #endif
 
@@ -398,9 +400,18 @@ void setup()
   tft.println("TFT OK. Configuring WiFi");
     
 
+
+  IPAddress   DHCP(192,168,68,1);
+  IPAddress   DNS1(192,168,68,1);
+  IPAddress   DNS2(192,168,68,1);
+  IPAddress   GATEWAY(192,168,68,1);
+  IPAddress   SUBNET(255,255,252,0);
+  IPAddress   me(192,168,68,93);
+
+  WiFi.config(me,  GATEWAY, SUBNET,DNS1,DNS2 ); 
   WiFi.begin(ESP_SSID, ESP_PASS);
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println();
     Serial.print("Connecting");
   #endif
@@ -409,7 +420,7 @@ void setup()
     delay(200);
     tft.print(".");
     
-    #ifdef DEBUG_
+    #ifdef _DEBUG
     Serial.print(".");
     #endif
   }
@@ -443,12 +454,12 @@ tft.println("Connecting ArduinoOTA...");
     tft.println("OTA End. About to reboot!");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
         Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
     #endif
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.printf("Error[%u]: ", error);
       if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
       else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -461,10 +472,7 @@ tft.println("Connecting ArduinoOTA...");
     tft.println(error);
   });
   ArduinoOTA.begin();
-  
-  
-  
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("Connected!");
       Serial.println(WiFi.localIP());
     #endif
@@ -504,10 +512,10 @@ tft.println("Connecting ArduinoOTA...");
     }
     tft.println("Set up TimeClient...");
 
-    timeClient.begin();
+//    setSyncInterval(600); //set NTP interval for sync in sec
+    timeClient.begin(); //time is in UTC
+    updateTime(10,250); //check if DST and set time to EST or EDT
     
-    checkDST();
-
     tft.print("TimeClient OK.  ");
     tft.println("Starting...");
 
@@ -575,7 +583,7 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
   //if no finddev and oldest = false, will return -1
   
   if (S->snsID==0) {
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.println("FINDDEV: you passed a zero index.");
         #endif
 
@@ -583,7 +591,7 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
   }
   for (int j=0;j<SENSORNUM;j++)  {
       if (Sensors[j].ardID == S->ardID && Sensors[j].snsType == S->snsType && Sensors[j].snsID == S->snsID) {
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.print("FINDDEV: I foud this dev, and the index is: ");
           Serial.println(j);
         #endif
@@ -594,7 +602,7 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
     
 //if I got here, then nothing found.
   if (oldest) {
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.print("FINDDEV: I didn't find the registered dev. the index to the oldest element is: ");
     Serial.println(findOldestDev());
   #endif
@@ -609,7 +617,7 @@ int16_t findSns(byte snstype, bool newest) {
   //find the first (or newest) instance of a sensor of tpe snstype
   
   if (snstype==0) {
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.println("FINDDEV: you passed a zero index.");
         #endif
 
@@ -626,7 +634,7 @@ int16_t findSns(byte snstype, bool newest) {
         newestTime = Sensors[j].timeLogged;
 
 
-        #ifdef DEBUG_
+        #ifdef _DEBUG
           Serial.print("FINDSNS: I foud this dev, and the index is: ");
           Serial.println(j);
         #endif
@@ -683,16 +691,45 @@ double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uin
 
 
 //Time fcn
-void checkDST(void) {
+bool updateTime(byte retries,uint16_t waittime) {
 
-setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
+
+  bool isgood = timeClient.update();
+  byte i=1;
+
+
+  while (i<retries && isgood==false) {
+    i++; 
+    isgood = timeClient.update();
+    if (isgood==false) {
+      delay(waittime);
+
+      #ifdef _DEBUG
+        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+      #endif
+    }
+  } 
+
+  if (isgood) {
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+    checkDST();
+    setTime(timeClient.getEpochTime());
+  }
+
+  return isgood;
+}
+
+void checkDST(void) {
+#ifdef _DEBUG
+  Serial.printf("checkDST: Starting time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+#endif
+
 
 //check if time offset is EST (-5h) or EDT (-4h)
 int m = month();
 int d = day();
 int dow = weekday(); //1 is sunday
 
-  DSTOFFSET = 0;
   if (m > 3 && m < 11) DSTOFFSET = 3600;
   else {
     if (m == 3) {
@@ -717,18 +754,14 @@ int dow = weekday(); //1 is sunday
     }
   }
 
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+    //timeClient.forceUpdate();
 
-  setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-  
-}
-
-
-bool checkTime(void) {
-  uint32_t n = now();
-  if (WiFi.status() == WL_CONNECTED && (n>2208992400 || n<1704070800)) return false; //time not in a realistic  despite wifi
+    #ifdef _DEBUG
+      Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    #endif
 
 
-  return true;
 }
 
 
@@ -838,7 +871,7 @@ void parseLine_to_Sensor(String token) {
   String temp;
   int16_t strOffset;
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println("I am beginning parsing!");
     Serial.println(token);
   #endif
@@ -858,7 +891,7 @@ void parseLine_to_Sensor(String token) {
     token.remove(0,strOffset+1);
     if (breakLOGID(logID,&S.ardID,&S.snsType,&S.snsID) == false) return;
 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.print("token: ");
       Serial.println(token);
       Serial.print("logID: ");
@@ -889,7 +922,7 @@ void parseLine_to_Sensor(String token) {
   temp = token.substring(0,strOffset); 
   token.remove(0,strOffset+1);
   snprintf(S.snsName,29,"%s",temp.c_str());
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.print("token: ");
     Serial.println(token);
     Serial.print("snsName: ");
@@ -902,7 +935,7 @@ void parseLine_to_Sensor(String token) {
   temp= token.substring(0,strOffset); 
   token.remove(0,strOffset+1);
   S.snsValue = temp.toDouble();
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.print("token: ");
     Serial.println(token);
     Serial.print("value: ");
@@ -917,7 +950,7 @@ void parseLine_to_Sensor(String token) {
   if (temp.toInt()!=0) {
     bitWrite(S.Flags,0,1);
   }
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.print("token: ");
     Serial.println(token);
     Serial.print("isFlagged: ");
@@ -930,7 +963,7 @@ void parseLine_to_Sensor(String token) {
   if (sn<0) return;
   Sensors[sn] = S;
 
-  #ifdef DEBUG_
+  #ifdef _DEBUG
   Serial.print("sn=");
   Serial.print(sn);
   Serial.print(",   ");
@@ -976,7 +1009,7 @@ char buf[12] = "";
   tempPayload.toCharArray(buf,12);
   *timeval = strtoul(buf,NULL,0); //do it this way because it is a 32 bit number, so toInt will fail
   payload.remove(0,strOffset+1); //include the comma
-  #ifdef DEBUG_
+  #ifdef _DEBUG
     Serial.println("If the following starts with a comma, then payload removal requires +1");
     Serial.println(payload);
     Serial.println("");
@@ -1004,6 +1037,10 @@ char buf[12] = "";
 
 
 bool GetWeather() {
+
+    #ifdef _DEBUG
+    Serial.println("Getweather: entering");
+    #endif
 
 bool isgood = false;
 String     payload;
@@ -1060,9 +1097,8 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
   
       
       hourly_time = (uint32_t) hourly[0]["dt"];
-    #ifdef DEBUG_
-    Serial.print("hourly_time = ");
-    Serial.print(hourly_time);
+    #ifdef _DEBUG
+    Serial.printf("GetWeather: API hourly_time is = %i, clock time is %i\n",hourly_time,now());
     #endif
 
     String temp = "";
@@ -1096,7 +1132,7 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
     isgood = true;
 
     } else {
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println("No connection... ");
         Serial.println(httpCode);
       #endif
@@ -1108,12 +1144,16 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
    
   } else {
     isgood = false;
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.println("No wifi");
     #endif
     I.wifi=0;
 
   } 
+
+   #ifdef _DEBUG
+    Serial.printf("GetWeather: Exiting with status %i\n",isgood);
+    #endif
 
   return isgood;
 }
@@ -2081,7 +2121,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
   for (i=1;i<7;i++) {
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
-    #ifdef DEBUG_
+    #ifdef _DEBUG
       Serial.print("i=");
       Serial.print(i);
     #endif
@@ -2155,16 +2195,16 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
 
 
 void loop() {
+    // #ifdef _DEBUG
+    //   Serial.printf("Loop start: Time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    // #endif
 
   ArduinoOTA.handle();
   server.handleClient();
-  while(!timeClient.update()) {
-    timeClient.forceUpdate();
-  }
-
+  updateTime(1,0); //just try once
 
   time_t t = now(); // store the current time in time variable t
-  
+    
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second    
@@ -2184,6 +2224,11 @@ void loop() {
       if (Sensors[i].snsType == 3  || Sensors[i].snsType == 1 || Sensors[i].snsType == 4 || Sensors[i].snsType == 60 || Sensors[i].snsType == 61)  {
         if (Sensors[i].snsID>0 && t-Sensors[i].timeLogged<3600 && bitRead(Sensors[i].Flags,0) ) { //only care about flags if the reading was within an hour
           I.isFlagged = true; //only flag for soil or temp or battery
+          
+    #ifdef _DEBUG
+      Serial.printf("Loop 1 second action (Sensor read is flagged): Sensor is: %s, Time is: %s\n",Sensors[i].snsName, dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    #endif
+
           #ifdef _WEBDEBUG
             WEBDEBUG = WEBDEBUG + "FLAGGED SENSOR: " + (String) Sensors[i].ardID + " " + (String) Sensors[i].snsName + "<br>";  
           #endif
@@ -2234,7 +2279,7 @@ void loop() {
 
     //get weather
     if (GetWeather()==false) {
-      #ifdef DEBUG_
+      #ifdef _DEBUG
         Serial.println("GetWeather failed!");
       #endif
       Next_Precip = 0;
@@ -2247,26 +2292,18 @@ void loop() {
       
     } 
 
-
-      #ifdef DEBUG_
-        for (int i=0;i<24;i++) {
-          t2 = t + i*3600;
-          Serial.print(hour(t2));
-          Serial.print("@");
-          Serial.print(hourly_temp[i]);
-          Serial.print(" ");
-        }
-        Serial.println(" ");
-      #endif
-
   }
   
   if (OldTime[3] != weekday()) {
     if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
     
-    checkDST();
     OldTime[3] = weekday();
   }
+
+    //  #ifdef _DEBUG
+    // Serial.printf("Loop: exiting at %s, unixtime: %i\n", dateify(now(),"mm/dd/yyyy hh:mm:nn"),now());
+    // #endif
+
 }
 
 
@@ -2496,7 +2533,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</script> \n";
   WEBHTML += "</body></html>\n";   
 
-   #ifdef DEBUG_
+   #ifdef _DEBUG
       Serial.println(WEBHTML);
     #endif
     

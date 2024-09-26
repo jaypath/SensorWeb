@@ -50,3 +50,6 @@
 
   #define DHTTYPE    DHT11     // DHT11 or DHT22
   #define DHTPIN 2
+
+
+#endif

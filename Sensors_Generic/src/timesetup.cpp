@@ -23,20 +23,48 @@ bool checkTime(void) {
 }
 
 
+bool updateTime(byte retries,uint16_t waittime) {
 
-//Time fcn
+
+  bool isgood = timeClient.update();
+  byte i=1;
+
+
+  while (i<retries && isgood==false) {
+    i++; 
+    isgood = timeClient.update();
+    if (isgood==false) {
+      delay(waittime);
+
+      #ifdef _DEBUG
+        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+      #endif
+    }
+  } 
+
+  if (isgood) {
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+    checkDST();
+    setTime(timeClient.getEpochTime());
+  }
+
+  return isgood;
+}
 
 void checkDST(void) {
+#ifdef _DEBUG
+  Serial.printf("checkDST: Starting time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+#endif
+
 
 //check if time offset is EST (-5h) or EDT (-4h)
 int m = month();
 int d = day();
 int dow = weekday(); //1 is sunday
 
-  DSTOFFSET = 0;
   if (m > 3 && m < 11) DSTOFFSET = 3600;
   else {
-    if (month() == 3) {
+    if (m == 3) {
       //need to figure out if it is past the second sunday at 2 am
       if (d<8) DSTOFFSET = 0;
       else {
@@ -48,19 +76,27 @@ int dow = weekday(); //1 is sunday
       }
     }
 
-    if (month() == 11) {
+    if (m == 11) {
       //need to figure out if it is past the first sunday at 2 am
-      if (d>7)  DSTOFFSET = 3600; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
+      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
       else {
-        if ((int) d-dow+1>1) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
-        else DSTOFFSET = 0;
+        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
+        else DSTOFFSET = 3600;
       }
     }
   }
 
-  setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+    //timeClient.forceUpdate();
+
+    #ifdef _DEBUG
+      Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    #endif
+
 
 }
+
+
 
 
 String fcnDOW(time_t t) {

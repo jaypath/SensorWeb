@@ -294,11 +294,7 @@ void setup()
 
     //set time
     timeClient.begin();
-    timeClient.update();
-
-    checkDST();
-  
-    if (checkTime()==false) ESP.restart();
+    updateTime(10,250);
 
     ALIVESINCE = now();
 
@@ -517,8 +513,7 @@ void setup()
 
 void loop() {
 
-  timeClient.update();
-
+  updateTime(1,0);
   
   #ifndef _USELOWPOWER
     ArduinoOTA.handle();

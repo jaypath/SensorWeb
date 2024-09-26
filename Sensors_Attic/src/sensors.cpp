@@ -118,6 +118,7 @@ uint  sc_interval;
           else {
             Sensors[i].limitUpper = 65;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           Sensors[i].PollingInt=2*60;
           Sensors[i].SendingInt=5*60;
@@ -182,6 +183,7 @@ uint  sc_interval;
           else {
             Sensors[i].limitUpper = 65;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           Sensors[i].PollingInt=10*60;
           Sensors[i].SendingInt=10*60;
@@ -220,10 +222,12 @@ uint  sc_interval;
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 88;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           else {
             Sensors[i].limitUpper = 80;
             Sensors[i].limitLower = 60;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
         Sensors[i].PollingInt=30*60;
         Sensors[i].SendingInt=60*60;
@@ -295,6 +299,7 @@ uint  sc_interval;
         else {
           Sensors[i].limitUpper = 65;
           Sensors[i].limitLower = 25;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         }
         Sensors[i].PollingInt=120;
         Sensors[i].SendingInt=5*60;
@@ -342,6 +347,7 @@ uint  sc_interval;
         else {
           Sensors[i].limitUpper = 65;
           Sensors[i].limitLower = 25;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         }
         Sensors[i].PollingInt=15*60;
         Sensors[i].SendingInt=15*60;
@@ -382,8 +388,8 @@ uint  sc_interval;
           pinMode(Sensors[i].snsPin, INPUT);
           Sensors[i].limitUpper = 700; //this is the difference needed in the analog read of the induction sensor to decide if device is powered
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -400,8 +406,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -414,8 +420,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=30*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -432,8 +438,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
           Sensors[i].limitUpper = 0.5;
           Sensors[i].limitLower = -0.5;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=10*60;
           break;
         #endif
 
@@ -449,6 +455,8 @@ uint  sc_interval;
           Sensors[i].limitLower = 3.7;
           Sensors[i].PollingInt=1*60;
           Sensors[i].SendingInt=5*60;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
+
           
         #endif
         #ifdef _USESLABATTERY
@@ -462,7 +470,7 @@ uint  sc_interval;
           Sensors[i].limitLower = 12.23;
           Sensors[i].PollingInt=60*60;
           Sensors[i].SendingInt=60*60;
-          
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         #endif
 
         break;
@@ -510,7 +518,7 @@ uint  sc_interval;
           Sensors[i].PollingInt=10*60; //these don't matter
           Sensors[i].SendingInt=10*60; //these don't matter
           bitWrite(Sensors[i].Flags,3,1); //calculated
-
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         
         break;
 
@@ -558,13 +566,13 @@ int peak_to_peak(int pin, int ms) {
   uint32_t t0, t1;
   
   t0 = millis();
-  t1 = millis();
+  t1 = t1;
 
   while (t1<=t0+ms) { 
-    t1 = millis();
     buffer = analogRead(pin);
     if (maxVal<buffer) maxVal = buffer;
-    if (minVal>buffer) minVal = buffer;        
+    if (minVal>buffer) minVal = buffer;
+    t1 = millis();        
   }
   
 

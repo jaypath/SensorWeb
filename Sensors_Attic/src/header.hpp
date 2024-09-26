@@ -10,85 +10,54 @@
 
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,57}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,9}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {192,168,68,121}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
 #define ARDNAME "Att" //unique name
 #define SENSORNUM 4 //be sure this matches SENSORTYPES
+
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,9,13};
+
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,56,57};
-
 //#define _USEDHT 1
 #define _USEAHT 1
-//#define _USEBMP  1
+#define _USEBMP  1
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
 //#define _USESOILRES D5
-//#define _USEBARPRED 1
+#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
-//#define _USEBATTERY  A0 //set to the pin that is analogin
-//#define _USELOWPOWER 10e6 //must also have _USEBATTERY
-
+//#define _USELIBATTERY  A0 //set to the pin that is analogin
+//#define _USESLABATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
+//#define _USELEAK 
 //binary switches
-#define _CHECKAIRCON 1
+//#define _CHECKAIRCON 1
 //#define _CHECKHEAT 1
 
-#ifdef _USELEAK
-  #define _LEAKPIN 12
-  #define _LEAKDIO 13
-#endif
 
-#ifdef _USESOILRES
-  #define SOILRESISTANCE 4700
-  #define SOILR_MAX 2000
-  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
-  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
-#endif
-
-#ifdef _USESOILCAP
-  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
-#endif
-
-#ifdef _USEHCSR04
-  #define USONIC_DIV 58   //conversion for ultrasonic distance time to cm
-  #define TRIGPIN 2
-  #define ECHOPIN 3
-#endif
-
-#ifdef _USESSD1306
-  //#define _OLEDTYPE &Adafruit128x64
-  //#define _OLEDTYPE &Adafruit128x32
-  //#define _OLEDINVERT 0
+//automatically detect arduino type
+#if defined (ARDUINO_ARCH_ESP8266)
+  #define _USE8266 1
+  #define _ADCRATE 1023
+#elif defined(ESP32)
+  #define _USE32
+  #define _ADCRATE 4095
+#else
+  #error Arduino architecture unrecognized by this code.
 #endif
 
 
-#ifdef _CHECKAIRCON 
-  const uint8_t DIO_INPUTS=2; //two pins assigned
-  const uint8_t DIOPINS[2] = {34,35}; //comp then fan
-
-#endif
-
-#ifdef _CHECKHEAT
-  const uint8_t DIO_INPUTS=6; //6 sensors
-  const uint8_t DIOPINS[6] = {34,35,36,37,38,39}; //fix this
-  
-#endif
-
-
-#ifdef _USEDHT
-
-  #define DHTTYPE    DHT11     // DHT11 or DHT22
-  #define DHTPIN 2
 
 #endif
 
@@ -131,21 +100,7 @@ const uint8_t SENSORTYPES[SENSORNUM] = {4,5,56,57};
 */
 
 
-//automatically detect arduino type
-#if defined (ARDUINO_ARCH_ESP8266)
-  #define _USE8266 1
-  #define _ADCRATE 1023
-#elif defined(ESP32)
-  #define _USE32
-  #define _ADCRATE 4095
-#else
-  #error Arduino architecture unrecognized by this code.
-#endif
-
-
-#endif
-
-  /*
+   /*
   FOR ESP32:
   //16-33 are valid pins, though not all are exposed. For example, 15 is usable but must be high at boot. 14 goes high at boot 
 GPIO 0 (must be LOW to enter boot mode)
@@ -158,6 +113,8 @@ GPIO 15 (must be HIGH during boot)
 GPIO 1,3,5,6-11,14,15 are HIGH at boot
 GPIO 2,4,5,12,13,14,15 support pullup and pulldown
   
+
+GPIO21 is SDA and 22 is SCL
   GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO4 (often labeled as "D4" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO5 (often labeled as "D5" on development boards) - Supports both internal pull-up and pull-down resistors.
@@ -168,6 +125,8 @@ GPIO15 (often labeled as "D15" on development boards) - Supports both internal p
 GPIO25 - Supports internal pull-up resistor.
 GPIO26 - Supports internal pull-up resistor.
 GPIO27 - Supports internal pull-up resistor
+
+ADC pins are labeled as their GPIO. NOTE: ADC bank 2 cannot be used with wifi, use bank 1 instead (which is pins 36, 39, 34, 35,32,33 numbered starting from the pin next to EN)
 */
 
 /* for ESP8266 12e
