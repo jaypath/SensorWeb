@@ -1,4 +1,4 @@
-#define _DEBUG 0
+//#define _DEBUG 0
 //#define _WEBDEBUG 0
 
 //Version 12 - 
@@ -711,17 +711,16 @@ bool updateTime(byte retries,uint16_t waittime) {
   } 
 
   if (isgood) {
-    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
     checkDST();
-    setTime(timeClient.getEpochTime());
   }
 
   return isgood;
 }
 
 void checkDST(void) {
+  timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
 #ifdef _DEBUG
-  Serial.printf("checkDST: Starting time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
 #endif
 
 
@@ -756,6 +755,7 @@ int dow = weekday(); //1 is sunday
 
     timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
     //timeClient.forceUpdate();
+    setTime(timeClient.getEpochTime());
 
     #ifdef _DEBUG
       Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
