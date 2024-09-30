@@ -587,6 +587,8 @@ bool ReadData(struct SensorVal *P) {
 
   double val;
   bitWrite(P->Flags,0,0);
+
+  P->LastsnsValue = P->snsValue;
   
   switch (P->snsType) {
     case 1: //DHT temp
@@ -1102,27 +1104,32 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
 }
 
 bool checkSensorValFlag(struct SensorVal *P) {
-  if (bitRead(P->Flags,6)==0) return false;
+  //if (bitRead(P->Flags,6)==0) return false;
 
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, 
+  
+  bool lastflag = false;
+  bool thisflag = false;
+  if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
+  
   if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
-    //flag is true
-    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
-    else bitWrite(P->Flags,7,0);
-
+    thisflag = true;
     bitWrite(P->Flags,0,1);
 
-    //if too high, write bit 5
+    //is it too high? write bit 5
     if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
     else bitWrite(P->Flags,5,0);
-  }       
-      
-  else { //flag is off
-    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,0);
-    else bitWrite(P->Flags,7,1);
+  } 
 
-    bitWrite(P->Flags,0,0);
-
-    bitWrite(P->Flags,5,0);
+  //now check for changes...  
+  if (lastflag!=thisflag) {
+    bitWrite(P->Flags,6,1); //change detected
+    if (thisflag==true) bitWrite(P->Flags,7,1); //changed to flagged
+    else bitWrite(P->Flags,7,0); //changed to not flagged
+  } else {
+    bitWrite(P->Flags,6,0);
+    bitWrite(P->Flags,7,0);
   }
   
   return bitRead(P->Flags,0);

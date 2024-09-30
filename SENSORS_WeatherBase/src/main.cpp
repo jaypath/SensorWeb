@@ -1630,7 +1630,7 @@ uint32_t set_color(byte r, byte g, byte b) {
 }
 
 void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
-  uint8_t box_nl_border[3] = {0,125,0};
+  /*uint8_t box_nl_border[3] = {0,125,0};
   uint8_t box_nl_fill[3] = {120,255,120};
   uint8_t box_high_border[3] = {150,20,20}; //r,g,b
   uint8_t box_high_fill[3] = {255,100,100};
@@ -1640,89 +1640,63 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   uint8_t box_dry_fill[3] = {250,170,100};
   uint8_t box_wet_border[3] = {0,0,255};
   uint8_t box_wet_fill[3] = {0,190,255};
+  */
   
-  
-  uint32_t box_border = set_color(box_nl_border[0],box_nl_border[1],box_nl_border[2]);
-  uint32_t box_fill = set_color(box_nl_fill[0],box_nl_fill[1],box_nl_fill[2]);
-  uint32_t text_color;
+  uint32_t box_border = set_color(0,125,0);
+  uint32_t box_fill = set_color(120,255,120);
+  uint32_t text_color = set_color(0,0,0);
 
+  String box_text = "";
+  char tempbuf[14];
 
   byte isHigh = 255,isLow=255;
-  int temperature = -900;
-  int soilval = -900;
-  int leakval = -900;
-  int batval = -900;
   byte FNTSZ=2;
   tft.setTextFont(FNTSZ);
 
-  char tempbuf[10];
-  byte rgb_box[3],rgb_fill[3];
-
   //get sensor vals 1, 4, 3, 58, 61... if any are flagged then set box color
   //temperature
-    isHigh = 255;
+  isHigh = 255;
   isLow = 255;
 
   find_limit_sensortypes(roomname,1,&isHigh,&isLow);
   if (isLow != 255) {
-    temperature = Sensors[isLow].snsValue;
-    rgb_box[0] = box_low_border[0];
-    rgb_box[1] = box_low_border[1];
-    rgb_box[2] = box_low_border[2];
-
-    rgb_fill[0] = box_low_fill[0];
-    rgb_fill[1] = box_low_fill[1];
-    rgb_fill[2] = box_low_fill[2];
+    box_text += (String) Sensors[isLow].snsValue + "F (LOW)|";
+    box_border = set_color(20,20,150);
+    box_fill = set_color(150,150,255);
+    text_color = set_color(255-150,255-150,255-255);
   }
   if (isHigh != 255) {
-    temperature = Sensors[isHigh].snsValue;
-    rgb_box[0] = box_high_border[0];
-    rgb_box[1] = box_high_border[1];
-    rgb_box[2] = box_high_border[2];
-
-    rgb_fill[0] = box_high_fill[0];
-    rgb_fill[1] = box_high_fill[1];
-    rgb_fill[2] = box_high_fill[2];
+    box_text += (String) Sensors[isLow].snsValue + "F (HIGH)|";
+    box_border = set_color(150,20,20);
+    box_fill = set_color(255,100,100);
+    text_color = set_color(255-255,255-100,255-100);
   }
-    isHigh = 255;
-  isLow = 255;
 
+  isHigh = 255;
+  isLow = 255;
   find_limit_sensortypes(roomname,4,&isHigh,&isLow);
   if (isLow != 255) {
-    temperature = Sensors[isLow].snsValue;
-    rgb_box[0] = box_low_border[0];
-    rgb_box[1] = box_low_border[1];
-    rgb_box[2] = box_low_border[2];
-
-    rgb_fill[0] = box_low_fill[0];
-    rgb_fill[1] = box_low_fill[1];
-    rgb_fill[2] = box_low_fill[2];
+    box_text += (String) Sensors[isLow].snsValue + "F (LOW)|";
+    box_border = set_color(20,20,150);
+    box_fill = set_color(150,150,255);
+    text_color = set_color(255-150,255-150,255-255);
   }
   if (isHigh != 255) {
-    temperature = Sensors[isHigh].snsValue;
-    rgb_box[0] = box_high_border[0];
-    rgb_box[1] = box_high_border[1];
-    rgb_box[2] = box_high_border[2];
-
-    rgb_fill[0] = box_high_fill[0];
-    rgb_fill[1] = box_high_fill[1];
-    rgb_fill[2] = box_high_fill[2];
+    box_text += (String) Sensors[isLow].snsValue + "F (HIGH)|";
+    box_border = set_color(150,20,20);
+    box_fill = set_color(255,100,100);
+    text_color = set_color(255-255,255-100,255-100);
   }
 
   //soil
   isHigh = 255;
   isLow = 255;
-
   find_limit_sensortypes(roomname,3,&isHigh,&isLow);    
   if (isHigh != 255) {
-    soilval = Sensors[isHigh].snsValue;
-    rgb_box[0] = box_dry_border[0];
-    rgb_box[1] = box_dry_border[1];
-    rgb_box[2] = box_dry_border[2];
-
-    rgb_fill[0] = box_dry_fill[0];
-    rgb_fill[1] = box_dry_fill[1];
-    rgb_fill[2] = box_dry_fill[2];
+    box_text += "DRY\n";
+    box_border = set_color(65,45,20);
+    box_fill = set_color(250,170,100);
+    text_color = set_color(255-250,255-170,255-100);
   } 
 
   //leak
@@ -1730,15 +1704,10 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isLow = 255;
   find_limit_sensortypes(roomname,58,&isHigh,&isLow);    
   if (isHigh != 255) {
-    leakval = Sensors[isHigh].snsValue;
-    rgb_box[0] = box_wet_border[0];
-    rgb_box[1] = box_wet_border[1];
-    rgb_box[2] = box_wet_border[2];
-
-    rgb_fill[0] = box_wet_fill[0];
-    rgb_fill[1] = box_wet_fill[1];
-    rgb_fill[2] = box_wet_fill[2];
-
+    box_text += "LEAK\n";
+    box_border = set_color(0,0,255);
+    box_fill = set_color(0,190,255);
+    text_color = set_color(255-0,255-190,255-255);
   }
  
 
@@ -1747,19 +1716,12 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isLow = 255;
   find_limit_sensortypes(roomname,61,&isHigh,&isLow);    
   if (isLow != 255) {
-    batval = Sensors[isLow].snsValue;
-    rgb_box[0] = box_low_border[0];
-    rgb_box[1] = box_low_border[1];
-    rgb_box[2] = box_low_border[2];
-
-    rgb_fill[0] = box_low_fill[0];
-    rgb_fill[1] = box_low_fill[1];
-    rgb_fill[2] = box_low_fill[2];
+    box_text += (String) Sensors[isLow].snsValue + "% (LOW)|";
+    box_border = set_color(20,20,150);
+    box_fill = set_color(150,150,255);
+    text_color = set_color(255-150,255-150,255-255);
   }
 
-  box_border = set_color(rgb_box[0],rgb_box[1],rgb_box[2]);
-  box_fill = set_color(rgb_fill[0],rgb_fill[1],rgb_fill[2]);
-  text_color = set_color(255-rgb_fill[0],255-rgb_fill[1],255-rgb_fill[2]);
 
   //draw  box
   tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_fill);
@@ -1773,32 +1735,28 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   Y+=3+tft.fontHeight(FNTSZ);
   FNTSZ=1;
+
   tft.setTextColor(text_color,box_fill);
+      
+  //print each line to the |, then print on the next line
+  int strOffset = -1;
+  String tempstr = "";
+  do {
+    strOffset = box_text.indexOf("|", 0);
+    if (strOffset == -1) { //did not find the break point
+      tempstr = box_text;
+      box_text = "";
+    } else {
+      tempstr = box_text.substring(0, strOffset);
+      box_text.remove(0, strOffset + 1);
+    }
 
-  if (temperature>-900) {
-    snprintf(tempbuf,12,"%dF",(int) temperature);
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-    Y+=4+tft.fontHeight(FNTSZ);
-  }    
+    if (tempstr.length()>1) {
+      fcnPrintTxtCenter(tempstr,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+    }
+  } while (box_text.length()>1);
 
-  if (soilval>-900) {
-    snprintf(tempbuf,12,"DRY");
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-    Y+=2+tft.fontHeight(FNTSZ);
-  }
-
-  if (leakval>-900) {
-    snprintf(tempbuf,12,"LEAK");
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-    Y+=2+tft.fontHeight(FNTSZ);
-  }
-
-  if (batval>-900) {
-    snprintf(tempbuf,12,"%d%%",(int) batval);
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-    Y+=2+tft.fontHeight(FNTSZ);
-  }
-
+  
 }
 
 void fcnDrawSensors(int Y) {

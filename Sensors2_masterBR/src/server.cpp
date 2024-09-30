@@ -21,13 +21,13 @@ IP_TYPE SERVERIP[NUMSERVERS];
 
 WiFi_type WIFI_INFO;
 
-
+#ifdef _DEBUG
 void SerialWrite(String msg) {
-  #ifdef _DEBUG
     Serial.printf("%s",msg.c_str());
-  #endif
   return;
 }
+#endif
+  
 
 void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   //ip is a 4 byte array
@@ -74,18 +74,25 @@ uint8_t connectWiFi()
   }
   
   WiFi.mode(WIFI_STA);
+  #ifdef _DEBUG
   SerialWrite((String) "wifi begin\n");
+       #endif
+
   
   WiFi.begin(ESP_SSID, ESP_PASS);
 
   if (WiFi.status() != WL_CONNECTED)  {
+  #ifdef _DEBUG
     SerialWrite((String) "Connecting\n");
+       #endif
     
     #ifdef _USESSD1306
       oled.print("Connecting");
     #endif
     for (byte j=0;j<retries;j++) {
+  #ifdef _DEBUG
       SerialWrite((String) ".");
+       #endif
       #ifdef _USESSD1306
         oled.print(".");
       #endif
@@ -94,7 +101,9 @@ uint8_t connectWiFi()
       if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
+  #ifdef _DEBUG
         SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
+       #endif
 
         #ifdef _USESSD1306
           oled.clear();
@@ -110,7 +119,9 @@ uint8_t connectWiFi()
         
   }
 
+  #ifdef _DEBUG
   SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
+       #endif
           
 
   return connected;
@@ -148,7 +159,10 @@ byte arduinoID = WIFI_INFO.MYIP[3];
 
 if (bitRead(snsreading->Flags,1) == 0) return false;
 
+  #ifdef _DEBUG
 SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
+       #endif
+
 
 WiFiClient wfclient;
 HTTPClient http;
