@@ -386,7 +386,7 @@ uint  sc_interval;
           Sensors[i].snsPin=DIOPINS[HEATPIN];
           snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[HEATPIN++]);
           pinMode(Sensors[i].snsPin, INPUT);
-          Sensors[i].limitUpper = 700; //this is the difference needed in the analog read of the induction sensor to decide if device is powered
+          Sensors[i].limitUpper = 700; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=10*60;
           Sensors[i].SendingInt=30*60;
@@ -1155,7 +1155,25 @@ uint16_t findOldestDev() {
   return oldestInd;
 }
 
-void initSensor(byte k) {
+void initSensor(int k) {
+  //special cases... k>255 then expire any sensor that is older than k mimnutes
+  //k<0 then init ALL sensors
+  time_t t=now();
+  if (k<0 || k>255) {
+    if (k<0)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+    else {
+      if (k>255) {
+        for (byte i=0;i<SENSORNUM;i++)  {
+          if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (uint32_t) (t-Sensors[i].timeLogged)>k*60)  {//convert to seconds
+            //remove N hour old values 
+            initSensor(i);
+          }
+        }
+      }
+    }
+    return;
+  }
+
   sprintf(Sensors[k].snsName,"");
   Sensors[k].snsID = 0;
   Sensors[k].snsType = 0;

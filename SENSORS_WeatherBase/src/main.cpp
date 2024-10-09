@@ -155,6 +155,7 @@ struct Screen {
     byte redraw;
     byte ScreenNum;
     bool isFlagged;
+    bool wasFlagged;
     uint8_t localWeather; //index of outside sensor
 };
 
@@ -251,7 +252,7 @@ bool updateTime(byte retries=10,uint16_t waittime=250);
 bool checkTime(void);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
-void initSensor(byte k);
+void initSensor(int k); //k is the index to sensor to init. use -1 [anything <0] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
 char* strPad(char* str, char* pad, byte L);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 int ID2Icon(int); //provide a weather ID, obtain an icon ID
@@ -375,6 +376,8 @@ void setup()
   I.ScreenNum = 0;
   I.redraw = SECSCREEN;
   I.isFlagged = false;
+  I.wasFlagged = false;
+  
 
 
   #ifdef _DEBUG
@@ -507,9 +510,7 @@ tft.println("Connecting ArduinoOTA...");
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
-    for (byte i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
+    initSensor(-1);
     tft.println("Set up TimeClient...");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
@@ -554,7 +555,25 @@ int16_t findOldestDev() {
   return oldestInd;
 }
 
-void initSensor(byte k) {
+void initSensor(int k) {
+  //special cases... k>255 then expire any sensor that is older than k mimnutes
+  //k<0 then init ALL sensors
+  time_t t=now();
+  if (k<0 || k>255) {
+    if (k<0)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+    else {
+      if (k>255) {
+        for (byte i=0;i<SENSORNUM;i++)  {
+          if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (uint32_t) (t-Sensors[i].timeLogged)>k*60)  {//convert to seconds
+            //remove N hour old values 
+            initSensor(i);
+          }
+        }
+      }
+    }
+    return;
+  }
+
   snprintf(Sensors[k].snsName,30,"");
   Sensors[k].IP = (0,0,0,0);
   Sensors[k].ardID=0;
@@ -1588,7 +1607,9 @@ void fcnDrawHeader(time_t t) {
 
 void fcnDrawScreen() {
 
-  if (I.redraw > 0) return; //not time to redraw
+  if (I.redraw > 0 && I.isFlagged==I.wasFlagged) return; //not time to redraw and flag status has not changed
+
+  I.wasFlagged = I.isFlagged; //change was status to is status because we are drawing now
 
   time_t t = now();
   
@@ -1600,7 +1621,6 @@ void fcnDrawScreen() {
 
   tft.fillScreen(BG_COLOR);            // Clear screen
   fcnDrawHeader(t);
-
 
 
   if (I.isFlagged) {
@@ -1965,8 +1985,7 @@ char tempbuf[32];
 double tempval;
 uint8_t FNTSZ = 0;
 
-  byte deltaY = 0;
-
+byte deltaY = 0;
 byte section_spacer = 1;
 
 
@@ -2184,9 +2203,9 @@ void loop() {
         if (Sensors[i].snsID>0 && t-Sensors[i].timeLogged<3600 && bitRead(Sensors[i].Flags,0) ) { //only care about flags if the reading was within an hour
           I.isFlagged = true; //only flag for soil or temp or battery
           
-    #ifdef _DEBUG
-      Serial.printf("Loop 1 second action (Sensor read is flagged): Sensor is: %s, Time is: %s\n",Sensors[i].snsName, dateify(now(),"mm/dd/yyyy hh:mm:ss"));
-    #endif
+          #ifdef _DEBUG
+            Serial.printf("Loop 1 second action (Sensor read is flagged): Sensor is: %s, Time is: %s\n",Sensors[i].snsName, dateify(t,"mm/dd/yyyy hh:mm:ss"));
+          #endif
 
           #ifdef _WEBDEBUG
             WEBDEBUG = WEBDEBUG + "FLAGGED SENSOR: " + (String) Sensors[i].ardID + " " + (String) Sensors[i].snsName + "<br>";  
@@ -2227,14 +2246,7 @@ void loop() {
     OldTime[2] = hour(); 
 
     //expire any measurements that are older than N hours.
-    for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (t-Sensors[i].timeLogged)>OLDESTSENSORHR*60*60)  {
-        //remove N hour old values 
-        initSensor(i);
-      }
-    }
-
-    
+    initSensor(OLDESTSENSORHR*60);
 
     //get weather
     if (GetWeather()==false) {

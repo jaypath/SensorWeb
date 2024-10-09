@@ -50,3 +50,16 @@
 
   #define DHTTYPE    DHT11     // DHT11 or DHT22
   #define DHTPIN 2
+#endif
+
+
+//automatically detect arduino type
+#if defined (ARDUINO_ARCH_ESP8266)
+  #define _USE8266 1
+  #define _ADCRATE 1023
+#elif defined(ESP32)
+  #define _USE32
+  #define _ADCRATE 4095
+#else
+  #error Arduino architecture unrecognized by this code.
+#endif

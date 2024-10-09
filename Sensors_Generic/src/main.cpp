@@ -403,9 +403,8 @@ void setup()
 
 
     //init globals
-    for ( i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
+      initSensor(-1);
+
     #ifdef _USEBARPRED
       for (byte ii=0;ii<24;ii++) {
         BAR_HX[ii] = -1;
@@ -621,6 +620,9 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
     #endif
   
     checkDST();
+
+    //expire 24 hour old readings
+    initSensor(24*60);
 
     OldTime[2] = hour();
 

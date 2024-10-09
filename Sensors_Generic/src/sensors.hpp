@@ -141,7 +141,7 @@ float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte 
 
 uint8_t countDev();
 void setupSensors();
-void initSensor(byte k);
+void initSensor(int k);
 uint16_t findOldestDev();
 uint8_t findSensor(byte snsType, byte snsID);
 bool checkSensorValFlag(struct SensorVal *P);
