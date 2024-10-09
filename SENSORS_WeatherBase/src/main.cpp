@@ -252,7 +252,7 @@ bool updateTime(byte retries=10,uint16_t waittime=250);
 bool checkTime(void);
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
-void initSensor(int k); //k is the index to sensor to init. use -1 [anything <0] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
+void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
 char* strPad(char* str, char* pad, byte L);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 int ID2Icon(int); //provide a weather ID, obtain an icon ID
@@ -510,7 +510,7 @@ tft.println("Connecting ArduinoOTA...");
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
-    initSensor(-1);
+    initSensor(-256);
     tft.println("Set up TimeClient...");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
@@ -558,17 +558,13 @@ int16_t findOldestDev() {
 void initSensor(int k) {
   //special cases... k>255 then expire any sensor that is older than k mimnutes
   //k<0 then init ALL sensors
-  time_t t=now();
-  if (k<0 || k>255) {
-    if (k<0)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+  if (k<-255 || k>255) {
+    if (k<-255)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
     else {
-      if (k>255) {
-        for (byte i=0;i<SENSORNUM;i++)  {
-          if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (uint32_t) (t-Sensors[i].timeLogged)>k*60)  {//convert to seconds
-            //remove N hour old values 
-            initSensor(i);
-          }
-        }
+      time_t t=now();
+
+      for (byte i=0;i<SENSORNUM;i++)  {
+        if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (uint32_t) (t-Sensors[i].timeLogged)>k*60)  initSensor(i); //convert k to seconds and  remove N hour old values 
       }
     }
     return;
@@ -634,6 +630,7 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
 
 int16_t findSns(byte snstype, bool newest) {
   //find the first (or newest) instance of a sensor of tpe snstype
+  //returns -1 if no sensor found
   
   if (snstype==0) {
         #ifdef _DEBUG
