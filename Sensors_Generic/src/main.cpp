@@ -403,7 +403,7 @@ void setup()
 
 
     //init globals
-      initSensor(-1);
+      initSensor(-256);
 
     #ifdef _USEBARPRED
       for (byte ii=0;ii<24;ii++) {

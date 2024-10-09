@@ -1159,8 +1159,8 @@ void initSensor(int k) {
   //special cases... k>255 then expire any sensor that is older than k mimnutes
   //k<0 then init ALL sensors
   time_t t=now();
-  if (k<0 || k>255) {
-    if (k<0)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+  if (k<-255 || k>255) {
+    if (k<-255)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
     else {
       if (k>255) {
         for (byte i=0;i<SENSORNUM;i++)  {
