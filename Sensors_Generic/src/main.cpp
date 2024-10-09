@@ -293,9 +293,9 @@ void setup()
 
 
     //set time
-    timeClient.begin();
-    updateTime(10,250);
-
+    timeClient.begin(); //time is in UTC
+    updateTime(10,250); //check if DST and set time to EST or EDT
+    
     ALIVESINCE = now();
 
     #ifdef _USESSD1306

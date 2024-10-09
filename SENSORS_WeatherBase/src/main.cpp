@@ -1660,13 +1660,13 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   find_limit_sensortypes(roomname,1,&isHigh,&isLow);
   if (isLow != 255) {
-    box_text += (String) Sensors[isLow].snsValue + "F (LOW)|";
+    box_text += (String) ((int) Sensors[isLow].snsValue) + "F(LOW)|";
     box_border = set_color(20,20,150);
     box_fill = set_color(150,150,255);
     text_color = set_color(255-150,255-150,255-255);
   }
   if (isHigh != 255) {
-    box_text += (String) Sensors[isLow].snsValue + "F (HIGH)|";
+    box_text += (String) ((int) Sensors[isHigh].snsValue) + "F(HIGH)|";
     box_border = set_color(150,20,20);
     box_fill = set_color(255,100,100);
     text_color = set_color(255-255,255-100,255-100);
@@ -1676,13 +1676,13 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isLow = 255;
   find_limit_sensortypes(roomname,4,&isHigh,&isLow);
   if (isLow != 255) {
-    box_text += (String) Sensors[isLow].snsValue + "F (LOW)|";
+    box_text += (String) ((int) Sensors[isLow].snsValue) + "F(LOW)|";
     box_border = set_color(20,20,150);
     box_fill = set_color(150,150,255);
     text_color = set_color(255-150,255-150,255-255);
   }
   if (isHigh != 255) {
-    box_text += (String) Sensors[isLow].snsValue + "F (HIGH)|";
+    box_text += (String) ((int) Sensors[isHigh].snsValue) + "F(HIGH)|";
     box_border = set_color(150,20,20);
     box_fill = set_color(255,100,100);
     text_color = set_color(255-255,255-100,255-100);
@@ -1693,7 +1693,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isLow = 255;
   find_limit_sensortypes(roomname,3,&isHigh,&isLow);    
   if (isHigh != 255) {
-    box_text += "DRY\n";
+    box_text += "DRY|";
     box_border = set_color(65,45,20);
     box_fill = set_color(250,170,100);
     text_color = set_color(255-250,255-170,255-100);
@@ -1703,8 +1703,8 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isHigh = 255;
   isLow = 255;
   find_limit_sensortypes(roomname,58,&isHigh,&isLow);    
-  if (isHigh != 255) {
-    box_text += "LEAK\n";
+  if (isHigh != 255) { //leak is a 1, no leak is a 0
+    box_text += "LEAK|";
     box_border = set_color(0,0,255);
     box_fill = set_color(0,190,255);
     text_color = set_color(255-0,255-190,255-255);
@@ -1716,7 +1716,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   isLow = 255;
   find_limit_sensortypes(roomname,61,&isHigh,&isLow);    
   if (isLow != 255) {
-    box_text += (String) Sensors[isLow].snsValue + "% (LOW)|";
+    box_text += (String) ((int) Sensors[isLow].snsValue) + "%(LOW)|";
     box_border = set_color(20,20,150);
     box_fill = set_color(150,150,255);
     text_color = set_color(255-150,255-150,255-255);
@@ -1734,27 +1734,28 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
 
   Y+=3+tft.fontHeight(FNTSZ);
-  FNTSZ=1;
-
+  
   tft.setTextColor(text_color,box_fill);
       
   //print each line to the |, then print on the next line
+  FNTSZ=1;
   int strOffset = -1;
-  String tempstr = "";
-  do {
+  String tempstr;
+  while (box_text.length()>1) {
     strOffset = box_text.indexOf("|", 0);
     if (strOffset == -1) { //did not find the break point
       tempstr = box_text;
       box_text = "";
     } else {
       tempstr = box_text.substring(0, strOffset);
-      box_text.remove(0, strOffset + 1);
+      box_text.remove(0, strOffset + 1); //include the trailing "|"
     }
 
     if (tempstr.length()>1) {
       fcnPrintTxtCenter(tempstr,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+      Y+=2+tft.fontHeight(FNTSZ);
     }
-  } while (box_text.length()>1);
+  } 
 
   
 }

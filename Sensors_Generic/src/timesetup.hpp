@@ -13,9 +13,9 @@ extern NTPClient timeClient;
 extern int DSTOFFSET;
 extern char DATESTRING[];
 
-bool checkTime();
-bool updateTime(byte retries,uint16_t waittime);
 void checkDST(void);
+bool updateTime(byte retries=10,uint16_t waittime=250);
+bool checkTime(void);
 String fcnDOW(time_t t);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
 #endif

@@ -23,6 +23,7 @@ bool checkTime(void) {
 }
 
 
+//Time fcn
 bool updateTime(byte retries,uint16_t waittime) {
 
 
@@ -43,17 +44,17 @@ bool updateTime(byte retries,uint16_t waittime) {
   } 
 
   if (isgood) {
-    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
     checkDST();
-    setTime(timeClient.getEpochTime());
   }
 
   return isgood;
 }
 
 void checkDST(void) {
+  timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+  setTime(timeClient.getEpochTime());
 #ifdef _DEBUG
-  Serial.printf("checkDST: Starting time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
 #endif
 
 
@@ -70,7 +71,7 @@ int dow = weekday(); //1 is sunday
       else {
         if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
         else {
-          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
+          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is  the second sunday or more
           else DSTOFFSET = 0;
         }
       }
@@ -87,16 +88,12 @@ int dow = weekday(); //1 is sunday
   }
 
     timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-    //timeClient.forceUpdate();
+    setTime(timeClient.getEpochTime());
 
     #ifdef _DEBUG
       Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
     #endif
-
-
 }
-
-
 
 
 String fcnDOW(time_t t) {
