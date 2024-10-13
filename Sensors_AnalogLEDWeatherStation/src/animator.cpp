@@ -6,6 +6,7 @@
 #include "animator.hpp"
 #include "temp_display.hpp"
 #include "setLED.hpp"
+#include "weather.hpp"
 
 const uint rainy = 0;
 const uint snowy = 1;
@@ -393,7 +394,7 @@ void LED_Weather_Animation::animate_sky(bool add_rays) {
   frame_fill(LED_Sky_Color, global_brightness);
 
   //add sun at the apporpriate position... dawn is 6 dusk 8p
-  byte sun_y = (byte) ((double) (LEDHEIGHT-1)*((double) (20-this->current_hour)/(20-6))); 
+  byte sun_y = (byte) ((double) (LEDHEIGHT-1)*((double) (sunset-this->current_hour)/(sunset-sunrise))); 
   //the point at which the sun is will be white
   frame_pixel(1,sun_y,0xffffff, 100); //center of sun is full bright!
 

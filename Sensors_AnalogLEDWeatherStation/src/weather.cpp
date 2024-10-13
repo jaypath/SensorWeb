@@ -9,6 +9,8 @@ unsigned long last_weather_update = 4294967290; //some arbitrarily huge value ne
 float weather_ids_worst_to_best[WEATHER_CATEGORY_COUNT] = { 7, 2, 6, 5, 3, 8 };
 float div_100_multiplier = 1 / 100;
 
+double sunrise;
+double sunset;
 
 
 uint8_t hundreds_place(uint weather_id) {
@@ -80,12 +82,14 @@ void parse_request_into_weather_info(weather_info_t& weather_info, String& data)
 
   //Get worst weather ID in next 8 hours
   long worst_weather_id = nums[0];
-  for (uint ind = 1; ind < FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 3; ind += 1) { //-3 because we have hour and two temps at the end
+  for (uint ind = 1; ind < FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 5; ind += 1) { //-5 because we have hour and two temps and sunrise and sunset at the end
     if (weather_id_is_worse(nums[ind], worst_weather_id))  worst_weather_id = nums[ind];
   }
 
   //Worst weather ID, current temp, temp in 4 hours
-  weather_info.set_fields(worst_weather_id, nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 3], nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 2],nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 1]);
+  weather_info.set_fields(worst_weather_id, nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 5], nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 4],nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 3],nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 2],nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 1]);
+  sunrise = nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 2];
+  sunset = nums[FETCHED_WEATHER_AND_TEMP_FIELDS_COUNT - 1];
 }
 
 //Thank you to Random Nerd Tutorials for this code!
@@ -125,7 +129,7 @@ String HTTP_GET_request(const char* URL) {
 
 bool get_weather_data(weather_info_t& weather_info) {
   if (!(millis() < last_weather_update || millis() - last_weather_update >= WEATHER_UPDATE_INTERVAL)) return false;
-String request_url = "http://192.168.68.93/REQUESTWEATHER?hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_temp=0&hourly_temp=4&hour=0";
+String request_url = "http://192.168.68.93/REQUESTWEATHER?hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_temp=0&hourly_temp=4&hour=0&sunrise=0@sunset=0";
 
   String data = HTTP_GET_request(request_url.c_str());
 
