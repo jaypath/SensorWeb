@@ -215,6 +215,8 @@ int16_t hourly_temp[24]; //hourly temperature
 int16_t hourly_weatherID[24];
 int16_t hourly_pop[24];
 
+uint32_t sunrise,sunset;
+
 int16_t       daily_tempMax[NUMWTHRDAYS];
 int16_t       daily_tempMin[NUMWTHRDAYS];
 int16_t      daily_weatherID[NUMWTHRDAYS];
@@ -1082,18 +1084,16 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
       deserializeJson(doc, http.getStream());
       //GLOBAL_TIMEZONE_OFFSET = doc["timezone_offset"]; // -14400
 
-      
-   //   JsonObject current = doc["current"];
+      sunrise = (uint32_t) doc["current"]["sunrise"] + GLOBAL_TIMEZONE_OFFSET + DSTOFFSET;
+      sunset = (uint32_t) doc["current"]["sunset"] + GLOBAL_TIMEZONE_OFFSET + DSTOFFSET;
+
       JsonArray hourly = doc["hourly"];
       JsonArray daily = doc["daily"];
-
-
-    
 
  //   JsonObject current_weather_0 = current["weather"][0];
  //   int current_weather_0_id = current_weather_0["id"]; // 802
 
-  Next_Precip = 0; //initialize
+      Next_Precip = 0; //initialize
       uint8_t i=0;
   //    double pop;
 
@@ -2338,6 +2338,8 @@ void handleREQUESTWEATHER() {
         WEBHTML += (String) daily_weatherID[0] + ";"; //dailyID
         WEBHTML += (String) daily_pop[0] + ";"; //POP
         WEBHTML += (String) daily_snow[0] + ";"; //snow
+        WEBHTML += (String) sunrise + ";"; //snow
+        WEBHTML += (String) sunset + ";"; //snow
   } else {
     for (uint8_t i = 0; i < server.args(); i++) {
       if (server.argName(i)=="hourly_temp") WEBHTML += (String) hourly_temp[server.arg(i).toInt()] + ";";
@@ -2348,6 +2350,8 @@ void handleREQUESTWEATHER() {
       if (server.argName(i)=="daily_pop") WEBHTML += (String) daily_pop[server.arg(i).toInt()] + ";";
       if (server.argName(i)=="hourly_pop") WEBHTML += (String) hourly_pop[server.arg(i).toInt()] + ";";
       if (server.argName(i)=="daily_snow") WEBHTML += (String) daily_snow[server.arg(i).toInt()] + ";";
+      if (server.argName(i)=="sunrise") WEBHTML += (String) sunrise + ";";
+      if (server.argName(i)=="sunset") WEBHTML += (String) sunset + ";";
       if (server.argName(i)=="hour") {
         uint32_t temptime = server.arg(i).toDouble();
         if (temptime==0) WEBHTML += (String) hour() + ";";
@@ -2406,6 +2410,8 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</FORM><br>";
 */
 
+  WEBHTML = WEBHTML + "Sunrise " + dateify(sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Sunset " + dateify(sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
