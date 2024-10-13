@@ -5,6 +5,24 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 #ifdef _WEBCHART
   SensorChart SensorCharts[_WEBCHART];
 #endif
+
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+  HISTORY HVACHX[SENSORNUM];
+
+  #ifdef _USECALIBRATIONMODE
+    void checkHVAC(void) {
+      //push peak to peak values into HVACHX array
+      for (byte j=0;j<SENSORNUM;j++) {
+        pushDoubleArray(HVACHX[j].values,_HVACHXPNTS,peak_to_peak(SENSORS_TO_CHART[j],100));
+      }
+    
+    }
+  #endif
+
+  
+#endif
+
+
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
 
 
@@ -59,18 +77,29 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 
 
+
+
 void setupSensors() {
+
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
+//init hvachx 
+  for (byte j=0;j<SENSORNUM;j++) {
+    HVACHX[j].interval = 60*60; //seconds
+    HVACHX[j].lastRead = 0;
+    for (byte jj=0;jj<_HVACHXPNTS;jj++) HVACHX[j].values[jj]=0;
+  }
+
+#endif
 
 //double sc_multiplier = 0;
 //int sc_offset;
-uint  sc_interval; 
+uint16_t  sc_interval; 
 
-#ifdef _CHECKHEAT
-  HEATPIN=0;
-  #endif
 
   for (byte i=0;i<SENSORNUM;i++) {
     Sensors[i].snsType=SENSORTYPES[i];
+    Sensors[i].snsID=find_sensor_count(Sensors[i].snsType); 
+
 
     Sensors[i].Flags = 0;
     //   Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
@@ -82,7 +111,7 @@ uint  sc_interval;
     if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
     else bitWrite(Sensors[i].Flags,2,0);
 
-    switch (SENSORTYPES[i]) {
+    switch (Sensors[i].snsType) {
       case 1: //DHT temp
         //sc_multiplier = 1;
         //sc_offset=100;
@@ -383,13 +412,13 @@ uint  sc_interval;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
 
-          Sensors[i].snsPin=DIOPINS[HEATPIN];
-          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[HEATPIN++]);
+          Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
+          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[Sensors[i].snsID-1]);
           pinMode(Sensors[i].snsPin, INPUT);
-          Sensors[i].limitUpper = 700; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
+          Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=30*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -406,8 +435,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=30*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -420,8 +449,8 @@ uint  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=30*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -524,7 +553,6 @@ uint  sc_interval;
 
     }
 
-    Sensors[i].snsID=find_sensor_count((String) ARDNAME,Sensors[i].snsType); 
         
     Sensors[i].snsValue=0;
     Sensors[i].LastReadTime=0;
@@ -547,10 +575,6 @@ uint  sc_interval;
 
 
 
-  #ifdef _CHECKHEAT
-    HEATPIN=0;
-  #endif
-
 
 }
 
@@ -561,12 +585,12 @@ int peak_to_peak(int pin, int ms) {
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
   
   int maxVal = 0;
-  int minVal=5000;
+  int minVal=16000;
   int buffer = 0;
   uint32_t t0, t1;
   
   t0 = millis();
-  t1 = t1;
+  t1 = t0;
 
   while (t1<=t0+ms) { 
     buffer = analogRead(pin);
@@ -996,6 +1020,16 @@ bool ReadData(struct SensorVal *P) {
 
     }
   #endif
+
+  #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+    #ifndef _USECALIBRATIONMODE
+      if (HVACHX[P->snsID-1].lastRead+HVACHX[P->snsID-1].interval <= P->LastReadTime) {
+        pushDoubleArray(HVACHX[P->snsID-1].values,_HVACHXPNTS,P->snsValue);
+        HVACHX[P->snsID-1].lastRead = P->LastReadTime;
+      }
+    #endif
+
+  #endif
   
 
 #ifdef _DEBUG
@@ -1006,7 +1040,7 @@ bool ReadData(struct SensorVal *P) {
           Serial.println(P->snsName);
       Serial.print("SnsType: ");
           Serial.println(P->snsType);
-      Serial.print("SnsID: ");
+      Serial.print("snsID: ");
           Serial.println(P->snsID);
       Serial.print("Value: ");
           Serial.println(P->snsValue);
@@ -1025,7 +1059,7 @@ return true;
 
 byte find_limit_sensortypes(String snsname, byte snsType,bool highest){
   //returns nidex to sensorval for the entry that is flagged and highest for sensor with name like snsname and type like snsType
-byte cnt = find_sensor_count(snsname,snsType);
+byte cnt = find_sensor_count(snsType);
 byte j = 255;
 byte ind = 255;
 double snsVal;
@@ -1054,14 +1088,12 @@ bool newind = false;
 }
 
 
-byte find_sensor_count(String snsname,byte snsType) {
+byte find_sensor_count(byte snsType) {
 //find the number of sensors associated with sensor havign snsname 
-String temp;
 byte cnt =0;
   for (byte j=0; j<SENSORNUM;j++) {
-    temp = Sensors[j].snsName; 
 
-    if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType) cnt++;
+    if (Sensors[j].snsType == snsType) cnt++;
 
   }
 
@@ -1164,7 +1196,7 @@ void initSensor(int k) {
     else {
       if (k>255) {
         for (byte i=0;i<SENSORNUM;i++)  {
-          if (Sensors[i].snsID>0 && Sensors[i].timeLogged>0 && (uint32_t) (t-Sensors[i].timeLogged)>k*60)  {//convert to seconds
+          if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>(uint32_t) k*60)  {//convert to seconds
             //remove N hour old values 
             initSensor(i);
           }
@@ -1175,7 +1207,7 @@ void initSensor(int k) {
   }
 
   sprintf(Sensors[k].snsName,"");
-  Sensors[k].snsID = 0;
+  Sensors[k].snsID = 255; //this is an impossible value for ID, as 0 is valid
   Sensors[k].snsType = 0;
   Sensors[k].snsValue = 0;
   Sensors[k].PollingInt = 0;
@@ -1189,7 +1221,7 @@ void initSensor(int k) {
 uint8_t countDev() {
   uint8_t c = 0;
   for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsID > 0) c++; 
+    if (Sensors[j].snsType > 0) c++; 
   }
   return c;
 }

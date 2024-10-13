@@ -44,11 +44,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //binary switches
 //#define _CHECKAIRCON 1
 #define _CHECKHEAT 1
-
-
-
-
-#endif
+//#define _USECALIBRATIONMODE 6 
 
 /*sens types
 //0 - not defined
@@ -132,3 +128,86 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 
 */
+
+
+#ifdef _USECALIBRATIONMODE
+  #define _NUMWEBCHARTPNTS 50
+  const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {36, 39, 34, 35,32,33}; //which pins should be stored for charting?
+
+#endif
+
+#ifdef _USELEAK
+  #define _LEAKPIN 12
+  #define _LEAKDIO 13
+#endif
+
+#ifdef _USESOILRES
+  #define SOILRESISTANCE 4700
+  #define SOILR_MAX 2000
+  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
+#endif
+
+#ifdef _USESOILCAP
+  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
+#endif
+
+#ifdef _USEHCSR04
+  #define USONIC_DIV 58   //conversion for ultrasonic distance time to cm
+  #define TRIGPIN 2
+  #define ECHOPIN 3
+#endif
+
+#ifdef _USESSD1306
+  //#define _OLEDTYPE &Adafruit128x64
+  //#define _OLEDTYPE &Adafruit128x32
+  //#define _OLEDINVERT 0
+#endif
+
+
+#ifdef _CHECKAIRCON 
+  const uint8_t DIO_INPUTS=2; //two pins assigned
+  const uint8_t DIOPINS[2] = {34,35}; //comp then fan
+#endif
+
+#ifdef _CHECKHEAT
+//  const uint8_t DIO_INPUTS=6; //6 sensors
+  const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
+  const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+#endif
+
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
+  #define _HVACHXPNTS 24
+#endif
+
+
+
+#ifdef _USEDHT
+
+  #define DHTTYPE    DHT11     // DHT11 or DHT22
+  #define DHTPIN 2
+#endif
+
+
+//automatically detect arduino type
+#if defined (ARDUINO_ARCH_ESP8266)
+  #define _USE8266 1
+  #define _ADCRATE 1023
+#elif defined(ESP32)
+  #define _USE32
+  #define _ADCRATE 4095
+#else
+  #error Arduino architecture unrecognized by this code.
+#endif
+
+// warnings
+#if defined(_CHECKAIRCON) && defined(_CHECKHEAT)
+  #error "Check air con and check heat cannot both be defined."
+#endif
+
+#if defined(_USECALIBRATIONMODE) && defined(_WEBCHART)
+  #error "CANNOT enable both webchart and usecalibration."
+#endif
+
+
+#endif

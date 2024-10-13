@@ -24,8 +24,6 @@
   #include <AHTxx.h>
 #endif
 
-
-
 #ifdef _USEBMP
 //  #include <Adafruit_Sensor.h>
   #include <Adafruit_BMP280.h>
@@ -51,28 +49,21 @@
   extern uint32_t LAST_BAR_READ; //last pressure reading in BAR_HX
 #endif
 
-#ifdef _CHECKAIRCON 
-
-#endif
-
-#ifdef _CHECKHEAT
-  extern uint8_t HEATPIN;
-  extern const String HEATZONE[];
-#endif
 
 struct SensorVal {
   uint8_t  snsType ;
-  uint8_t snsID;
+  uint8_t snsID; //unique ID numnber for type. Example, if there are two type 55 sensors, first will have ID 0 and second will have ID 1... this their unique index is 55.0 and 55.1
   uint8_t snsPin;
   char snsName[32];
   double snsValue;
+  double LastsnsValue;
   double limitUpper;
   double limitLower;
   uint16_t PollingInt;
   uint16_t SendingInt;
   uint32_t LastReadTime;
   uint32_t LastSendTime;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low
+  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB7 = was not flagged, but now is flagged
 };
 
 extern SensorVal Sensors[SENSORNUM];
@@ -91,6 +82,23 @@ extern SensorVal Sensors[SENSORNUM];
 
   extern SensorChart SensorCharts[_WEBCHART];
 #endif
+
+
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+  struct HISTORY {
+    uint32_t lastRead;
+    uint16_t interval;
+    double values[_HVACHXPNTS];
+  };
+  extern HISTORY HVACHX[SENSORNUM];
+
+  #ifdef _USECALIBRATIONMODE
+
+    void checkHVAC(void);
+  #endif
+#endif
+
+
 
 #ifdef _USEBME680
   extern BME680_Class BME680;  ///< Create an instance of the BME680 class
@@ -133,14 +141,14 @@ extern   SSD1306AsciiWire oled;
 
 bool ReadData(struct SensorVal *P);
 byte find_limit_sensortypes(String snsname, byte snsType,bool highest);
-byte find_sensor_count(String snsname,byte snsType);
+byte find_sensor_count(byte snsType);
 byte find_sensor_name(String snsname,byte snsType,byte snsID);
 byte find_sensor_type(byte snsType,byte snsID=255);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 
 uint8_t countDev();
 void setupSensors();
-void initSensor(byte k);
+void initSensor(int k);
 uint16_t findOldestDev();
 uint8_t findSensor(byte snsType, byte snsID);
 bool checkSensorValFlag(struct SensorVal *P);

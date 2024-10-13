@@ -7,7 +7,6 @@
 #include <server.hpp>
 #include <timesetup.hpp>
 
-#define GLOBAL_TIMEZONE_OFFSET  -14400
 
 #ifdef _USE8266 
   //static const uint8_t A0   = A0;
@@ -76,7 +75,6 @@
   #define FILESYS SPIFFS
   #define FORMAT_FS_IF_FAILED false
 #endif
-
 
 
 #define FileSys LittleFS
@@ -152,8 +150,6 @@ bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
 
 void setup()
 {
-  byte i;
-
   #ifdef _DEBUG
     Serial.begin(115200);
     Serial.println("Begin Setup");
@@ -260,11 +256,11 @@ void setup()
   oled.println("WiFi Starting.");
 #endif
 
-  WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
-  while (connectWiFi() != 0) {
-    connectWiFi();
-    
-  }
+WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
+while (connectWiFi() != 0) {
+  connectWiFi();
+  
+}
     
 
 #ifdef _USESSD1306
@@ -273,9 +269,9 @@ void setup()
   oled.println("set up time.");
 #endif
 
-        #ifdef _DEBUG
-    SerialWrite((String)"setuptime done. OTA next.\n");
-  #endif
+#ifdef _DEBUG
+  SerialWrite((String)"setuptime done. OTA next.\n");
+#endif
  
 #ifdef _USESSD1306
   oled.clear();
@@ -285,107 +281,107 @@ void setup()
 
 
 
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+  oled.println("start time.");
+#endif
+
+
+//set time
+timeClient.begin(); //time is in UTC
+updateTime(10,250); //check if DST and set time to EST
+
+ALIVESINCE = now();
+
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+#endif
+
+
+#ifndef _USELOWPOWER
+  //OTA
+    // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname(ARDNAME);
+
+  // No authentication by default
+  // ArduinoOTA.setPassword((const char *)"123");
+
+  ArduinoOTA.onStart([]() {
+    #ifdef _DEBUG
+    Serial.println("OTA started");
+    #endif
+  });
+  ArduinoOTA.onEnd([]() {
+    #ifdef _DEBUG
+    Serial.println("OTA End");
+    #endif
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    #ifdef _DEBUG
+        Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+    #endif
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
-      oled.println("start time.");
+      oled.println("Receiving OTA:");
+      String strbuff = "Progress: " + (100*progress / total);
+      oled.println("OTA start.");   
+      oled.println(strbuff);
     #endif
 
-
-    //set time
-    timeClient.begin();
-    updateTime(10,250);
-
-    ALIVESINCE = now();
-
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    #ifdef _DEBUG
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    #endif
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
+      String strbuff;
+      strbuff = "Error[%u]: " + (String) error + " ";
+      oled.print(strbuff);
+      if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
+      else if (error == OTA_END_ERROR) oled.println("End Failed");
+    #endif
+  });
+  ArduinoOTA.begin();
+    #ifdef _USESSD1306
+      oled.clear();
+      oled.setCursor(0,0);
+      oled.println("OTA OK.");      
     #endif
 
 
-    #ifndef _USELOWPOWER
-      //OTA
-        // Port defaults to 8266
-      // ArduinoOTA.setPort(8266);
-
-      // Hostname defaults to esp8266-[ChipID]
-      ArduinoOTA.setHostname(ARDNAME);
-
-      // No authentication by default
-      // ArduinoOTA.setPassword((const char *)"123");
-
-      ArduinoOTA.onStart([]() {
-        #ifdef _DEBUG
-        Serial.println("OTA started");
-        #endif
-      });
-      ArduinoOTA.onEnd([]() {
-        #ifdef _DEBUG
-        Serial.println("OTA End");
-        #endif
-      });
-      ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        #ifdef _DEBUG
-            Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-        #endif
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("Receiving OTA:");
-          String strbuff = "Progress: " + (100*progress / total);
-          oled.println("OTA start.");   
-          oled.println(strbuff);
-        #endif
-
-      });
-      ArduinoOTA.onError([](ota_error_t error) {
-        #ifdef _DEBUG
-          Serial.printf("Error[%u]: ", error);
-          if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-          else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-          else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-          else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-          else if (error == OTA_END_ERROR) Serial.println("End Failed");
-        #endif
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          String strbuff;
-          strbuff = "Error[%u]: " + (String) error + " ";
-          oled.print(strbuff);
-          if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
-          else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
-          else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
-          else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
-          else if (error == OTA_END_ERROR) oled.println("End Failed");
-        #endif
-      });
-      ArduinoOTA.begin();
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("OTA OK.");      
-        #endif
-
-
-        #ifdef _DEBUG
-        SerialWrite((String) "set up HTML server... ");
-        #endif
-      server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-      server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
-      server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
-      server.on("/SETTHRESH", handleSETTHRESH);               
-      server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
-      server.on("/NEXTSNS", handleNEXT);
-      server.on("/LASTSNS", handleLAST);
-      server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
-      server.begin();
-      
-      #ifdef _DEBUG
-              SerialWrite((String) "HTML server started!\n");
+    #ifdef _DEBUG
+    SerialWrite((String) "set up HTML server... ");
+    #endif
+    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+    server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
+    server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
+    server.on("/SETTHRESH", handleSETTHRESH);               
+    server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
+    server.on("/NEXTSNS", handleNEXT);
+    server.on("/LASTSNS", handleLAST);
+    server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
+    server.begin();
+    
+    #ifdef _DEBUG
+            SerialWrite((String) "HTML server started!\n");
+    #endif
   #endif
-    #endif
 
 
 
@@ -403,9 +399,8 @@ void setup()
 
 
     //init globals
-    for ( i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
+      initSensor(-256);
+
     #ifdef _USEBARPRED
       for (byte ii=0;ii<24;ii++) {
         BAR_HX[ii] = -1;
@@ -429,11 +424,11 @@ void setup()
   #endif
 
   #ifdef DHTTYPE
-         #ifdef _DEBUG
-   SerialWrite((String) "dht begin\n");
-       #endif
+    #ifdef _DEBUG
+      SerialWrite((String) "dht begin\n");
+      #endif
  
-    dht.begin();
+      dht.begin();
   #endif
 
 
@@ -575,7 +570,11 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
 
   #endif
 
-  
+  #ifdef _USECALIBRATIONMODE
+    if (millis()%10000==0) checkHVAC();
+  #endif
+
+
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
@@ -592,6 +591,8 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
       if (goodread == true) {
         if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,6) /* value changed since last read*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
       }
+
+
     }
 
 
@@ -622,6 +623,9 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
   
     checkDST();
 
+    //expire 24 hour old readings
+    initSensor(24*60);
+
     OldTime[2] = hour();
 
   }
@@ -631,50 +635,27 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
 
     OldTime[3] = weekday();
 
+    checkDST();
   
     //reset heat and ac values
     #ifdef _DEBUG
       Serial.printf("\nNew day... ");
     #endif
-    #ifdef _CHECKAIRCON
 
-    #ifdef _DEBUG
-      SerialWrite((String) "Reset HVACs...\n");
-    #endif
+    #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 
-
-     for (byte j=0;j<SENSORNUM;j++)  {
-      if (Sensors[j].snsType >=56 && Sensors[j].snsType <=57) {
-        SendData(&Sensors[j]);
-        Sensors[j].snsValue = 0;
-      }
-     }
+      #ifdef _DEBUG
+        SerialWrite((String) "Reset HVACs...\n");
+      #endif
+      initHVAC();
 
     #endif
 
-    #ifdef _CHECKHEAT
-    #ifdef _DEBUG
-      SerialWrite((String) "Reset heater time.\n");
-    #endif
-
-      for (byte j=0;j<SENSORNUM;j++)  {
-        if (Sensors[j].snsType == 55) {
-          SendData(&Sensors[j]);
-          Sensors[j].snsValue = 0;
-        }
-      }
-    #endif
 
     #ifdef _DEBUG
       Serial.printf("\n");
 
     #endif
 
-  
-
   } 
-
-
-
-
 }

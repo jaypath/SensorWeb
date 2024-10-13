@@ -1,6 +1,28 @@
 #include <sensors.hpp>
 
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
+
+#ifdef _WEBCHART
+  SensorChart SensorCharts[_WEBCHART];
+#endif
+
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+  HISTORY HVACHX[SENSORNUM];
+
+  #ifdef _USECALIBRATIONMODE
+    void checkHVAC(void) {
+      //push peak to peak values into HVACHX array
+      for (byte j=0;j<SENSORNUM;j++) {
+        pushDoubleArray(HVACHX[j].values,_HVACHXPNTS,peak_to_peak(SENSORS_TO_CHART[j],100));
+      }
+    
+    }
+  #endif
+
+  
+#endif
+
+
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
 
 
@@ -55,14 +77,29 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 
 
+
+
 void setupSensors() {
 
-#ifdef _CHECKHEAT
-  HEATPIN=0;
-  #endif
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
+//init hvachx 
+  for (byte j=0;j<SENSORNUM;j++) {
+    HVACHX[j].interval = 60*60; //seconds
+    HVACHX[j].lastRead = 0;
+    for (byte jj=0;jj<_HVACHXPNTS;jj++) HVACHX[j].values[jj]=0;
+  }
+
+#endif
+
+//double sc_multiplier = 0;
+//int sc_offset;
+uint  sc_interval; 
+
 
   for (byte i=0;i<SENSORNUM;i++) {
     Sensors[i].snsType=SENSORTYPES[i];
+    Sensors[i].snsID=find_sensor_count(Sensors[i].snsType); 
+
 
     Sensors[i].Flags = 0;
     //   Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
@@ -74,8 +111,12 @@ void setupSensors() {
     if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
     else bitWrite(Sensors[i].Flags,2,0);
 
-    switch (SENSORTYPES[i]) {
+    switch (Sensors[i].snsType) {
       case 1: //DHT temp
+        //sc_multiplier = 1;
+        //sc_offset=100;
+        sc_interval=60*30;//seconds 
+
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
           snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME);
@@ -92,6 +133,10 @@ void setupSensors() {
         #endif
         break;
       case 2: //DHT RH
+        //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
           snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
@@ -102,14 +147,18 @@ void setupSensors() {
           else {
             Sensors[i].limitUpper = 65;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           Sensors[i].PollingInt=2*60;
           Sensors[i].SendingInt=5*60;
         #endif
         break;
       case 3: //soil
+        //sc_multiplier = 100; //divide by 100
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
         #ifdef _USESOILCAP
-          Sensors[i].snsPin=SOILPIN;
+          Sensors[i].snsPin=SOILPIN; //input, usually A0
           snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
           Sensors[i].limitUpper = 290;
           Sensors[i].limitLower = 25;
@@ -117,6 +166,8 @@ void setupSensors() {
           Sensors[i].SendingInt=600;
         #endif
         #ifdef _USESOILRES
+          pinMode(_USESOILRES,OUTPUT);  
+
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
           Sensors[i].limitUpper = SOILR_MAX;
@@ -127,6 +178,10 @@ void setupSensors() {
 
         break;
       case 4: //AHT temp
+        //sc_multiplier = 1;
+        //sc_offset=100;
+        sc_interval=60*30;//seconds 
+
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
           snprintf(Sensors[i].snsName,31,"%s_AHT_T",ARDNAME);
@@ -143,6 +198,10 @@ void setupSensors() {
         #endif
         break;
       case 5:
+        //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
         #ifdef _USEAHT
           Sensors[i].snsPin=0;
           snprintf(Sensors[i].snsName,31,"%s_AHT_RH",ARDNAME);
@@ -153,6 +212,7 @@ void setupSensors() {
           else {
             Sensors[i].limitUpper = 65;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           Sensors[i].PollingInt=10*60;
           Sensors[i].SendingInt=10*60;
@@ -161,6 +221,9 @@ void setupSensors() {
   
 
       case 7: //dist
+        //sc_multiplier = 1;
+        //sc_offset=50;
+        sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0; //not used
         snprintf(Sensors[i].snsName,31,"%s_Dist",ARDNAME);
         Sensors[i].limitUpper = 100;
@@ -169,6 +232,9 @@ void setupSensors() {
         Sensors[i].SendingInt=100;
         break;
       case 9: //BMP pres
+        //sc_multiplier = .5; //[multiply by 2]
+        //sc_offset=-950; //now range is <100, so multiplier of .5 is ok
+        sc_interval=60*60;//seconds 
         Sensors[i].snsPin=0; //i2c
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
@@ -177,20 +243,28 @@ void setupSensors() {
         Sensors[i].SendingInt=60*60;
         break;
       case 10: //BMP temp
+        //sc_multiplier = 1;
+        //sc_offset=50;
+        sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_BMP_t",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
             Sensors[i].limitUpper = 88;
             Sensors[i].limitLower = 25;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
           else {
             Sensors[i].limitUpper = 80;
             Sensors[i].limitLower = 60;
+            bitWrite(Sensors[i].Flags,1,0); //not monitored
           }
         Sensors[i].PollingInt=30*60;
         Sensors[i].SendingInt=60*60;
         break;
       case 11: //BMP alt
+        //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
@@ -199,6 +273,10 @@ void setupSensors() {
         Sensors[i].SendingInt=60000;
         break;
       case 12: //Bar prediction
+        //sc_multiplier = 1;
+        //sc_offset=10; //to eliminate neg numbs
+        sc_interval=60*30;//seconds 
+
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_Pred",ARDNAME);
         Sensors[i].limitUpper = 0;
@@ -209,6 +287,9 @@ void setupSensors() {
         bitWrite(Sensors[i].Flags,4,1); //predictive
         break;
       case 13: //BME pres
+        //sc_multiplier = .5;
+        //sc_offset=-950; //now range is <100, so multiply by 2
+        sc_interval=60*60;//seconds 
         Sensors[i].snsPin=0; //i2c
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1022; //normal is 1013
@@ -217,6 +298,9 @@ void setupSensors() {
         Sensors[i].SendingInt=60*60;
         break;
       case 14: //BMEtemp
+        //sc_multiplier = 1;
+        //sc_offset=100;
+        sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_BMEt",ARDNAME);
           if (bitRead(OUTSIDE_SNS,i)) {
@@ -231,6 +315,10 @@ void setupSensors() {
         Sensors[i].SendingInt=5*60;
         break;
       case 15: //bme rh
+        //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_BMErh",ARDNAME);
         if (bitRead(OUTSIDE_SNS,i)) {
@@ -240,11 +328,16 @@ void setupSensors() {
         else {
           Sensors[i].limitUpper = 65;
           Sensors[i].limitLower = 25;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         }
         Sensors[i].PollingInt=120;
         Sensors[i].SendingInt=5*60;
         break;
       case 16: //bme alt
+        //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
         Sensors[i].limitUpper = 100;
@@ -253,6 +346,9 @@ void setupSensors() {
         Sensors[i].SendingInt=15*60*60;
         break;
       case 17: //bme680
+        //sc_multiplier = 1;
+        //sc_offset=50;
+        sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_T",ARDNAME);
         if (bitRead(OUTSIDE_SNS,i)) {
@@ -267,6 +363,10 @@ void setupSensors() {
         Sensors[i].SendingInt=15*60;
         break;
       case 18: //bme680
+              //sc_multiplier = 1;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
         if (bitRead(OUTSIDE_SNS,i)) {
@@ -276,11 +376,15 @@ void setupSensors() {
         else {
           Sensors[i].limitUpper = 65;
           Sensors[i].limitLower = 25;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
         }
         Sensors[i].PollingInt=15*60;
         Sensors[i].SendingInt=15*60;
         break;
       case 19: //bme680
+        //sc_multiplier = .5;
+        //sc_offset=-950; //now range is <100, so multiply by 2
+        sc_interval=60*60;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1020;
@@ -289,6 +393,10 @@ void setupSensors() {
         Sensors[i].SendingInt=60*60;
         break;
       case 20: //bme680
+        //sc_multiplier = 1;
+        //sc_offset=00;
+        sc_interval=60*30;//seconds 
+
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_gas",ARDNAME);
         Sensors[i].limitUpper = 1000;
@@ -300,13 +408,17 @@ void setupSensors() {
       #ifdef _CHECKHEAT
 
         case 55: //heat
-          Sensors[i].snsPin=DIOPINS[HEATPIN];
-          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[HEATPIN++]);
+        //sc_multiplier = 4096/256;
+        //sc_offset=0;
+        sc_interval=60*30;//seconds 
+
+          Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
+          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[Sensors[i].snsID-1]);
           pinMode(Sensors[i].snsPin, INPUT);
-          Sensors[i].limitUpper = 700;
+          Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
@@ -315,44 +427,89 @@ void setupSensors() {
 
       #ifdef _CHECKAIRCON
         case 56: //aircon compressor
+          //sc_multiplier = 4096/256;
+          //sc_offset=0;
+          sc_interval=60*30;//seconds 
           Sensors[i].snsPin=DIOPINS[0];
           pinMode(Sensors[i].snsPin, INPUT);
           snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
-          Sensors[i].limitUpper = 700; //this is the difference in the analog read for a sign wave detection
+          Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
         case 57: //aircon fan
+          //sc_multiplier = 4096/256;
+          //sc_offset=0;
+          sc_interval=60*30;//seconds 
           Sensors[i].snsPin=DIOPINS[1];
           pinMode(Sensors[i].snsPin, INPUT);
           snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=10*60;
+          Sensors[i].PollingInt=5*60;
+          Sensors[i].SendingInt=5*60;
           bitWrite(Sensors[i].Flags,6,0); //flag does not matters
           bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
+
+          
       #endif
+      case 58: //leak
+        #ifdef _USELEAK
+          sc_interval=60*60;//seconds 
+          Sensors[i].snsPin=_LEAKPIN;
+          pinMode(Sensors[i].snsPin,INPUT);
+          pinMode(_LEAKDIO,OUTPUT);
+          digitalWrite(_LEAKDIO, LOW);
+          snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
+          Sensors[i].limitUpper = 0.5;
+          Sensors[i].limitLower = -0.5;
+          Sensors[i].PollingInt=10*60;
+          Sensors[i].SendingInt=10*60;
+          break;
+        #endif
 
       case 60: //battery
-        #ifdef _USEBATTERY
-          Sensors[i].snsPin=_USEBATTERY;
+        #ifdef _USELIBATTERY
+          //sc_multiplier = .01;
+          //sc_offset=-3.1;
+          sc_interval=60*30;//seconds 
+          Sensors[i].snsPin=_USELIBATTERY;
           pinMode(Sensors[i].snsPin, INPUT);
           snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
           Sensors[i].limitUpper = 4.3;
           Sensors[i].limitLower = 3.7;
           Sensors[i].PollingInt=1*60;
           Sensors[i].SendingInt=5*60;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
+
           
         #endif
+        #ifdef _USESLABATTERY
+          //sc_multiplier = .01;
+          //sc_offset=-3.1;
+          sc_interval=60*30;//seconds 
+          Sensors[i].snsPin=_USESLABATTERY;
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
+          Sensors[i].limitUpper = 12.89;
+          Sensors[i].limitLower = 12.23;
+          Sensors[i].PollingInt=60*60;
+          Sensors[i].SendingInt=60*60;
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
+        #endif
+
         break;
       case 61: //battery percent
-        #ifdef _USEBATTERY
-          Sensors[i].snsPin=_USEBATTERY;
+        #ifdef _USELIBATTERY
+          //sc_multiplier = 1;
+          //sc_offset=0;
+          sc_interval=60*30;//seconds 
+
+          Sensors[i].snsPin=_USELIBATTERY;
           pinMode(Sensors[i].snsPin, INPUT);
           snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
           Sensors[i].limitUpper = 105;
@@ -362,26 +519,64 @@ void setupSensors() {
           bitWrite(Sensors[i].Flags,3,1); //calculated
 
         #endif
-        break;
+        #ifdef _USESLABATTERY
+          //sc_multiplier = 1;
+          //sc_offset=0;
+          sc_interval=60*60;//seconds 
 
+          Sensors[i].snsPin=_USESLABATTERY;
+          pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
+          Sensors[i].limitUpper = 100;
+          Sensors[i].limitLower = 50;
+          Sensors[i].PollingInt=60*60;
+          Sensors[i].SendingInt=60*60;
+          bitWrite(Sensors[i].Flags,3,1); //calculated
+
+        #endif
+        break;
+      case 90: //Sleep info
+
+          sc_interval=60*30;//seconds 
+
+          Sensors[i].snsPin=0;
+          //pinMode(Sensors[i].snsPin, INPUT);
+          snprintf(Sensors[i].snsName,31,"%s_sleep",ARDNAME);
+          Sensors[i].limitUpper = 14400;
+          Sensors[i].limitLower = 0;
+          Sensors[i].PollingInt=10*60; //these don't matter
+          Sensors[i].SendingInt=10*60; //these don't matter
+          bitWrite(Sensors[i].Flags,3,1); //calculated
+          bitWrite(Sensors[i].Flags,1,0); //not monitored
+        
+        break;
 
     }
 
-    Sensors[i].snsID=find_sensor_count((String) ARDNAME,Sensors[i].snsType); 
         
     Sensors[i].snsValue=0;
     Sensors[i].LastReadTime=0;
     Sensors[i].LastSendTime=0;  
+    #ifdef _WEBCHART
+      for (byte j=0;j<_WEBCHART;j++) {
+        if (Sensors[i].snsType==SENSORS_TO_CHART[j]) {
+          SensorCharts[j].snsType = Sensors[i].snsType;
+          SensorCharts[j].snsNum = i;
+          //SensorCharts[j].offset = sc_offset;
+          //SensorCharts[j].multiplier = sc_multiplier;
+          for (byte k=0; k<_NUMWEBCHARTPNTS; k++)     SensorCharts[j].values[k] = 0;
+          SensorCharts[j].interval = sc_interval;
+          SensorCharts[j].lastRead = 0;
+        }
+      }
+    #endif
 
   }
 
-  #ifdef _CHECKHEAT
-    HEATPIN=0;
-  #endif
+
 
 
 }
-
 
 int peak_to_peak(int pin, int ms) {
   
@@ -390,18 +585,18 @@ int peak_to_peak(int pin, int ms) {
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
   
   int maxVal = 0;
-  int minVal=5000;
+  int minVal=16000;
   int buffer = 0;
   uint32_t t0, t1;
   
   t0 = millis();
-  t1 = millis();
+  t1 = t0;
 
   while (t1<=t0+ms) { 
-    t1 = millis();
     buffer = analogRead(pin);
     if (maxVal<buffer) maxVal = buffer;
-    if (minVal>buffer) minVal = buffer;        
+    if (minVal>buffer) minVal = buffer;
+    t1 = millis();        
   }
   
 
@@ -410,9 +605,14 @@ int peak_to_peak(int pin, int ms) {
 }
 
 
+
 bool ReadData(struct SensorVal *P) {
+  if (checkTime()==false) return false;
+
   double val;
   bitWrite(P->Flags,0,0);
+
+  P->LastsnsValue = P->snsValue;
   
   switch (P->snsType) {
     case 1: //DHT temp
@@ -444,8 +644,16 @@ bool ReadData(struct SensorVal *P) {
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
       
-        val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
-        P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value
+
+        #ifdef _USE32
+          val = val * (3.3 / 4095); //12 bit
+          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
+        #endif
+        #ifdef _USE8266
+          val = val * (3.3 / _ADCRATE); //it's _ADCRATE because the value 1024 is overflow
+          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
+        #endif
+
         
       #endif
 
@@ -663,12 +871,13 @@ bool ReadData(struct SensorVal *P) {
       break;
     #endif
 
+
     case 55: //heat
 
       //take n measurements, and average
       val=0;
       for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,17); //check 17 ms, which is 1 cycle of a 60hz wave
+        val += peak_to_peak(P->snsPin,50);
       }
       val = val/3; //average
       
@@ -690,7 +899,7 @@ bool ReadData(struct SensorVal *P) {
       //take n measurements, and average
       val=0;
       for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,17);
+        val += peak_to_peak(P->snsPin,50);
       }
       val = val/3; //average
       
@@ -711,7 +920,7 @@ bool ReadData(struct SensorVal *P) {
       //take n measurements, and average
       val=0;
       for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,17);
+        val += peak_to_peak(P->snsPin,50);
       }
       val = val/3; //average
       
@@ -728,94 +937,99 @@ bool ReadData(struct SensorVal *P) {
         bitWrite(P->Flags,0,0); //no ac
       }
       break;
+    case 58: //Leak detection
+      #ifdef _USELEAK
+        digitalWrite(_LEAKDIO, HIGH);
+        if (digitalRead(_LEAKPIN)==HIGH) P->snsValue =1;
+        else P->snsValue =0;
+        digitalWrite(_LEAKDIO, LOW);
 
-    case 60: //lithium battery
-      #ifdef _USEBATTERY
-
-        double m1,m2,m3;
-        m1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        m3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        P->snsValue = (m1+m2+m3)/3;
       #endif
+
+      break;
+
+
+    case 60: // battery
+      #ifdef _USELIBATTERY
+        //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
+        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+         
+      #endif
+      #ifdef _USESLABATTERY
+        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+        
+      #endif
+
+
       break;
     case 61:
       //_USEBATPCNT
-      #ifdef _USEBATTERY
-        double p1,p2,p3;
-        p1 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p2 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        p3 = (double) (3.3* 2 * (double) analogRead(P->snsPin)/1023);//0 to 1023, where 1023 = 3.3v max //note that there is a voltage divider cutting the bat voltage in 2
-        P->snsValue = (p1+p2+p3)/3;
-        
-        if (P->snsValue>=4.2) P->snsValue = 100;
-        else {
-          if (P->snsValue>=4.15) P->snsValue = 95;
-          else {
-            if (P->snsValue>=4.11) P->snsValue = 90;
-            else {
-              if (P->snsValue>=4.08) P->snsValue = 85;
-              else {
-                if (P->snsValue>=4.02) P->snsValue = 80;
-                else {
-                  if (P->snsValue>=3.98) P->snsValue = 75;
-                  else {
-                    if (P->snsValue>=3.95) P->snsValue = 70;
-                    else {
-                      if (P->snsValue>=3.91) P->snsValue = 65;
-                      else {
-                        if (P->snsValue>=3.87) P->snsValue = 60;
-                        else {
-                          if (P->snsValue>=3.85) P->snsValue = 55;
-                          else {
-                            if (P->snsValue>=3.84) P->snsValue = 50;
-                            else {
-                              if (P->snsValue>=3.82) P->snsValue = 45;
-                              else {
-                                if (P->snsValue>=3.80) P->snsValue = 40;
-                                else {
-                                  if (P->snsValue>=3.79) P->snsValue = 35;
-                                  else {
-                                    if (P->snsValue>=3.77) P->snsValue = 30;
-                                    else {
-                                      if (P->snsValue>=3.75) P->snsValue = 25;
-                                      else {
-                                        if (P->snsValue>=3.73) P->snsValue = 20;
-                                        else {
-                                            if (P->snsValue>=3.71) P->snsValue = 15;
-                                            else {
-                                                if (P->snsValue>=3.69) P->snsValue = 10;
-                                                else {
-                                                  if (P->snsValue>=3.61) P->snsValue = 5;
-                                                  else {
-                                                    P->snsValue = 1;
-                                                  }
-                                                }
-                                            }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }  
+      #ifdef _USELIBATTERY
+        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+
+        #define VOLTAGETABLE 21
+        static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
+        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
+
+        for (byte jj=0;jj<VOLTAGETABLE;jj++) {
+          if (P->snsValue> BAT_VOLT[jj]) {
+            P->snsValue = BAT_PCNT[jj];
+            break;
+          } 
+        }
+
+
       #endif
+
+      #ifdef _USESLABATTERY
+        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+
+        #define VOLTAGETABLE 11
+        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+        static byte BAT_PCNT[VOLTAGETABLE] = {100,90,80,70,60,50,40,30,20,10,0};
+        for (byte jj=0;jj<VOLTAGETABLE;jj++) {
+          if (P->snsValue>= BAT_VOLT[jj]) {
+            P->snsValue = BAT_PCNT[jj];
+            break;
+          } 
+        }
+
+      #endif
+
+      break;
+    case 90:
+      //don't do anything here
+      //I'm set manually!
       break;
     
   }
 
   checkSensorValFlag(P); //sets isFlagged
   P->LastReadTime = now(); //localtime
+
+  #ifdef _WEBCHART
+    for (byte k=0;k<_WEBCHART;k++) {
+      if (SensorCharts[k].snsType == P->snsType) {
+        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->LastReadTime) {
+          SensorCharts[k].lastRead = P->LastReadTime;
+          //byte tmpval = (byte) ((double) (P->snsValue + SensorCharts[k].offset) / SensorCharts[k].multiplier );
+
+          pushDoubleArray(SensorCharts[k].values,_NUMWEBCHARTPNTS,P->snsValue);
+        }
+      }
+
+    }
+  #endif
+
+  #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+    #ifndef _USECALIBRATIONMODE
+      if (HVACHX[P->snsID-1].lastRead+HVACHX[P->snsID-1].interval <= P->LastReadTime) {
+        pushDoubleArray(HVACHX[P->snsID-1].values,_HVACHXPNTS,P->snsValue);
+        HVACHX[P->snsID-1].lastRead = P->LastReadTime;
+      }
+    #endif
+
+  #endif
   
 
 #ifdef _DEBUG
@@ -826,7 +1040,7 @@ bool ReadData(struct SensorVal *P) {
           Serial.println(P->snsName);
       Serial.print("SnsType: ");
           Serial.println(P->snsType);
-      Serial.print("SnsID: ");
+      Serial.print("snsID: ");
           Serial.println(P->snsID);
       Serial.print("Value: ");
           Serial.println(P->snsValue);
@@ -845,7 +1059,7 @@ return true;
 
 byte find_limit_sensortypes(String snsname, byte snsType,bool highest){
   //returns nidex to sensorval for the entry that is flagged and highest for sensor with name like snsname and type like snsType
-byte cnt = find_sensor_count(snsname,snsType);
+byte cnt = find_sensor_count(snsType);
 byte j = 255;
 byte ind = 255;
 double snsVal;
@@ -874,25 +1088,41 @@ bool newind = false;
 }
 
 
-byte find_sensor_count(String snsname,byte snsType) {
+byte find_sensor_count(byte snsType) {
 //find the number of sensors associated with sensor havign snsname 
-String temp;
 byte cnt =0;
   for (byte j=0; j<SENSORNUM;j++) {
-    temp = Sensors[j].snsName; 
 
-    if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType) cnt++;
+    if (Sensors[j].snsType == snsType) cnt++;
 
   }
 
   return cnt;
 }
 
+byte find_sensor_type(byte snsType,byte snsID) {
+  //return the first sensor that is of specified type
+  //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
+  //returns 255 if no such sensor found
+  String temp;
+  for (byte j=0; j<SENSORNUM;j++) {
+    if (snsID==255) {
+      if (Sensors[j].snsType == snsType) return j;
+    } else {
+      if (Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
+    }
+  }
+  return 255;
+}
+
+
 byte find_sensor_name(String snsname,byte snsType,byte snsID) {
   //return the first sensor that has fieldname within its name
   //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
   //returns 255 if no such sensor found
   String temp;
+
+  if (snsname=="") snsname = ARDNAME;
   for (byte j=0; j<SENSORNUM;j++) {
     temp = Sensors[j].snsName; 
 
@@ -906,27 +1136,32 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
 }
 
 bool checkSensorValFlag(struct SensorVal *P) {
-  if (bitRead(P->Flags,6)==0) return false;
+  //if (bitRead(P->Flags,6)==0) return false;
 
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, 
+  
+  bool lastflag = false;
+  bool thisflag = false;
+  if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
+  
   if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
-    //flag is true
-    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
-    else bitWrite(P->Flags,7,0);
-
+    thisflag = true;
     bitWrite(P->Flags,0,1);
 
-    //if too high, write bit 5
+    //is it too high? write bit 5
     if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
     else bitWrite(P->Flags,5,0);
-  }       
-      
-  else { //flag is off
-    if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,0);
-    else bitWrite(P->Flags,7,1);
+  } 
 
-    bitWrite(P->Flags,0,0);
-
-    bitWrite(P->Flags,5,0);
+  //now check for changes...  
+  if (lastflag!=thisflag) {
+    bitWrite(P->Flags,6,1); //change detected
+    if (thisflag==true) bitWrite(P->Flags,7,1); //changed to flagged
+    else bitWrite(P->Flags,7,0); //changed to not flagged
+  } else {
+    bitWrite(P->Flags,6,0);
+    bitWrite(P->Flags,7,0);
   }
   
   return bitRead(P->Flags,0);
@@ -952,9 +1187,27 @@ uint16_t findOldestDev() {
   return oldestInd;
 }
 
-void initSensor(byte k) {
+void initSensor(int k) {
+  //special cases... k>255 then expire any sensor that is older than k mimnutes
+  //k<0 then init ALL sensors
+  time_t t=now();
+  if (k<-255 || k>255) {
+    if (k<-255)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+    else {
+      if (k>255) {
+        for (byte i=0;i<SENSORNUM;i++)  {
+          if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>k*60)  {//convert to seconds
+            //remove N hour old values 
+            initSensor(i);
+          }
+        }
+      }
+    }
+    return;
+  }
+
   sprintf(Sensors[k].snsName,"");
-  Sensors[k].snsID = 0;
+  Sensors[k].snsID = 255; //this is an impossible value for ID, as 0 is valid
   Sensors[k].snsType = 0;
   Sensors[k].snsValue = 0;
   Sensors[k].PollingInt = 0;
@@ -968,12 +1221,21 @@ void initSensor(byte k) {
 uint8_t countDev() {
   uint8_t c = 0;
   for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsID > 0) c++; 
+    if (Sensors[j].snsType > 0) c++; 
   }
   return c;
 }
 
-void pushDoubleArray(double arr[], byte N, double value) {
+void pushByteArray(byte arr[], byte N, byte value) {
+  for (byte i = N-1; i > 0 ; i--) {
+    arr[i] = arr[i-1];
+  }
+  arr[0] = value;
+
+  return ;
+}
+
+void pushDoubleArray(double arr[], byte N, double value) { //array variable, size of array, value to push
   for (byte i = N-1; i > 0 ; i--) {
     arr[i] = arr[i-1];
   }
@@ -981,17 +1243,25 @@ void pushDoubleArray(double arr[], byte N, double value) {
 
   return ;
 
-/*
-  double arr2[N];
-  arr2[0] = value;
+}
 
-  for (byte i = 0 ; i < N-1 ; i++)
-    {
-        arr2[i+1] = *(arr+i);
-        *(arr+i) = arr2[i];
-    }
-    *(arr+N-1) = arr2[N-1];
-*/
+float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN) {
+  /*
+    R1 is first resistor
+    R2 is second resistor (which we are measuring voltage across)
+    snsPin is the pin to measure the voltage, Vo
+    ADCRATE is the max ADCRATE
+    Vm is the ADC max voltage (1 for esp12e, 3.3 for NodeMCU, 3.3 for ESP)
+    avgN is the number of times to avg
+    */
+
+  float Vo = 0;
+
+  for (byte i=0;i<avgN;i++) {
+    Vo += (float) Vm * ((R2+R1)/R2) * analogRead(snsPin)/_ADCRATE;
+  }
+
+  return  Vo/avgN;
 }
 
 
