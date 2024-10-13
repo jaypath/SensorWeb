@@ -67,13 +67,16 @@ uint16_t      daily_weatherID[NUMWTHRDAYS];
 uint8_t       daily_pop[NUMWTHRDAYS];
 double        daily_snow[NUMWTHRDAYS];
 uint8_t LASTMINUTEDRAWN=0;
+uint32_t sunrise,sunset;
 
 
-
+#define GLOBAL_TIMEZONE_OFFSET -18000 
+int16_t DSTOFFSET = 0; 
+#define TIMEUPDATEINT 600000
 //wifi
 WiFiUDP ntpUDP;
 //ESP8266WebServer server(80);
-NTPClient timeClient(ntpUDP);
+NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,TIMEUPDATEINT); //utc time to start [have to spec the third param!]
 // By default 'pool.ntp.org' is used with 60 seconds update interval and
 // no offset
 // You can specify the time server pool and the offset, (in seconds)
@@ -84,9 +87,6 @@ NTPClient timeClient(ntpUDP);
 #define ESP_PASS "snakesquirrel" // Your network password here
 #define TIMEOUTHTTP 2000
 //time zone offset is the number of seconds from Greenwich Mean Time. EST is 5 hours behind, but 4 hours in summer
-const int16_t GLOBAL_timezone_offset = -18000; //need a variable, not constant. it's 5 hrs for normal time, 4 hrs for dst
-int16_t DSTOFFSET = 0; //set to zero during winter, +3600 in summer
-
 
 //four timers
 uint32_t TIMERS[4] = {0,0,0,0};
@@ -104,7 +104,82 @@ uint32_t TIMERS[4] = {0,0,0,0};
 bool getWeather();
 void weatherIDLookup(uint16_t wid);
 bool TimerFcn(byte timerNum);
-void setDST();
+bool updateTime(byte retries,uint16_t waittime);
+void checkDST(void);
+
+bool updateTime(byte retries,uint16_t waittime) {
+
+
+  bool isgood = timeClient.update();
+  byte i=1;
+
+
+  while (i<retries && isgood==false) {
+    i++; 
+    isgood = timeClient.update();
+    if (isgood==false) {
+      delay(waittime);
+
+      #ifdef _DEBUG
+        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+      #endif
+    }
+  } 
+
+  if (isgood) {
+    checkDST();
+  }
+
+  return isgood;
+}
+
+void checkDST(void) {
+  timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+  setTime(timeClient.getEpochTime());
+#ifdef _DEBUG
+  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+#endif
+
+
+//check if time offset is EST (-5h) or EDT (-4h)
+int m = month();
+int d = day();
+int dow = weekday(); //1 is sunday
+
+  if (m > 3 && m < 11) DSTOFFSET = 3600;
+  else {
+    if (m == 3) {
+      //need to figure out if it is past the second sunday at 2 am
+      if (d<8) DSTOFFSET = 0;
+      else {
+        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
+        else {
+          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
+          else DSTOFFSET = 0;
+        }
+      }
+    }
+
+    if (m == 11) {
+      //need to figure out if it is past the first sunday at 2 am
+      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
+      else {
+        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
+        else DSTOFFSET = 3600;
+      }
+    }
+  }
+
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+    setTime(timeClient.getEpochTime());
+
+    #ifdef _DEBUG
+      Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    #endif
+
+
+}
+
     
 
 bool getWeather() {
@@ -118,7 +193,7 @@ bool getWeather() {
     String tempstring;
     int httpCode=404;
 
-    tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=0&hourly_temp=1&hourly_temp=2&daily_tempMax=0&daily_tempMin=0&daily_weatherID=0&daily_pop=0&daily_snow=0";
+    tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=0&hourly_temp=1&hourly_temp=2&daily_tempMax=0&daily_tempMin=0&daily_weatherID=0&daily_pop=0&daily_snow=0&sunrise=0&sunset=0";
 
     http.begin(wfclient,tempstring.c_str());
     httpCode = http.GET();
@@ -150,6 +225,13 @@ bool getWeather() {
 
         daily_snow[0] = payload.substring(0, payload.indexOf(";",0)).toDouble(); 
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+
+        sunrise = payload.substring(0, payload.indexOf(";",0)).toDouble(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+
+        sunset = payload.substring(0, payload.indexOf(";",0)).toDouble(); 
+      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+
 
     return true;
   }
@@ -452,18 +534,13 @@ void setup() {
     myDisplay.displayClear();
     myDisplay.print("Time");
 
-  timeClient.begin();
-  timeClient.update();
+//    setSyncInterval(600); //set NTP interval for sync in sec
+    timeClient.begin(); //time is in UTC
+    updateTime(10,250); //check if DST and set time to EST or EDT
 
-
-
-  setTime(timeClient.getEpochTime()+GLOBAL_timezone_offset); //do this once to get month and day
-
-  setDST();
-  setTime(timeClient.getEpochTime()+GLOBAL_timezone_offset+DSTOFFSET); //now set DST offset
 
     #ifdef DEBUG_
-      Serial.println(GLOBAL_timezone_offset);
+      Serial.println(GLOBAL_TIMEZONE_OFFSET);
     #endif
 
   //set timers
@@ -504,16 +581,10 @@ bool TimerFcn(byte timerNum) {
   }
 }
 
-void setDST(){
-byte m = month();
-
-    if ((m > 3 && m <11) || (m == 3 &&  day() > 9) || m <11 || (m == 11 && day() < 3)) DSTOFFSET = 1*60*60;
-  else DSTOFFSET = 0;
-return;
-}
 
 void loop() {
-    ArduinoOTA.handle();
+  ArduinoOTA.handle();
+  updateTime(1,0); //just try once
   
     // put your main code here, to run repeatedly
 
@@ -521,10 +592,6 @@ void loop() {
   if (TimerFcn(0)) {
   
   //sync/set time from internet
-    timeClient.update();
-
-    setDST();
-    setTime(timeClient.getEpochTime()+GLOBAL_timezone_offset+DSTOFFSET);
     TIMERS[0] = now()+1*60*60;
     TIMERS[1] = now()+ClockDefs.ClockTime; //N second from now
     getWeather();
