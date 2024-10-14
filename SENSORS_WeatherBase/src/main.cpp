@@ -156,6 +156,12 @@ struct Screen {
     byte ScreenNum;
     bool isFlagged;
     bool wasFlagged;
+    bool isHeat;
+    bool isAC;
+    bool isHot;
+    bool isCold;
+    bool isSoilDry;
+    bool isLeak;
     uint8_t localWeather; //index of outside sensor
 };
 
@@ -169,7 +175,9 @@ struct SensorVal {
   double snsValue;
   uint32_t timeRead;
   uint32_t timeLogged;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
+  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
+
 };
 
 
@@ -244,9 +252,10 @@ String WEBHTML;
 int16_t findDev(struct SensorVal *S, bool oldest = false);
 int16_t findSns(byte snstype, bool newest = false);
 void checkHeat(byte* heat, byte* cool, byte* fan);
-byte find_sensor_name(String snsname, byte snsType, byte snsID = 255);
-byte find_sensor_count(String snsname,byte snsType);
-void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, byte* snsIndexLow);
+uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);
+uint8_t find_sensor_count(String snsname,uint8_t snsType);
+void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
+uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
 uint32_t set_color(byte r, byte g, byte b);
 void checkDST(void);
@@ -289,9 +298,18 @@ double valSensorType(byte snsType, bool asAvg = false, int isflagged=-1, int iso
 uint16_t temp2color(int temp);
 String fcnDOW(time_t t, bool caps=false);
 void pushDoubleArray(double,byte,double);
+int inArray(int arrind[], int N, int value);
 //uint16_t read16(fs::File);
 //uint32_t read32(fs::File);
 
+
+int inArray(int arr[], int N, int value) {
+  //returns index to the integer array of length N holding value, or -1 if not found
+
+for (int i = 0; i < N-1 ; i++)   if (arr[i]==value) return i;
+return -1;
+
+}
 void pushDoubleArray(double arr[], byte N, double value) { //array variable, size of array, value to push
   for (byte i = N-1; i > 0 ; i--) {
     arr[i] = arr[i-1];
@@ -305,8 +323,8 @@ void pushDoubleArray(double arr[], byte N, double value) { //array variable, siz
 void find_limit_sensortypes(String snsname, byte snsType, byte* snsIndexHigh, byte* snsIndexLow){
   //returns index to the highest flagged sensorval and lowest flagged sensorval with name like snsname and type like snsType. index is 255 if no lowval is flagged
 
-  //high is RMB0 is 1 and RMB5 is 1
-  //low is rmb0 is 1 and RMB5 is 0
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
 
   byte cnt = find_sensor_count(snsname,snsType);
   
@@ -664,6 +682,66 @@ int16_t findSns(byte snstype, bool newest) {
 
 }  
 
+
+uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
+  //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
+  //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
+
+byte count =0;
+int snsArr[10] = {0}; //this is for special cases
+
+if (snsType == -1) { //critical sensors, all types
+snsArr[0] = 1; 
+snsArr[1] = 4;
+snsArr[2] = 10;
+snsArr[3] = 14;
+snsArr[4] = 17;
+snsArr[5] = 3;
+snsArr[6] = 61;
+snsArr[7] = 58;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+if (snsType == -2) { //temperature sensors
+snsArr[0] = 1; 
+snsArr[1] = 4;
+snsArr[2] = 10;
+snsArr[3] = 14;
+snsArr[4] = 17;
+snsArr[5] = -1;
+snsArr[6] = -1;
+snsArr[7] = -1;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+if (snsType == -3) { //hvac sensors
+snsArr[0] = 55; 
+snsArr[1] = 56;
+snsArr[2] = 57;
+snsArr[3] = -1;
+snsArr[4] = -1;
+snsArr[5] = -1;
+snsArr[6] = -1;
+snsArr[7] = -1;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+
+
+  for (byte j = 0; j<SENSORNUM; j++) {
+    if (snsType==0 || (snsType<0 && inArray(snsArr,7,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
+      if ((Sensors[j].Flags & flagsthatmatter) & flagsettings == flagsthatmatter & flagsettings) {
+        if (Sensors[j].timeLogged> MoreRecentThan) count++;
+      }
+  }
+
+  return count;
+}
 
 double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uint32_t MoreRecentThan) {
   //return average of snstype
@@ -2195,21 +2273,26 @@ void loop() {
     //do stuff every minute
 
     I.isFlagged = false;
-    for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsType == 3  || Sensors[i].snsType == 1 || Sensors[i].snsType == 4 || Sensors[i].snsType == 60 || Sensors[i].snsType == 61)  {
-        if (Sensors[i].snsID>0 && t-Sensors[i].timeLogged<3600 && bitRead(Sensors[i].Flags,0) ) { //only care about flags if the reading was within an hour
-          I.isFlagged = true; //only flag for soil or temp or battery
-          
-          #ifdef _DEBUG
-            Serial.printf("Loop 1 second action (Sensor read is flagged): Sensor is: %s, Time is: %s\n",Sensors[i].snsName, dateify(t,"mm/dd/yyyy hh:mm:ss"));
-          #endif
+    if (countFlagged(-1,0b00000111,0b00000011,(t>3600)?t-3600:0)>0) I.isFlagged = true; //only flag for soil or temp or battery
+    
+    I.isAC = false;
+    if (countFlagged(56,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isAC = true;
 
-          #ifdef _WEBDEBUG
-            WEBDEBUG = WEBDEBUG + "FLAGGED SENSOR: " + (String) Sensors[i].ardID + " " + (String) Sensors[i].snsName + "<br>";  
-          #endif
-        }
-      }
-    }
+    I.isHeat = false;
+    if (countFlagged(55,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isHeat = true;
+
+    I.isSoilDry = false;
+    if (countFlagged(3,0b00000111,0b00000011,(t>600)?t-600:0)>0) I.isSoilDry = true;
+
+    I.isHot = false;
+    if (countFlagged(-2,0b00010111,0b00010011,(t>600)?t-600:0)>0) I.isHot = true;
+
+    I.isCold = false;
+    if (countFlagged(-2,0b00010111,0b00000011,(t>600)?t-600:0)>0) I.isCold = true;
+
+    I.isLeak = false;
+    if (countFlagged(58,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isLeak = true;
+
 
     I.redraw = 0;
 
@@ -2232,8 +2315,6 @@ void loop() {
         }
       }
     }
-
-
     
   }
   
@@ -2357,6 +2438,14 @@ void handleREQUESTWEATHER() {
         if (temptime==0) WEBHTML += (String) hour() + ";";
         else WEBHTML += (String) hour(temptime) + ";";
       }
+      if (server.argName(i)=="isFlagged") WEBHTML += (String) ((I.isFlagged==true)?1:0) + ";";
+      if (server.argName(i)=="isAC") WEBHTML += (String) ((I.isAC==true)?1:0) + ";";
+      if (server.argName(i)=="isHeat") WEBHTML += (String) ((I.isHeat==true)?1:0) + ";";
+      if (server.argName(i)=="isSoilDry") WEBHTML += (String) ((I.isSoilDry==true)?1:0) + ";";
+      if (server.argName(i)=="isHot") WEBHTML += (String) ((I.isHot==true)?1:0) + ";";
+      if (server.argName(i)=="isCold") WEBHTML += (String) ((I.isCold==true)?1:0) + ";";
+      if (server.argName(i)=="isLeak") WEBHTML += (String) ((I.isLeak==true)?1:0) + ";";
+
     }
   }
   
@@ -2416,7 +2505,18 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
-  WEBHTML = WEBHTML + "<br>";      
+  WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
+  
+  if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged!";
+  if (I.isLeak==true) WEBHTML = WEBHTML + "A leak has been detected!!!";
+  if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on";
+  if (I.isAC==true) WEBHTML = WEBHTML + "AC is on";
+  if (I.isHot==true) WEBHTML = WEBHTML + "Interior room(s) over temp";
+  if (I.isCold==true) WEBHTML = WEBHTML + "Interior room(s) below temp";
+  if (I.isSoilDry==true) WEBHTML = WEBHTML + "Plant(s) dry";
+
+  WEBHTML = WEBHTML + "</font><br>---------------------<br>";      
+
 
 
   byte used[SENSORNUM];
@@ -2545,7 +2645,7 @@ uint8_t tempIP[4] = {0,0,0,0};
   int sn = findDev(&S,true);
 
   //special cases
-
+      
   //bmp temp received... check for AHT
   if (S.snsType == 10 && findSns(4,false)>-1) {
     if (sn>=0) {

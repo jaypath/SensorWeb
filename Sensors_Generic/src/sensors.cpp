@@ -1139,7 +1139,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
   //if (bitRead(P->Flags,6)==0) return false;
 
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
   
   bool lastflag = false;
   bool thisflag = false;
