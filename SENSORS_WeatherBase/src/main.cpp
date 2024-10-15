@@ -17,16 +17,13 @@
   */
 
 /*
-
-
-/*sens types
-//0 - not defined
+//0 - not defined/not a sensor/do not use
 //1 - temp, DHT
 //2 - RH, DHT
 //3 - soil moisture, capacitative or Resistive
 //4 -  temp, AHT21
 //5 - RH, AHT21
-//6
+//6 - 
 //7 - distance, HC-SR04
 //8 - human presence (mm wave)
 //9 - BMP pressure
@@ -38,22 +35,22 @@
 //15 - BMe humidity
 //16 - BMe altitude
 //17 - BME680 temp
-//18 - BME680 rh
-//19 - BME680 air press
-//20  - BME680 gas sensor
+18 - BME680 rh
+19 - BME680 air press
+20  - BME680 gas sensor
 21 - human present (mmwave)
-50 - any binary, 1=yes/true/on
-51 = any on/off switch
-52 = any yes/no switch
-53 = any 3 way switch
-54 = 
+40 - any binary, 1=yes/true/on
+41 = any on/off switch
+42 = any yes/no switch
+43 = any 3 way switch
+50 = total HVAC time
 55 - heat on/off {requires N DIO Pins}
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
-58 - leak yes/no
-60 - lithium battery level
-
-99 - any binary sensor
+60 -  battery power
+61 - battery %
+70 - leak
+99 = any numerical value
 */
 
 
@@ -255,7 +252,7 @@ void checkHeat(byte* heat, byte* cool, byte* fan);
 uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
-uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
+uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = B00000011, uint8_t flagsettings= B00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
 uint32_t set_color(byte r, byte g, byte b);
 void checkDST(void);
@@ -700,7 +697,7 @@ snsArr[3] = 14;
 snsArr[4] = 17;
 snsArr[5] = 3;
 snsArr[6] = 61;
-snsArr[7] = 58;
+snsArr[7] = 70;
 snsArr[8] = -1;
 snsArr[9] = -1;
 } 
@@ -734,8 +731,8 @@ snsArr[9] = -1;
 
 
   for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,7,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & flagsthatmatter) & flagsettings == flagsthatmatter & flagsettings) {
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
+      if ((Sensors[j].Flags & (flagsthatmatter & flagsettings)) == (flagsthatmatter & flagsettings)) {
         if (Sensors[j].timeLogged> MoreRecentThan) count++;
       }
   }
@@ -1748,7 +1745,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   byte FNTSZ=2;
   tft.setTextFont(FNTSZ);
 
-  //get sensor vals 1, 4, 3, 58, 61... if any are flagged then set box color
+  //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
   //temperature
   isHigh = 255;
   isLow = 255;
@@ -1797,7 +1794,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   //leak
   isHigh = 255;
   isLow = 255;
-  find_limit_sensortypes(roomname,58,&isHigh,&isLow);    
+  find_limit_sensortypes(roomname,70,&isHigh,&isLow);    
   if (isHigh != 255) { //leak is a 1, no leak is a 0
     box_text += "LEAK|";
     box_border = set_color(0,0,255);
@@ -2273,25 +2270,25 @@ void loop() {
     //do stuff every minute
 
     I.isFlagged = false;
-    if (countFlagged(-1,0b00000111,0b00000011,(t>3600)?t-3600:0)>0) I.isFlagged = true; //only flag for soil or temp or battery
+    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //only flag for soil or temp or battery
     
     I.isAC = false;
-    if (countFlagged(56,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isAC = true;
+    if (countFlagged(56,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isAC = true;
 
     I.isHeat = false;
-    if (countFlagged(55,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isHeat = true;
+    if (countFlagged(50,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isHeat = true;
 
     I.isSoilDry = false;
-    if (countFlagged(3,0b00000111,0b00000011,(t>600)?t-600:0)>0) I.isSoilDry = true;
+    if (countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0)>0) I.isSoilDry = true;
 
     I.isHot = false;
-    if (countFlagged(-2,0b00010111,0b00010011,(t>600)?t-600:0)>0) I.isHot = true;
+    if (countFlagged(-2,B00010111,B00010011,(t>3600)?t-3600:0)>0) I.isHot = true;
 
     I.isCold = false;
-    if (countFlagged(-2,0b00010111,0b00000011,(t>600)?t-600:0)>0) I.isCold = true;
+    if (countFlagged(-2,B00010111,B00000011,(t>3600)?t-3600:0)>0) I.isCold = true;
 
     I.isLeak = false;
-    if (countFlagged(58,0b00000001,0b00000001,(t>600)?t-600:0)>0) I.isLeak = true;
+    if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
 
 
     I.redraw = 0;
@@ -2507,15 +2504,15 @@ void handlerForRoot(bool allsensors) {
   
   WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
   
-  if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged!";
-  if (I.isLeak==true) WEBHTML = WEBHTML + "A leak has been detected!!!";
-  if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on";
-  if (I.isAC==true) WEBHTML = WEBHTML + "AC is on";
-  if (I.isHot==true) WEBHTML = WEBHTML + "Interior room(s) over temp";
-  if (I.isCold==true) WEBHTML = WEBHTML + "Interior room(s) below temp";
-  if (I.isSoilDry==true) WEBHTML = WEBHTML + "Plant(s) dry";
+  if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged!<br>";
+  if (I.isLeak==true) WEBHTML = WEBHTML + "A leak has been detected!!!<br>";
+  if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on<br>";
+  if (I.isAC==true) WEBHTML = WEBHTML + "AC is on<br>";
+  if (I.isHot==true) WEBHTML = WEBHTML + "Interior room(s) over temp<br>";
+  if (I.isCold==true) WEBHTML = WEBHTML + "Interior room(s) below temp<br>";
+  if (I.isSoilDry==true) WEBHTML = WEBHTML + "Plant(s) dry<br>";
 
-  WEBHTML = WEBHTML + "</font><br>---------------------<br>";      
+  WEBHTML = WEBHTML + "</font>---------------------<br>";      
 
 
 

@@ -460,9 +460,12 @@ currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYI
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 
-
-currentLine += "Free Stack: " + (String) uxTaskGetStackHighWaterMark(NULL) + "<br>\n";
-
+#ifdef _USE32
+  currentLine += "Free Stack: " + (String) uxTaskGetStackHighWaterMark(NULL) + "<br>\n";
+#endif
+#ifdef _USE8266
+  currentLine += "Free Stack: " + (String) ESP.getFreeContStack() + "<br>\n";
+#endif
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";

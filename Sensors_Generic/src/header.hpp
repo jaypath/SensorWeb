@@ -19,9 +19,9 @@ const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedi
 
 
 #define ARDNAME "Heat" //unique name
-#define SENSORNUM 6 //be sure this matches SENSORTYPES
+#define SENSORNUM 7 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {55,55,55,55,55,55};
+const uint8_t SENSORTYPES[SENSORNUM] = {50,55,55,55,55,55,55};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside

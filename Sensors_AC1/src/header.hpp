@@ -13,6 +13,7 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
+
 const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
@@ -22,8 +23,6 @@ const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedi
 #define SENSORNUM 2 //be sure this matches SENSORTYPES
 
 const uint8_t SENSORTYPES[SENSORNUM] = {56,57};
-
-//#define ARDID 94 //unique arduino ID //deprecated - now ardid is last 3 of wifi IP. if this is defined it will override wifi id
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
@@ -40,8 +39,10 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
-//#define _USEBATTERY  A0 //set to the pin that is analogin
-
+//#define _USELIBATTERY  A0 //set to the pin that is analogin
+//#define _USESLABATTERY  A0 //set to the pin that is analogin
+//#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
+//#define _USELEAK 
 //binary switches
 #define _CHECKAIRCON 1
 //#define _CHECKHEAT 1
