@@ -133,7 +133,7 @@ snsArr[9] = -1;
 
   for (byte j = 0; j<SENSORNUM; j++) {
     if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & (flagsthatmatter & flagsettings)) == (flagsthatmatter & flagsettings)) {
+      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
         if (Sensors[j].LastReadTime> MoreRecentThan) count++;
       }
   }
@@ -144,6 +144,14 @@ snsArr[9] = -1;
 
 
 void setupSensors() {
+/*
+          Sensors[i].snsPin=DHTPIN; //this is the pin to read/write from - not always used
+          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME); //sensor name
+            Sensors[i].limitUpper = 88; //upper limit of normal
+            Sensors[i].limitLower = 20; //lower limit of normal
+          Sensors[i].PollingInt=120; //how often to check this sensor, in seconds
+          Sensors[i].SendingInt=2*60; //how often to send data from this sensor. nte that value will be sent regardless if flag status changes, so can set to arbitrarily high value if you only want to send when flag status changes
+*/
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
 //init hvachx 
@@ -474,16 +482,14 @@ uint16_t  sc_interval;
           Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
           snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
           pinMode(Sensors[i].snsPin, INPUT);
-          Sensors[i].limitUpper = 14400; //maximum is 24 hours on time
+          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300;
+          Sensors[i].SendingInt=600; 
           bitWrite(Sensors[i].Flags,3,1); //calculated
           
           break;
 
-      #endif
-      #ifdef _CHECKHEAT
 
         case 55: //heat
         //sc_multiplier = 4096/256;
@@ -495,8 +501,8 @@ uint16_t  sc_interval;
           pinMode(Sensors[i].snsPin, INPUT);
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=30*60;
+          Sensors[i].PollingInt=300;
+          Sensors[i].SendingInt=1800; 
           break;
       #endif
 

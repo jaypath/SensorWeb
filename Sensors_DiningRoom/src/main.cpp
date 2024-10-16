@@ -150,8 +150,6 @@ bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
 
 void setup()
 {
-  byte i;
-
   #ifdef _DEBUG
     Serial.begin(115200);
     Serial.println("Begin Setup");

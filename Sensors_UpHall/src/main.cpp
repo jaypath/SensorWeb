@@ -2,11 +2,11 @@
 
 #include <Wire.h>
 
+#include <header.hpp>
 #include <sensors.hpp>
 #include <server.hpp>
 #include <timesetup.hpp>
 
-#define GLOBAL_TIMEZONE_OFFSET  -14400
 
 #ifdef _USE8266 
   //static const uint8_t A0   = A0;
@@ -77,12 +77,8 @@
 #endif
 
 
-
 #define FileSys LittleFS
 #define BG_COLOR 0xD69A
-
-
-
 
 
 //wellesley, MA
@@ -112,22 +108,12 @@ union convertINT {
 #endif
 
 
-#ifdef _CHECKHEAT
-  String HEATZONE[6] = {"FamRm","DinRm","Office","MastBR","Upstrs","Den"};
-  uint8_t HEATPIN = 0;
-#endif
-
-
 byte OldTime[5] = {0,0,0,0,0};
 
 time_t ALIVESINCE = 0;
 uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 
 //function declarations
-
-
-
-
 
 #ifdef _USELOWPOWER
 
@@ -164,8 +150,6 @@ bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
 
 void setup()
 {
-  byte i;
-
   #ifdef _DEBUG
     Serial.begin(115200);
     Serial.println("Begin Setup");
@@ -177,7 +161,10 @@ void setup()
   SERVERIP[1].IP = {192,168,68,106};
   SERVERIP[2].IP = {192,168,68,100};
 
-  SerialWrite((String) "servers set");
+    #ifdef _DEBUG
+      SerialWrite((String) "servers set");
+    #endif
+
 
 
 
@@ -186,7 +173,10 @@ void setup()
   
 
 #ifdef _USESSD1306
-  SerialWrite((String)"oled begin");
+  #ifdef _DEBUG
+    SerialWrite((String)"oled begin");
+  #endif
+
   
   #if INCLUDE_SCROLLING == 0
   #error INCLUDE_SCROLLING must be non-zero. Edit SSD1306Ascii.h
@@ -243,7 +233,9 @@ void setup()
   #ifdef _USEBME680
 
   while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
-        SerialWrite((String)"-  Unable to find BME680. Trying again in 5 seconds.\n"));
+        #ifdef _DEBUG
+  SerialWrite((String)"-  Unable to find BME680. Trying again in 5 seconds.\n"));
+  #endif
 
       delay(5000);
     }  // of loop until device is located
@@ -264,11 +256,11 @@ void setup()
   oled.println("WiFi Starting.");
 #endif
 
-  WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
-  while (connectWiFi() != 0) {
-    connectWiFi();
-    
-  }
+WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi
+while (connectWiFi() != 0) {
+  connectWiFi();
+  
+}
     
 
 #ifdef _USESSD1306
@@ -277,7 +269,9 @@ void setup()
   oled.println("set up time.");
 #endif
 
-    SerialWrite((String)"setuptime done. OTA next.\n");
+#ifdef _DEBUG
+  SerialWrite((String)"setuptime done. OTA next.\n");
+#endif
  
 #ifdef _USESSD1306
   oled.clear();
@@ -287,100 +281,107 @@ void setup()
 
 
 
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+  oled.println("start time.");
+#endif
+
+
+//set time
+timeClient.begin(); //time is in UTC
+updateTime(10,250); //check if DST and set time to EST
+
+ALIVESINCE = now();
+
+#ifdef _USESSD1306
+  oled.clear();
+  oled.setCursor(0,0);
+#endif
+
+
+#ifndef _USELOWPOWER
+  //OTA
+    // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname(ARDNAME);
+
+  // No authentication by default
+  // ArduinoOTA.setPassword((const char *)"123");
+
+  ArduinoOTA.onStart([]() {
+    #ifdef _DEBUG
+    Serial.println("OTA started");
+    #endif
+  });
+  ArduinoOTA.onEnd([]() {
+    #ifdef _DEBUG
+    Serial.println("OTA End");
+    #endif
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    #ifdef _DEBUG
+        Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+    #endif
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
-      oled.println("start time.");
+      oled.println("Receiving OTA:");
+      String strbuff = "Progress: " + (100*progress / total);
+      oled.println("OTA start.");   
+      oled.println(strbuff);
     #endif
 
-
-    setupTime();
-
-    ALIVESINCE = now();
-
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    #ifdef _DEBUG
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    #endif
     #ifdef _USESSD1306
       oled.clear();
       oled.setCursor(0,0);
+      String strbuff;
+      strbuff = "Error[%u]: " + (String) error + " ";
+      oled.print(strbuff);
+      if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
+      else if (error == OTA_END_ERROR) oled.println("End Failed");
+    #endif
+  });
+  ArduinoOTA.begin();
+    #ifdef _USESSD1306
+      oled.clear();
+      oled.setCursor(0,0);
+      oled.println("OTA OK.");      
     #endif
 
 
-    #ifndef _USELOWPOWER
-      //OTA
-        // Port defaults to 8266
-      // ArduinoOTA.setPort(8266);
-
-      // Hostname defaults to esp8266-[ChipID]
-      ArduinoOTA.setHostname(ARDNAME);
-
-      // No authentication by default
-      // ArduinoOTA.setPassword((const char *)"123");
-
-      ArduinoOTA.onStart([]() {
-        #ifdef _DEBUG
-        Serial.println("OTA started");
-        #endif
-      });
-      ArduinoOTA.onEnd([]() {
-        #ifdef _DEBUG
-        Serial.println("OTA End");
-        #endif
-      });
-      ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        #ifdef _DEBUG
-            Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-        #endif
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("Receiving OTA:");
-          String strbuff = "Progress: " + (100*progress / total);
-          oled.println("OTA start.");   
-          oled.println(strbuff);
-        #endif
-
-      });
-      ArduinoOTA.onError([](ota_error_t error) {
-        #ifdef _DEBUG
-          Serial.printf("Error[%u]: ", error);
-          if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-          else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-          else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-          else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-          else if (error == OTA_END_ERROR) Serial.println("End Failed");
-        #endif
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          String strbuff;
-          strbuff = "Error[%u]: " + (String) error + " ";
-          oled.print(strbuff);
-          if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
-          else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
-          else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
-          else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
-          else if (error == OTA_END_ERROR) oled.println("End Failed");
-        #endif
-      });
-      ArduinoOTA.begin();
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("OTA OK.");      
-        #endif
-
-
-      SerialWrite((String) "set up HTML server... ");
-      server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-      server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
-      server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
-      server.on("/SETTHRESH", handleSETTHRESH);               
-      server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
-      server.on("/NEXTSNS", handleNEXT);
-      server.on("/LASTSNS", handleLAST);
-      server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
-      server.begin();
-      SerialWrite((String) "HTML server started!\n");
+    #ifdef _DEBUG
+    SerialWrite((String) "set up HTML server... ");
     #endif
+    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+    server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
+    server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
+    server.on("/SETTHRESH", handleSETTHRESH);               
+    server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
+    server.on("/NEXTSNS", handleNEXT);
+    server.on("/LASTSNS", handleLAST);
+    server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
+    server.begin();
+    
+    #ifdef _DEBUG
+            SerialWrite((String) "HTML server started!\n");
+    #endif
+  #endif
 
 
 
@@ -398,9 +399,8 @@ void setup()
 
 
     //init globals
-    for ( i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
+      initSensor(-256);
+
     #ifdef _USEBARPRED
       for (byte ii=0;ii<24;ii++) {
         BAR_HX[ii] = -1;
@@ -413,7 +413,10 @@ void setup()
     if (aht21.begin() != true)
     {
       for (byte retry = 0;retry<10;retry++) {
+        #ifdef _DEBUG
         SerialWrite((String) "AHT2x not connected or failed to load calibration coefficient. Retry number " + (String) retry + "\n"); //(F()) save string to flash & keeps dynamic memory free
+        #endif
+  
         if (aht21.begin() == true) continue;
       }
     }
@@ -421,9 +424,11 @@ void setup()
   #endif
 
   #ifdef DHTTYPE
-    SerialWrite((String) "dht begin\n");
-
-    dht.begin();
+    #ifdef _DEBUG
+      SerialWrite((String) "dht begin\n");
+      #endif
+ 
+      dht.begin();
   #endif
 
 
@@ -458,7 +463,9 @@ void setup()
 
   #endif
   #ifdef _USEBME
+         #ifdef _DEBUG
     SerialWrite((String) "bme begin\n");
+       #endif
     while (!bme.begin()) {
       #ifdef _USESSD1306
         oled.println("BME failed.");
@@ -501,18 +508,14 @@ void setup()
 
 void loop() {
 
-  if (checkTime()==false) {
-    SerialWrite((String)"Restarting because unixtime is " + (String) now() + "\n");
-    ESP.restart();
-  }
-
+  updateTime(1,0);
   
-  timeClient.update();
   #ifndef _USELOWPOWER
     ArduinoOTA.handle();
     server.handleClient();
   #endif
 
+  
 
   if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
 
@@ -520,7 +523,10 @@ void loop() {
 
   #ifdef _USELOWPOWER
 
+         #ifdef _DEBUG
     SerialWrite((String)"Checking for low power state.\n");
+       #endif
+
 
 
     /*
@@ -545,13 +551,18 @@ void loop() {
 
       //read and send everything now if sleep was long enough
         for (byte k=0;k<SENSORNUM;k++) {
-          SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\n");
+          
+                   #ifdef _DEBUG
+SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\n");
+       #endif
         
           ReadData(&Sensors[k]); //read value 
           SendData(&Sensors[k]); //send value
         }
 
+                   #ifdef _DEBUG
         SerialWrite((String) "Entering sleep.\n");
+       #endif
       //  Serial.flush();
       
       ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
@@ -559,12 +570,18 @@ void loop() {
 
   #endif
 
-  
+  #ifdef _USECALIBRATIONMODE
+    if (millis()%10000==0) checkHVAC();
+  #endif
+
+
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
     
-    SerialWrite((String) ".");
+    #ifdef _DEBUG
+      SerialWrite((String) ".");
+    #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
       bool goodread = false;
@@ -572,8 +589,10 @@ void loop() {
       if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) goodread = ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
       if (goodread == true) {
-        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* value changed flag stat*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,6) /* value changed since last read*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
       }
+
+
     }
 
 
@@ -585,10 +604,10 @@ void loop() {
     OldTime[1] = minute();
 
     #ifdef _DEBUG
-      Serial.printf("\nTime is %s. \n",dateify(t,"hh:nn:ss"));
-
+    SerialWrite((String) "\nTime is " + dateify(t,"hh:nn:ss") +" \n");
     #endif
 
+    
     #ifdef _USESSD1306
       redrawOled();
     #endif
@@ -597,12 +616,17 @@ void loop() {
 
 
   if (OldTime[2] != hour()) {
+  
+    #ifdef _DEBUG
     SerialWrite((String) "\nNew hour... TimeUpdate running. \n");
+    #endif
+  
+    checkDST();
+
+    //expire 24 hour old readings
+    initSensor(24*60);
 
     OldTime[2] = hour();
-
-
-    timeUpdate();
 
   }
   
@@ -611,50 +635,27 @@ void loop() {
 
     OldTime[3] = weekday();
 
+    checkDST();
   
     //reset heat and ac values
     #ifdef _DEBUG
       Serial.printf("\nNew day... ");
-
     #endif
-    #ifdef _CHECKAIRCON
 
-      SerialWrite((String) "Reset AC...\n");
+    #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 
-     for (byte j=0;j<SENSORNUM;j++)  {
-      if (Sensors[j].snsType == 56) {
-        SendData(&Sensors[j]);
-        Sensors[j].snsValue = 0;
-      }
-
-      if (Sensors[j].snsType == 57) {
-        SendData(&Sensors[j]);
-        Sensors[j].snsValue = 0;
-      }
-     }
+      #ifdef _DEBUG
+        SerialWrite((String) "Reset HVACs...\n");
+      #endif
+      initHVAC();
 
     #endif
 
-    #ifdef _CHECKHEAT
-      SerialWrite((String) "Reset heater time.\n");
-      for (byte j=0;j<SENSORNUM;j++)  {
-        if (Sensors[j].snsType == 55) {
-          SendData(&Sensors[j]);
-          Sensors[j].snsValue = 0;
-        }
-      }
-    #endif
 
     #ifdef _DEBUG
       Serial.printf("\n");
 
     #endif
 
-  
-
   } 
-
-
-
-
 }

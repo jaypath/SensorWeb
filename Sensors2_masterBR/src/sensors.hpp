@@ -63,7 +63,7 @@ struct SensorVal {
   uint16_t SendingInt;
   uint32_t LastReadTime;
   uint32_t LastSendTime;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB7 = was not flagged, but now is flagged
+  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status, RMB7 = was not flagged, but now is flagged
 };
 
 extern SensorVal Sensors[SENSORNUM];
@@ -138,14 +138,14 @@ extern  Adafruit_BME280 bme; // I2C
 extern   SSD1306AsciiWire oled;
 #endif
 
-
+int inArray(int arrind[], int N, int value);
 bool ReadData(struct SensorVal *P);
 byte find_limit_sensortypes(String snsname, byte snsType,bool highest);
 byte find_sensor_count(byte snsType);
 byte find_sensor_name(String snsname,byte snsType,byte snsID);
 byte find_sensor_type(byte snsType,byte snsID=255);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
-
+uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = B00000011, uint8_t flagsettings= B00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
 void setupSensors();
 void initSensor(int k);

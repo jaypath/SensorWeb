@@ -133,7 +133,7 @@ snsArr[9] = -1;
 
   for (byte j = 0; j<SENSORNUM; j++) {
     if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & (flagsthatmatter & flagsettings)) == (flagsthatmatter & flagsettings)) {
+      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
         if (Sensors[j].LastReadTime> MoreRecentThan) count++;
       }
   }

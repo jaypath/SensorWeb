@@ -1,5 +1,7 @@
 #include <sensors.hpp>
 
+
+
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 #ifdef _WEBCHART
@@ -78,6 +80,68 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 
 
+//FUNCTIONS
+uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
+  //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
+  //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
+
+byte count =0;
+int snsArr[10] = {0}; //this is for special cases
+
+if (snsType == -1) { //critical sensors, all types
+snsArr[0] = 1; 
+snsArr[1] = 4;
+snsArr[2] = 10;
+snsArr[3] = 14;
+snsArr[4] = 17;
+snsArr[5] = 3;
+snsArr[6] = 61;
+snsArr[7] = 70;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+if (snsType == -2) { //temperature sensors
+snsArr[0] = 1; 
+snsArr[1] = 4;
+snsArr[2] = 10;
+snsArr[3] = 14;
+snsArr[4] = 17;
+snsArr[5] = -1;
+snsArr[6] = -1;
+snsArr[7] = -1;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+if (snsType == -3) { //hvac sensors
+snsArr[0] = 55; 
+snsArr[1] = 56;
+snsArr[2] = 57;
+snsArr[3] = -1;
+snsArr[4] = -1;
+snsArr[5] = -1;
+snsArr[6] = -1;
+snsArr[7] = -1;
+snsArr[8] = -1;
+snsArr[9] = -1;
+} 
+
+
+
+  for (byte j = 0; j<SENSORNUM; j++) {
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
+      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
+        if (Sensors[j].LastReadTime> MoreRecentThan) count++;
+      }
+  }
+
+  return count;
+}
+
+
 
 void setupSensors() {
 
@@ -93,7 +157,7 @@ void setupSensors() {
 
 //double sc_multiplier = 0;
 //int sc_offset;
-uint  sc_interval; 
+uint16_t  sc_interval; 
 
 
   for (byte i=0;i<SENSORNUM;i++) {
@@ -102,9 +166,7 @@ uint  sc_interval;
 
 
     Sensors[i].Flags = 0;
-    //   Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
-    bitWrite(Sensors[i].Flags,6,1); //flag matters
-
+    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status, RMB7 = was not flagged, but now is flagged
     if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
     else bitWrite(Sensors[i].Flags,1,0);
     
@@ -405,6 +467,22 @@ uint  sc_interval;
         Sensors[i].SendingInt=1*60;
         break;
 
+      #if defined(_CHECKHEAT) 
+        case 50: //HVAC time - use for units that have multiple zones (so compressor on time might be used for multiple zones)
+          sc_interval=60*30;//seconds 
+
+          Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
+          snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
+          pinMode(Sensors[i].snsPin, INPUT);
+          Sensors[i].limitUpper = 14400; //maximum is 24 hours on time
+          Sensors[i].limitLower = -1;
+          Sensors[i].PollingInt=60;
+          Sensors[i].SendingInt=300;
+          bitWrite(Sensors[i].Flags,3,1); //calculated
+          
+          break;
+
+      #endif
       #ifdef _CHECKHEAT
 
         case 55: //heat
@@ -418,9 +496,7 @@ uint  sc_interval;
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
-          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
+          Sensors[i].SendingInt=30*60;
           break;
       #endif
 
@@ -437,8 +513,6 @@ uint  sc_interval;
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=5*60;
           Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
-          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
         case 57: //aircon fan
           //sc_multiplier = 4096/256;
@@ -451,13 +525,11 @@ uint  sc_interval;
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=5*60;
           Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,6,0); //flag does not matters
-          bitWrite(Sensors[i].Flags,5,1); //if flagged it is too high
           break;
 
           
       #endif
-      case 58: //leak
+      case 70: //leak
         #ifdef _USELEAK
           sc_interval=60*60;//seconds 
           Sensors[i].snsPin=_LEAKPIN;
@@ -609,6 +681,8 @@ int peak_to_peak(int pin, int ms) {
 bool ReadData(struct SensorVal *P) {
   if (checkTime()==false) return false;
 
+  time_t t=now();
+
   double val;
   bitWrite(P->Flags,0,0);
 
@@ -732,9 +806,9 @@ bool ReadData(struct SensorVal *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < now()) {
+          if (LAST_BAR_READ+60*60 < t) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = now();          
+            LAST_BAR_READ = t;          
           }
         #endif
 
@@ -828,9 +902,9 @@ bool ReadData(struct SensorVal *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < now()) {
+          if (LAST_BAR_READ+60*60 < t) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = now();          
+            LAST_BAR_READ = t;          
           }
         #endif
       #endif
@@ -871,73 +945,80 @@ bool ReadData(struct SensorVal *P) {
       break;
     #endif
 
+    #if defined(_CHECKHEAT) 
 
-    case 55: //heat
+      case 50: //total HVAC time        
+        if (countFlagged(-3,B00000001,B00000001,0)>0) P->snsValue += P->PollingInt/60; //number of minutes HVAC multizone systems were on
 
-      //take n measurements, and average
-      val=0;
-      for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,50);
-      }
-      val = val/3; //average
-      
-      if (val > P->limitUpper) {
-        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
+        #ifndef _USECALIBRATIONMODE
+          //note that for heat, the total time (case 50) accounts for slot 0 and the heat elements take the following slots
+          if (HVACHX[0].lastRead+HVACHX[0].interval <= P->LastReadTime) {
+            pushDoubleArray(HVACHX[0].values,_HVACHXPNTS,P->snsValue);
+            HVACHX[0].lastRead = P->LastReadTime;
+          }
+        #endif
 
-        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
-        bitWrite(P->Flags,0,1); //for heat, flag if on
-      } else {
-        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
 
-        bitWrite(P->Flags,0,0); //no heat
-      }
-      break;
+        break;
+    
+      case 55: //heat
 
-    case 56: //aircon compressor
-      //take n measurements, and average
-      val=0;
-      for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,50);
-      }
-      val = val/3; //average
-      
-      if (val > P->limitUpper) {
-        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
+        //take n measurements, and average
+        val=0;
+        for (byte j=0;j<3;j++) {
+          val += peak_to_peak(P->snsPin,50);
+        }
+        val = val/3; //average
+        
+        if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
 
-        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
-        bitWrite(P->Flags,0,1); //for ac, flag if on
-      } else {
-        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
+        #ifndef _USECALIBRATIONMODE
+          //note that for heat, the total time (case 50) accounts for slot 0 and the heat elements take the following slots
+          if (HVACHX[P->snsID].lastRead+HVACHX[P->snsID].interval <= P->LastReadTime) {
+            pushDoubleArray(HVACHX[P->snsID].values,_HVACHXPNTS,P->snsValue);
+            HVACHX[P->snsID].lastRead = P->LastReadTime;
+          }
+        #endif
 
-        bitWrite(P->Flags,0,0); //no ac
-      }
-      break;
-    case 57: //aircon fan
-      //take n measurements, and average
-      val=0;
-      for (byte j=0;j<3;j++) {
-        val += peak_to_peak(P->snsPin,50);
-      }
-      val = val/3; //average
-      
-      if (val > P->limitUpper) {
-        if (bitRead(P->Flags,0)==0) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
+  
+        break;
+    #endif
 
-        P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
-        bitWrite(P->Flags,0,1); //for ac, flag if on
-      } else {
-        if (bitRead(P->Flags,0)==1) bitWrite(P->Flags,7,1);
-        else bitWrite(P->Flags,7,0); //no change
+    #if defined(_CHECKAIRCON)
+      case 56: //aircon compressor
+        //take n measurements, and average
+        val=0;
+        for (byte j=0;j<3;j++) {
+          val += peak_to_peak(P->snsPin,50);
+        }
+        val = val/3; //average
+        
+        if (val > P->limitUpper) P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
+          
 
-        bitWrite(P->Flags,0,0); //no ac
-      }
-      break;
-    case 58: //Leak detection
+        #ifndef _USECALIBRATIONMODE
+          //note the -1 because total HVAC time is not included here (single zone)
+          if (HVACHX[P->snsID-1].lastRead+HVACHX[P->snsID-1].interval <= P->LastReadTime) {
+            pushDoubleArray(HVACHX[P->snsID-1].values,_HVACHXPNTS,P->snsValue);
+            HVACHX[P->snsID-1].lastRead = P->LastReadTime;
+          }
+        #endif
+
+        break;
+      case 57: //aircon fan
+        //take n measurements, and average
+        val=0;
+        for (byte j=0;j<3;j++) {
+          val += peak_to_peak(P->snsPin,50);
+        }
+        val = val/3; //average
+        
+        if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
+
+        break;
+    #endif
+
+    case 70: //Leak detection
       #ifdef _USELEAK
         digitalWrite(_LEAKDIO, HIGH);
         if (digitalRead(_LEAKPIN)==HIGH) P->snsValue =1;
@@ -948,64 +1029,65 @@ bool ReadData(struct SensorVal *P) {
 
       break;
 
+    #if defined(_USELIBATTERY) || defined(_USESLABATTERY)
 
-    case 60: // battery
-      #ifdef _USELIBATTERY
-        //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
-        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
-         
-      #endif
-      #ifdef _USESLABATTERY
-        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
-        
-      #endif
-
-
-      break;
-    case 61:
-      //_USEBATPCNT
-      #ifdef _USELIBATTERY
-        P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
-
-        #define VOLTAGETABLE 21
-        static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
-        static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
-
-        for (byte jj=0;jj<VOLTAGETABLE;jj++) {
-          if (P->snsValue> BAT_VOLT[jj]) {
-            P->snsValue = BAT_PCNT[jj];
-            break;
-          } 
-        }
+      case 60: // battery
+        #ifdef _USELIBATTERY
+          //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
+          P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+          
+        #endif
+        #ifdef _USESLABATTERY
+          P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          
+        #endif
 
 
-      #endif
+        break;
+      case 61:
+        //_USEBATPCNT
+        #ifdef _USELIBATTERY
+          P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
 
-      #ifdef _USESLABATTERY
-        P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          #define VOLTAGETABLE 21
+          static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
+          static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
 
-        #define VOLTAGETABLE 11
-        static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
-        static byte BAT_PCNT[VOLTAGETABLE] = {100,90,80,70,60,50,40,30,20,10,0};
-        for (byte jj=0;jj<VOLTAGETABLE;jj++) {
-          if (P->snsValue>= BAT_VOLT[jj]) {
-            P->snsValue = BAT_PCNT[jj];
-            break;
-          } 
-        }
+          for (byte jj=0;jj<VOLTAGETABLE;jj++) {
+            if (P->snsValue> BAT_VOLT[jj]) {
+              P->snsValue = BAT_PCNT[jj];
+              break;
+            } 
+          }
 
-      #endif
 
-      break;
+        #endif
+
+        #ifdef _USESLABATTERY
+          P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+
+          #define VOLTAGETABLE 11
+          static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+          static byte BAT_PCNT[VOLTAGETABLE] = {100,90,80,70,60,50,40,30,20,10,0};
+          for (byte jj=0;jj<VOLTAGETABLE;jj++) {
+            if (P->snsValue>= BAT_VOLT[jj]) {
+              P->snsValue = BAT_PCNT[jj];
+              break;
+            } 
+          }
+
+        #endif
+
+        break;
+    #endif
     case 90:
       //don't do anything here
       //I'm set manually!
       break;
     
   }
-
   checkSensorValFlag(P); //sets isFlagged
-  P->LastReadTime = now(); //localtime
+  P->LastReadTime = t; //localtime
 
   #ifdef _WEBCHART
     for (byte k=0;k<_WEBCHART;k++) {
@@ -1021,15 +1103,6 @@ bool ReadData(struct SensorVal *P) {
     }
   #endif
 
-  #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
-    #ifndef _USECALIBRATIONMODE
-      if (HVACHX[P->snsID-1].lastRead+HVACHX[P->snsID-1].interval <= P->LastReadTime) {
-        pushDoubleArray(HVACHX[P->snsID-1].values,_HVACHXPNTS,P->snsValue);
-        HVACHX[P->snsID-1].lastRead = P->LastReadTime;
-      }
-    #endif
-
-  #endif
   
 
 #ifdef _DEBUG
@@ -1136,15 +1209,41 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
 }
 
 bool checkSensorValFlag(struct SensorVal *P) {
-  //if (bitRead(P->Flags,6)==0) return false;
-
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
   
   bool lastflag = false;
   bool thisflag = false;
+
+  if (P->snsType==50 || P->snsType==55 || P->snsType==56 || P->snsType==57) { //HVAC is a special case
+    lastflag = bitRead(P->Flags,0); //this is the last flag status
+    if (P->LastsnsValue <  P->snsValue) { //currently flagged
+      bitWrite(P->Flags,0,1); //currently flagged
+      bitWrite(P->Flags,5,1); //value is high
+      if (lastflag) {
+        bitWrite(P->Flags,6,0); //no change in flag
+        bitWrite(P->Flags,7,0); //no change in flag
+      } else {
+        bitWrite(P->Flags,6,1); //changed to high
+        bitWrite(P->Flags,7,1); //changed to high
+      }
+      return true; //flagged
+    } else { //currently NOT flagged
+      bitWrite(P->Flags,0,0); //currently not flagged
+      bitWrite(P->Flags,5,0); //irrelevant
+      if (lastflag) {
+        bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
+        bitWrite(P->Flags,7,0); //did not change to flagged
+      } else {
+        bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
+        bitWrite(P->Flags,7,0); //no change
+      }
+        return false; //not flagged
+    }
+  }
+
   if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
-  
+
   if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
     thisflag = true;
     bitWrite(P->Flags,0,1);
@@ -1196,7 +1295,7 @@ void initSensor(int k) {
     else {
       if (k>255) {
         for (byte i=0;i<SENSORNUM;i++)  {
-          if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>k*60)  {//convert to seconds
+          if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>(uint32_t) k*60)  {//convert to seconds
             //remove N hour old values 
             initSensor(i);
           }
@@ -1314,3 +1413,11 @@ void redrawOled() {
 
 #endif
 
+
+int inArray(int arr[], int N, int value) {
+  //returns index to the integer array of length N holding value, or -1 if not found
+
+for (int i = 0; i < N-1 ; i++)   if (arr[i]==value) return i;
+return -1;
+
+}

@@ -731,8 +731,8 @@ snsArr[9] = -1;
 
 
   for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & (flagsthatmatter & flagsettings)) == (flagsthatmatter & flagsettings)) {
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) 
+      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
         if (Sensors[j].timeLogged> MoreRecentThan) count++;
       }
   }
@@ -2282,10 +2282,10 @@ void loop() {
     if (countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0)>0) I.isSoilDry = true;
 
     I.isHot = false;
-    if (countFlagged(-2,B00010111,B00010011,(t>3600)?t-3600:0)>0) I.isHot = true;
+    if (countFlagged(-2,B00100111,B00100011,(t>3600)?t-3600:0)>0) I.isHot = true;
 
     I.isCold = false;
-    if (countFlagged(-2,B00010111,B00000011,(t>3600)?t-3600:0)>0) I.isCold = true;
+    if (countFlagged(-2,B00100111,B00000011,(t>3600)?t-3600:0)>0) I.isCold = true;
 
     I.isLeak = false;
     if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
@@ -2502,18 +2502,20 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
-  WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
-  
-  if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged!<br>";
-  if (I.isLeak==true) WEBHTML = WEBHTML + "A leak has been detected!!!<br>";
-  if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on<br>";
-  if (I.isAC==true) WEBHTML = WEBHTML + "AC is on<br>";
-  if (I.isHot==true) WEBHTML = WEBHTML + "Interior room(s) over temp<br>";
-  if (I.isCold==true) WEBHTML = WEBHTML + "Interior room(s) below temp<br>";
-  if (I.isSoilDry==true) WEBHTML = WEBHTML + "Plant(s) dry<br>";
 
-  WEBHTML = WEBHTML + "</font>---------------------<br>";      
+  if (I.isFlagged || I.isHeat || I.isAC) {
+    WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
+    
+    if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on<br>";
+    if (I.isAC==true) WEBHTML = WEBHTML + "AC is on<br>";
+    if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged:<br>";
+    if (I.isLeak==true) WEBHTML = WEBHTML + "     A leak has been detected!!!<br>";
+    if (I.isHot==true) WEBHTML = WEBHTML + "     Interior room(s) over max temp<br>";
+    if (I.isCold==true) WEBHTML = WEBHTML + "     Interior room(s) below min temp<br>";
+    if (I.isSoilDry==true) WEBHTML = WEBHTML + "     Plant(s) dry<br>";
 
+    WEBHTML = WEBHTML + "</font>---------------------<br>";      
+  }
 
 
   byte used[SENSORNUM];
