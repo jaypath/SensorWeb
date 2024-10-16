@@ -139,7 +139,7 @@ NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //utc time to star
 #define SENSORNUM 60
 
 #define NUMSCREEN 2
-#define SECSCREEN 15
+#define SECSCREEN 3
 
 #define OLDESTSENSORHR 24 //hours before a sensor is removed
 
@@ -148,13 +148,14 @@ NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //utc time to star
 //gen global types
 
 struct Screen {
-    byte wifi;
-    byte redraw;
-    byte ScreenNum;
+    uint8_t wifi;
+    uint8_t redraw;
+    uint8_t ScreenNum;
     bool isFlagged;
     bool wasFlagged;
-    bool isHeat;
-    bool isAC;
+    uint8_t isHeat; //first bit is heat on, bits 1-6 are zones
+    uint8_t isAC; //first bit is compressor on, bits 1-6 are zones
+    uint8_t isFan; //first bit is fan on, bits 1-6 are zones
     bool isHot;
     bool isCold;
     bool isSoilDry;
@@ -239,8 +240,6 @@ uint16_t BG_COLOR = TFT_LIGHTGREY; //light gray = 211,211,211
 
 char DATESTRING[30]=""; //holds up to hh:nn:ss day mm/dd/yyyy
 
-uint8_t Heat=0,Cool=0,Fan=0;
-
 time_t ALIVESINCE = 0;
 
 String WEBHTML;
@@ -248,7 +247,7 @@ String WEBHTML;
 //fuction declarations
 int16_t findDev(struct SensorVal *S, bool oldest = false);
 int16_t findSns(byte snstype, bool newest = false);
-void checkHeat(byte* heat, byte* cool, byte* fan);
+void checkHeat(void);
 uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
@@ -1178,7 +1177,7 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
           hourly_weatherID[i] = 0;
           hourly_pop[i] = 0;
       }
-      for (i=0;i<7;i++) {
+      for (i=0;i<NUMWTHRDAYS;i++) {
           daily_tempMax[i] = 0;
           daily_tempMin[i] = 0;
           daily_weatherID[i] = 0;
@@ -1425,32 +1424,30 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
 
   tft.setTextFont(FNTSZ);
 
-  checkHeat(&Heat,&Cool, &Fan);
-
   int x = X;
   tft.setTextDatum(TL_DATUM);
   for (byte j=1;j<7;j++) {
     if (j==4) {
       x=X;
-      Y+= 10; //tft.fontheight does not work for font 0
+      Y+= tft.fontHeight(FNTSZ)+2; 
     }
 
-    if (bitRead(Heat,j)) {
+    if (bitRead(I.isHeat,j)) {
       c_FG = c_heat;
       c_BG = BG_COLOR;
-      if (bitRead(Fan,j)) {
+      if (bitRead(I.isFan,j)) {
         c_BG = c_fan; 
       }
-      if (bitRead(Cool,j)) {
+      if (bitRead(I.isAC,j)) {
         c_BG = c_ac; //warning!!
       }
     } else {
-      if (bitRead(Cool,j)) {
+      if (bitRead(I.isAC,j)) {
         c_FG = c_ac;
         c_BG = TFT_RED; //if the fan is not on, this is an alarm!
-        if (bitRead(Fan,j)) c_BG = c_fan;
+        if (bitRead(I.isFan,j)) c_BG = c_fan;
       } else {
-        if (bitRead(Fan,j)) {
+        if (bitRead(I.isFan,j)) {
           c_FG = c_fan;
           c_BG = BG_COLOR;
         }
@@ -1464,9 +1461,8 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
     tft.setTextColor(c_FG,c_BG);    
   }
 
-  temp = "4 5 6";
-
-  tft.setCursor(X + tft.textWidth(temp,FNTSZ) ,Y-tft.fontHeight(0));
+  temp = "4 5 6"; //placeholder to find new X,Y location
+  tft.setCursor(X + tft.textWidth(temp,FNTSZ) ,Y-tft.fontHeight(FNTSZ));
 
   return;
 }
@@ -1525,7 +1521,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
 return;
 }
 
-void checkHeat(byte* heat, byte* cool, byte* fan) {
+void checkHeat() {
   //heat byte, from RIGHT to LEFT bits are: heat is on, zone 1, zone 2, zone 3... zone 6, unused
   //cool byte from RIGHT to LEFT bits are: AC compressor is on, zone 1, zone 2, zone 3... zone 6, unused
   //cool byte from RIGHT to LEFT bits are: AC compressor is on, zone 1, zone 2, zone 3... zone 6, unused
@@ -1550,50 +1546,50 @@ void checkHeat(byte* heat, byte* cool, byte* fan) {
   6=Den
 
   */
-*heat=0;
-*cool=0;
-*fan=0;
+I.isHeat=0;
+I.isAC=0;
+I.isFan=0;
 
-byte t = 0;
+time_t t = now();
 
   for (byte j=0;j<SENSORNUM;j++) {
-    if (Sensors[j].snsType == 55) {
-      if ( bitRead(Sensors[j].Flags,0) && (double) t-Sensors[j].timeRead < 600 ) bitWrite(*heat,Sensors[j].snsID,1); //note that 0th bit is that any heater is on or off!
-      else bitWrite(*heat,Sensors[j].snsID,0);
+    if (Sensors[j].snsType == 55) { //heat
+      if ( Sensors[j].Flags&1 == 1 && (double) t-Sensors[j].timeLogged < 1800 ) bitWrite(I.isHeat,Sensors[j].snsID,1); //Sensors[j].Flags&1 == 1 means that 0th bit is 1, ie flagged. note that 0th bit is that any heater is on or off!. If a reading is >30 minutes it is too old to be believed
+      else bitWrite(I.isHeat,Sensors[j].snsID,0);
     } else {
-      if (Sensors[j].snsType == 56) { //ac comp
+      if (Sensors[j].snsType == 56 && Sensors[j].Flags&1==1) { //ac comp        
         //which ac?
-        t = bitRead(Sensors[j].Flags,0);
-        if (Sensors[j].ardID == 103) {
-          bitWrite(*cool,1,t);
-          bitWrite(*cool,2,t);
-          bitWrite(*cool,3,t);
-          bitWrite(*cool,6,t);
+        String S = Sensors[j].snsName;         
+        if (S.indexOf("ACDown")>-1) {
+          bitWrite(I.isAC,1,1);
+          bitWrite(I.isAC,2,1);
+          bitWrite(I.isAC,3,1);
+          bitWrite(I.isAC,6,1);
         } else {
-          bitWrite(*cool,4,t);
-          bitWrite(*cool,5,t);
+          bitWrite(I.isAC,4,1);
+          bitWrite(I.isAC,5,1);
         }
       }
-      if (Sensors[j].snsType == 57) { //ac fan
-        //which ac?
-        t = bitRead(Sensors[j].Flags,0);
-        if (Sensors[j].ardID == 103) {
-          bitWrite(*fan,1,t);
-          bitWrite(*fan,2,t);
-          bitWrite(*fan,3,t);
-          bitWrite(*fan,6,t);
+      if (Sensors[j].snsType == 57 && Sensors[j].Flags&1==1) { //ac fan
+        String S = Sensors[j].snsName;         
+        if (S.indexOf("ACDown")>-1) {
+          bitWrite(I.isFan,1,1);
+          bitWrite(I.isFan,2,1);
+          bitWrite(I.isFan,3,1);
+          bitWrite(I.isFan,6,1);
         } else {
-          bitWrite(*fan,4,t);
-          bitWrite(*fan,5,t);
+          bitWrite(I.isFan,4,1);
+          bitWrite(I.isFan,5,1);
         }
       }
-
     }
   }
 
-  if (*heat>0) bitWrite(*heat,0,1); //any heater is on
-  if (*cool>0) bitWrite(*cool,0,1); //any ac is on
-  if (*fan>0) bitWrite(*fan,0,1); //any fan is on
+  if (I.isHeat>0)     bitWrite(I.isHeat,0,1); //any heater is on    
+
+  if (I.isAC>0)     bitWrite(I.isAC,0,1); //any ac is on
+    
+  if (I.isFan>0) bitWrite(I.isFan,0,1); //any fan is on
   
 }
 
@@ -1648,27 +1644,33 @@ void fcnDrawHeader(time_t t) {
   
   fcnPrintTxtHeatingCooling(x,3);
 
-  st = "1 2 3 ";
-  x += tft.textWidth(st,1)+10;
-  y=3;
+  st = "1 2 3 "; //placeholder to find new X position
+  x += tft.textWidth(st,1)+4;
+
+  y=2;
   tft.setTextDatum(TL_DATUM);
   tft.setTextFont(1);
+  if (I.localWeather<255) tft.drawString("LOCALTEMP",x,y);
   
-  if (I.localWeather<255) {
-    tft.drawString("LOCAL",x,y);
-    y+=tft.fontHeight(0)+2;    
-    x+=tft.drawString("TEMP",x,y+tft.fontHeight(1)+1) + 5;
-
-    //draw battery pcnt
-    byte tind = find_sensor_name("Outside",61);
-    if (tind<255) {
-        tft.setTextDatum(TR_DATUM);
-        tft.setTextFont(2);
-        st = (String) ((int) Sensors[tind].snsValue) + "%";
-        tft.drawString(st,tft.width(),y);
-        tft.setTextDatum(TL_DATUM);
-    } 
+  y+=tft.fontHeight(1)+2;    
+  if (I.isFlagged) {
+    tft.setTextColor(TFT_RED,BG_COLOR); //without second arg it is transparent background
+    tft.drawString("ISFLAGGED",x,y);
+    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   }
+
+  
+  //draw battery pcnt
+  byte tind = find_sensor_name("Outside",61);
+  if (tind<255) {
+      tft.setTextDatum(TL_DATUM);
+      tft.setTextFont(1);
+      st = (String) ((int) Sensors[tind].snsValue) + "%";
+      tft.drawString(st,x+5,y);
+      tft.setTextDatum(TL_DATUM);
+  } 
+  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+  
 
   tft.setTextFont(2);
 
@@ -1696,18 +1698,12 @@ void fcnDrawScreen() {
 
 
   if (I.isFlagged) {
-    I.ScreenNum=1;
-    I.redraw = SECSCREEN;
+    I.redraw = SECSCREEN; //set to screen time for multiple screens... here redraw only refers to the alert area 
 
-/*
     I.ScreenNum = ((I.ScreenNum+1)%NUMSCREEN);
 
-    if (I.ScreenNum==0) I.redraw = SECSCREEN;
-    
-    if (I.ScreenNum==1) I.redraw = SECSCREEN;
-*/
   } else {
-    I.redraw = 60;
+    I.redraw = 120; //some arbitrarily large number relative to byte... this will reset every minute on the minute anyway
     I.ScreenNum = 0;
   }
   fcnDrawWeather(t);
@@ -1869,6 +1865,8 @@ void fcnDrawSensors(int Y) {
    
   int X = 0;
   char tempbuf[7];
+
+  /* don't do this anymore...
 //print time at top
   tft.setTextColor(FG_COLOR,BG_COLOR);
   byte FNTSZ=4;
@@ -1878,6 +1876,7 @@ void fcnDrawSensors(int Y) {
   tft.setTextFont(FNTSZ);
 
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,tft.fontHeight(FNTSZ)/2);
+  */
 
   byte boxsize_x=60,boxsize_y=50;
   String roomname;
@@ -2153,12 +2152,11 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
 
 
 //if isflagged, then show rooms with flags. otherwise, show daily weather
-  if (I.isFlagged) {
-    if (I.ScreenNum==1) {
-      fcnDrawSensors(30+120+section_spacer);
-      return;
-    }
-  } 
+  if (I.isFlagged && I.ScreenNum==1) {
+    fcnDrawSensors(30+120+section_spacer);
+    return;
+  }
+  
   //now draw weather icons 
   Y = 30+120+section_spacer;
   tft.setCursor(0,Y);
@@ -2240,6 +2238,16 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setTextFont(FNTSZ);
 
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+tft.fontHeight(FNTSZ)/2);
+
+//add heat and AC icons to right and left of time
+  if (I.isHeat&1==1) {
+    snprintf(tempbuf,31,"/heat30.bmp");
+    drawBmp(tempbuf,10,Y);
+  }
+  if (I.isAC&1==1) {
+    snprintf(tempbuf,31,"/ac30.bmp");
+    drawBmp(tempbuf,tft.width()-10-30,Y);
+  }
   
 }
 
@@ -2255,14 +2263,6 @@ void loop() {
 
   time_t t = now(); // store the current time in time variable t
     
-  if (OldTime[0] != second()) {
-    OldTime[0] = second();
-    //do stuff every second    
-
-    if (I.wifi>0) I.wifi--;
-    if (I.redraw>0) I.redraw--;
-    fcnDrawScreen();
-  }
   
   if (OldTime[1] != minute()) {
 
@@ -2272,11 +2272,7 @@ void loop() {
     I.isFlagged = false;
     if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //only flag for soil or temp or battery
     
-    I.isAC = false;
-    if (countFlagged(56,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isAC = true;
-
-    I.isHeat = false;
-    if (countFlagged(50,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isHeat = true;
+    checkHeat(); //this updates I.isheat and I.isac
 
     I.isSoilDry = false;
     if (countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0)>0) I.isSoilDry = true;
@@ -2299,8 +2295,8 @@ void loop() {
       I.wifi=0;
     }
 
-    //check if weather available
-    if (hourly_temp[0] == 0 &&  daily_tempMax[0] ==0 &&  daily_tempMin[0] == 0 &&  daily_weatherID[0] == 0) {
+    //check if weather available for the max  range required
+    if (hourly_temp[6] == 0 &&  daily_tempMax[5] ==0 &&  daily_tempMin[5] == 0 &&  daily_weatherID[5] == 0) {
       //no weather
       if (GetWeather()==false) {
         Next_Precip = 0;
@@ -2314,7 +2310,8 @@ void loop() {
     }
     
   }
-  
+
+ 
 
   if (OldTime[2] != hour()) {
  
@@ -2339,16 +2336,24 @@ void loop() {
     } 
 
   }
-  
+
   if (OldTime[3] != weekday()) {
     if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
     
     OldTime[3] = weekday();
   }
 
-    //  #ifdef _DEBUG
-    // Serial.printf("Loop: exiting at %s, unixtime: %i\n", dateify(now(),"mm/dd/yyyy hh:mm:nn"),now());
-    // #endif
+
+  //note that second events are last intentionally
+  if (OldTime[0] != second()) {
+    OldTime[0] = second();
+    //do stuff every second    
+
+    if (I.wifi>0) I.wifi--;
+    if (I.redraw>0) I.redraw--;
+    fcnDrawScreen();
+  }
+
 
 }
 
@@ -2436,8 +2441,8 @@ void handleREQUESTWEATHER() {
         else WEBHTML += (String) hour(temptime) + ";";
       }
       if (server.argName(i)=="isFlagged") WEBHTML += (String) ((I.isFlagged==true)?1:0) + ";";
-      if (server.argName(i)=="isAC") WEBHTML += (String) ((I.isAC==true)?1:0) + ";";
-      if (server.argName(i)=="isHeat") WEBHTML += (String) ((I.isHeat==true)?1:0) + ";";
+      if (server.argName(i)=="isAC") WEBHTML += (String) ((I.isAC&1==1)?1:0) + ";";
+      if (server.argName(i)=="isHeat") WEBHTML += (String) ((I.isHeat&1==1)?1:0) + ";";
       if (server.argName(i)=="isSoilDry") WEBHTML += (String) ((I.isSoilDry==true)?1:0) + ";";
       if (server.argName(i)=="isHot") WEBHTML += (String) ((I.isHot==true)?1:0) + ";";
       if (server.argName(i)=="isCold") WEBHTML += (String) ((I.isCold==true)?1:0) + ";";
@@ -2503,11 +2508,11 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
 
-  if (I.isFlagged || I.isHeat || I.isAC) {
+  if (I.isFlagged || I.isHeat&1==1 || I.isAC&1==1) {
     WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
     
-    if (I.isHeat==true) WEBHTML = WEBHTML + "Heat is on<br>";
-    if (I.isAC==true) WEBHTML = WEBHTML + "AC is on<br>";
+    if (I.isHeat&1==1) WEBHTML = WEBHTML + "Heat is on<br>";
+    if (I.isAC&1==1) WEBHTML = WEBHTML + "AC is on<br>";
     if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged:<br>";
     if (I.isLeak==true) WEBHTML = WEBHTML + "     A leak has been detected!!!<br>";
     if (I.isHot==true) WEBHTML = WEBHTML + "     Interior room(s) over max temp<br>";

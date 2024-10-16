@@ -19,7 +19,7 @@ const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedi
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "AC1" //unique name
+#define ARDNAME "ACDown" //unique name
 #define SENSORNUM 2 //be sure this matches SENSORTYPES
 
 const uint8_t SENSORTYPES[SENSORNUM] = {56,57};
