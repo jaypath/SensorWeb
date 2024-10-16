@@ -85,7 +85,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
   //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
   //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change status and I did not send data yet
 
 byte count =0;
 int snsArr[10] = {0}; //this is for special cases
@@ -144,6 +144,14 @@ snsArr[9] = -1;
 
 
 void setupSensors() {
+/*
+          Sensors[i].snsPin=DHTPIN; //this is the pin to read/write from - not always used
+          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME); //sensor name
+            Sensors[i].limitUpper = 88; //upper limit of normal
+            Sensors[i].limitLower = 20; //lower limit of normal
+          Sensors[i].PollingInt=120; //how often to check this sensor, in seconds
+          Sensors[i].SendingInt=2*60; //how often to send data from this sensor. nte that value will be sent regardless if flag status changes, so can set to arbitrarily high value if you only want to send when flag status changes
+*/
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
 //init hvachx 
@@ -166,7 +174,7 @@ uint16_t  sc_interval;
 
 
     Sensors[i].Flags = 0;
-    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status, RMB7 = was not flagged, but now is flagged
+    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status since prior read, RMB7 = flag status changed and I have not sent data yet
     if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
     else bitWrite(Sensors[i].Flags,1,0);
     
@@ -474,16 +482,14 @@ uint16_t  sc_interval;
           Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
           snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
           pinMode(Sensors[i].snsPin, INPUT);
-          Sensors[i].limitUpper = 14400; //maximum is 24 hours on time
+          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300;
+          Sensors[i].SendingInt=600; 
           bitWrite(Sensors[i].Flags,3,1); //calculated
           
           break;
 
-      #endif
-      #ifdef _CHECKHEAT
 
         case 55: //heat
         //sc_multiplier = 4096/256;
@@ -495,8 +501,8 @@ uint16_t  sc_interval;
           pinMode(Sensors[i].snsPin, INPUT);
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=30*60;
+          Sensors[i].PollingInt=300;
+          Sensors[i].SendingInt=1800; 
           break;
       #endif
 
@@ -1210,7 +1216,7 @@ byte find_sensor_name(String snsname,byte snsType,byte snsID) {
 
 bool checkSensorValFlag(struct SensorVal *P) {
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change to flagged (yes, this is redundant.... I might repurpose this to flag does or does not matter)
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
   
   bool lastflag = false;
   bool thisflag = false;
@@ -1225,7 +1231,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
         bitWrite(P->Flags,7,0); //no change in flag
       } else {
         bitWrite(P->Flags,6,1); //changed to high
-        bitWrite(P->Flags,7,1); //changed to high
+        bitWrite(P->Flags,7,1); //changed to high and I have not sent data
       }
       return true; //flagged
     } else { //currently NOT flagged
@@ -1233,7 +1239,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
       bitWrite(P->Flags,5,0); //irrelevant
       if (lastflag) {
         bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
-        bitWrite(P->Flags,7,0); //did not change to flagged
+        bitWrite(P->Flags,7,1); // and I have not sent data
       } else {
         bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
         bitWrite(P->Flags,7,0); //no change
@@ -1256,8 +1262,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
   //now check for changes...  
   if (lastflag!=thisflag) {
     bitWrite(P->Flags,6,1); //change detected
-    if (thisflag==true) bitWrite(P->Flags,7,1); //changed to flagged
-    else bitWrite(P->Flags,7,0); //changed to not flagged
+    bitWrite(P->Flags,7,1); //changed to flagged and I have not sent    
   } else {
     bitWrite(P->Flags,6,0);
     bitWrite(P->Flags,7,0);

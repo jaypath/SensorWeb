@@ -21,13 +21,23 @@ IP_TYPE SERVERIP[NUMSERVERS];
 
 WiFi_type WIFI_INFO;
 
-
+#ifdef _DEBUG
 void SerialWrite(String msg) {
-  #ifdef _DEBUG
     Serial.printf("%s",msg.c_str());
-  #endif
   return;
 }
+#endif
+  
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+void initHVAC(void){
+  for (byte j=0;j<SENSORNUM;j++)  {
+    if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
+      SendData(&Sensors[j]);
+      Sensors[j].snsValue = 0;
+    }      
+  }
+}
+#endif
 
 void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   //ip is a 4 byte array
@@ -74,18 +84,25 @@ uint8_t connectWiFi()
   }
   
   WiFi.mode(WIFI_STA);
+  #ifdef _DEBUG
   SerialWrite((String) "wifi begin\n");
+       #endif
+
   
   WiFi.begin(ESP_SSID, ESP_PASS);
 
   if (WiFi.status() != WL_CONNECTED)  {
+  #ifdef _DEBUG
     SerialWrite((String) "Connecting\n");
+       #endif
     
     #ifdef _USESSD1306
       oled.print("Connecting");
     #endif
     for (byte j=0;j<retries;j++) {
+  #ifdef _DEBUG
       SerialWrite((String) ".");
+       #endif
       #ifdef _USESSD1306
         oled.print(".");
       #endif
@@ -94,7 +111,9 @@ uint8_t connectWiFi()
       if (WifiStatus()) {
         WIFI_INFO.MYIP = WiFi.localIP();
         
+  #ifdef _DEBUG
         SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
+       #endif
 
         #ifdef _USESSD1306
           oled.clear();
@@ -110,7 +129,9 @@ uint8_t connectWiFi()
         
   }
 
+  #ifdef _DEBUG
   SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
+       #endif
           
 
   return connected;
@@ -146,9 +167,12 @@ byte arduinoID = WIFI_INFO.MYIP[3];
    arduinoID = ARDID;
 #endif
 
-if (bitRead(snsreading->Flags,1) == 0) return false;
+if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
 
+  #ifdef _DEBUG
 SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
+       #endif
+
 
 WiFiClient wfclient;
 HTTPClient http;
@@ -233,7 +257,9 @@ bool isGood = false;
     
   }
 
-     return isGood;
+  if (isGood) bitWrite(snsreading->Flags,7,0); //even if there was no change in the flag status, I wrote the value so set bit 7 to zero
+
+  return isGood;
 
 
 }
@@ -418,9 +444,11 @@ byte arduinoID = WIFI_INFO.MYIP[3];
 #endif
 
 String currentLine = "<!DOCTYPE html><html>\n";
-#ifdef _WEBCHART
+
+#if defined(_WEBCHART) || defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
   currentLine =currentLine  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
 #endif
+
 
 
 currentLine +=  "<head><title>" + (String) ARDNAME + " Page</title>\n";
@@ -432,7 +460,14 @@ currentLine += "<body>";
 
 currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
-currentLine += "Current time " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
+currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
+
+#ifdef _USE32
+  currentLine += "Free Stack: " + (String) uxTaskGetStackHighWaterMark(NULL) + "<br>\n";
+#endif
+#ifdef _USE8266
+  currentLine += "Free Stack: " + (String) ESP.getFreeContStack() + "<br>\n";
+#endif
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";
@@ -517,16 +552,18 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine += "</p>\n";
 
 
-
-#ifdef _WEBCHART
+#if defined(_WEBCHART) || defined(_CHECKHEAT) || defined(_CHECKAIRCON)
   //add charts if indicated
   currentLine += "<br>-----------------------<br>\n";
-  for (byte j=0;j<_WEBCHART;j++)    currentLine += "<div id=\"myChart" + (String) j + "\" style=\"width:100%; max-width:800px; height:500px;\"></div>\n";
+  #if defined(_WEBCHART)
+    for (byte j=0;j<_WEBCHART;j++)    currentLine += "<div id=\"myChart" + (String) j + "\" style=\"width:100%; max-width:800px; height:500px;\"></div>\n";
+  #endif
+  
+  #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+    currentLine += "<div id=\"myChart_HVAC\" style=\"width:100%; max-width:1500px; height:500px;\"></div>\n";
+  #endif
   currentLine += "<br>-----------------------<br>\n";
 #endif
-
-
-
 /* do not do this. Use sensor charts instead
 
   #ifdef _USEBARPRED
@@ -548,34 +585,75 @@ currentLine += "<br>-----------------------<br>\n";
 
   currentLine =currentLine  + "<script>\n";
 
-  #ifdef _WEBCHART
+  #if defined(_WEBCHART) || defined(_CHECKHEAT) || defined(_CHECKAIRCON)
     currentLine =currentLine  + "google.charts.load('current',{packages:['corechart']});\n";
     currentLine =currentLine  + "google.charts.setOnLoadCallback(drawChart);\n";
-    
-    currentLine += "function drawChart() {\n";
 
-    for (byte j=0;j<_WEBCHART;j++) {
-      currentLine += "const data" + (String) j + " = google.visualization.arrayToDataTable([\n";
-      currentLine += "['t','val'],\n";
 
-      for (int jj = _NUMWEBCHARTPNTS-1;jj>=0;jj--) {
-        currentLine += "[" + (String) ((int) ((uint32_t) (SensorCharts[j].lastRead - SensorCharts[j].interval*jj)-now())/60) + "," + (String) SensorCharts[j].values[jj] + "]";
-        if (jj>0) currentLine += ",";
-        currentLine += "\n";
+    #ifdef _WEBCHART
+      
+      currentLine += "function drawChart() {\n";
+
+      for (byte j=0;j<_WEBCHART;j++) {
+        currentLine += "const data" + (String) j + " = google.visualization.arrayToDataTable([\n";
+        currentLine += "['t','val'],\n";
+
+        for (int jj = _NUMWEBCHARTPNTS-1;jj>=0;jj--) {
+          currentLine += "[" + (String) ((int) ((uint32_t) (SensorCharts[j].lastRead - SensorCharts[j].interval*jj)-now())/60) + "," + (String) SensorCharts[j].values[jj] + "]";
+          if (jj>0) currentLine += ",";
+          currentLine += "\n";
+        }
+        currentLine += "]);\n\n";
+
+      
+      // Set Options
+        currentLine += "const options" + (String) j + " = {\n";
+        currentLine += "hAxis: {title: 'min from now'}, \n";
+        currentLine += "vAxis: {title: '" + (String) Sensors[SensorCharts[j].snsNum].snsName + "'},\n";
+        currentLine += "legend: 'none'\n};\n";
+
+        currentLine += "const chart" + (String) j + " = new google.visualization.LineChart(document.getElementById('myChart" + (String) j + "'));\n";
+        currentLine += "chart" + (String) j + ".draw(data" + (String) j + ", options" + (String) j + ");\n"; 
+      }
+        currentLine += "}\n";
+    #endif
+
+    #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+      
+      currentLine += "function drawChart() {\n";
+
+      currentLine += "const data_HVAC = google.visualization.arrayToDataTable([\n";
+      //header
+      currentLine += "['HoursAgo',";
+      for (byte j=0;j<SENSORNUM;j++) {
+        currentLine += "'" + (String) Sensors[j].snsName + "'";
+        if (j<SENSORNUM-1) currentLine += ",";
+        else currentLine += "],\n";
+      }
+      //data points
+      for (int jj = 0;jj<_HVACHXPNTS;jj++) {
+        currentLine += "[" + (String) (jj+1) + ",";        
+        for (byte j=0;j<SENSORNUM;j++) {
+          currentLine += (String)  HVACHX[j].values[jj];
+          if (j<SENSORNUM-1) currentLine += ",";
+          else currentLine += "]";
+        }
+        if (jj<_HVACHXPNTS-1) currentLine += ",\n";
+        else currentLine += "\n";
       }
       currentLine += "]);\n\n";
 
-    
-    // Set Options
-      currentLine += "const options" + (String) j + " = {\n";
-      currentLine += "hAxis: {title: 'min from now'}, \n";
-      currentLine += "vAxis: {title: '" + (String) Sensors[SensorCharts[j].snsNum].snsName + "'},\n";
-      currentLine += "legend: 'none'\n};\n";
+      
+      // Set Options
+      currentLine += "const options_HVAC = {\n";
+      currentLine += "hAxis: {title: 'Time'}, \n";
+      currentLine += "vAxis: {title: 'MinutesOn'},\n";
+      currentLine += "legend: { position: 'bottom' }\n};\n";
 
-      currentLine += "const chart" + (String) j + " = new google.visualization.LineChart(document.getElementById('myChart" + (String) j + "'));\n";
-      currentLine += "chart" + (String) j + ".draw(data" + (String) j + ", options" + (String) j + ");\n"; 
-    }
+      currentLine += "const chart_HVAC = new google.visualization.LineChart(document.getElementById('myChart_HVAC'));\n";
+      currentLine += "chart_HVAC.draw(data_HVAC, options_HVAC);\n"; 
       currentLine += "}\n";
+    #endif
   #endif
 
   currentLine += "function sortTable(col) {\nvar table, rows, switching, i, x, y, shouldSwitch;\ntable = document.getElementById(\"Logs\");\nswitching = true;\nwhile (switching) {\nswitching = false;\nrows = table.rows;\nfor (i = 1; i < (rows.length - 1); i++) {\nshouldSwitch = false;\nx = rows[i].getElementsByTagName(\"TD\")[col];\ny = rows[i + 1].getElementsByTagName(\"TD\")[col];\nif (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {\nshouldSwitch = true;\nbreak;\n}\n}\nif (shouldSwitch) {\nrows[i].parentNode.insertBefore(rows[i + 1], rows[i]);\nswitching = true;\n}\n}\n}\n";

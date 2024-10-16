@@ -31,7 +31,7 @@ void SerialWrite(String msg) {
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
   for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsType >=55 && Sensors[j].snsType <=57) {
+    if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
       SendData(&Sensors[j]);
       Sensors[j].snsValue = 0;
     }      
@@ -167,7 +167,7 @@ byte arduinoID = WIFI_INFO.MYIP[3];
    arduinoID = ARDID;
 #endif
 
-if (bitRead(snsreading->Flags,1) == 0) return false;
+if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
 
   #ifdef _DEBUG
 SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
@@ -257,7 +257,9 @@ bool isGood = false;
     
   }
 
-     return isGood;
+  if (isGood) bitWrite(snsreading->Flags,7,0); //even if there was no change in the flag status, I wrote the value so set bit 7 to zero
+
+  return isGood;
 
 
 }
@@ -460,9 +462,12 @@ currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYI
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 
-
-currentLine += "Free Stack: " + (String) uxTaskGetStackHighWaterMark(NULL) + "<br>\n";
-
+#ifdef _USE32
+  currentLine += "Free Stack: " + (String) uxTaskGetStackHighWaterMark(NULL) + "<br>\n";
+#endif
+#ifdef _USE8266
+  currentLine += "Free Stack: " + (String) ESP.getFreeContStack() + "<br>\n";
+#endif
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
 currentLine += "<br>-----------------------<br>\n";
