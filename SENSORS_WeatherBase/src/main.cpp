@@ -139,7 +139,6 @@ NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //utc time to star
 #define SENSORNUM 60
 
 #define NUMSCREEN 2
-#define SECSCREEN 3
 
 #define OLDESTSENSORHR 24 //hours before a sensor is removed
 
@@ -205,9 +204,11 @@ union convertSensorVal {
 int DSTOFFSET = 0;
 
 Screen I; //here, I is of type Screen (struct)
+uint8_t SECSCREEN = 3; //seconds before alarm redraw
 
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
 
+uint8_t HourlyInterval = 2; //hours between daily weather display
 uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;
 double batteryArray[48] = {0};
 double LAST_BAR=0;
@@ -296,6 +297,7 @@ void handleREQUESTUPDATE();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
+void handleUPDATEDEFAULTS();
 bool GetWeather();
 uint16_t temp2color(int temp, bool invertgray = false);
 String fcnDOW(time_t t, bool caps=false);
@@ -414,7 +416,7 @@ void listFiles(String dirpath) {
 void setup()
 {
   I.ScreenNum = 0;
-  I.redraw = SECSCREEN;
+  I.redraw = SECSCREEN; 
   I.isFlagged = false;
   I.wasFlagged = false;
   
@@ -550,7 +552,8 @@ tft.println("Connecting ArduinoOTA...");
     server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
     server.on("/GETSTATUS",handleGETSTATUS);
     server.on("/REBOOT",handleReboot);
-    
+    server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
+
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
@@ -760,7 +763,9 @@ snsArr[9] = -1;
   for (byte j = 0; j<SENSORNUM; j++) {
     if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) 
       if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
-        if (Sensors[j].timeLogged> MoreRecentThan) count++;
+        if (snsType==3 && bitRead(Sensors[j].Flags,5)) { //regardless of flagsthatmatter, soil is only a concern if reading is high (dry)... wet is never a concern
+          if (Sensors[j].timeLogged> MoreRecentThan) count++;
+        }
       }
   }
 
@@ -1158,6 +1163,7 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
       uint8_t i=0;
   //    double pop;
 
+      Next_Precip = 0;
   //clear values
       for (i=0;i<24;i++) {
           hourly_temp[i] = 0;
@@ -1186,12 +1192,12 @@ payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.
         hourly_weatherID[i] = (int) (hourly[i]["weather"][0]["id"]);
         temp = (String) hourly[i]["pop"];
         hourly_pop[i] = (int) (temp.toDouble() * 100);
-        if (Next_Precip == 0 && hourly_pop[i] > 10) Next_Precip = now() + i*60*60;
+        if (Next_Precip == 0 && hourly_pop[i] > 10) Next_Precip = hourly[i]["dt"];
       }
 
 
       daily_time = (uint32_t) daily[0]["dt"];
-      for (i=0;i<7;i++) {
+      for (i=0;i<NUMWTHRDAYS;i++) {
   
           daily_tempMax[i] = (int) (daily[i]["temp"]["max"]);
           daily_tempMin[i] = (int) (daily[i]["temp"]["min"]);
@@ -2112,7 +2118,7 @@ int temp0;
   
   Z=Z+tft.fontHeight( FNTSZ)+section_spacer;
 
-//print daily max / min
+//print today max / min
   FNTSZ = 4;  
   if (FNTSZ==0) deltaY = 8;
   else deltaY = tft.fontHeight(FNTSZ);
@@ -2164,7 +2170,7 @@ int temp0;
     return;
   }
   
-  //now draw weather icons 
+  //otherwise draw weather icons, starting with hourly 
   Y = 30+120+section_spacer;
   tft.setCursor(0,Y);
 
@@ -2173,14 +2179,16 @@ int temp0;
   
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
-  for (i=1;i<7;i++) {
+  for (i=1;i<7;i++) { //draw 6 icons, with HourlyInterval hours between icons. Note that index 1 is  1 hour from now
+    if (i*HourlyInterval>23) break; //safety check if user asked for too large an interval (probably 4 or more)... cannot display past 24 at present
+    
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
     #ifdef _DEBUG
       Serial.print("i=");
       Serial.print(i);
     #endif
-    iconID = ID2Icon(hourly_weatherID[i]);
+    iconID = ID2Icon(hourly_weatherID[i*HourlyInterval]);
     snprintf(tempbuf,29,"/BMP30x30/%d.bmp",iconID);
     drawBmp(tempbuf,X,Y);
     Z+=30;
@@ -2189,7 +2197,7 @@ int temp0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6))/2; 
 
     FNTSZ=1;
-    snprintf(tempbuf,3,"%s:00",dateify(now()+i*60*60,"hh"));
+    snprintf(tempbuf,6,"%s:00",dateify(now()+i*HourlyInterval*60*60,"hh"));
     tft.setTextFont(FNTSZ); //small font
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+tft.fontHeight(FNTSZ)/2);
 
@@ -2197,7 +2205,7 @@ int temp0;
 
     FNTSZ=4;
     tft.setTextFont(FNTSZ); //med font
-    fcnPrintTxtColor(hourly_temp[i],FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
+    fcnPrintTxtColor(hourly_temp[i*HourlyInterval],FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
     tft.setTextColor(FG_COLOR,BG_COLOR);
     Z+=tft.fontHeight(FNTSZ);
   }
@@ -2277,7 +2285,7 @@ void loop() {
     //do stuff every minute
 
     I.isFlagged = false;
-    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //only flag for soil or temp or battery
+    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means only flag for soil or temp or battery
     
     checkHeat(); //this updates I.isheat and I.isac
 
@@ -2303,18 +2311,7 @@ void loop() {
     }
 
     //check if weather available for the max  range required
-    if (hourly_temp[6] == 0 &&  daily_tempMax[5] ==0 &&  daily_tempMin[5] == 0 &&  daily_weatherID[5] == 0) {
-      //no weather
-      if (GetWeather()==false) {
-        Next_Precip = 0;
-        for (byte x=0;x<24;x++) {
-          if (hourly_pop[x]>0) {
-            Next_Precip = hourly_time + 60*60*x;
-            x = 100; 
-          }
-        }
-      }
-    }
+    if (hourly_weatherID[6] == 0 ||  daily_weatherID[5] ==0  ||  daily_weatherID[NUMWTHRDAYS-1] == 0) GetWeather();
     
   }
 
@@ -2328,20 +2325,8 @@ void loop() {
     initSensor(OLDESTSENSORHR*60);
 
     //get weather
-    if (GetWeather()==false) {
-      #ifdef _DEBUG
-        Serial.println("GetWeather failed!");
-      #endif
-      Next_Precip = 0;
-      for (byte x=0;x<24;x++) {
-        if (hourly_pop[x]>0) {
-          Next_Precip = hourly_time + 60*60*x;
-          x = 100; 
-        }
-      }
+    GetWeather();
       
-    } 
-
   }
 
   if (OldTime[3] != weekday()) {
@@ -2485,6 +2470,8 @@ void handleALL(void) {
 
 void handlerForRoot(bool allsensors) {
   WEBHTML.reserve(7000);
+  time_t t=now();
+
 
   LAST_WEB_REQUEST = now(); //this is the time of the last web request
 
@@ -2499,7 +2486,7 @@ void handlerForRoot(bool allsensors) {
   
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
   WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(t,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Free stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
 
 /*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
@@ -2514,9 +2501,10 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
   
+  WEBHTML = WEBHTML + "---------------------<br>";      
 
-  if (I.isFlagged || I.isHeat&1==1 || I.isAC&1==1) {
-    WEBHTML = WEBHTML + "<br>---------------------<br><font color=\"#EE4B2B\">";      
+  if (I.isFlagged || (I.isHeat&1)==1 || (I.isAC&1)==1) {
+    WEBHTML = WEBHTML + "<font color=\"#EE4B2B\">";      
     
     if ((I.isHeat&1)==1) WEBHTML = WEBHTML + "Heat is on<br>";
     if ((I.isAC&1)==1) WEBHTML = WEBHTML + "AC is on<br>";
@@ -2530,13 +2518,31 @@ void handlerForRoot(bool allsensors) {
   }
 
 
-  byte used[SENSORNUM];
-  for (byte j=0;j<SENSORNUM;j++)  {
-    used[j] = 255;
-  }
+  WEBHTML += "<FORM action=\"/UPDATEDEFAULTS\" method=\"get\">";
+  WEBHTML += "<p style=\"font-family:arial, sans-serif\">";
+  WEBHTML += "<label for=\"HoulyInterval\">Hourly interval for display (1-3h)</label>";
+  WEBHTML += "<input type=\"text\" id=\"HourlyInterval\" name=\"HourlyInterval\" value=\"" + String(HourlyInterval) + "\" maxlength=\"15\"><br>";  
+  WEBHTML += "<label for=\"SecSCreen\">Seconds for alarm screen to show</label>";
+  WEBHTML += "<input type=\"text\" id=\"SECSCREEN\" name=\"SECSCREEN\" value=\"" + (String) SECSCREEN + "\" maxlength=\"15\"><br>";  
+  
+  WEBHTML +=  "<br>";
+  WEBHTML += "<button type=\"submit\">Submit</button><br><br>";
 
-  byte usedINDEX = 0;  
-  time_t t=now();
+  WEBHTML += "</p></font></form>";
+
+    WEBHTML = WEBHTML + "---------------------<br>";      
+        
+
+
+
+    byte used[SENSORNUM];
+    for (byte j=0;j<SENSORNUM;j++)  {
+      used[j] = 255;
+    }
+
+    byte usedINDEX = 0;  
+
+
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th></tr>"; 
@@ -2623,6 +2629,29 @@ void handlerForRoot(bool allsensors) {
     #endif
     
   server.send(200, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+}
+
+
+void handleUPDATEDEFAULTS() {
+  uint8_t temp = 0;
+
+  for (uint8_t i = 0; i < server.args(); i++) {
+    //error check for hourly interval.
+    if (server.argName(i)=="HourlyInterval") {
+      temp =  server.arg(i).toInt();
+      if (temp>0 && temp<4) HourlyInterval = temp;
+    }
+
+    //no error checking for secscreen... all values are legal.
+    if (server.argName(i)=="SECSCREEN") SECSCREEN =  server.arg(i).toInt();
+    
+  }
+  I.redraw = 0; //force screen redraw
+
+
+  server.sendHeader("Location", "/");//This Line goes to root page
+  server.send(302, "text/plain", "Updated.");  
 
 }
 
@@ -2766,8 +2795,8 @@ char* Byte2Bin(uint8_t value, char* output, bool invert) {
       if (value & (1 << i)) output[i] = '1';
       else output[i] = '0';
     } else {
-      if (value & (1 << i)) output[8-i] = '1';
-      else output[8-i] = '0';
+      if (value & (1 << i)) output[7-i] = '1';
+      else output[7-i] = '0';
     }
   }
 

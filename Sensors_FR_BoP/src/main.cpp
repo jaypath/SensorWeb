@@ -293,9 +293,13 @@ struct SensorVal {
   uint16_t PollingInt;
   uint16_t SendingInt;
   uint32_t LastReadTime;
-  uint32_t LastSendTime;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value
+  uint32_t LastSendTime;
+  uint32_t LastsnsValue;
+  uint8_t Flags; 
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = Not used by server
 };
+  
 
 struct IP_TYPE {
   IPAddress IP;
@@ -1204,21 +1208,64 @@ byte i;
 
 //sensor fcns
 bool checkSensorValFlag(struct SensorVal *P) {
-  if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower)       bitWrite(P->Flags,0,1);
-      
-  else bitWrite(P->Flags,0,0);
+  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
+  
+  bool lastflag = false;
+  bool thisflag = false;
 
-return bitRead(P->Flags,0);
+  if (P->snsType==50 || P->snsType==55 || P->snsType==56 || P->snsType==57) { //HVAC is a special case
+    lastflag = bitRead(P->Flags,0); //this is the last flag status
+    if (P->LastsnsValue <  P->snsValue) { //currently flagged
+      bitWrite(P->Flags,0,1); //currently flagged
+      bitWrite(P->Flags,5,1); //value is high
+      if (lastflag) {
+        bitWrite(P->Flags,6,0); //no change in flag
+        bitWrite(P->Flags,7,0); //no change in flag
+      } else {
+        bitWrite(P->Flags,6,1); //changed to high
+        bitWrite(P->Flags,7,1); //changed to high and I have not sent data
+      }
+      return true; //flagged
+    } else { //currently NOT flagged
+      bitWrite(P->Flags,0,0); //currently not flagged
+      bitWrite(P->Flags,5,0); //irrelevant
+      if (lastflag) {
+        bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
+        bitWrite(P->Flags,7,1); // and I have not sent data
+      } else {
+        bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
+        bitWrite(P->Flags,7,0); //no change
+      }
+        return false; //not flagged
+    }
+  }
 
+  if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
 
-    #ifdef _DEBUG
-      Serial.print("Setup ended. Time is ");
-      Serial.println(dateify(now(),"hh:nn:ss"));
+  if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
+    thisflag = true;
+    bitWrite(P->Flags,0,1);
 
-    #endif
+    //is it too high? write bit 5
+    if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
+    else bitWrite(P->Flags,5,0);
+  } 
 
+  //now check for changes...  
+  if (lastflag!=thisflag) {
+    bitWrite(P->Flags,6,1); //change detected
+    bitWrite(P->Flags,7,1); //changed to flagged and I have not sent    
+  } else {
+    bitWrite(P->Flags,6,0);
+    bitWrite(P->Flags,7,0);
+  }
+  
+  return bitRead(P->Flags,0);
 
 }
+
+
 
 uint8_t findSensor(byte snsType, byte snsID) {
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -1307,11 +1354,13 @@ void loop() {
     #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
-      flagstatus = bitRead(Sensors[k].Flags,0); //flag before reading value
+      bool goodread = false;
 
-      if (Sensors[k].LastReadTime == 0 || Sensors[k].LastReadTime > t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || (t - Sensors[k].LastReadTime )>60*60*24 ) ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) goodread = ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
-      if ((Sensors[k].LastSendTime  == 0 || Sensors[k].LastSendTime > t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || flagstatus != bitRead(Sensors[k].Flags,0)) || (t - Sensors[k].LastSendTime)>60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      if (goodread == true) {
+        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* isflagged changed since last read and this value was not sent*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+      }
     }
   }
   
@@ -1607,8 +1656,6 @@ currentLine += "<br>-----------------------<br>";
   currentLine += "SENSOR NUMBER: " + String(j,DEC);
   if (bitRead(Sensors[j].Flags,0)) currentLine += " !!!!!ISFLAGGED!!!!!";
   currentLine += "<br>";
-  
-
   currentLine += "-----------------------<br>";
 
 
@@ -1713,6 +1760,14 @@ strPad(temp,padder,25);
   currentLine += " = ";
   currentLine += (String) dateify(Sensors[j].LastSendTime);
   currentLine +=  "<br>";
+
+  currentLine += "     ";
+  currentLine +=  "Flags: ";
+  temp[8] = 0;//make sure no characters after the first 8 shown
+  Byte2Bin(Sensors[j].Flags,temp);
+  currentLine +=  (String) temp + "<br>";
+
+
 
 /*
   currentLine += "     ";
@@ -1888,8 +1943,11 @@ bool SendData(struct SensorVal *snsreading) {
 bool ReadData(struct SensorVal *P) {
       double val;
 
+  time_t t=now();
   bitWrite(P->Flags,0,0);
   
+    P->LastsnsValue = P->snsValue;
+
   switch (P->snsType) {
     case 1: //DHT temp
       #ifdef DHTTYPE
@@ -2010,9 +2068,9 @@ bool ReadData(struct SensorVal *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < now()) {
+          if (LAST_BAR_READ+60*60 < t) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = now();          
+            LAST_BAR_READ = t;          
           }
         #endif
 
@@ -2106,9 +2164,9 @@ bool ReadData(struct SensorVal *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < now()) {
+          if (LAST_BAR_READ+60*60 < t) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = now();          
+            LAST_BAR_READ = t;          
           }
         #endif
       #endif
@@ -2133,7 +2191,7 @@ bool ReadData(struct SensorVal *P) {
   }
 
   checkSensorValFlag(P); //sets isFlagged
-  P->LastReadTime = now(); //localtime
+  P->LastReadTime = t; //localtime
   
 
 #ifdef _DEBUG
@@ -2216,14 +2274,14 @@ void pushDoubleArray(double arr[], byte N, double value) {
 }
 
 void Byte2Bin(uint8_t value, char* output, bool invert) {
-  snprintf(output,8,"00000000");
+  snprintf(output,9,"00000000");
   for (byte i = 0; i < 8; i++) {
     if (invert) {
       if (value & (1 << i)) output[i] = '1';
       else output[i] = '0';
     } else {
-      if (value & (1 << i)) output[8-i] = '1';
-      else output[8-i] = '0';
+      if (value & (1 << i)) output[7-i] = '1';
+      else output[7-i] = '0';
     }
   }
 
