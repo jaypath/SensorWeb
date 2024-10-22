@@ -206,8 +206,6 @@ int daily_weatherID[5];
 int daily_tempMAX[5];
 int daily_tempMIN[5];
 
-
-
 uint32_t ALTSCREEN = 0;
 bool SHOWMAIN = true;
 
@@ -221,6 +219,7 @@ byte OldTime[5] = {0,0,0,0,0};
 int Ypos = 0;
 bool isFlagged = false;
 char tempbuf[70];          
+uint32_t weathercalls=0;
 
 
 int fcn_write_sensor_data(byte i, int y);
@@ -245,7 +244,9 @@ void handlePost();
 void handleRoot();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
-void timeUpdate(void);
+void handleGOTWEATHER();
+void checkDST(void);
+bool updateTime(byte retries,uint16_t waittime);
 void initSensor(byte);
 int16_t findOldestDev();
 uint8_t countDev();
@@ -649,7 +650,7 @@ delay(2000);
     server.on("/POST", handlePost);   
     server.on("/CLEARSENSOR",handleCLEARSENSOR);
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
-    
+    server.on("/GOTWEATHER",handleGOTWEATHER)
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
@@ -658,18 +659,16 @@ delay(2000);
     }
     tft.println("Set up TimeClient...");
 
-    timeClient.begin();
-    timeClient.update();
-    setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET);
+    timeClient.begin(); //time is in UTC
+    updateTime(10,250); //check if DST and set time to EST or EDT
+    
 
-
-    timeUpdate();
     OldTime[0] = 61; //force sec update, but all else will be preset.
     OldTime[2] = minute();
     OldTime[2] = hour();
     OldTime[3] = weekday();
 
-    tft.print("TimeClient OK. I will pull from server... ");
+    tft.print("TimeClient OK.  ");
 
     //init globals
     for ( byte i=0;i<SENSORNUM;i++) {
@@ -779,20 +778,87 @@ void drawBmp(const char *filename, int16_t x, int16_t y) {
 }
 
 
-void timeUpdate() {
-  timeClient.update();
-  if (month() < 3 || (month() == 3 &&  day() < 10) || month() ==12 || (month() == 11 && day() >=3)) DSTOFFSET = -1*60*60; //2024 DST
-  else DSTOFFSET = 0;
+//Time fcn
+bool updateTime(byte retries,uint16_t waittime) {
 
-  setTime(timeClient.getEpochTime()+GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-  return;
+
+  bool isgood = timeClient.update();
+  byte i=1;
+
+
+  while (i<retries && isgood==false) {
+    i++; 
+    isgood = timeClient.update();
+    if (isgood==false) {
+      delay(waittime);
+
+      #ifdef _DEBUG
+        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+      #endif
+    }
+  } 
+
+  if (isgood) {
+    checkDST();
+  }
+
+  return isgood;
+}
+
+void checkDST(void) {
+  timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+  setTime(timeClient.getEpochTime());
+#ifdef _DEBUG
+  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+#endif
+
+
+//check if time offset is EST (-5h) or EDT (-4h)
+int m = month();
+int d = day();
+int dow = weekday(); //1 is sunday
+
+  if (m > 3 && m < 11) DSTOFFSET = 3600;
+  else {
+    if (m == 3) {
+      //need to figure out if it is past the second sunday at 2 am
+      if (d<8) DSTOFFSET = 0;
+      else {
+        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
+        else {
+          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
+          else DSTOFFSET = 0;
+        }
+      }
+    }
+
+    if (m == 11) {
+      //need to figure out if it is past the first sunday at 2 am
+      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
+      else {
+        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
+        else DSTOFFSET = 3600;
+      }
+    }
+  }
+
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+    setTime(timeClient.getEpochTime());
+
+    #ifdef _DEBUG
+      Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
+    #endif
+
+
 }
 
 
 void loop()
 {
     //Call ready() repeatedly in loop for authentication checking and processing
-    bool ready = GSheet.ready();
+  updateTime(1,0); //just try once
+
+  bool ready = GSheet.ready();
   time_t t = now();
   
 
@@ -918,7 +984,6 @@ void loop()
     if (OldTime[2] != hour()) {
       OldTime[2] = hour(); 
       getWeather();
-      timeUpdate();
     }
 
     if (OldTime[3] != weekday()) {
@@ -968,13 +1033,13 @@ void getWeather() {
     int httpCode=404;
 
     tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=00&hourly_temp=1&hourly_temp=2&hourly_temp=3&hourly_temp=4&hourly_temp=5&hourly_temp=6&hourly_temp=7&hourly_temp=8&hourly_temp=9&hourly_temp=10&hourly_temp=11&hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_weatherID=8&hourly_weatherID=9&hourly_weatherID=10&hourly_weatherID=11&daily_weatherID=0&daily_weatherID=1&daily_weatherID=2&daily_weatherID=3&daily_weatherID=4&daily_tempMax=0&daily_tempMax=1&daily_tempMax=3&daily_tempMax=2&daily_tempMax=4&daily_tempMin=0&daily_tempMin=1&daily_tempMin=2&daily_tempMin=3&daily_tempMin=4";
-    
+    http.useHTTP10(true);    
     http.begin(wfclient,tempstring.c_str());
     httpCode = http.GET();
     payload = http.getString();
     http.end();
 
-    http.useHTTP10(true);
+
 
     for (byte j=0;j<12;j++) {
       hourly_temp[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
@@ -1570,13 +1635,19 @@ void handleCLEARSENSOR() {
 }
 
 
+void handleGOTWEATHER() {
+  //just made a weather call...
+  server.send(200, "text/plain",++weathercalls);
 
+  server.send(302, "text/plain", "ok");  
+
+}
 
 
 void handleTIMEUPDATE() {
 
 
-  timeUpdate();
+  updateTime(10,20);
 
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Updated-- Press Back Button");  //This returns to the main page
