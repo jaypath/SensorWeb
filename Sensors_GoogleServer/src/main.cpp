@@ -2,7 +2,7 @@
 #define ARDNAME "GoogleServer"
 #define _USETFT
 #define _USETOUCH
-#define NOISY false
+//#define NOISY true
 #define _USEOTA
 #define ALTSCREENTIME 30
 
@@ -229,9 +229,10 @@ void getWeather();
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);
 
-String file_findSpreadsheetIDByName(String sheetname, bool createfile = false);
+String file_findSpreadsheetIDByName(String sheetname, bool createfile);
 bool file_deleteSpreadsheetByID(String fileID);
-String file_createSpreadsheet(String sheetname, bool addHeader = true);
+String file_createSpreadsheet(String sheetname);
+bool file_createHeaders(String sheetname,String Headers);
 void tokenStatusCallback(TokenInfo info);
 void file_deleteSpreadsheetByName(String filename);
 char* strPad(char* str, char* pad, byte L);
@@ -244,7 +245,6 @@ void handlePost();
 void handleRoot();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
-void handleGOTWEATHER();
 void checkDST(void);
 bool updateTime(byte retries,uint16_t waittime);
 void initSensor(byte);
@@ -256,7 +256,7 @@ bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 bool IPString2ByteArray(String IPstr,byte* IP);
 String fcnMONTH(time_t t);
 String fcnDOW(time_t t);
-bool file_uploadData(void);
+bool file_uploadSensorData(void);
 void fcnChooseTxtColor(byte snsIndex);
 String IP2String(byte* IP);
 uint32_t temp2color(int temp);
@@ -473,8 +473,8 @@ void clearTFT() {
 void setup()
 {
 
-
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
+
  tft.init();
 
   // Setting display to landscape
@@ -650,7 +650,6 @@ delay(2000);
     server.on("/POST", handlePost);   
     server.on("/CLEARSENSOR",handleCLEARSENSOR);
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
-    server.on("/GOTWEATHER",handleGOTWEATHER)
     server.onNotFound(handleNotFound);
     server.begin();
     //init globals
@@ -876,7 +875,7 @@ void loop()
       #ifdef _DEBUG
         Serial.printf("Upload to gsheets requested\n");
       #endif
-      lastUploadSuccess=file_uploadData();
+      lastUploadSuccess=file_uploadSensorData();
       #ifdef _DEBUG
         Serial.printf("Uploaded to google sheets %s.\n", lastUploadSuccess ? "succeeded" : "failed");
       #endif
@@ -969,7 +968,7 @@ void loop()
       #ifdef _DEBUG
         Serial.println("uploading to sheets!");
       #endif
-      if (file_uploadData()==false) {
+      if (file_uploadSensorData()==false) {
         tft.setTextFont(SMALLFONT);
         sprintf(tempbuf,"Failed to upload!");
         tft.drawString(tempbuf, 0, Ypos);
@@ -1362,262 +1361,7 @@ void drawScreen_list() {
   
 }
 
-bool file_deleteSpreadsheetByID(String fileID){
-  FirebaseJson response;
-  
-   bool success= GSheet.deleteFile(&response /* returned response */, fileID /* spreadsheet Id to delete */);
-   //String tmp;
-   //response.toString(tmp, true);
-//  tft.printf("Delete result: %s",tmp.c_str());
-  return success;
-}
 
-void file_deleteSpreadsheetByName(String filename){
-  FirebaseJson response;
-  
-  String fileID;
-
-
-  do {
-    fileID = file_findSpreadsheetIDByName(filename);
-    if (fileID!="" && fileID.substring(0,5)!="ERROR") {
-      tft.setTextFont(SMALLFONT);
-      sprintf(tempbuf,"Deletion of %s status: %s\n",fileID.c_str(),file_deleteSpreadsheetByID(fileID) ? "OK" : "FAIL");
-      tft.drawString(tempbuf, 0, Ypos);
-      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-    }
-  } while (fileID!="" && fileID.substring(0,5)!="ERROR");
-  return;
-}
-
-
-String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
-  //returns the file ID. Note that sheetname is NOT unique, so multiple spreadsheets could have the same name. Only ID is unique.
-  //returns "" if no such filename
-          
-  FirebaseJson filelist;
-
-  String resultstring = "ERROR:";  
-  String thisFileID = "";
-  
-  String tmp;
-  bool success = GSheet.listFiles(&filelist /* returned response */);
-    if (NOISY) {
-      tft.setTextFont(SMALLFONT);
-      snprintf(tempbuf,60,"%s search result: %s\n",sheetname.c_str(),success?"OK":"FAIL");
-      tft.drawString(tempbuf, 0, Ypos);
-      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-    }
-  
-  if (success) {
-    #ifdef _DEBUG
-      filelist.toString(Serial, true);
-    #endif
-
-    if (sheetname == "***") {
-      //special case, return the entire file index!
-      filelist.toString(resultstring,true);
-      tft.printf("%s\n",resultstring.c_str());
-      return "";
-    }
-
-    //put file array into data object
-    FirebaseJsonData result;
-    filelist.get(result,"files");
-
-    if (result.success) {
-
-      FirebaseJsonArray thisfile;
-      result.get<FirebaseJsonArray /* type e.g. FirebaseJson or FirebaseJsonArray */>(thisfile /* object that used to store value */);
-            
-      int fileIndex=0;
-      bool foundit=false;
-  
-      do {
-        thisfile.get(result,fileIndex++); //iterate through each file
-        if (result.success) {
-          FirebaseJson fileinfo;
-
-          //Get FirebaseJson data
-          result.get<FirebaseJson>(fileinfo);
-
-//          fileinfo.toString(tmp,true);
-
-          size_t count = fileinfo.iteratorBegin();
-          
-          for (size_t i = 0; i < count; i++) {
-            
-            FirebaseJson::IteratorValue value = fileinfo.valueAt(i);
-            String s1(value.key);
-            String s2(value.value);
-            s2=s2.substring(1,s2.length()-1);
-
-            if (s1 == "id") thisFileID = s2;
-            if (s1 == "name" && (s2 == sheetname || sheetname == "*")) foundit=true; //* is a special case where any file returned
-          }
-          fileinfo.iteratorEnd();
-          if (foundit) {
-              if (NOISY) {
-                tft.setTextFont(SMALLFONT);
-                snprintf(tempbuf,60,"FileID is %s\n",thisFileID.c_str());
-                tft.drawString(tempbuf, 0, Ypos);
-                Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-              }
-           return thisFileID;
-          }
-        }
-      } while (result.success);
-
-    }
-
-    resultstring= "ERROR: no files found";
-  
-    if (createfile) {
-      resultstring = file_createSpreadsheet(sheetname, true);
-      if (NOISY) {
-        tft.setTextFont(SMALLFONT);
-        snprintf(tempbuf,60,"new fileid: %s\n",resultstring.c_str());
-        tft.drawString(tempbuf, 0, Ypos);
-        Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-      }
-    }         
-       
-    
-  } else { //gsheet error
-      if (NOISY) {
-        tft.setTextFont(SMALLFONT);
-        snprintf(tempbuf,60,"Gsheet error:%s\n",GSheet.errorReason().c_str());
-        tft.drawString(tempbuf, 0, Ypos);
-        Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-      }
-    resultstring = "ERROR: gsheet error";
-    
-  }
-  return resultstring; 
-
-}
-
-
-String file_createSpreadsheet(String sheetname, bool addHeader) {
-
-
-String fileID = file_findSpreadsheetIDByName(sheetname);
-if (fileID.substring(0,5)!="ERROR") return fileID;
-
-        FirebaseJson spreadsheet;
-        spreadsheet.set("properties/title", sheetname);
-        spreadsheet.set("sheets/properties/title", "Sheet1");
-        spreadsheet.set("sheets/properties/sheetId", 1); //readonly
-        spreadsheet.set("sheets/properties/sheetType", "GRID");
-        spreadsheet.set("sheets/properties/sheetType", "GRID");
-        spreadsheet.set("sheets/properties/gridProperties/rowCount", 200000);
-        spreadsheet.set("sheets/properties/gridProperties/columnCount", 10);
-
-        spreadsheet.set("sheets/developerMetadata/[0]/metadataValue", "Jaypath");
-        spreadsheet.set("sheets/developerMetadata/[0]/metadataKey", "Creator");
-        spreadsheet.set("sheets/developerMetadata/[0]/visibility", "DOCUMENT");
-
-  FirebaseJson response;
-
-  bool success = GSheet.create(&response /* returned response */, &spreadsheet /* spreadsheet object */, USER_EMAIL /* your email that this spreadsheet shared to */);
-
-     
-  if (success) {
-    fileID = file_findSpreadsheetIDByName(sheetname);
-    if (addHeader) {
-      FirebaseJson valueRange;
-      valueRange.add("majorDimension", "ROWS");
-      valueRange.set("values/[0]/[0]", "SnsID");
-      valueRange.set("values/[0]/[1]", "IP Add");
-      valueRange.set("values/[0]/[2]", "SnsName");
-      valueRange.set("values/[0]/[3]", "Time Logged");
-      valueRange.set("values/[0]/[4]", "Time Read");
-      valueRange.set("values/[0]/[5]", "HumanTime");
-      valueRange.set("values/[0]/[6]", "Flags");
-      valueRange.set("values/[0]/[7]", "Reading");
-
-      bool success = GSheet.values.append(&response /* returned response */, fileID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
-    }
-    return fileID;
-    
-  
-  } 
-  
-      if (NOISY) {
-        tft.setTextFont(SMALLFONT);
-        snprintf(tempbuf,60,"CREATE: gsheet failed to create object\n");
-        tft.drawString(tempbuf, 0, Ypos);
-        Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-      }
-  
-  
-    return "ERROR: Gsheet failed to create";
-
-}
-
-bool file_uploadData(void) {
-
-  FirebaseJson valueRange;
-  FirebaseJson response;
-
-  time_t t = now();
-
-  String logid;
-  String fileID = (String) "ArduinoLog" + (String) dateify(t,"yyyy-mm");
-  fileID = file_findSpreadsheetIDByName(fileID,true);
-
-  if (fileID=="" || fileID.substring(0,5)=="ERROR") return false;
-
-  byte rowInd = 0;
-  byte snsArray[SENSORNUM] = {255};
-  for (byte j=0;j<SENSORNUM;j++) snsArray[j]=255;
-
-  for (byte j=0;j<SENSORNUM;j++) {
-    if (Sensors[j].timeLogged>0 && Sensors[j].isSent == false) {
-      logid = (String) Sensors[j].ardID + "." + (String)  Sensors[j].snsType + "." + (String)  Sensors[j].snsID;
-
-      valueRange.add("majorDimension", "ROWS");
-      valueRange.set("values/[" + (String) rowInd + "]/[0]", logid);
-      valueRange.set("values/[" + (String) rowInd + "]/[1]", IP2String(Sensors[j].IP));
-      valueRange.set("values/[" + (String) rowInd + "]/[2]", (String) Sensors[j].snsName);
-      valueRange.set("values/[" + (String) rowInd + "]/[3]", (String) Sensors[j].timeLogged);
-      valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) Sensors[j].timeRead);
-      valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) dateify(Sensors[j].timeRead,"mm/dd/yy hh:nn:ss"));
-      valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) bitRead(Sensors[j].Flags,0));
-      valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) Sensors[j].snsValue);
-  
-      snsArray[rowInd++] = j;
-    }
-  }
-
-        // For Google Sheet API ref doc, go to https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/append
-
-  bool success = GSheet.values.append(&response /* returned response */, fileID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
-  if (success) {
-//            response.toString(Serial, true);
-    for (byte j=0;j<SENSORNUM;j++) {
-      if (snsArray[j]!=255)     Sensors[snsArray[j]].isSent = true;
-    }
-    lastUploadTime = now(); 
-}
-
-return success;
-
-        
-}
-
-void tokenStatusCallback(TokenInfo info)
-{
-    if (info.status == token_status_error)
-    {
-        GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
-        GSheet.printf("Token error: %s\n", GSheet.getTokenError(info).c_str());
-    }
-    else
-    {
-        GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
-    }
-}
 
 
 void handleCLEARSENSOR() {
@@ -1634,14 +1378,6 @@ void handleCLEARSENSOR() {
   return;
 }
 
-
-void handleGOTWEATHER() {
-  //just made a weather call...
-  server.send(200, "text/plain",++weathercalls);
-
-  server.send(302, "text/plain", "ok");  
-
-}
 
 
 void handleTIMEUPDATE() {
@@ -2241,3 +1977,286 @@ double valSensorType(byte snsType, bool asAvg, int isflagged, int isoutdoor, uin
   if (count == 0) return -1000;
   return val/count;  
 }
+
+
+//--------------------------------------
+//--------------------------------------
+//--------------------------------------
+//--------------------------------------
+//SPREADSHEET FUNCTIONS
+
+bool file_deleteSpreadsheetByID(String fileID){
+  FirebaseJson response;
+  
+   bool success= GSheet.deleteFile(&response /* returned response */, fileID /* spreadsheet Id to delete */);
+   //String tmp;
+   //response.toString(tmp, true);
+//  tft.printf("Delete result: %s",tmp.c_str());
+  return success;
+}
+
+void file_deleteSpreadsheetByName(String filename){
+  FirebaseJson response;
+  
+  String fileID;
+
+
+  do {
+    fileID = file_findSpreadsheetIDByName(filename,false);
+    if (fileID!="" && fileID.substring(0,5)!="ERROR") {
+      tft.setTextFont(SMALLFONT);
+      sprintf(tempbuf,"Deletion of %s status: %s\n",fileID.c_str(),file_deleteSpreadsheetByID(fileID) ? "OK" : "FAIL");
+      tft.drawString(tempbuf, 0, Ypos);
+      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+    }
+  } while (fileID!="" && fileID.substring(0,5)!="ERROR");
+  return;
+}
+
+
+String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
+  //returns the file ID. Note that sheetname is NOT unique, so multiple spreadsheets could have the same name. Only ID is unique.
+  //returns "" if no such filename
+          
+  FirebaseJson filelist;
+
+  String resultstring = "ERROR:";  
+  String thisFileID = "";
+  
+  String tmp;
+  bool success = GSheet.listFiles(&filelist /* returned response */);
+    #ifdef NOISY
+      tft.setTextFont(SMALLFONT);
+      snprintf(tempbuf,60,"%s search result: %s\n",sheetname.c_str(),success?"OK":"FAIL");
+      tft.drawString(tempbuf, 0, Ypos);
+      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+    #endif
+  
+  if (success) {
+    #ifdef _DEBUG
+      filelist.toString(Serial, true);
+    #endif
+
+    if (sheetname == "***") {
+      //special case, return the entire file index!
+      filelist.toString(resultstring,true);
+      tft.printf("%s\n",resultstring.c_str());
+      return "";
+    }
+
+    //put file array into data object
+    FirebaseJsonData result;
+    filelist.get(result,"files");
+
+    if (result.success) {
+
+      FirebaseJsonArray thisfile;
+      result.get<FirebaseJsonArray /* type e.g. FirebaseJson or FirebaseJsonArray */>(thisfile /* object that used to store value */);
+            
+      int fileIndex=0;
+      bool foundit=false;
+  
+      do {
+        thisfile.get(result,fileIndex++); //iterate through each file
+        if (result.success) {
+          FirebaseJson fileinfo;
+
+          //Get FirebaseJson data
+          result.get<FirebaseJson>(fileinfo);
+
+//          fileinfo.toString(tmp,true);
+
+          size_t count = fileinfo.iteratorBegin();
+          
+          for (size_t i = 0; i < count; i++) {
+            
+            FirebaseJson::IteratorValue value = fileinfo.valueAt(i);
+            String s1(value.key);
+            String s2(value.value);
+            s2=s2.substring(1,s2.length()-1);
+
+            if (s1 == "id") thisFileID = s2;
+            if (s1 == "name" && (s2 == sheetname || sheetname == "*")) foundit=true; //* is a special case where any file returned
+          }
+          fileinfo.iteratorEnd();
+          if (foundit) {
+              #ifdef NOISY
+                tft.setTextFont(SMALLFONT);
+                snprintf(tempbuf,60,"FileID is %s\n",thisFileID.c_str());
+                tft.drawString(tempbuf, 0, Ypos);
+                Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+              #endif
+           return thisFileID;
+          }
+        }
+      } while (result.success);
+
+    }
+
+    resultstring= "ERROR: no files found";
+  
+    if (createfile) {
+      resultstring = file_createSpreadsheet(sheetname);
+      resultstring = file_createHeaders(resultstring,"SnsID,IP Add,SnsName,Time Logged,Time Read,HumanTime,Flags,Reading");
+      #ifdef NOISY
+        tft.setTextFont(SMALLFONT);
+        snprintf(tempbuf,60,"new fileid: %s\n",resultstring.c_str());
+        tft.drawString(tempbuf, 0, Ypos);
+        Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+      #endif
+    }         
+       
+    
+  } else { //gsheet error
+      #ifdef NOISY
+        tft.setTextFont(SMALLFONT);
+        snprintf(tempbuf,60,"Gsheet error:%s\n",GSheet.errorReason().c_str());
+        tft.drawString(tempbuf, 0, Ypos);
+        Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+      #endif
+    resultstring = "ERROR: gsheet error";
+    
+  }
+  return resultstring; 
+
+}
+
+
+String file_createSpreadsheet(String sheetname) {
+
+
+  String fileID = file_findSpreadsheetIDByName(sheetname,true);
+  if (fileID.substring(0,5)!="ERROR") return fileID;
+
+  FirebaseJson spreadsheet;
+  spreadsheet.set("properties/title", sheetname);
+  spreadsheet.set("sheets/properties/title", "Sheet1");
+  spreadsheet.set("sheets/properties/sheetId", 1); //readonly
+  spreadsheet.set("sheets/properties/sheetType", "GRID");
+  spreadsheet.set("sheets/properties/sheetType", "GRID");
+  spreadsheet.set("sheets/properties/gridProperties/rowCount", 200000);
+  spreadsheet.set("sheets/properties/gridProperties/columnCount", 10);
+
+  spreadsheet.set("sheets/developerMetadata/[0]/metadataValue", "Jaypath");
+  spreadsheet.set("sheets/developerMetadata/[0]/metadataKey", "Creator");
+  spreadsheet.set("sheets/developerMetadata/[0]/visibility", "DOCUMENT");
+
+  FirebaseJson response;
+
+  bool success = GSheet.create(&response /* returned response */, &spreadsheet /* spreadsheet object */, USER_EMAIL /* your email that this spreadsheet shared to */);
+
+  if (success==false) {
+    #ifdef NOISY
+      tft.setTextFont(SMALLFONT);
+      snprintf(tempbuf,60,"CREATE: gsheet failed to create object\n");
+      tft.drawString(tempbuf, 0, Ypos);
+      Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
+    #endif
+
+  
+    return "ERROR: Gsheet failed to create";
+  }
+
+  return fileID;
+}
+
+bool file_createHeaders(String fileID,String Headers) {
+
+  /* only accept file ID
+  String fileID = file_findSpreadsheetIDByName(sheetname,true);
+  fileID = file_findSpreadsheetIDByName(sheetname);
+  */
+
+  if (fileID.substring(0,5)=="ERROR") return false;
+
+  uint8_t cnt = 0;
+  int strOffset=-1;
+  String temp;
+  FirebaseJson valueRange;
+  FirebaseJson response;
+  valueRange.add("majorDimension", "ROWS");
+  while (Headers.length()>0 && Headers!=",") {
+    strOffset = Headers.indexOf(",", 0);
+    if (strOffset == -1) { //did not find the "," so the remains are the last header.
+      temp=Headers;
+    } else {
+      temp = Headers.substring(0, strOffset);
+      Headers.remove(0, strOffset + 1);
+    }
+
+    if (temp.length()>0) valueRange.set("values/[0]/[" + (String) (cnt++) + "]", temp);
+  }
+
+
+  bool success = GSheet.values.append(&response /* returned response */, fileID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
+
+  return success;
+  
+} 
+  
+
+bool file_uploadSensorData(void) {
+
+  FirebaseJson valueRange;
+  FirebaseJson response;
+
+  time_t t = now();
+
+  String logid;
+  String fileID = (String) "ArduinoLog" + (String) dateify(t,"yyyy-mm");
+  fileID = file_findSpreadsheetIDByName(fileID,false);
+
+  if (fileID=="" || fileID.substring(0,5)=="ERROR") return false;
+
+  byte rowInd = 0;
+  byte snsArray[SENSORNUM] = {255};
+  for (byte j=0;j<SENSORNUM;j++) snsArray[j]=255;
+
+  for (byte j=0;j<SENSORNUM;j++) {
+    if (Sensors[j].timeLogged>0 && Sensors[j].isSent == false) {
+      logid = (String) Sensors[j].ardID + "." + (String)  Sensors[j].snsType + "." + (String)  Sensors[j].snsID;
+
+      valueRange.add("majorDimension", "ROWS");
+      valueRange.set("values/[" + (String) rowInd + "]/[0]", logid);
+      valueRange.set("values/[" + (String) rowInd + "]/[1]", IP2String(Sensors[j].IP));
+      valueRange.set("values/[" + (String) rowInd + "]/[2]", (String) Sensors[j].snsName);
+      valueRange.set("values/[" + (String) rowInd + "]/[3]", (String) Sensors[j].timeLogged);
+      valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) Sensors[j].timeRead);
+      valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) dateify(Sensors[j].timeRead,"mm/dd/yy hh:nn:ss"));
+      valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) bitRead(Sensors[j].Flags,0));
+      valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) Sensors[j].snsValue);
+  
+      snsArray[rowInd++] = j;
+    }
+  }
+
+        // For Google Sheet API ref doc, go to https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/append
+
+  bool success = GSheet.values.append(&response /* returned response */, fileID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
+  if (success) {
+//            response.toString(Serial, true);
+    for (byte j=0;j<SENSORNUM;j++) {
+      if (snsArray[j]!=255)     Sensors[snsArray[j]].isSent = true;
+    }
+    lastUploadTime = now(); 
+}
+
+return success;
+
+        
+}
+
+void tokenStatusCallback(TokenInfo info)
+{
+    if (info.status == token_status_error)
+    {
+        GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
+        GSheet.printf("Token error: %s\n", GSheet.getTokenError(info).c_str());
+    }
+    else
+    {
+        GSheet.printf("Token info: type = %s, status = %s\n", GSheet.getTokenType(info).c_str(), GSheet.getTokenStatus(info).c_str());
+    }
+}
+
+

@@ -1128,7 +1128,6 @@ bool GetWeather() {
 
 bool isgood = false;
 String     payload;
-payload.reserve(2500);
 payload = "http://api.openweathermap.org/data/2.5/onecall?lat=42.307614&lon=-71.299288&exclude=minutely&units=imperial&appid=0acc2e002c61b662274debd545d4f558";
 
   WiFiClient wfclient;
