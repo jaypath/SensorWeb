@@ -18,19 +18,35 @@ time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and ret
 {
   //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
 
-    byte m = month(), d=day(), h=0, n=0, s=0;
+    int m = month(), d=day(), h=0, n=0, s=0;
     int yy = year()-2000;
+    String datesplit = "";
 
-  if (str.indexOf("/")>-1) //date is included
+  if (str.indexOf("/")>-1) datesplit = "/"; //date is included
+  if (str.indexOf("-")>-1) datesplit = "-";//date is included
+
+  if (datesplit!="")
   {
-    m = breakString(&str,"/").toInt();
-    d = breakString(&str,"/").toInt();
-    if (str.indexOf(" ")<0) //time is not included
-    {
-      yy = str.toInt();      
+    m = breakString(&str,datesplit).toInt();
+    if (m>12) {
+      yy=m;
+      m = breakString(&str,datesplit).toInt();
+      if (str.indexOf(" ")<0) //time is not included
+      {
+        d = str.toInt();      
+      } else {
+        d = breakString(&str," ").toInt();
+      }
     } else {
-      yy = breakString(&str," ").toInt();
+      d = breakString(&str,"/").toInt();
+      if (str.indexOf(" ")<0) //time is not included
+      {
+        yy = str.toInt();      
+      } else {
+        yy = breakString(&str," ").toInt();
+      }
     }
+    
     if (yy>2000) yy = yy-2000;
     else if (yy>1970) yy=yy-1900;
 
@@ -80,14 +96,6 @@ time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
   return makeTime(unixTime);
 }
 
-bool checkTime(void) {
-
-  uint32_t td = now(); 
-  
-  if ( WifiStatus()  && (td>2208992400 || td<1704070800)) return false;
-  return true;
-
-}
 
 
 //Time fcn
@@ -113,6 +121,7 @@ bool updateTime(byte retries,uint16_t waittime) {
 }
 
 void checkDST(void) {
+   DSTOFFSET = 0; //starting default
   timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET);
   setTime(timeClient.getEpochTime());
   
@@ -123,32 +132,53 @@ void checkDST(void) {
 #endif
 
 
+
 //check if time offset is EST (-5h) or EDT (-4h)
-int m = month(n);
-int d = day(n);
-int dow = weekday(n); //1 is sunday
+  int m=month();
 
   if (m > 3 && m < 11) DSTOFFSET = 3600;
   else {
     if (m == 3) {
       //need to figure out if it is past the second sunday at 2 am
-      if (d<8) DSTOFFSET = 0;
-      else {
-        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
-        else {
-          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is  the second sunday or more
-          else DSTOFFSET = 0;
-        }
-      }
+
+      time_t m1 = makeUnixTime(year(),month(),7,2,0,0); //this is the last day of the first week of March at 2 am. We want second sunday at 2 am
+      if (n< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
+      else DSTOFFSET = 3600;
+
+      //7-weekday(m1)+1 is the next sunday 
+      /*explanation:
+        weekday(m1) //is the weekday of m1, the last day of the first week. If it is Sunday (1), then add 7 to get to the second sunday...
+        if it is 1, then add 7 = 7-weekday(m1)+1
+        if it is 2, then add 6 = 7-weekday(m1)+1
+        if it is 3 then add 5 = 7-weekday(m1)+1
+        if it is 4 then add 4 = 7-weekday(m1)+1
+        if it is 5 then add 3 = 7-weekday(m1)+1
+        if it is 6 then add 2 = 7-weekday(m1)+1
+        if it is 7 then add 1 = 7-weekday(m1)+1
+      */
+
     }
 
     if (m == 11) {
       //need to figure out if it is past the first sunday at 2 am
-      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
-      else {
-        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
-        else DSTOFFSET = 3600;
-      }
+      time_t m1 = makeUnixTime(year(),month(),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
+      if (weekday(m1)>1) m1 += (7-(weekday(m1)-1))*86400; //this is the first sunday of the month.
+      if (n< m1) DSTOFFSET = 3600; //still in the summer timezone
+      else DSTOFFSET = 0;
+
+    /*explanation...
+      if weekday(m1) is 1 then it is sunday, add 0
+      if 2 then Monday, add 6
+      if 3 then Tue, add 5
+      ... +4
+      +3
+      +2
+      +1
+
+      so that is 7 - (weekday(m1)-1)
+
+    */
+      
     }
   }
 
@@ -204,6 +234,12 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%02d",hour(t));
   dateformat.replace("hh",holder);
 
+  snprintf(holder,4,"%d",hour(t));
+  dateformat.replace("h1",holder);
+
+  snprintf(holder,4,"%d",hourFormat12(t));
+  dateformat.replace("H",holder);
+
   snprintf(holder,4,"%02d",minute(t));
   dateformat.replace("nn",holder);
 
@@ -216,6 +252,8 @@ char* dateify(time_t t, String dateformat) {
   snprintf(holder,4,"%s",fcnDOW(t,false).c_str());
   dateformat.replace("dow",holder);
 
+  if (dateformat.indexOf("XM")>-1) dateformat.replace("XM",(isPM(t)==true)?"PM":"AM");
+  
   snprintf(DATESTRING,25,"%s",dateformat.c_str());
   
   return DATESTRING;  

@@ -346,7 +346,7 @@ void handlerForRoot(bool allsensors) {
   #endif
 
   #ifdef _USE32
-  WEBHTML = WEBHTML + "Free Stack Memory: " + esp_get_free_internal_heap_size() + "</h2><br>";  
+  WEBHTML = WEBHTML + "Free Stack Memory: " + esp_get_free_internal_heap_size() + "<br>";  
   WEBHTML = WEBHTML + "Lowest Free Stack Memory: " + esp_get_minimum_free_heap_size() + "</h2><br>";  
   #endif
 
@@ -357,6 +357,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</FORM><br>";
 */
 
+  //WEBHTML = WEBHTML + "NOAA station: " + WeatherData.Grid + "<br>";
   WEBHTML = WEBHTML + "Sunrise " + dateify(WeatherData.sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 

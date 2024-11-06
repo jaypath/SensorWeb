@@ -20,7 +20,7 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this
 
 //screen
 Screen I; //here, I is of type Screen (struct)
-uint8_t SECSCREEN = 3; //seconds before alarm redraw
+uint8_t SECSCREEN = 5; //seconds before alarm redraw
 
 
 //weather
@@ -30,7 +30,6 @@ uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;
 double batteryArray[48] = {0};
 double LAST_BAR=0;
 uint32_t LAST_WEB_REQUEST = 0;
-
 
 
 

@@ -375,6 +375,7 @@ ALIVESINCE = now();
     server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
     server.on("/NEXTSNS", handleNEXT);
     server.on("/LASTSNS", handleLAST);
+    server.on("/REBOOT", handleREBOOT);
     server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
     server.begin();
     
@@ -632,15 +633,20 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
   
   if (OldTime[3] != weekday()) {
     //once per day
+    #ifdef REBOOTDAILY
+      ESP.restart();
+    #endif
 
     OldTime[3] = weekday();
 
     checkDST();
-  
+
     //reset heat and ac values
     #ifdef _DEBUG
       Serial.printf("\nNew day... ");
     #endif
+
+
 
     #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 

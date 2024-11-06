@@ -6,9 +6,6 @@
 
 
 
-//wellesley, MA
-#define LAT 42.3076 //only 4 decimal pts
-#define LON -71.2993 //only 4 decimal pts allowed with NOAA
 
 #define NUMWTHRDAYS 5 //get hourly data for 5 days
 
@@ -16,7 +13,6 @@ class WeatherInfo
 {
 private:
     //keep hourly for next 24 hours, and daily (really day and night, so 12 hour interval)
-    String Grid = ""; //full URL for grid from NOAA API
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt =0;
     uint32_t lastUpdateStatus = false;
@@ -40,6 +36,7 @@ private:
 
     uint8_t getIndex(time_t dT = 0);
 public:
+    String Grid = ""; //full URL for grid from NOAA API
     uint32_t sunrise; //next  sunrise for TODAY
     uint32_t sunset; //next  sunset for TODAY
     bool flag_rain;

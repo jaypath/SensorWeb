@@ -160,7 +160,6 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 
 bool SendData(struct SensorVal *snsreading) {
 
-if (checkTime()==false) return false;
 
 byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
@@ -436,6 +435,12 @@ byte arduinoID = WIFI_INFO.MYIP[3];
   }
 }
 
+void handleREBOOT() {
+
+    server.send(400, "text/plain", "Rebooting...");   // Send HTTP status 400 as error
+
+ESP. restart();
+}
 
 void handleRoot() {
 byte arduinoID = WIFI_INFO.MYIP[3];

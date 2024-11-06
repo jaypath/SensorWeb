@@ -685,8 +685,7 @@ int peak_to_peak(int pin, int ms) {
 
 
 bool ReadData(struct SensorVal *P) {
-  if (checkTime()==false) return false;
-
+  
   time_t t=now();
 
   double val;

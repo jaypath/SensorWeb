@@ -5,6 +5,7 @@
 
 //#define _DEBUG 1
 //#define _WEBDEBUG
+//#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
 #define _WEBCHART 2
 

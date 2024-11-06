@@ -8,6 +8,9 @@
 
 //#define _WEBCHART 2
 
+//#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
+
+
 #define _WEBCHART 2
 
 #ifdef _WEBCHART

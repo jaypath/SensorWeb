@@ -82,6 +82,7 @@
   String WEBDEBUG = "";
 #endif
 
+const byte CLOCKAREA = 105;
 //gen global types
 
 /*
@@ -120,14 +121,15 @@ extern SensorVal Sensors[SENSORNUM];
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
 extern double LAST_BAR;
-  
+
 //fuction declarations
-uint32_t set_color(byte r, byte g, byte b);
+uint16_t set_color(byte r, byte g, byte b);
 uint16_t read16(File &f);
 uint32_t read32(File &f);
 int ID2Icon(int); //provide a weather ID, obtain an icon ID
 void drawBmp(const char*, int16_t, int16_t, uint16_t alpha = TRANSPARENT_COLOR);
 void fcnDrawHeader(time_t t);
+void fcnDrawClock(time_t t);
 void fcnDrawScreen();
 void fcnDrawWeather(time_t t);
 void fcnDrawSensors(int Y);
@@ -135,8 +137,8 @@ void fcnPrintTxtHeatingCooling(int x,int y);
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ,int x=-1,int y=-1,bool autocontrast = false);
 void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1,bool autocontrast=false);
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1);
-void fcnPredictionTxt(char* tempPred, uint32_t* fg, uint32_t* bg);
-void fcnPressureTxt(char* tempPres, uint32_t* fg, uint32_t* bg);
+void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
+void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
 void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y);
 uint16_t temp2color(int temp, bool invertgray = false);
 
@@ -145,7 +147,7 @@ uint16_t temp2color(int temp, bool invertgray = false);
 
 void setup()
 {
-  WEBHTML.reserve(175000); //maximum size of web call is ~170k
+  WEBHTML.reserve(7000); 
 
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
 tft.init();
@@ -641,10 +643,12 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
   String temp;
 
 
-  uint32_t c_heat = tft.color565(255,180,0); //TFT_ORANGE;
-  uint32_t c_ac = tft.color565(0,0,255*.7);
-  uint32_t c_fan = tft.color565(135,206,235); //TFT_SKYBLUE;135 206 235
-  uint32_t c_FG=BG_COLOR, c_BG=BG_COLOR;
+  uint16_t c_heat = tft.color565(255,180,0); //TFT_ORANGE;
+  uint16_t c_ac = tft.color565(0,0,(byte) 255*.7);
+  uint16_t c_fan = TFT_GREEN; //tft.color565(135,206,235); //TFT_SKYBLUE;135 206 235
+  uint16_t c_errorfg = TFT_BLACK; 
+  uint16_t c_errorbg = tft.color565(255,0,0); 
+  uint16_t c_FG=BG_COLOR, c_BG=BG_COLOR;
   
 
   tft.setTextFont(FNTSZ);
@@ -660,37 +664,25 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
       Y+= tft.fontHeight(FNTSZ)+2; 
     }
 
-    if (bitRead(I.isHeat,j)) {
-      c_FG = c_heat;
-      c_BG = BG_COLOR;
-      if (bitRead(I.isFan,j)) {
-        c_BG = c_fan; 
-      }
-      if (bitRead(I.isAC,j)) {
-        c_BG = c_ac; //warning!!
-      }
+    if (bitRead(I.isHeat,j) && bitRead(I.isAC,j)) {
+      c_FG = c_errorfg;
+      c_BG = c_errorbg;
     } else {
+      if (bitRead(I.isFan,j)) {
+          c_BG = c_fan; 
+      }
+      if (bitRead(I.isHeat,j)) {
+        c_FG = c_heat;        
+      }
       if (bitRead(I.isAC,j)) {
-        c_FG = c_ac;
-        c_BG = TFT_RED; //if the fan is not on, this is an alarm!
-        if (bitRead(I.isFan,j)) c_BG = c_fan;
-      } else {
-        if (bitRead(I.isFan,j)) {
-          c_FG = c_fan;
-          c_BG = BG_COLOR;
-        }
+        c_FG = c_ac; 
+        if (c_BG != c_fan) c_BG = c_errorbg;
       }
     }
     temp = (String) j;
+
     tft.setTextColor(c_FG,c_BG);    
     x +=tft.drawString(temp,x,Y,1) + 5;
-    #ifdef _LIGHTMODE
- c_FG=TFT_DARKGREY;
-  #else
- c_FG=TFT_LIGHTGREY;
-  #endif
-    c_BG=BG_COLOR;
-    tft.setTextColor(c_FG,c_BG);    
   }
 
   temp = "4 5 6"; //placeholder to find new X,Y location
@@ -915,7 +907,7 @@ void fcnDrawHeader(time_t t) {
 //  y+=tft.fontHeight(2)+2;    
   if (I.isFlagged) {
     tft.setTextFont(2);
-    tft.setTextColor(TFT_RED,BG_COLOR); //without second arg it is transparent background
+    tft.setTextColor(tft.color565(255,0,0),BG_COLOR); //without second arg it is transparent background
     tft.drawString("FLAG",x,y);
     tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   }
@@ -924,11 +916,11 @@ void fcnDrawHeader(time_t t) {
 //add heat and AC icons to right 
   if ((I.isHeat&1)==1) {
     st="/HVAC/flame.bmp";
-    drawBmp(st.c_str(),tft.width()-35,0);
+    drawBmp(st.c_str(),tft.width()-30,0);
   }
   if ((I.isAC&1)==1) {
     st="/HVAC/ac30.bmp";
-    drawBmp(st.c_str(),tft.width()-70,0);
+    drawBmp(st.c_str(),tft.width()-65,0);
   }
    
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
@@ -944,25 +936,9 @@ void fcnDrawHeader(time_t t) {
 void fcnDrawScreen() {
   time_t t = now();
 
-#ifdef _DEBUG
-Serial.println("main: main draw pathway reached");
-#endif
-  if ((I.redraw > 0 && I.isFlagged==I.wasFlagged) || t-I.lastDraw < 30) return; //not time to redraw and flag status has not changed or screen was just drawn
-
+  if (((I.redraw > 0 ) && I.isFlagged==I.wasFlagged ) || (t-I.lastDraw < 60 && I.isFlagged==false)) return; //not time to redraw and flag status has not changed or screen was just drawn
+  
   I.wasFlagged = I.isFlagged; //change was status to is status because we are drawing now
-
-  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
-  I.localWeather=find_sensor_name("Outside", 4);
-  if (I.localWeather<255) {
-    if (t-Sensors[I.localWeather].timeRead>60*30) I.localWeather = 255; //localweather is only useful if <30 minutes old 
-  }
-
-  tft.clear(BG_COLOR);
-  I.lastDraw = t;
-  //tft.fillScreen(BG_COLOR);            // Clear screen, this also works
-  fcnDrawHeader(t);
-
-
   if (I.isFlagged) {
     I.redraw = SECSCREEN; //set to screen time for multiple screens... here redraw only refers to the alert area 
 
@@ -972,6 +948,26 @@ Serial.println("main: main draw pathway reached");
     I.redraw = 120; //some arbitrarily large number relative to byte... this will reset every minute on the minute anyway
     I.ScreenNum = 0;
   }
+
+  fcnDrawClock(t);
+
+  if ( t-I.lastDraw < 30 && I.isFlagged) { //just needed to draw the boxes/clock
+    return;
+  }     
+  I.lastDraw = t;
+    
+
+  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
+  I.localWeather=find_sensor_name("Outside", 4);
+  if (I.localWeather<255) {
+    if (t-Sensors[I.localWeather].timeRead>60*30) I.localWeather = 255; //localweather is only useful if <30 minutes old 
+  }
+
+  tft.fillRect(0,0,tft.width(),tft.height()-CLOCKAREA,BG_COLOR); //clear the weather area
+  //tft.fillScreen(BG_COLOR);            // Clear screen, this also works
+  fcnDrawHeader(t);
+
+
   fcnDrawWeather(t);
 
 
@@ -979,7 +975,7 @@ Serial.println("main: main draw pathway reached");
   
 }
 
-uint32_t set_color(byte r, byte g, byte b) {
+uint16_t set_color(byte r, byte g, byte b) {
   return tft.color565(r,g, b);
 }
 
@@ -996,16 +992,14 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   uint8_t box_wet_fill[3] = {0,190,255};
   */
   
-  uint32_t box_border = set_color(0,125,0);
-  uint32_t box_fill = set_color(120,255,120);
-  uint32_t text_color = set_color(0,0,0);
+  uint16_t box_border = set_color(200,175,200);
+  uint16_t box_fill = set_color(75,50,75);
+  uint16_t text_color = set_color(255,225,255);
 
   String box_text = "";
   char tempbuf[14];
 
   byte isHigh = 255,isLow=255;
-  byte FNTSZ=2;
-  tft.setTextFont(FNTSZ);
 
   //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
   //temperature
@@ -1078,17 +1072,19 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
 
   //draw  box
-  tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_fill);
-  tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_border);
+//  tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_fill);
+  //tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_border);
+  tft.fillRect(X,Y,boxsize_x-2,boxsize_y-2,box_fill);
+  tft.drawRect(X,Y,boxsize_x-2,boxsize_y-2,box_border);
   tft.setTextColor(0,box_fill);
   
   Y+=  2;
-
+  byte FNTSZ=2;
+  tft.setTextFont(FNTSZ);
   snprintf(tempbuf,13,"%s",roomname.c_str());
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
+  Y+=2+tft.fontHeight(FNTSZ);
 
-  Y+=3+tft.fontHeight(FNTSZ);
-  
   tft.setTextColor(text_color,box_fill);
       
   //print each line to the |, then print on the next line
@@ -1143,17 +1139,19 @@ void fcnDrawSensors(int Y) {
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,tft.fontHeight(FNTSZ)/2);
   */
 
-  byte boxsize_x=60,boxsize_y=50;
+  byte boxsize_x=50,boxsize_y=50;
+  byte gapx = 4;
+  byte gapy = 2;
   String roomname;
 
   X = 0;
  
-  byte rows = 3;
-  byte cols = 4;
+  byte rows = 2;
+  byte cols = 6;
 
   for (byte r=0;r<rows;r++) {
     for (byte c=0;c<cols;c++) {
-      switch ((uint16_t) r<<8 | c) {
+      switch ((uint16_t) r<<8 | c) { //this puts the row into the first 8 bits and column into the next 8, so can check both row and column in 1 case
         case 0:
           roomname = "Outside";
           break;
@@ -1166,39 +1164,39 @@ void fcnDrawSensors(int Y) {
         case 0<<8 | 3:
           roomname = "MastBR";
           break;
-        case 1<<8 | 0:
+        case 0<<8 | 4:
           roomname = "FamRm";
           break;
-        case 1<<8 | 1:
+        case 0<<8 | 5:
           roomname = "FRBoP";
           break;
-        case 1<<8 | 2:
+        case 1<<8 | 0:
           roomname = "Dining";
           break;
-        case 1<<8 | 3:
+        case 1<<8 | 1:
           roomname = "LivRm";
           break;
-        case 2<<8 | 0:
+        case 1<<8 | 2:
           roomname = "Office";
           break;
-        case 2<<8 | 1:
+        case 1<<8 | 3:
           roomname = "Den";
           break;
-        case 2<<8 | 2:
+        case 1<<8 | 4:
           roomname = "Garage";
           break;
-        case 2<<8 | 3:
+        case 1<<8 | 5:
           roomname = "Bmnt";
           break;
       }
 
 
-      drawBox(roomname,  X,  Y,boxsize_x,boxsize_y );
+      drawBox(roomname,  X,  Y,boxsize_x,boxsize_y);
         
 
-      X=X+boxsize_x;
+      X=X+boxsize_x+gapx;
     }
-    Y+=boxsize_y;
+    Y+=boxsize_y + gapy;
     X=0;
   }
     tft.setTextColor(FG_COLOR,BG_COLOR);
@@ -1206,7 +1204,7 @@ void fcnDrawSensors(int Y) {
 }
 
 
-void fcnPressureTxt(char* tempPres, uint32_t* fg, uint32_t* bg) {
+void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   // print air pressure
   double tempval = find_sensor_name("Outside", 13); //bme pressure
   if (tempval==255) tempval = find_sensor_name("Outside", 9); //bmp pressure
@@ -1216,12 +1214,12 @@ void fcnPressureTxt(char* tempPres, uint32_t* fg, uint32_t* bg) {
     tempval = Sensors[(byte) tempval].snsValue;
     if (tempval>LAST_BAR+.5) {
       snprintf(tempPres,10,"%dhPa^",(int) tempval);
-      *fg=TFT_RED;
+      *fg=tft.color565(255,0,0);
       *bg=BG_COLOR;
     } else {
       if (tempval<LAST_BAR-.5) {
         snprintf(tempPres,10,"%dhPa_",(int) tempval);
-        *fg=TFT_BLUE;
+        *fg=tft.color565(0,0,255);
         *bg=BG_COLOR;
       } else {
         snprintf(tempPres,10,"%dhPa~",(int) tempval);
@@ -1231,20 +1229,20 @@ void fcnPressureTxt(char* tempPres, uint32_t* fg, uint32_t* bg) {
     }
 
     if (tempval>=1022) {
-      *fg=TFT_RED;
-      *bg=TFT_WHITE;
+      *fg=tft.color565(255,0,0);
+      *bg=tft.color565(255,255,255);
     }
 
     if (tempval<=1000) {
-      *fg=TFT_BLUE;
-      *bg=TFT_WHITE;
+      *fg=tft.color565(0,0,255);
+      *bg=tft.color565(255,0,0);
     }
 
   }
   return;
 }
 
-void fcnPredictionTxt(char* tempPred, uint32_t* fg, uint32_t* bg) {
+void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
 
   double tempval = find_sensor_name("Outside",12);
   if (tempval!=255) tempval = (int) Sensors[(byte) tempval].snsValue;
@@ -1255,11 +1253,11 @@ void fcnPredictionTxt(char* tempPred, uint32_t* fg, uint32_t* bg) {
     switch ((int) tempval) {
       case 3:
         snprintf(tempPred,10,"GALE");
-        *fg=TFT_RED;*bg=TFT_BLACK;
+        *fg=tft.color565(255,0,0);*bg=tft.color565(0,0,0);
         break;
       case 2:
         snprintf(tempPred,10,"WIND");
-        *fg=TFT_RED;*bg=BG_COLOR;
+        *fg=tft.color565(255,0,0);*bg=BG_COLOR;
         break;
       case 1:
         snprintf(tempPred,10,"POOR");
@@ -1275,33 +1273,36 @@ void fcnPredictionTxt(char* tempPred, uint32_t* fg, uint32_t* bg) {
         break;
       case -2:
         snprintf(tempPred,10,"RAIN");
-        *fg=TFT_BLUE;*bg=BG_COLOR;
+        *fg=tft.color565(0,0,255);*bg=BG_COLOR;
 
         break;
       case -3:
         snprintf(tempPred,10,"STRM");
-        *fg=TFT_BLACK;*bg=TFT_CYAN;
+        *fg=tft.color565(255,255,255);
+        *bg=tft.color565(0,255,255);
 
         break;
       case -4:
         snprintf(tempPred,10,"STRM");
-        *fg=TFT_YELLOW;*bg=TFT_CYAN;
+        *fg=tft.color565(255,255,0);
+        *bg=tft.color565(0,255,255);
         break;
       case -5:
         snprintf(tempPred,10,"STRM");
-        *fg=TFT_RED;*bg=TFT_CYAN;
+        *fg=tft.color565(255,0,0);*bg=tft.color565(0,255,255);
         break;
       case -6:
         snprintf(tempPred,10,"GALE");
-        *fg=TFT_YELLOW;*bg=TFT_BLUE;
+        *fg=tft.color565(255,255,0);
+        *bg=tft.color565(0,0,255);
         break;
       case -7:
         snprintf(tempPred,10,"TSTRM");
-        *fg=TFT_RED;*bg=TFT_BLUE;
+        *fg=tft.color565(255,0,0);*bg=tft.color565(0,0,255);
         break;
       case -8:
         snprintf(tempPred,10,"BOMB");
-        *fg=TFT_RED;*bg=TFT_BLUE;
+        *fg=tft.color565(255,0,0);*bg=tft.color565(0,0,255);
         break;
     }
   } 
@@ -1309,25 +1310,53 @@ void fcnPredictionTxt(char* tempPred, uint32_t* fg, uint32_t* bg) {
   return;
 }
 
+void fcnDrawClock(time_t t) {
+
+int Y = tft.height()-CLOCKAREA;
+  tft.fillRect(0,Y,tft.width(),CLOCKAREA,BG_COLOR); //clear the clock area
+
+  //if isflagged, then show rooms with flags. otherwise, show daily weather
+  if (I.isFlagged && I.ScreenNum==1) {
+    fcnDrawSensors(Y);
+    return;
+  }
+  
+
+  //otherwise print time at bottom
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  uint8_t FNTSZ=8;
+  Y = tft.height() - tft.fontHeight(FNTSZ) - 2;
+  int16_t X = tft.width()/2;
+  char tempbuf[32];
+
+  snprintf(tempbuf,31,"%s",dateify(t,"h1:nn"));
+  tft.setTextFont(FNTSZ);
+
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+tft.fontHeight(FNTSZ)/2);
+
+}
+
+
 void fcnDrawWeather(time_t t) {
 
 int X=0,Y = 30,Z=0; //header ends at 30
 int i=0,j=0;
-char tempbuf[32];
+char tempbuf[45];
 uint8_t FNTSZ = 0;
 
 byte deltaY = 0;
-byte section_spacer = 1;
+byte section_spacer = 3;
 
 #ifdef _DEBUG
 Serial.println("main: fcndrawweather reached");
 #endif
 
 
-//draw icon for today
-int iconID = ID2Icon(WeatherData.getDailyWeatherID(0));
-if (t > WeatherData.sunrise  && t< WeatherData.sunset) snprintf(tempbuf,29,"/BMP180x180day/%d.bmp",iconID);
-else snprintf(tempbuf,29,"/BMP180x180night/%d.bmp",iconID);
+//draw icon for NOW
+int iconID = ID2Icon(WeatherData.getWeatherID(0));
+if (t > WeatherData.sunrise  && t< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180dayG/%d.bmp", iconID);
+else snprintf(tempbuf,44,"/BMP180nightG/%d.bmp",iconID);
+
 drawBmp(tempbuf,0,Y);
 
 //add info below icon
@@ -1339,12 +1368,12 @@ if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in nex
   uint32_t nextsnow = WeatherData.nextSnow();
   uint8_t snow =  WeatherData.getSnow() +   WeatherData.getIce();
   if (nextsnow < t + 86400 && snow > 0) {
-      tft.setTextColor(TFT_RED,TFT_WHITE);
+      tft.setTextColor(tft.color565(255,0,0),tft.color565(255,0,0));
       snprintf(tempbuf,30,"Snow@%s %.1f\"",dateify(nextsnow,"hh"),snow);
       fcnPrintTxtCenter(tempbuf,FNTSZ,60,180-7);    
   } else {
     if (rain>0 && nextrain< t + 86400 ) {
-      tft.setTextColor(TFT_YELLOW,TFT_BLUE);
+      tft.setTextColor(tft.color565(255,255,0),tft.color565(0,0,255));
       snprintf(tempbuf,30,"Rain@%s",dateify(Next_Precip,"hh:nn"));
       if (FNTSZ==0) deltaY = 8;
       else deltaY = tft.fontHeight(FNTSZ);
@@ -1399,7 +1428,7 @@ int temp0;
   Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
 
 //print pressure info
-  uint32_t fg,bg;
+  uint16_t fg,bg;
   FNTSZ = 4;
   tempbuf[0]=0;
   fcnPredictionTxt(tempbuf,&fg,&bg);
@@ -1429,7 +1458,7 @@ int temp0;
     else snprintf(tempbuf,20,"PoP: %u%%",WeatherData.getDailyPoP(0));
   }
 
-    if (WeatherData.getDailyPoP(0)>50)  tft.setTextColor(TFT_RED,TFT_BLUE);
+    if (WeatherData.getDailyPoP(0)>50)  tft.setTextColor(tft.color565(255,0,0),tft.color565(0,0,255));
     else tft.setTextColor(FG_COLOR,BG_COLOR);
     fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+deltaY/2);
   Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
@@ -1437,14 +1466,7 @@ int temp0;
 //end current wthr
 
 
-//if isflagged, then show rooms with flags. otherwise, show daily weather
-  if (I.isFlagged && I.ScreenNum==1) {
-    fcnDrawSensors(30+120+section_spacer);
-    return;
-  }
-  
-  //otherwise draw weather icons, starting with hourly 
-  Y = 30+180+10;
+  Y = 30+180+section_spacer;
   tft.setCursor(0,Y);
 
   FNTSZ = 4;
@@ -1453,7 +1475,7 @@ int temp0;
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
   for (i=1;i<7;i++) { //draw 6 icons, with HourlyInterval hours between icons. Note that index 1 is  1 hour from now
-    if (i*HourlyInterval>23) break; //safety check if user asked for too large an interval (probably 4 or more)... cannot display past 24 at present
+    if (i*HourlyInterval>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
     
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
@@ -1463,6 +1485,12 @@ int temp0;
     #endif
     if (t+i*HourlyInterval*3600 > WeatherData.sunrise  && t+i*HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
     else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
+    #ifdef _DEBUG
+      Serial.printf("time of icon is %d and sunrise - sunset is %d - %d\n",t+i*HourlyInterval*3600,WeatherData.sunrise,WeatherData.sunset);
+    
+      Serial.printf("drawing icon #%i, which is id %u located at %s\n",i,iconID,tempbuf);
+    #endif
+    
     drawBmp(tempbuf,X,Y);
     Z+=30;
 
@@ -1480,15 +1508,13 @@ int temp0;
     tft.setTextFont(FNTSZ); //med font
     fcnPrintTxtColor(WeatherData.getTemperature(t + i*HourlyInterval*3600),FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    Z+=tft.fontHeight(FNTSZ);
+    Z+=tft.fontHeight(FNTSZ)+section_spacer;
   }
   tft.setTextColor(FG_COLOR,BG_COLOR);
   Y+=Z;
 
 
 //now draw daily weather
-Y+=5;
-
   tft.setCursor(0,Y);
  
   for (i=1;i<6;i++) {
@@ -1506,7 +1532,7 @@ Y+=5;
     snprintf(tempbuf,31,"%s",dateify(now()+i*60*60*24,"DOW"));
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+tft.fontHeight(FNTSZ)/2);
     
-    Z+=tft.fontHeight(FNTSZ)+section_spacer;
+    Z+=tft.fontHeight(FNTSZ);
 
     tft.setTextFont(FNTSZ);
     WeatherData.getDailyTemp(i,tempMm);
@@ -1517,23 +1543,12 @@ Y+=5;
     
     Z+=tft.fontHeight(FNTSZ)+section_spacer;
     
-    j+=45;
   }
 
   Y+=Z;
 
  tft.setCursor(0,Y);
  
-//print time at bottom
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  FNTSZ=8;
-  Y = tft.height() - tft.fontHeight(FNTSZ) - 2;
-  X = tft.width()/2;
-  snprintf(tempbuf,31,"%s",dateify(t,"hh:nn"));
-  tft.setTextFont(FNTSZ);
-
-  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+tft.fontHeight(FNTSZ)/2);
-
   
 }
 
@@ -1559,8 +1574,13 @@ void loop() {
     //do stuff every minute
 
     I.isFlagged = false;
+    
     if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means only flag for soil or temp or battery
     
+    #ifdef _DEBUG
+    Serial.printf("Flagged sensors = %d\n",countFlagged(-1,B00000111,B00000011,0));
+    Serial.printf("isflagged = %s\n",(I.isFlagged == true)?"T":"F");
+    #endif
     checkHeat(); //this updates I.isheat and I.isac
 
     I.isSoilDry = false;
@@ -1577,7 +1597,7 @@ void loop() {
 
 
     I.redraw = 0;
-
+    I.lastDraw=0;
     if(WiFi.status()== WL_CONNECTED){
       I.wifi=10;
     } else {
@@ -1599,7 +1619,7 @@ void loop() {
   }
 
   if (OldTime[3] != weekday()) {
-    if (ALIVESINCE-t > 604800) ESP.restart(); //reset every week
+    if ((uint32_t) t-ALIVESINCE > 604800) ESP.restart(); //reset every week
     
     OldTime[3] = weekday();
   }

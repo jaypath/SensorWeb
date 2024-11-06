@@ -21,6 +21,12 @@
 // drawing
 #define NUMSCREEN 2
 
+//weather
+//wellesley, MA
+#define LAT 42.30210392783453  //only 4 decimal pts
+#define LON -71.29822225979105 //only 4 decimal pts allowed with NOAA
+
+
 struct Screen {
     uint8_t wifi;
     uint8_t redraw;

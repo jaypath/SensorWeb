@@ -13,16 +13,6 @@ char DATESTRING[25]="";
 
 
 
-bool checkTime(void) {
-
-  uint32_t td = now(); 
-  
-  if ( WifiStatus()  && (td>2208992400 || td<1704070800)) return false;
-  return true;
-
-}
-
-
 //Time fcn
 bool updateTime(byte retries,uint16_t waittime) {
   bool isgood = timeClient.update();
@@ -46,6 +36,7 @@ bool updateTime(byte retries,uint16_t waittime) {
 }
 
 void checkDST(void) {
+   DSTOFFSET = 0; //starting default
   timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET);
   setTime(timeClient.getEpochTime());
   
@@ -56,32 +47,53 @@ void checkDST(void) {
 #endif
 
 
+
 //check if time offset is EST (-5h) or EDT (-4h)
-int m = month(n);
-int d = day(n);
-int dow = weekday(n); //1 is sunday
+  int m=month();
 
   if (m > 3 && m < 11) DSTOFFSET = 3600;
   else {
     if (m == 3) {
       //need to figure out if it is past the second sunday at 2 am
-      if (d<8) DSTOFFSET = 0;
-      else {
-        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
-        else {
-          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is  the second sunday or more
-          else DSTOFFSET = 0;
-        }
-      }
+
+      time_t m1 = makeUnixTime(year(),month(),7,2,0,0); //this is the last day of the first week of March at 2 am. We want second sunday at 2 am
+      if (n< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
+      else DSTOFFSET = 3600;
+
+      //7-weekday(m1)+1 is the next sunday 
+      /*explanation:
+        weekday(m1) //is the weekday of m1, the last day of the first week. If it is Sunday (1), then add 7 to get to the second sunday...
+        if it is 1, then add 7 = 7-weekday(m1)+1
+        if it is 2, then add 6 = 7-weekday(m1)+1
+        if it is 3 then add 5 = 7-weekday(m1)+1
+        if it is 4 then add 4 = 7-weekday(m1)+1
+        if it is 5 then add 3 = 7-weekday(m1)+1
+        if it is 6 then add 2 = 7-weekday(m1)+1
+        if it is 7 then add 1 = 7-weekday(m1)+1
+      */
+
     }
 
     if (m == 11) {
       //need to figure out if it is past the first sunday at 2 am
-      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
-      else {
-        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
-        else DSTOFFSET = 3600;
-      }
+      time_t m1 = makeUnixTime(year(),month(),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
+      if (weekday(m1)>1) m1 += (7-(weekday(m1)-1))*86400; //this is the first sunday of the month.
+      if (n< m1) DSTOFFSET = 3600; //still in the summer timezone
+      else DSTOFFSET = 0;
+
+    /*explanation...
+      if weekday(m1) is 1 then it is sunday, add 0
+      if 2 then Monday, add 6
+      if 3 then Tue, add 5
+      ... +4
+      +3
+      +2
+      +1
+
+      so that is 7 - (weekday(m1)-1)
+
+    */
+      
     }
   }
 
@@ -94,7 +106,18 @@ int dow = weekday(n); //1 is sunday
 }
 
 
-String fcnDOW(time_t t) {
+
+String fcnDOW(time_t t, bool caps) {
+  if (caps) {
+    if (weekday(t) == 1) return "SUN";
+    if (weekday(t) == 2) return "MON";
+    if (weekday(t) == 3) return "TUE";
+    if (weekday(t) == 4) return "WED";
+    if (weekday(t) == 5) return "THU";
+    if (weekday(t) == 6) return "FRI";
+    if (weekday(t) == 7) return "SAT";
+
+  } else {
     if (weekday(t) == 1) return "Sun";
     if (weekday(t) == 2) return "Mon";
     if (weekday(t) == 3) return "Tue";
@@ -102,38 +125,74 @@ String fcnDOW(time_t t) {
     if (weekday(t) == 5) return "Thu";
     if (weekday(t) == 6) return "Fri";
     if (weekday(t) == 7) return "Sat";
-
+  }
     return "???";
 }
+
+
 
 char* dateify(time_t t, String dateformat) {
   if (t==0) t = now();
 
   char holder[5] = "";
 
-  snprintf(holder,5,"%02d",month(t));
+  snprintf(holder,4,"%02d",month(t));
   dateformat.replace("mm",holder);
   
-  snprintf(holder,5,"%02d",day(t));
+  snprintf(holder,4,"%02d",day(t));
   dateformat.replace("dd",holder);
   
   snprintf(holder,5,"%02d",year(t));
   dateformat.replace("yyyy",holder);
   
-  snprintf(holder,5,"%02d",year(t)-2000);
+  snprintf(holder,4,"%02d",year(t)-2000);
   dateformat.replace("yy",holder);
   
-  snprintf(holder,5,"%02d",hour(t));
+  snprintf(holder,4,"%02d",hour(t));
   dateformat.replace("hh",holder);
 
-  snprintf(holder,5,"%02d",minute(t));
+  snprintf(holder,4,"%d",hour(t));
+  dateformat.replace("h1",holder);
+
+  snprintf(holder,4,"%d",hourFormat12(t));
+  dateformat.replace("H",holder);
+
+  snprintf(holder,4,"%02d",minute(t));
   dateformat.replace("nn",holder);
 
-  snprintf(holder,5,"%02d",second(t));
+  snprintf(holder,4,"%02d",second(t));
   dateformat.replace("ss",holder);
+
+  snprintf(holder,4,"%s",fcnDOW(t,true).c_str());
+  dateformat.replace("DOW",holder);
+
+  snprintf(holder,4,"%s",fcnDOW(t,false).c_str());
+  dateformat.replace("dow",holder);
+
+  if (dateformat.indexOf("XM")>-1) dateformat.replace("XM",(isPM(t)==true)?"PM":"AM");
   
   snprintf(DATESTRING,25,"%s",dateformat.c_str());
   
   return DATESTRING;  
 }
 
+
+time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
+  //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
+
+  int16_t y = 2000;
+
+  if (yy>=70) y = 1900+yy;
+  else y=2000+yy;
+
+  tmElements_t unixTime;
+
+  unixTime.Year = y-1970; //years since 1970
+  unixTime.Month = m;
+  unixTime.Day = d;
+  unixTime.Hour = h;
+  unixTime.Minute = n;
+  unixTime.Second = s;
+
+  return makeTime(unixTime);
+}

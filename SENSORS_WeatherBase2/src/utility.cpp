@@ -1,3 +1,4 @@
+//#define _DEBUG
 #include <utility.hpp>
 #include <FS.h>
 
@@ -319,6 +320,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 byte count =0;
 int snsArr[10] = {0}; //this is for special cases
 
+
 if (snsType == -1) { //critical sensors, all types
 snsArr[0] = 1; 
 snsArr[1] = 4;
@@ -358,15 +360,24 @@ snsArr[8] = -1;
 snsArr[9] = -1;
 } 
 
+#ifdef _DEBUG
+        Serial.printf("ISFLAGGED reached");
+      #endif
 
 
   for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) 
-      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
-        if (snsType==3 && bitRead(Sensors[j].Flags,5)) { //regardless of flagsthatmatter, soil is only a concern if reading is high (dry)... wet is never a concern
-          if (Sensors[j].timeLogged> MoreRecentThan) count++;
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
+      #ifdef _DEBUG
+        if (Sensors[j].snsType==4)         Serial.printf("ISFLAGGED if %d == %d (sens & flagsthatmatter) == (flagsthatmatter & flagsettings)\n",(Sensors[j].Flags & flagsthatmatter),(flagsthatmatter & flagsettings));
+      #endif
+      if ((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings)) {
+        if (snsType==3) {
+          if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
+        } else {
+          if (Sensors[j].timeLogged> MoreRecentThan) count++;          
         }
       }
+    }
   }
 
   return count;

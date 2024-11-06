@@ -757,7 +757,7 @@ bool WeatherInfo::updateWeather()
         http.end();
     }
 
-    if (day(tnow) != day(this->lastUpdateT)) //also update sun once a day
+    if (this->lastUpdateT > this->sunset || this->lastUpdateT == 0) //update sunrise/sunset when we are past the sunset time
     {
         uint8_t cnt=0; 
         char cbuf[100];
@@ -781,11 +781,12 @@ bool WeatherInfo::updateWeather()
                 JsonObject properties = doc["results"];
                 const char* srise = properties["sunrise"];
                 const char* sset = properties["sunset"];
+                const char* sdat = properties["date"];
 
-                String sun = (String) srise;
+                String sun = (String) sdat + " " + (String) srise;
                 this->sunrise = convertStrTime(sun);
 
-                sun = (String) sset;
+                sun = (String) sdat + " " + (String) sset;
                 this->sunset = convertStrTime(sun);
             }
         } 

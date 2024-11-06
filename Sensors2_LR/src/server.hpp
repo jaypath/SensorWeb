@@ -57,6 +57,7 @@ void initHVAC(void);
 void SerialWrite(String);
 bool WifiStatus(void);
 bool Server_Message(String URL, String* payload, int* httpCode);
+void handleREBOOT(void);
 void handleRoot(void);
 void handleNotFound(void);
 void handleSETTHRESH(void);

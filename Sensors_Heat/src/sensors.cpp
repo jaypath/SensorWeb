@@ -685,10 +685,9 @@ int peak_to_peak(int pin, int ms) {
 
 
 bool ReadData(struct SensorVal *P) {
-  if (checkTime()==false) return false;
-
+  
   time_t t=now();
-
+  byte nsamps;
   double val;
   bitWrite(P->Flags,0,0);
 
@@ -971,10 +970,12 @@ bool ReadData(struct SensorVal *P) {
 
         //take n measurements, and average
         val=0;
-        for (byte j=0;j<3;j++) {
+        nsamps=1; //number of samples to average
+
+        for (byte j=0;j<nsamps;j++) {
           val += peak_to_peak(P->snsPin,50);
         }
-        val = val/3; //average
+        val = val/nsamps; //average
         
         if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
 
@@ -994,10 +995,12 @@ bool ReadData(struct SensorVal *P) {
       case 56: //aircon compressor
         //take n measurements, and average
         val=0;
-        for (byte j=0;j<3;j++) {
+        nsamps=1; //number of samples to average
+        
+        for (byte j=0;j<nsamps;j++) {
           val += peak_to_peak(P->snsPin,50);
         }
-        val = val/3; //average
+        val = val/nsamps; //average
         
         if (val > P->limitUpper) P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
           
@@ -1014,10 +1017,12 @@ bool ReadData(struct SensorVal *P) {
       case 57: //aircon fan
         //take n measurements, and average
         val=0;
-        for (byte j=0;j<3;j++) {
+        nsamps=1; //number of samples to average
+        
+        for (byte j=0;j<nsamps;j++) {
           val += peak_to_peak(P->snsPin,50);
         }
-        val = val/3; //average
+        val = val/nsamps; //average
         
         if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the ac was on
 

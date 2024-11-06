@@ -6,8 +6,9 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
-//#define _WEBCHART 2
+#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
+//#define _WEBCHART 2
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
@@ -129,7 +130,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 */
 
-
+//for calibrating current sensor
 #ifdef _USECALIBRATIONMODE
   #define _NUMWEBCHARTPNTS 50
   const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {36, 39, 34, 35,32,33}; //which pins should be stored for charting?
