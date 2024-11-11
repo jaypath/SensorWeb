@@ -32,6 +32,9 @@ uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
 void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
 
+String IPbytes2String(byte* IP);
+bool IPString2ByteArray(String IPstr,byte* IP) ;
+bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 
 
 #endif

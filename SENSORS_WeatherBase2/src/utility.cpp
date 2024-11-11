@@ -204,10 +204,13 @@ int16_t findOldestDev() {
 }
 
 void initSensor(int k) {
-  //special cases... k>255 then expire any sensor that is older than k mimnutes
+  //special cases... k>255 then expire any sensor that is older than k MINUTES
   //k<0 then init ALL sensors
+
+
+
   if (k<-255 || k>255) {
-    if (k<-255)     for (byte i=0;i<SENSORNUM;i++) initSensor(i);
+    if (k<-255)     for (byte i=0;i<SENSORNUM;i++) initSensor(i); //initialize everything.
     else {
       time_t t=now();
 
@@ -218,8 +221,10 @@ void initSensor(int k) {
     return;
   }
 
-  snprintf(Sensors[k].snsName,30,"");
-  Sensors[k].IP = (0,0,0,0);
+  if (k<0) return; //index was invalid
+
+  Sensors[k].snsName[0]=0;
+  for (byte ii=0;ii<4;ii++) Sensors[k].IP[ii]=0;
   Sensors[k].ardID=0;
   Sensors[k].snsType=0;
   Sensors[k].snsID=0;
@@ -246,30 +251,20 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
   //if no finddev and oldest = false, will return -1
   
   if (S->snsID==0) {
-        #ifdef _DEBUG
-          Serial.println("FINDDEV: you passed a zero index.");
-        #endif
+        
 
     return -1;  //can't find a 0 id sensor!
   }
   for (int j=0;j<SENSORNUM;j++)  {
       if (Sensors[j].ardID == S->ardID && Sensors[j].snsType == S->snsType && Sensors[j].snsID == S->snsID) {
-        #ifdef _DEBUG
-          Serial.print("FINDDEV: I foud this dev, and the index is: ");
-          Serial.println(j);
-        #endif
-        
+                
         return j;
       }
     }
     
 //if I got here, then nothing found.
   if (oldest) {
-  #ifdef _DEBUG
-    Serial.print("FINDDEV: I didn't find the registered dev. the index to the oldest element is: ");
-    Serial.println(findOldestDev());
-  #endif
-
+  
     return findOldestDev();
   } 
 
@@ -281,10 +276,7 @@ int16_t findSns(byte snstype, bool newest) {
   //returns -1 if no sensor found
   
   if (snstype==0) {
-        #ifdef _DEBUG
-          Serial.println("FINDDEV: you passed a zero index.");
-        #endif
-
+        
     return -1;  //can't find a 0 id sensor!
   }
 
@@ -296,13 +288,6 @@ int16_t findSns(byte snstype, bool newest) {
         if (newest==false) return j;
         newestInd = j;
         newestTime = Sensors[j].timeLogged;
-
-
-        #ifdef _DEBUG
-          Serial.print("FINDSNS: I foud this dev, and the index is: ");
-          Serial.println(j);
-        #endif
-
       }
   }
         
@@ -360,16 +345,10 @@ snsArr[8] = -1;
 snsArr[9] = -1;
 } 
 
-#ifdef _DEBUG
-        Serial.printf("ISFLAGGED reached");
-      #endif
-
 
   for (byte j = 0; j<SENSORNUM; j++) {
     if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
-      #ifdef _DEBUG
-        if (Sensors[j].snsType==4)         Serial.printf("ISFLAGGED if %d == %d (sens & flagsthatmatter) == (flagsthatmatter & flagsettings)\n",(Sensors[j].Flags & flagsthatmatter),(flagsthatmatter & flagsettings));
-      #endif
+      
       if ((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings)) {
         if (snsType==3) {
           if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
@@ -401,4 +380,69 @@ String breakString(String *inputstr,String token) //take a pointer to input stri
   *inputstr = orig;
   return outputstr;
 
+}
+
+
+// IP fcns
+String IPbytes2String(byte* IP) {
+//reconstruct a string from 4 bytes. If the first or second element is 0 then use 192 or 168
+  String IPs = "";
+
+  for (byte j=0;j<3;j++){
+    if (IP[j] ==0) {
+      if (j==0) IPs = IPs + String(192,DEC) + ".";
+      else {
+        if (j==1)         IPs = IPs + String(168,DEC) + ".";
+        else IPs = IPs + String(0,DEC) + ".";
+      }
+    } 
+    else     IPs = IPs + String(IP[j],DEC) + ".";
+  }
+
+  IPs = IPs + String(IP[3],DEC);
+  return IPs;
+}
+
+bool IPString2ByteArray(String IPstr,byte* IP) {
+        
+    String temp;
+    
+    int strOffset; 
+    IPstr = IPstr + "."; //need the string to end with .
+    for(byte j=0;j<4;j++) {
+      strOffset = IPstr.indexOf(".", 0);
+      if (strOffset == -1) { //did not find the . , IPstr not correct. abort.
+        return false;
+      } else {
+        temp = IPstr.substring(0, strOffset);
+        IP[j] = (uint8_t) temp.toInt();
+        IPstr.remove(0, strOffset + 1);
+      }
+    }
+    
+    return true;
+}
+
+
+bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
+    
+    String temp;
+    
+    int strOffset = logID.indexOf(".", 0);
+    if (strOffset == -1) { //did not find the . , logID not correct. abort.
+      return false;
+    } else {
+      temp = logID.substring(0, strOffset);
+      *ardID = temp.toInt();
+      logID.remove(0, strOffset + 1);
+
+      strOffset = logID.indexOf(".", 0);
+      temp = logID.substring(0, strOffset);
+      *snsID = temp.toInt();
+      logID.remove(0, strOffset + 1);
+
+      *snsNum = logID.toInt();
+    }
+    
+    return true;
 }

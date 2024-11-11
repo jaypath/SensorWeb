@@ -1,8 +1,8 @@
-//#define _DEBUG
 #include <Weather.hpp>
 #include <ArduinoJson.h>
 #include <timesetup.hpp>
 #include <server.hpp>
+
 
 
 uint8_t WeatherInfo::getIndex(time_t dT)
@@ -50,9 +50,6 @@ int16_t WeatherInfo::getWeatherID(uint32_t dt)
 
     //return hourly ID, so long as request is within limits
     byte i = getIndex(dt);
-    #ifdef _DEBUG
-        Serial.printf("getWEatherID: the index for dt=%u is %u, and the weatherID is %i\n",dt,i,this->weatherID[i]);
-    #endif
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -269,13 +266,6 @@ time_t WeatherInfo::breakNOAATimestamp(String tm)
     uint8_t n = (byte) tm.substring(14,16).toInt();
     uint8_t s = (byte) tm.substring(17,19).toInt();
 
-/*
-    #ifdef _DEBUG
-        time_t t = makeUnixTime(y,m,d,h,n,s);
-        Serial.printf("breakNOAATimestamp: I received this timestamp <%s> and broke it to y=%u, m=%u, d=%u, h=%u, n=%u, s=%u.\n", tm.c_str(), y,m,d,h,n,s);
-        Serial.printf("breakNOAATimestamp: I  converted it to this dT <%u> which maps to <%s>\n", t, dateify(t,"mm/dd/yyyy hh:nn:ss"));
-    #endif
-    */
 
     return makeUnixTime(y,m,d,h,n,s);
 
@@ -327,10 +317,7 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
             return 201;
         } else {
             byte total = this->getDailyRain(starttime,endtime);
-            #ifdef _DEBUG
-            Serial.printf("breakicon: total daily rain for day %d is %d\n",starttime,total);
-            #endif
-
+            
             //note that these are 1/2 day totals
             if (total<5) return 200;
             return 201;
@@ -468,34 +455,53 @@ void WeatherInfo::getDailyTemp(uint8_t daysfromnow, int8_t* temp){
 }
 
 
-bool WeatherInfo::updateWeather() 
+bool WeatherInfo::updateWeather(uint16_t synctime) 
 {
+
     time_t tnow = now();
-    if (this->lastUpdateT+3600 > tnow || (this->lastUpdateStatus==false && this->lastUpdateAttempt+30 > tnow)) return false; //not time to update
-    
-    this->lastUpdateAttempt = tnow;
+    if (this->lastUpdateT+synctime > tnow) return false; //not time to update
+    if ((bool) this->lastUpdateStatus==false && (uint32_t) this->lastUpdateAttempt+30 > tnow) return false; //last update failed and was at least 30s ago
+
+    #ifdef _DEBUG
+Serial.printf("Updateweather: init...");
+    #endif
 
     initWeather();
+
+    this->lastUpdateStatus=false;
+    this->lastUpdateAttempt = tnow;
+
 
     bool isgood = false;
     String url;
     JsonDocument doc;
     int httpCode;
 
+    #ifdef _DEBUG
+Serial.printf(" done at %s.\n",dateify(tnow));
+    #endif
 
-    if (this->Grid == "") {
+
+    if (this->Grid_x == 0 && this->Grid_y == 0) {
+        #ifdef _DEBUG
+            Serial.printf("updateweather: get grid points\n");                
+        #endif
+
         //get NOAA grid coordinates by API call ( NOAA uses specific geolocation, not zip or lon/lat)
         //https://api.weather.gov/points/lat,lon
         char cbuf[100];
         snprintf(cbuf,99,"https://api.weather.gov/points/%.4f,%.4f",this->lat,this->lon);
         url =  (String) cbuf;
-        this->Grid = url;
         String ca_cert = getCert("/Certificates/NOAA.crt");
-            #ifdef _DEBUG
-                Serial.printf("update weather size of NOAA Certificate:%u\n",ca_cert.length());                
-            #endif
 
-        if (Server_SecureMessage(url, WEBHTML, httpCode, ca_cert)==false) return false; //failed
+        if (Server_SecureMessage(url, WEBHTML, httpCode, ca_cert)==false) {
+
+            #ifdef _DEBUG
+                    Serial.printf("updateweather: failed to update grid points\n");                
+            #endif
+            return false; //failed
+
+        }
 
         DeserializationError error = deserializeJson(doc, WEBHTML);
         if (error) {
@@ -503,15 +509,14 @@ bool WeatherInfo::updateWeather()
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
-    
+            
             return false;
         }
 
-        const char* gridid = doc["properties"]["gridId"];
-        int gridx = doc["properties"]["gridX"];
-        int gridy = doc["properties"]["gridY"];
+        strcpy(this->Grid_id, doc["properties"]["gridId"]);
+        this->Grid_x = doc["properties"]["gridX"];
+        this->Grid_y = doc["properties"]["gridY"];
             
-        this->Grid  = "https://api.weather.gov/gridpoints/" + (String) gridid + "/" + (String) gridx + "," + (String) gridy;
 
     }
     
@@ -523,7 +528,14 @@ bool WeatherInfo::updateWeather()
     //forecast/hourly
     //this has hourly data including wind,temp, dewpoint, humidity, PoP, weatherID
     // EX: https://api.weather.gov/gridpoints/BOX/64,86/forecast/hourly
-    url = this->Grid + "/forecast/hourly";
+    
+    
+
+    url = this->getGrid(2); //forecast/hourly
+    #ifdef _DEBUG
+    Serial.printf("updateweather: get hourly used this URL: %s\n", url.c_str());                
+    #endif
+
     //due to the size of return, will need to process the stream rather than a stored copy
     
     if(WiFi.status()== WL_CONNECTED){
@@ -545,6 +557,7 @@ bool WeatherInfo::updateWeather()
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
+            
             return false;
         }
         JsonObject properties = doc["properties"];
@@ -596,7 +609,11 @@ bool WeatherInfo::updateWeather()
 
 
     if(WiFi.status()== WL_CONNECTED){
-        url = this->Grid;
+        url = getGrid(0);
+        #ifdef _DEBUG
+        Serial.printf("updateweather: get forecast used this URL: %s\n", url.c_str());                
+        #endif
+
         HTTPClient http;
         WiFiClientSecure wfclient;
         String ca_cert = getCert("/Certificates/NOAA.crt");
@@ -615,6 +632,7 @@ bool WeatherInfo::updateWeather()
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
+            
             return false;
         }
 
@@ -626,7 +644,7 @@ bool WeatherInfo::updateWeather()
             String tmp = value_validTime;
             uint32_t dt = breakNOAATimestamp(tmp);
     
-            byte i = getIndex(dt);
+            byte i = getIndex(dt); //note that this may be in the future, and may have gaps
 //            this->wetBulbTemperature[i] = int8_t ((double) (9*properties_temperature_value["value"])/5+32); // in C, convert to F
 
             while (cnt<=i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
@@ -636,6 +654,7 @@ bool WeatherInfo::updateWeather()
                 cnt++;
             }
 
+            if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
 
         }
 
@@ -653,7 +672,8 @@ bool WeatherInfo::updateWeather()
                 if (this->rainmm[cnt]>0) this->flag_rain = true;
                 cnt++;
             }
-            
+            if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
+
         }
 
         cnt=0; 
@@ -664,13 +684,14 @@ bool WeatherInfo::updateWeather()
     
             byte i = getIndex(dt);
 
-            while (cnt<i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
+            while (cnt<=i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
 
                 this->icemm[cnt] = uint8_t ((double) properties_value["value"]); // 17.7777777777778, ...
                 if (this->icemm[cnt]>0) this->flag_ice = true;
                 cnt++;
             }
+            if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
 
         }
 
@@ -688,6 +709,7 @@ bool WeatherInfo::updateWeather()
                 if (this->snowmm[cnt]>0) this->flag_snow = true;
                 cnt++;                            
             }
+            if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
 
         }            
 
@@ -696,11 +718,14 @@ bool WeatherInfo::updateWeather()
     }
 
 
-
-    //NOAA weather API forecast (daily) has daily max min temp and pop and icon (pop and icon are only here in this file)
+    //NOAA weather API forecast (daily) has daily max min temp and pop and icon (pop and icon are only  in this file)
     // EX: https://api.weather.gov/gridpoints/BOX/64,86/forecast
     //pull forecast, which has day and night weatherID in icon, dailyTmax, dailyTmin, PoP (with 0 as Null)
-    url = this->Grid + "/forecast";
+        url = getGrid(1);
+        #ifdef _DEBUG
+    Serial.printf("updateweather: get daily used this URL: %s\n", url.c_str());                
+    #endif
+
     if(WiFi.status()== WL_CONNECTED){
         HTTPClient http;
         WiFiClientSecure wfclient;
@@ -720,6 +745,7 @@ bool WeatherInfo::updateWeather()
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
+            
             return false;
         }
 
@@ -748,6 +774,7 @@ bool WeatherInfo::updateWeather()
             
             const char* properties_period_icon = properties_value["icon"];
             tmp = properties_period_icon;
+
             this->daily_weatherID[cnt] =  breakIconLink(tmp,this->daily_dT[cnt],this->daily_dT[cnt]+43200);
 
             cnt++;
@@ -759,7 +786,10 @@ bool WeatherInfo::updateWeather()
 
     if (this->lastUpdateT > this->sunset || this->lastUpdateT == 0) //update sunrise/sunset when we are past the sunset time
     {
-        uint8_t cnt=0; 
+        #ifdef _DEBUG
+            Serial.printf("updateweather: get sunrise/sunset\n");                
+        #endif
+
         char cbuf[100];
         snprintf(cbuf,99,"https://api.sunrisesunset.io/json?lat=%f&lng=%f",this->lat,this->lon);
         url = (String) cbuf;
@@ -767,15 +797,12 @@ bool WeatherInfo::updateWeather()
         
         if (Server_SecureMessage(url, WEBHTML, httpCode,cacert)) //this is a small doc, can fully download and process here
         {
-            #ifdef _DEBUG
-                Serial.printf("updateWeather: sunriseio returned:\n%s\n",WEBHTML.c_str());
-                
-            #endif
             //failure here does not result in critical failure
             DeserializationError error = deserializeJson(doc, WEBHTML);
             #ifdef _DEBUG
-                Serial.printf("updateWeather: sunriseio parse: %s\n",error.c_str());
-                
+                if (error) {
+                    Serial.printf("updateWeather: sunriseio failed deserialize: %s\n",error.c_str());
+                }                
             #endif
             if (!error) {
                 JsonObject properties = doc["results"];
@@ -790,14 +817,19 @@ bool WeatherInfo::updateWeather()
                 this->sunset = convertStrTime(sun);
             }
         } 
-         #ifdef _DEBUG
-                Serial.printf("updateWeather: sunrise: %u\n",this->sunrise);
-                
-            #endif
     }
 
     this->lastUpdateT = tnow; //mark the last successful update
     this->lastUpdateStatus = true;
 
     return true;
+}
+
+String WeatherInfo::getGrid(uint8_t fc) {
+    
+    if (fc==1) return (String) "https://api.weather.gov/gridpoints/" + (String) this->Grid_id + "/" + (String) this->Grid_x + "," + (String) this->Grid_y + (String) "/forecast";      
+    if (fc==2) return (String) "https://api.weather.gov/gridpoints/" + (String) this->Grid_id + "/" + (String) this->Grid_x + "," + (String) this->Grid_y + (String) "/forecast/hourly";      
+
+    return (String) "https://api.weather.gov/gridpoints/" + (String) this->Grid_id + "/" + (String) this->Grid_x + "," + (String) this->Grid_y ;
+
 }

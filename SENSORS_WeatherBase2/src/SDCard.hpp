@@ -5,8 +5,10 @@
 #include <utility.hpp>
 #include <globals.hpp>
 
+//declared as global constants
+extern SensorVal Sensors[SENSORNUM];
 
 
-bool writeSensorSD(struct SensorVal &S, String filename);
-
+bool writeSensorSD( String filename);
+bool readSensorSD(String filename);
 #endif

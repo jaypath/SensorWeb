@@ -1,6 +1,7 @@
 #ifndef SERVER_HPP
 #define SERVER_HPP
 
+//#define _DEBUG 0
 
 #include <Arduino.h>
 #include <timesetup.hpp>
@@ -42,6 +43,10 @@ extern double LAST_BAR;
 extern uint8_t SECSCREEN;
 extern uint8_t HourlyInterval;
 
+#ifdef _DEBUG
+extern uint16_t TESTRUN;
+extern uint32_t WTHRFAIL;
+#endif
 
 
 extern WiFi_type WIFI_INFO;
@@ -63,9 +68,6 @@ void handleCLEARSENSOR();
 void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
 void handleUPDATEDEFAULTS();
-String IP2String(byte* IP);
-bool IPString2ByteArray(String IPstr,byte* IP);
-bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 bool SendData(struct SensorVal*);
 byte connectWiFi();
 

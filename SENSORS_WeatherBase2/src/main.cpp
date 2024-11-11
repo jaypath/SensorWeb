@@ -1,5 +1,3 @@
-//#define _DEBUG 0
-//#define _WEBDEBUG 0
 
 
 //Version 12 - 
@@ -82,7 +80,6 @@
   String WEBDEBUG = "";
 #endif
 
-const byte CLOCKAREA = 105;
 //gen global types
 
 /*
@@ -115,24 +112,34 @@ extern WiFi_type WIFI_INFO;
 extern Screen I;
 extern String WEBHTML;
 extern time_t ALIVESINCE;
-extern uint8_t OldTime[4];
+//extern uint8_t OldTime[4];
 extern WeatherInfo WeatherData;
 extern SensorVal Sensors[SENSORNUM];
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
 extern double LAST_BAR;
 
+uint32_t FONTHEIGHT = 0;
+
+
+//time
+uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
+
+
 //fuction declarations
+
 uint16_t set_color(byte r, byte g, byte b);
 uint16_t read16(File &f);
 uint32_t read32(File &f);
+uint32_t setFont(uint8_t FNTSZ);
 int ID2Icon(int); //provide a weather ID, obtain an icon ID
 void drawBmp(const char*, int16_t, int16_t, uint16_t alpha = TRANSPARENT_COLOR);
 void fcnDrawHeader(time_t t);
 void fcnDrawClock(time_t t);
-void fcnDrawScreen();
+void fcnDrawScreen(time_t t);
 void fcnDrawWeather(time_t t);
 void fcnDrawSensors(int Y);
+void fncDrawCurrentCondition(time_t t);
 void fcnPrintTxtHeatingCooling(int x,int y);
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ,int x=-1,int y=-1,bool autocontrast = false);
 void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1,bool autocontrast=false);
@@ -144,43 +151,29 @@ uint16_t temp2color(int temp, bool invertgray = false);
 
 
 
-
 void setup()
 {
   WEBHTML.reserve(7000); 
+  #ifdef _DEBUG
+    Serial.begin(115200);
+
+  #endif
+
+
+  #ifdef _DEBUG
+    Serial.print("SPI begin and screen begin... ");
+  #endif
 
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
 tft.init();
 
+  #ifdef _DEBUG
+    Serial.println("ok ");
+  #endif
+
   // Setting display to landscape
   tft.setRotation(2);
 
-  
-  tft.printf("Running setup\n");
-
-  if(!SD.begin(41)){  //CS=41
-    tft.println("SD Mount Failed");
-  } 
-  else {
-    tft.println("SD Mount Succeeded");
-  }
-
-
-  I.lastDraw = 0;
-  I.ScreenNum = 0;
-  I.redraw = SECSCREEN; 
-  I.isFlagged = false;
-  I.wasFlagged = false;
-  WeatherData.lat = LAT;
-  WeatherData.lon = LON;
-  
-
-
-  #ifdef _DEBUG
-    Serial.begin(115200);
-  #endif
-
-  
 
   tft.setCursor(0,0);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
@@ -188,9 +181,46 @@ tft.init();
   tft.setTextSize(1);
   tft.setTextDatum(TL_DATUM);
 
-  tft.println("Setup...");
   tft.setTextSize(1);
-  tft.println("TFT OK. ");
+  
+  
+  tft.printf("Running setup\n");
+
+      //init globals
+    initSensor(-256);
+
+  if(!SD.begin(41)){  //CS=41
+    tft.println("SD Mount Failed");
+    #ifdef _DEBUG
+      Serial.println("SD mount failed... ");
+    #endif
+
+  } 
+  else {
+    #ifdef _DEBUG
+      Serial.println("SD mounted... ");
+    #endif
+
+    tft.println("SD Mount Succeeded...");
+     tft.print("Sensor data loaded from SD? ");
+     bool sdread = readSensorSD("/Data/Sensors.dat");
+    tft.println((sdread==true)?"yes":"no");
+    #ifdef _DEBUG
+      Serial.print("Sensor data loaded? ");
+      Serial.println((sdread==true)?"yes":"no");
+    #endif
+
+  }
+    
+
+
+  I.ScreenNum = 0;
+  I.isFlagged = false;
+  I.wasFlagged = false;
+
+  WeatherData.lat = LAT;
+  WeatherData.lon = LON;
+  
     
   WIFI_INFO.DHCP = IPAddress(192,168,68,1);
   WIFI_INFO.DNS = IPAddress(192,168,68,1);
@@ -220,6 +250,10 @@ tft.init();
     tft.println(WiFi.localIP());  
   }
 
+    #ifdef _DEBUG
+      Serial.println("Connected!");
+      Serial.println(WiFi.localIP());
+    #endif
 
 
 tft.println("Connecting ArduinoOTA...");
@@ -263,12 +297,15 @@ tft.println("Connecting ArduinoOTA...");
     tft.print("OTA error: ");
     tft.println(error);
   });
-  ArduinoOTA.begin();
     #ifdef _DEBUG
-      Serial.println("Connected!");
-      Serial.println(WiFi.localIP());
+      Serial.print("Beginning OTA... ");
     #endif
 
+  ArduinoOTA.begin();
+
+    #ifdef _DEBUG
+      Serial.println("connected!");
+    #endif
   
 
 
@@ -284,9 +321,15 @@ tft.println("Connecting ArduinoOTA...");
     server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
 
     server.onNotFound(handleNotFound);
+    #ifdef _DEBUG
+      Serial.print("Starting server... ");
+    #endif
+
     server.begin();
-    //init globals
-    initSensor(-256);
+    #ifdef _DEBUG
+      Serial.println("connected!");
+    #endif
+
     tft.println("Set up TimeClient...");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
@@ -319,16 +362,11 @@ void parseLine_to_Sensor(String token) {
   //the token contains:
   String logID; //#.#.# [as string], ARDID, SNStype, SNSID
   SensorVal S;
-  uint8_t tempIP[4] = {0,0,0,0};
 
   String temp;
   int16_t strOffset;
 
-  #ifdef _DEBUG
-    Serial.println("I am beginning parsing!");
-    Serial.println(token);
-  #endif
-
+  
   strOffset = token.indexOf(",",0);
   if (strOffset == -1) { //did not find the comma, we may have cut the last one. abort.
     return;
@@ -337,26 +375,13 @@ void parseLine_to_Sensor(String token) {
     logID= token.substring(0,strOffset); //end index is NOT inclusive
     token.remove(0,strOffset+1);
 
-    IPString2ByteArray(logID,tempIP);
-    S.IP = tempIP;
+    IPString2ByteArray(logID,S.IP);
 
     //element2 is logID
     logID= token.substring(0,strOffset); //end index is NOT inclusive
     token.remove(0,strOffset+1);
     if (breakLOGID(logID,&S.ardID,&S.snsType,&S.snsID) == false) return;
 
-    #ifdef _DEBUG
-      Serial.print("token: ");
-      Serial.println(token);
-      Serial.print("logID: ");
-      Serial.println(logID);
-      Serial.print("ardid: ");
-      Serial.println(S.ardID);
-      Serial.print("snsType: ");
-      Serial.println(S.snsType);
-      Serial.print("snsID: ");
-      Serial.println(S.snsID);
-    #endif
   }
 
 //timelogged
@@ -376,26 +401,13 @@ void parseLine_to_Sensor(String token) {
   temp = token.substring(0,strOffset); 
   token.remove(0,strOffset+1);
   snprintf(S.snsName,29,"%s",temp.c_str());
-  #ifdef _DEBUG
-    Serial.print("token: ");
-    Serial.println(token);
-    Serial.print("snsName: ");
-    Serial.println(S.snsName);
-
-  #endif
-
+  
 //  double value;
   strOffset = token.indexOf(",",0);
   temp= token.substring(0,strOffset); 
   token.remove(0,strOffset+1);
   S.snsValue = temp.toDouble();
-  #ifdef _DEBUG
-    Serial.print("token: ");
-    Serial.println(token);
-    Serial.print("value: ");
-    Serial.println(S.snsValue);
-  #endif
-
+  
 //bool isFlagged; last one
   strOffset = token.indexOf(",",0);
   if (strOffset==-1) temp= token;
@@ -404,28 +416,13 @@ void parseLine_to_Sensor(String token) {
   if (temp.toInt()!=0) {
     bitWrite(S.Flags,0,1);
   }
-  #ifdef _DEBUG
-    Serial.print("token: ");
-    Serial.println(token);
-    Serial.print("isFlagged: ");
-    Serial.println(S.Flags);
-  #endif
-
+  
 
   int sn = findDev(&S,true);
 
   if (sn<0) return;
   Sensors[sn] = S;
 
-  #ifdef _DEBUG
-  Serial.print("sn=");
-  Serial.print(sn);
-  Serial.print(",   ");
-  Serial.print(Sensors[sn].snsName);
-  Serial.print(", ");
-  Serial.print("isFlagged: ");
-  Serial.println(Sensors[sn].Flags);
-  #endif
 
 }
 
@@ -445,13 +442,7 @@ char buf[12] = "";
   tempPayload.toCharArray(buf,12);
   *timeval = strtoul(buf,NULL,0); //do it this way because it is a 32 bit number, so toInt will fail
   payload.remove(0,strOffset+1); //include the comma
-  #ifdef _DEBUG
-    Serial.println("If the following starts with a comma, then payload removal requires +1");
-    Serial.println(payload);
-    Serial.println("");
-    
-
-  #endif
+  
 
 
  //now iterate through the rest of the values!
@@ -611,19 +602,18 @@ uint32_t read32(File &f) {
 
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x, int y) {
 int X,Y;
-    
+uint32_t FH = setFont(FNTSZ);
+
 if (x>=0 && y>=0) {
-  tft.setTextFont(FNTSZ);
   X = x-tft.textWidth(msg)/2;
   if (X<0) X=0;
-  Y = y-tft.fontHeight(FNTSZ)/2;
+  Y = y-FH/2;
   if (Y<0) Y=0;
 } else {
   X=x;
   Y=y;
 }
 
-tft.setTextFont(FNTSZ);
 tft.setCursor(X,Y);
 tft.print(msg.c_str());
 tft.setTextDatum(TL_DATUM);
@@ -641,6 +631,7 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
 
   byte FNTSZ = 1;
   String temp;
+  uint32_t FH = setFont(FNTSZ);
 
 
   uint16_t c_heat = tft.color565(255,180,0); //TFT_ORANGE;
@@ -648,20 +639,18 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
   uint16_t c_fan = TFT_GREEN; //tft.color565(135,206,235); //TFT_SKYBLUE;135 206 235
   uint16_t c_errorfg = TFT_BLACK; 
   uint16_t c_errorbg = tft.color565(255,0,0); 
-  uint16_t c_FG=BG_COLOR, c_BG=BG_COLOR;
+  uint16_t c_FG=TFT_DARKGRAY, c_BG=BG_COLOR;
   
-
-  tft.setTextFont(FNTSZ);
-
+  
   int x = X;
   tft.setTextDatum(TL_DATUM);
   for (byte j=1;j<7;j++) {
-    c_FG=BG_COLOR;
+    c_FG=TFT_DARKGRAY;
     c_BG=BG_COLOR;
   
     if (j==4) {
       x=X;
-      Y+= tft.fontHeight(FNTSZ)+2; 
+      Y+= FH+2; 
     }
 
     if (bitRead(I.isHeat,j) && bitRead(I.isAC,j)) {
@@ -679,14 +668,34 @@ void fcnPrintTxtHeatingCooling(int X,int Y) {
         if (c_BG != c_fan) c_BG = c_errorbg;
       }
     }
-    temp = (String) j;
+    switch (j) {
+      case 1:
+        temp = "OF ";
+        break;
+      case 2:
+        temp = "MB ";
+        break;
+      case 3:
+        temp = "LR ";
+        break;
+      case 4:
+        temp = "BR ";
+        break;
+      case 5:
+        temp = "FR ";
+        break;
+      case 6:
+        temp = "DN ";
+        break;
+    }
 
-    tft.setTextColor(c_FG,c_BG);    
-    x +=tft.drawString(temp,x,Y,1) + 5;
+    tft.setTextColor(c_FG,c_BG);        
+    if (FNTSZ==0)    x +=tft.drawString(temp,x,Y,&fonts::TomThumb);
+    if (FNTSZ==1)    x +=tft.drawString(temp,x,Y,&fonts::Font0);
   }
-
-  temp = "4 5 6"; //placeholder to find new X,Y location
-  tft.setCursor(X + tft.textWidth(temp) ,Y-tft.fontHeight(FNTSZ));
+  
+  temp = "XX XX XX "; //placeholder to find new X,Y location
+  tft.setCursor(X + tft.textWidth(temp) ,Y-FH);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
   return;
@@ -702,10 +711,12 @@ uint16_t bgcolor;
 
 String temp = (String) value1 + "/" + (String) value2;
 int X,Y;
+
+uint32_t FH = setFont(FNTSZ);
 if (x>=0 && y>=0) {
   X = x-tft.textWidth(temp)/2;
   if (X<0) X=0;
-  Y = y-tft.fontHeight(FNTSZ)/2;
+  Y = y-FH/2;
   if (Y<0) Y=0;
 } else {
   X=x;
@@ -737,11 +748,12 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
 uint16_t bgcolor;
 String temp = (String) value;
 int X,Y;
-tft.setTextFont(FNTSZ);
+uint32_t FH = setFont(FNTSZ);
+
 if (x>=0 && y>=0) {
   X = x-tft.textWidth(temp)/2;
   if (X<0) X=0;
-  Y = y-tft.fontHeight(FNTSZ)/2;
+  Y = y-FH/2;
   if (Y<0) Y=0;
 } else {
   X=x;
@@ -874,44 +886,44 @@ uint16_t temp2color(int temp,bool invertgray) {
 }
 
 void fcnDrawHeader(time_t t) {
+  //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
+  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeader+3599<t)     I.lastHeader = t;
+  else return;
+
+  tft.fillRect(0,0,tft.width(),I.HEADER_Y,BG_COLOR); //clear the header area
+
   //draw header    
   String st = "";
   uint16_t x = 0,y=0;
+  uint32_t FH = setFont(4);
   tft.setCursor(0,0);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-  tft.setTextFont(4);
+  
   tft.setTextDatum(TL_DATUM);
   st = dateify(t,"dow mm/dd");
   tft.drawString(st,x,y);
   x += tft.textWidth(st)+10;
   
-  tft.setTextFont(1);
-  fcnPrintTxtHeatingCooling(x,3);
-  st = "1 2 3 "; //placeholder to find new X position
-  x += tft.textWidth(st)+4;
-  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
   y=4;
   tft.setTextDatum(TL_DATUM);
-  tft.setTextFont(2);
+  FH = setFont(2);
 
-  st = "LOCAL";
-  //draw battery pcnt
-  byte tind = find_sensor_name("Outside",61);
-  if (tind<255)       st += (String) ((int) Sensors[tind].snsValue) + "%";
-  
-  if (I.localWeather<255) tft.drawString(st,x,y);
 
-  x += tft.textWidth(st)+4;
-
-//  y+=tft.fontHeight(2)+2;    
   if (I.isFlagged) {
     tft.setTextFont(2);
     tft.setTextColor(tft.color565(255,0,0),BG_COLOR); //without second arg it is transparent background
     tft.drawString("FLAG",x,y);
     tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   }
-  x += tft.textWidth("FLAG")+2;
+  x += tft.textWidth("FLAG")+10;
+
+  setFont(0);
+  fcnPrintTxtHeatingCooling(x,5);
+  st = "XX XX XX "; //placeholder to find new X position
+  x += tft.textWidth(st)+4;
+  tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+
 
 //add heat and AC icons to right 
   if ((I.isHeat&1)==1) {
@@ -926,53 +938,63 @@ void fcnDrawHeader(time_t t) {
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   
 
-  tft.setTextFont(2);
+  FH = setFont(2);
 
   //draw a  bar below header
   tft.fillRect(0,25,tft.width(),5, FG_COLOR);
 
+  return;
+
 }
 
-void fcnDrawScreen() {
-  time_t t = now();
+void fcnDrawScreen(time_t t) {
 
-  if (((I.redraw > 0 ) && I.isFlagged==I.wasFlagged ) || (t-I.lastDraw < 60 && I.isFlagged==false)) return; //not time to redraw and flag status has not changed or screen was just drawn
-  
-  I.wasFlagged = I.isFlagged; //change was status to is status because we are drawing now
-  if (I.isFlagged) {
-    I.redraw = SECSCREEN; //set to screen time for multiple screens... here redraw only refers to the alert area 
-
-    I.ScreenNum = ((I.ScreenNum+1)%NUMSCREEN);
-
-  } else {
-    I.redraw = 120; //some arbitrarily large number relative to byte... this will reset every minute on the minute anyway
-    I.ScreenNum = 0;
-  }
-
-  fcnDrawClock(t);
-
-  if ( t-I.lastDraw < 30 && I.isFlagged) { //just needed to draw the boxes/clock
-    return;
-  }     
-  I.lastDraw = t;
-    
-
-  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
-  I.localWeather=find_sensor_name("Outside", 4);
-  if (I.localWeather<255) {
-    if (t-Sensors[I.localWeather].timeRead>60*30) I.localWeather = 255; //localweather is only useful if <30 minutes old 
-  }
-
-  tft.fillRect(0,0,tft.width(),tft.height()-CLOCKAREA,BG_COLOR); //clear the weather area
-  //tft.fillScreen(BG_COLOR);            // Clear screen, this also works
+  fcnDrawClock(t); 
   fcnDrawHeader(t);
-
-
+  fncDrawCurrentCondition(t);
   fcnDrawWeather(t);
+    I.wasFlagged = I.isFlagged;
+    I.wasAC = I.isAC;
+    I.wasFan = I.isFan;
+    I.wasHeat = I.isHeat;
 
 
   return;
   
+}
+
+uint32_t setFont(uint8_t FNTSZ) {
+  switch (FNTSZ) {
+    case 0:
+      tft.setFont(&fonts::TomThumb);      
+    break;
+    case 1:
+      tft.setFont(&fonts::Font0);
+    break;
+    case 2:
+      tft.setFont(&fonts::Font2);
+    break;
+    case 3:
+      tft.setFont(&fonts::FreeSans9pt7b);
+    case 4:
+      tft.setFont(&fonts::Font4);
+    break;
+    case 5:
+      tft.setFont(&fonts::FreeSans24pt7b);
+    break;
+    case 6:
+      tft.setFont(&fonts::Font6);
+    break;
+    case 7:
+      tft.setFont(&fonts::Font7);
+    break;    
+    case 8:
+      tft.setFont(&fonts::Font8);
+    break;
+  }
+
+  return tft.fontHeight();
+
 }
 
 uint16_t set_color(byte r, byte g, byte b) {
@@ -1079,16 +1101,18 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   tft.setTextColor(0,box_fill);
   
   Y+=  2;
-  byte FNTSZ=2;
-  tft.setTextFont(FNTSZ);
+  byte FNTSZ = 2;
+  uint32_t FH=setFont(FNTSZ);
+   
   snprintf(tempbuf,13,"%s",roomname.c_str());
-  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-  Y+=2+tft.fontHeight(FNTSZ);
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+FH/2);
+  Y+=2+FH;
 
   tft.setTextColor(text_color,box_fill);
       
   //print each line to the |, then print on the next line
-  FNTSZ=1;
+  FNTSZ = 1;
+  FH = setFont(0);
   int strOffset = -1;
   String tempstr;
   while (box_text.length()>1) {
@@ -1102,8 +1126,8 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
     }
 
     if (tempstr.length()>1) {
-      fcnPrintTxtCenter(tempstr,FNTSZ, X+boxsize_x/2,Y+tft.fontHeight(FNTSZ)/2);
-      Y+=2+tft.fontHeight(FNTSZ);
+      fcnPrintTxtCenter(tempstr,FNTSZ, X+boxsize_x/2,Y+FH/2);
+      Y+=2+FH;
     }
   } 
 
@@ -1311,46 +1335,196 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
 }
 
 void fcnDrawClock(time_t t) {
+  if (t == I.lastClock) return;
+  bool forcedraw = false;
+  int Y = tft.height() - I.CLOCK_Y;
+  if (I.lastClock==0) forcedraw=true;
+  I.lastClock = t;
 
-int Y = tft.height()-CLOCKAREA;
-  tft.fillRect(0,Y,tft.width(),CLOCKAREA,BG_COLOR); //clear the clock area
-
-  //if isflagged, then show rooms with flags. otherwise, show daily weather
-  if (I.isFlagged && I.ScreenNum==1) {
-    fcnDrawSensors(Y);
-    return;
+  
+  //if isflagged, then show rooms with flags
+  if (I.isFlagged) {
+    if (t>I.lastFlagView+I.flagViewTime) {
+      I.lastFlagView = t;
+      if (I.ScreenNum==1) {
+        I.ScreenNum = 0; //stop showing flags
+        forcedraw=true;
+      }
+      else {
+        I.ScreenNum = 1;
+        tft.fillRect(0,Y,tft.width(),I.CLOCK_Y,BG_COLOR); //clear the clock area
+        fcnDrawSensors(Y);
+        return;
+      }
+    } 
+    else if (I.ScreenNum==1) return;
   }
   
+  if (I.wasFlagged==true && I.isFlagged == false) {
+    //force full redraw
+    forcedraw=true;
+  }
 
   //otherwise print time at bottom
+  //break into three segments, will draw hour : min : sec
+  int16_t X = tft.width()/3;
+  uint8_t FNTSZ=6;
+  uint32_t FH = setFont(FNTSZ);
   tft.setTextColor(FG_COLOR,BG_COLOR);
-  uint8_t FNTSZ=8;
-  Y = tft.height() - tft.fontHeight(FNTSZ) - 2;
-  int16_t X = tft.width()/2;
-  char tempbuf[32];
+  char tempbuf[20];
+  
 
-  snprintf(tempbuf,31,"%s",dateify(t,"h1:nn"));
-  tft.setTextFont(FNTSZ);
+  #ifdef notdef
+  //am I drawing the H, m, s or just s?
+  if (second(t)==0 || forcedraw==true) { //I am redrawing everything, minute changed
+    tft.fillRect(0,Y,tft.width()-X+tft.textWidth(":")/2+1,I.CLOCK_Y,BG_COLOR); //clear the "h:nn:"" clock area
+    fcnPrintTxtCenter((String) ":",FNTSZ, X,Y+I.CLOCK_Y/2);      
+    fcnPrintTxtCenter((String) ":",FNTSZ, 2*X,Y+I.CLOCK_Y/2);
+    //print hour
+    snprintf(tempbuf,5,"%s",dateify(t,"h1"));
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X/2,Y+I.CLOCK_Y/2);
+    //print min
+    snprintf(tempbuf,5,"%s",dateify(t,"nn"));
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X + X/2,Y+I.CLOCK_Y/2);
+  }
 
-  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+tft.fontHeight(FNTSZ)/2);
+  //now clear the second area
+  tft.fillRect(2*X + tft.textWidth(":")/2+1,Y,X - tft.textWidth(":")/2-1,I.CLOCK_Y,BG_COLOR);
+  //draw seconds
+  snprintf(tempbuf,5,"%s",dateify(t,"ss"));
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+X+X/2,Y+I.CLOCK_Y/2);
+  #else
+    if (second(t)==0 || forcedraw) {
+      FH = setFont(8);
+      tft.fillRect(0,Y,tft.width(),I.CLOCK_Y,BG_COLOR); //clear the "h:nn"" clock area
+      snprintf(tempbuf,19,"%s",dateify(t,"h1:nn"));
+      fcnPrintTxtCenter((String) tempbuf,8, tft.width()/2,Y+I.CLOCK_Y/2);
+    }
+  #endif
+
+  return;
 
 }
 
 
+void fncDrawCurrentCondition(time_t t) {
+  if (t<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
+  I.lastCurrentCondition = t;
+
+  int Y = I.HEADER_Y, Z = 10,   X=180+(tft.width()-180)/2; //middle of area on side of icon
+  tft.fillRect(180,Y,tft.width()-180,180,BG_COLOR); //clear the cc area
+  int FNTSZ = 8;
+  int temp0;
+  byte section_spacer = 3;
+  bool islocal=false;
+  String st = "Local";
+
+  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
+  I.localWeather=find_sensor_name("Outside", 4);
+  if (I.localWeather<255) {
+    if (t-Sensors[I.localWeather].timeLogged>60*30) {
+      I.localWeather = 255; //localweather is only useful if <30 minutes old 
+      temp0 = WeatherData.getTemperature(t);
+    } 
+    else {
+      temp0 = Sensors[I.localWeather].snsValue;
+      byte tind = find_sensor_name("Outside",61);
+      if (tind<255)       st += (String) ((int) Sensors[tind].snsValue) + "%";
+      islocal=true;
+    }
+  }
+
+   
+  // draw current temp
+  uint32_t FH = setFont(FNTSZ);
+
+  
+  fcnPrintTxtColor(temp0,FNTSZ,X,Y+Z+FH/2);
+
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  Z+=FH+section_spacer;
+
+  //print today max / min
+    FNTSZ = 4;  
+    FH = setFont(FNTSZ);
+    int8_t tempMaxmin[2];
+    WeatherData.getDailyTemp(0,tempMaxmin);
+    if (tempMaxmin[0] == -125) tempMaxmin[0] = WeatherData.getTemperature(t);
+    //does local max/min trump reported?
+    if (tempMaxmin[0]<temp0) tempMaxmin[0]=temp0;
+    if (tempMaxmin[1]>temp0) tempMaxmin[1]=temp0;
+    I.Tmax = tempMaxmin[0];
+    I.Tmin = tempMaxmin[1];
+    
+    fcnPrintTxtColor2(I.Tmax,I.Tmin,FNTSZ,X,Y+Z+FH/2);
+
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+
+    Z=Z+FH+section_spacer;
+
+  //print pressure info
+    uint16_t fg,bg;
+    FNTSZ = 4;
+    FH = setFont(FNTSZ);
+    char tempbuf[15]="";
+    fcnPredictionTxt(tempbuf,&fg,&bg);
+    tft.setTextColor(fg,bg);
+    if (tempbuf[0]!=0) {// prediction made
+      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
+      Z=Z+FH+section_spacer;
+      FNTSZ=2;
+    }
+
+    FH = setFont(FNTSZ);
+    tempbuf[0]=0;
+    fcnPressureTxt(tempbuf,&fg,&bg);
+    tft.setTextColor(fg,bg);
+    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
+    Z=Z+FH+section_spacer;
+
+    FNTSZ = 4;
+    FH = setFont(FNTSZ);
+    if (WeatherData.flag_snow) snprintf(tempbuf,14,"Snow: %u%%",WeatherData.getDailyPoP(0));
+    else {
+      if (WeatherData.flag_ice) snprintf(tempbuf,14,"Ice: %u%%",WeatherData.getDailyPoP(0));
+      else snprintf(tempbuf,14,"PoP: %u%%",WeatherData.getDailyPoP(0));
+    }
+
+    if (WeatherData.getDailyPoP(0)>50)  tft.setTextColor(tft.color565(255,0,0),tft.color565(0,0,255));
+    else tft.setTextColor(FG_COLOR,BG_COLOR);
+    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
+    Z=Z+FH+section_spacer;
+
+  //end current wthr
+  
+  if (islocal) {
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    fcnPrintTxtCenter(st,1,X,Y+6);      
+  }
+
+  return;
+
+
+}
+
 void fcnDrawWeather(time_t t) {
 
-int X=0,Y = 30,Z=0; //header ends at 30
+if ((uint32_t) (t<I.lastWeather+I.weatherTime*60) && I.lastWeather>0) return;
+I.lastWeather = t;
+
+int X=0,Y = I.HEADER_Y,Z=0; //header ends at 30
+
+tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
+tft.fillRect(0,I.HEADER_Y+180,tft.width(),tft.height()-(180+I.HEADER_Y+I.CLOCK_Y),BG_COLOR); //clear the weather area
+
+
 int i=0,j=0;
 char tempbuf[45];
 uint8_t FNTSZ = 0;
 
-byte deltaY = 0;
+byte deltaY = setFont(FNTSZ);
+
 byte section_spacer = 3;
-
-#ifdef _DEBUG
-Serial.println("main: fcndrawweather reached");
-#endif
-
 
 //draw icon for NOW
 int iconID = ID2Icon(WeatherData.getWeatherID(0));
@@ -1359,8 +1533,9 @@ else snprintf(tempbuf,44,"/BMP180nightG/%d.bmp",iconID);
 
 drawBmp(tempbuf,0,Y);
 
-//add info below icon
-FNTSZ=0;
+//add info atop icon
+FNTSZ=1;
+deltaY = setFont(FNTSZ);
 if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in next 24 h
   uint32_t Next_Precip = WeatherData.nextPrecip();
   uint32_t nextrain = WeatherData.nextRain();
@@ -1376,7 +1551,7 @@ if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in nex
       tft.setTextColor(tft.color565(255,255,0),tft.color565(0,0,255));
       snprintf(tempbuf,30,"Rain@%s",dateify(Next_Precip,"hh:nn"));
       if (FNTSZ==0) deltaY = 8;
-      else deltaY = tft.fontHeight(FNTSZ);
+      else deltaY = setFont(FNTSZ);
     }
   }
   fcnPrintTxtCenter(tempbuf,FNTSZ,60,180-deltaY);
@@ -1384,112 +1559,22 @@ if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in nex
 tft.setTextColor(FG_COLOR,BG_COLOR);
 
 
-//add info to side of icon  
-Z = 10;
-X=180+(tft.width()-180)/2; //middle of area on side of icon
-
-tft.setTextFont(FNTSZ);
-tft.setTextColor(FG_COLOR,BG_COLOR);
-
-// draw current temp
-  FNTSZ = 8;
-//  if (tft.fontHeight(FNTSZ) > 120-Z-section_spacer-tft.fontHeight(FNTSZ)) FNTSZ = 4; //check if the number can fit!
-
-  tft.setTextFont(FNTSZ);
-    if (FNTSZ==0) deltaY = 8;
-    else deltaY = tft.fontHeight(FNTSZ);
-
-int temp0;
-
-  if (I.localWeather<255) temp0 = Sensors[I.localWeather].snsValue;
-  else temp0 = WeatherData.getTemperature(t);
-  
-  fcnPrintTxtColor(temp0,FNTSZ,X,Y+Z+deltaY/2);
-  
-  Z=Z+tft.fontHeight( FNTSZ)+section_spacer;
-
-//print today max / min
-  FNTSZ = 4;  
-  if (FNTSZ==0) deltaY = 8;
-  else deltaY = tft.fontHeight(FNTSZ);
-
-  int8_t tempMm[2];
-  WeatherData.getDailyTemp(0,tempMm);
-  if (tempMm[0] == -125) tempMm[0] = WeatherData.getTemperature(t);
-  if (tempMm[0]<temp0) tempMm[0]=temp0;
-
-  if (tempMm[1]>temp0) tempMm[1]=temp0;
-  
-  tft.setTextFont(FNTSZ);
-  fcnPrintTxtColor2(tempMm[0],tempMm[1],FNTSZ,X,Y+Z+deltaY/2);
-
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-
-  Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
-
-//print pressure info
-  uint16_t fg,bg;
-  FNTSZ = 4;
-  tempbuf[0]=0;
-  fcnPredictionTxt(tempbuf,&fg,&bg);
-  tft.setTextColor(fg,bg);
-  if (tempbuf[0]==0) {//no gale
-    FNTSZ = 4;
-  } else {
-    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
-    Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
-    FNTSZ=2;
-  }
-
-  deltaY = tft.fontHeight(FNTSZ);
-
-  tft.setTextFont(FNTSZ);  
-  tempbuf[0]=0;
-  fcnPressureTxt(tempbuf,&fg,&bg);
-  tft.setTextColor(fg,bg);
-  fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+deltaY/2);
-  Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
-
-  FNTSZ = 4;
-  tft.setTextFont(FNTSZ);
-  if (WeatherData.flag_snow) snprintf(tempbuf,20,"Snow: %u%%",WeatherData.getDailyPoP(0));
-  else {
-    if (WeatherData.flag_ice) snprintf(tempbuf,20,"Ice: %u%%",WeatherData.getDailyPoP(0));
-    else snprintf(tempbuf,20,"PoP: %u%%",WeatherData.getDailyPoP(0));
-  }
-
-    if (WeatherData.getDailyPoP(0)>50)  tft.setTextColor(tft.color565(255,0,0),tft.color565(0,0,255));
-    else tft.setTextColor(FG_COLOR,BG_COLOR);
-    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+deltaY/2);
-  Z=Z+tft.fontHeight(FNTSZ)+section_spacer;
-
-//end current wthr
-
-
-  Y = 30+180+section_spacer;
+  Y = I.HEADER_Y+180+section_spacer;
   tft.setCursor(0,Y);
 
   FNTSZ = 4;
-  tft.setTextFont(FNTSZ);
+  deltaY = setFont(FNTSZ);
   
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
-  for (i=1;i<7;i++) { //draw 6 icons, with HourlyInterval hours between icons. Note that index 1 is  1 hour from now
-    if (i*HourlyInterval>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
+  for (i=1;i<7;i++) { //draw 6 icons, with I.HourlyInterval hours between icons. Note that index 1 is  1 hour from now
+    if (i*I.HourlyInterval>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
     
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
-    iconID = ID2Icon(WeatherData.getWeatherID(t+i*HourlyInterval*60*60));
-    #ifdef _DEBUG
-      Serial.printf("drawing icon #%i, which is id %u\n",i,iconID);
-    #endif
-    if (t+i*HourlyInterval*3600 > WeatherData.sunrise  && t+i*HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
+    iconID = ID2Icon(WeatherData.getWeatherID(t+i*I.HourlyInterval*60*60));
+    if (t+i*I.HourlyInterval*3600 > WeatherData.sunrise  && t+i*I.HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
     else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
-    #ifdef _DEBUG
-      Serial.printf("time of icon is %d and sunrise - sunset is %d - %d\n",t+i*HourlyInterval*3600,WeatherData.sunrise,WeatherData.sunset);
-    
-      Serial.printf("drawing icon #%i, which is id %u located at %s\n",i,iconID,tempbuf);
-    #endif
     
     drawBmp(tempbuf,X,Y);
     Z+=30;
@@ -1498,17 +1583,19 @@ int temp0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6))/2; 
 
     FNTSZ=1;
-    snprintf(tempbuf,6,"%s:00",dateify(t+i*HourlyInterval*60*60,"hh"));
+    deltaY = setFont(FNTSZ);
+    snprintf(tempbuf,6,"%s:00",dateify(t+i*I.HourlyInterval*60*60,"hh"));
     tft.setTextFont(FNTSZ); //small font
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+tft.fontHeight(FNTSZ)/2);
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
 
-    Z+=tft.fontHeight(FNTSZ)+section_spacer;
+    Z+=deltaY+section_spacer;
 
     FNTSZ=4;
+    deltaY = setFont(FNTSZ);
     tft.setTextFont(FNTSZ); //med font
-    fcnPrintTxtColor(WeatherData.getTemperature(t + i*HourlyInterval*3600),FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2);
+    fcnPrintTxtColor(WeatherData.getTemperature(t + i*I.HourlyInterval*3600),FNTSZ,X,Y+Z+deltaY/2);
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    Z+=tft.fontHeight(FNTSZ)+section_spacer;
+    Z+=deltaY+section_spacer;
   }
   tft.setTextColor(FG_COLOR,BG_COLOR);
   Y+=Z;
@@ -1516,7 +1603,7 @@ int temp0;
 
 //now draw daily weather
   tft.setCursor(0,Y);
- 
+  int8_t tmm[2];
   for (i=1;i<6;i++) {
     Z=0;
     X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
@@ -1528,20 +1615,17 @@ int temp0;
     
     X = (i-1)*(tft.width()/5) + ((tft.width()/5))/2; 
     FNTSZ=2;
-    tft.setTextFont(FNTSZ); 
+    deltaY = setFont(FNTSZ);
     snprintf(tempbuf,31,"%s",dateify(now()+i*60*60*24,"DOW"));
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+tft.fontHeight(FNTSZ)/2);
+    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
     
-    Z+=tft.fontHeight(FNTSZ);
-
-    tft.setTextFont(FNTSZ);
-    WeatherData.getDailyTemp(i,tempMm);
-    
-    fcnPrintTxtColor2(tempMm[0],tempMm[1],FNTSZ,X,Y+Z+tft.fontHeight(FNTSZ)/2); 
+    Z+=deltaY;
+    WeatherData.getDailyTemp(i,tmm);
+    fcnPrintTxtColor2(tmm[0],tmm[1],FNTSZ,X,Y+Z+deltaY/2); 
     
     tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
     
-    Z+=tft.fontHeight(FNTSZ)+section_spacer;
+    Z+=deltaY+section_spacer;
     
   }
 
@@ -1553,23 +1637,59 @@ int temp0;
 }
 
 
+#ifdef _DEBUG
+uint16_t TESTRUN = 120;
+uint32_t WTHRFAIL = 0;
+#endif
+
 void loop() {
-    // #ifdef _DEBUG
-    //   Serial.printf("Loop start: Time is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
-    // #endif
   time_t t = now(); // store the current time in time variable t
+     #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+        Serial.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        while(true);
+       }
+     #endif
 
 
   ArduinoOTA.handle();
+  #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop OTA.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
   server.handleClient();
+      #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+       tft.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
   updateTime(1,0); //just try once
-  WeatherData.updateWeather();
-
-
-    
+   
   
   if (OldTime[1] != minute()) {
+    WeatherData.updateWeather(3600);
 
+    #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop update weather: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
     OldTime[1] = minute();
     //do stuff every minute
 
@@ -1577,10 +1697,6 @@ void loop() {
     
     if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means only flag for soil or temp or battery
     
-    #ifdef _DEBUG
-    Serial.printf("Flagged sensors = %d\n",countFlagged(-1,B00000111,B00000011,0));
-    Serial.printf("isflagged = %s\n",(I.isFlagged == true)?"T":"F");
-    #endif
     checkHeat(); //this updates I.isheat and I.isac
 
     I.isSoilDry = false;
@@ -1595,14 +1711,16 @@ void loop() {
     I.isLeak = false;
     if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
 
+    #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop check flags: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
 
-    I.redraw = 0;
-    I.lastDraw=0;
-    if(WiFi.status()== WL_CONNECTED){
-      I.wifi=10;
-    } else {
-      I.wifi=0;
-    }
     
   }
 
@@ -1612,14 +1730,34 @@ void loop() {
  
     OldTime[2] = hour(); 
 
+  //overwrite  sensors to the sd card
+    writeSensorSD("/Data/Sensors.dat");
+    #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop sdcard write sensors.dat: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
     //expire any measurements that are older than N hours.
     initSensor(OLDESTSENSORHR*60);
+        #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop initsensor: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
 
       
   }
 
   if (OldTime[3] != weekday()) {
-    if ((uint32_t) t-ALIVESINCE > 604800) ESP.restart(); //reset every week
+    //if ((uint32_t) t-ALIVESINCE > 604800) ESP.restart(); //reset every week
     
     OldTime[3] = weekday();
   }
@@ -1631,10 +1769,26 @@ void loop() {
     //do stuff every second    
 
     if (I.wifi>0) I.wifi--;
-    if (I.redraw>0) I.redraw--;
-    fcnDrawScreen();
+    fcnDrawScreen(t);
+        #ifdef _DEBUG
+       if (I.flagViewTime==0) {
+       Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.clear();
+        tft.setCursor(0,0);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       while(true);
+       }
+     #endif
   }
 
+  #ifdef _DEBUG
+    if (WeatherData.getTemperature(t+3600)<0 && TESTRUN<3600) {
+      Serial.printf("Loop %s: Weather data just failed\n",dateify(t));
+      WTHRFAIL = t;
+      TESTRUN = 3600;
+    }
+
+  #endif
 
 }
 

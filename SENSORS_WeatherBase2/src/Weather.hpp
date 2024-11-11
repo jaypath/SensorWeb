@@ -1,13 +1,16 @@
 #ifndef WEATHER_HPP
 #define WEATHER_HPP
 
+//#define _DEBUG 0
 #include <Arduino.h>
 #include <globals.hpp>
 
+#ifdef _DEBUG
+extern uint16_t TESTRUN;
+#endif
 
 
-
-#define NUMWTHRDAYS 5 //get hourly data for 5 days
+#define NUMWTHRDAYS 5 //get hourly data for this many days
 
 class WeatherInfo
 {
@@ -15,7 +18,7 @@ private:
     //keep hourly for next 24 hours, and daily (really day and night, so 12 hour interval)
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt =0;
-    uint32_t lastUpdateStatus = false;
+    bool lastUpdateStatus = false;
     uint32_t dT[NUMWTHRDAYS*24] = {0}; //time for each element
     int8_t temperature[NUMWTHRDAYS*24] = {0}; //degrees in F
     uint8_t humidity[NUMWTHRDAYS*24] = {0};
@@ -33,10 +36,12 @@ private:
     int8_t daily_tempMin[14] = {0};
     int16_t daily_weatherID[14] = {0};
     uint8_t daily_PoP[14] = {0};
+    char Grid_id[10] = ""; //station name... not sure how long this could be, but I've seen 3
+    int16_t Grid_x = 0; //station name
+    int16_t Grid_y = 0; //station name
 
     uint8_t getIndex(time_t dT = 0);
 public:
-    String Grid = ""; //full URL for grid from NOAA API
     uint32_t sunrise; //next  sunrise for TODAY
     uint32_t sunset; //next  sunset for TODAY
     bool flag_rain;
@@ -70,12 +75,12 @@ public:
     uint16_t getDailySnow(uint32_t starttime, uint32_t endtime);
     uint16_t getDailyIce(uint8_t daysfromnow);
     uint16_t getDailyIce(uint32_t starttime, uint32_t endtime);
-
+    String getGrid(uint8_t fc=0);
 
 
     time_t breakNOAATimestamp(String tm);
     int16_t breakIconLink(String icon,uint32_t starttime, uint32_t endtime);
-    bool updateWeather();        
+    bool updateWeather(uint16_t synctime = 3600);        
     bool initWeather();
     
 };

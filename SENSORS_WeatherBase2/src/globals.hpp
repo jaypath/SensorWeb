@@ -1,5 +1,8 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
+//#define _DEBUG 0
+//#define _WEBDEBUG 0
+
 
 
 #define SENSORNUM 60
@@ -29,19 +32,40 @@
 
 struct Screen {
     uint8_t wifi;
-    uint8_t redraw;
-    uint32_t lastDraw;
+
+    const byte CLOCK_Y = 105;
+    const byte HEADER_Y = 30;
+
+    uint32_t lastHeader=0;
+    uint32_t lastWeather=0;
+    uint32_t lastCurrentCondition=0;
+    uint32_t lastClock=0; //last time clock was updated, whether flag or not
+    uint32_t lastFlagView=0; //last time clock was updated, whether flag or not
+
+    uint8_t HourlyInterval = 2; //hours between daily weather display
+    uint8_t currentConditionTime = 10; //how many minutes to show current condition?
+    uint8_t flagViewTime = 10; //how many seconds to show flag values?
+    uint8_t weatherTime = 60; //how many MINUTES to show weather values?
+
     uint8_t ScreenNum;
-    bool isFlagged;
-    bool wasFlagged;
-    uint8_t isHeat; //first bit is heat on, bits 1-6 are zones
-    uint8_t isAC; //first bit is compressor on, bits 1-6 are zones
-    uint8_t isFan; //first bit is fan on, bits 1-6 are zones
+    
+    bool isFlagged=false;
+    bool wasFlagged=false;
+    uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
+    uint8_t isAC=false; //first bit is compressor on, bits 1-6 are zones
+    uint8_t isFan=false; //first bit is fan on, bits 1-6 are zones
+    uint8_t wasHeat=false; //first bit is heat on, bits 1-6 are zones
+    uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
+    uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
+
     bool isHot;
     bool isCold;
     bool isSoilDry;
     bool isLeak;
     uint8_t localWeather; //index of outside sensor
+
+    int8_t Tmax;
+    int8_t Tmin;
 };
 
 //#define _LIGHTMODE
@@ -60,7 +84,7 @@ struct Screen {
 #define OLDESTSENSORHR 24 //hours before a sensor is removed
 
 struct SensorVal {
-  IPAddress IP;
+  uint8_t IP[4];
   uint8_t ardID;
   uint8_t  snsType ;
   uint8_t snsID;

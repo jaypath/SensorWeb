@@ -53,9 +53,6 @@ time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and ret
     if (str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s);
   }
 
-#ifdef _DEBUG
-Serial.printf("convertstringtime: y=%d,m=%d,d=%d\n",yy,m,d);
-#endif
   byte hoffset = 0;
   if (str.indexOf(" ")>-1) { //there is a " AM/PM" present
     if (str.indexOf("PM")>-1)  hoffset=12;
@@ -64,9 +61,6 @@ Serial.printf("convertstringtime: y=%d,m=%d,d=%d\n",yy,m,d);
   h = breakString(&str,":").toInt() + hoffset;
   n = breakString(&str,":").toInt();
 
-#ifdef _DEBUG
-Serial.printf("convertstringtime: h=%d,n=%d\n",h,n);
-#endif
 
 
   if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data

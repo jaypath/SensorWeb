@@ -1,4 +1,3 @@
-//#define _DEBUG
 #include <Arduino.h>
 #include <SD.h>
 
@@ -6,7 +5,6 @@
 #include "server.hpp"
 #include <timesetup.hpp>
 #include <WiFiClient.h>
-
 
 
 
@@ -34,9 +32,6 @@ void SerialWrite(String msg) {
 
 String getCert(String filename) 
 {
-  #ifdef _DEBUG
-        Serial.printf("getCert: started\n");
-  #endif
 
   File f = SD.open(filename, FILE_READ);
   String s="";
@@ -47,10 +42,6 @@ String getCert(String filename)
      f.close();
     }    
 
-  #ifdef _DEBUG
-        Serial.printf("getCert: cert length is %u\n", s.length());
-  #endif
-
     
     return s;
 }
@@ -59,26 +50,15 @@ bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& 
   HTTPClient http;
   WiFiClientSecure wfclient;
   wfclient.setCACert(cacert.c_str());
-#ifdef _DEBUG
-      Serial.printf("Server_message: url is %s\n",URL.c_str());      
-    #endif
 
   if(WiFi.status()== WL_CONNECTED){
     I.wifi=10;
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();
-    #ifdef _DEBUG
-      Serial.print("Server_message: httpcode: ");
-      Serial.println(httpCode);
-    #endif
-
+    
     payload = http.getString();
-    #ifdef _DEBUG
-      Serial.print("Server_message: httpcode: ");
-      Serial.println(payload);
-    #endif
-
+    
     http.end();
     return true;
   } 
@@ -92,20 +72,13 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
   HTTPClient http;
   WiFiClient wfclient;
   
-  #ifdef _DEBUG
-        Serial.printf("Server_message: URL Requested is: %s\n", URL.c_str());
-  #endif
 
   if(WiFi.status()== WL_CONNECTED){
     I.wifi=10;
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();
-    #ifdef _DEBUG
-      Serial.print("Server_message: httpcode: ");
-      Serial.println(httpCode);
-    #endif
-
+    
     payload = http.getString();
   
     http.end();
@@ -229,7 +202,7 @@ void handleREQUESTUPDATE() {
 
   String payload;
   int httpCode;
-  String URL = Sensors[j].IP.toString() + "/UPDATEALLSENSORREADS";
+  String URL = IPbytes2String(Sensors[j].IP) + "/UPDATEALLSENSORREADS";
   Server_Message(URL, payload, httpCode);
 
   server.sendHeader("Location", "/");
@@ -357,13 +330,19 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</FORM><br>";
 */
 
-  //WEBHTML = WEBHTML + "NOAA station: " + WeatherData.Grid + "<br>";
   WEBHTML = WEBHTML + "Sunrise " + dateify(WeatherData.sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
-  WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>";
-  
+  WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+
+  #ifdef _DEBUG
+WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+  WEBHTML += "Weather temp in 1 hour: " + (String) WeatherData.getTemperature(t+3600) + "<br>";
+  WEBHTML += "WeatherID in 1 hour: " + (String) WeatherData.getWeatherID(t+3600) + "<br>";
+  WEBHTML += "Weather FAILURE detected at: " + (String) dateify(WTHRFAIL) + "<br>";
+  #endif
   WEBHTML = WEBHTML + "---------------------<br>";      
 
   if (I.isFlagged || (I.isHeat&1)==1 || (I.isAC&1)==1) {
@@ -383,11 +362,23 @@ void handlerForRoot(bool allsensors) {
 
   WEBHTML += "<FORM action=\"/UPDATEDEFAULTS\" method=\"get\">";
   WEBHTML += "<p style=\"font-family:arial, sans-serif\">";
-  WEBHTML += "<label for=\"HoulyInterval\">Hourly interval for display (1-3h)</label>";
-  WEBHTML += "<input type=\"text\" id=\"HourlyInterval\" name=\"HourlyInterval\" value=\"" + String(HourlyInterval) + "\" maxlength=\"15\"><br>";  
-  WEBHTML += "<label for=\"SecSCreen\">Seconds for alarm screen to show</label>";
-  WEBHTML += "<input type=\"text\" id=\"SECSCREEN\" name=\"SECSCREEN\" value=\"" + (String) SECSCREEN + "\" maxlength=\"15\"><br>";  
+  WEBHTML += "<label for=\"HoulyInterval\">Hourly interval for display</label>";
+  WEBHTML += "<input type=\"text\" id=\"HourlyInterval\" name=\"HourlyInterval\" value=\"" + String(I.HourlyInterval) + "\" maxlength=\"15\"><br>";  
+
+  WEBHTML += "<label for=\"FLAGVIEW\">Seconds to show Flag screen</label>";
+  WEBHTML += "<input type=\"text\" id=\"FLAGVIEW\" name=\"FLAGVIEW\" value=\"" + String(I.flagViewTime) + "\" maxlength=\"15\"><br>";  
+
+  WEBHTML += "<label for=\"CURRENTCONDITIONTIME\">MINUTES to show Current Conditions</label>";
+  WEBHTML += "<input type=\"text\" id=\"CURRENTCONDITIONTIME\" name=\"CURRENTCONDITIONTIME\" value=\"" + String(I.currentConditionTime) + "\" maxlength=\"15\"><br>";  
+
+  WEBHTML += "<label for=\"WEATHERTIME\">MINUTES before weather screen update</label>";
+  WEBHTML += "<input type=\"text\" id=\"WEATHERTIME\" name=\"WEATHERTIME\" value=\"" + String(I.weatherTime) + "\" maxlength=\"15\"><br>";  
   
+  #ifdef _DEBUG
+    WEBHTML += "<label for=\"TESTRUN\">Debugging mode</label>";
+    WEBHTML += "<input type=\"text\" id=\"TESTRUN\" name=\"TESTRUN\" value=\"" + (String) TESTRUN + "\" maxlength=\"15\"><br>";  
+  #endif
+
   WEBHTML +=  "<br>";
   WEBHTML += "<button type=\"submit\">Submit</button><br><br>";
 
@@ -413,7 +404,8 @@ void handlerForRoot(bool allsensors) {
     if (allsensors && bitRead(Sensors[j].Flags,1)==0) continue;
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
       used[usedINDEX++] = j;
-      WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[j].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[j].IP.toString() + "</a></td>";
+
+      WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
@@ -426,7 +418,7 @@ void handlerForRoot(bool allsensors) {
         if (allsensors && bitRead(Sensors[jj].Flags,1)==0) continue;
         if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].ardID==Sensors[j].ardID) {
           used[usedINDEX++] = jj;
-          WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors[jj].IP.toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors[jj].IP.toString() + "</a></td>";
+          WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[jj].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[jj].IP) + "</a></td>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].ardID + "</td>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsName + "</td>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsValue + "</td>";
@@ -487,9 +479,6 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</script> \n";
   WEBHTML += "</body></html>\n";   
 
-   #ifdef _DEBUG
-      Serial.println(WEBHTML);
-    #endif
     
   server.send(200, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
@@ -499,18 +488,33 @@ void handlerForRoot(bool allsensors) {
 void handleUPDATEDEFAULTS() {
   uint8_t temp = 0;
 
+  if (server.args()==0) return;
   for (uint8_t i = 0; i < server.args(); i++) {
     //error check for hourly interval.
-    if (server.argName(i)=="HourlyInterval") {
-      temp =  server.arg(i).toInt();
-      if (temp>0 && temp<4) HourlyInterval = temp;
-    }
+    if (server.argName(i)=="HourlyInterval") server.arg(i).toInt();
 
-    //no error checking for secscreen... all values are legal.
-    if (server.argName(i)=="SECSCREEN") SECSCREEN =  server.arg(i).toInt();
+    if (server.argName(i)=="FLAGVIEW") I.flagViewTime =  server.arg(i).toInt();
+
+    if (server.argName(i)=="CURRENTCONDITIONTIME") I.currentConditionTime =  server.arg(i).toInt();
     
+    if (server.argName(i)=="WEATHERTIME") I.weatherTime =  server.arg(i).toInt();
+   
+    
+    #ifdef _DEBUG
+    if (server.argName(i)=="TESTRUN") {
+      TESTRUN =  server.arg(i).toInt();
+
+      Serial.printf("TESRUN is now %u\n",TESTRUN);
+    }
+    #endif
+
   }
-  I.redraw = 0; //force screen redraw
+  //force screen redraw
+  I.lastClock = 0; 
+  I.lastCurrentCondition=0;
+  I.lastFlagView=0;
+  I.lastHeader=0;
+  I.lastWeather=0;
 
 
   server.sendHeader("Location", "/");//This Line goes to root page
@@ -524,16 +528,13 @@ void handleNotFound(){
 
 void handlePost() {
 SensorVal S;
-uint8_t tempIP[4] = {0,0,0,0};
+
+  if (server.args()==0) return;
 
   for (byte k=0;k<server.args();k++) {
-   #ifdef _WEBDEBUG
-       //WEBDEBUG = WEBDEBUG + "POST: " + server.argName(k) + ": " + String(server.arg(k)) + " @" + String(now(),DEC) + "<br>";
-    #endif
-      if ((String)server.argName(k) == (String)"logID")  breakLOGID(String(server.arg(k)),&S.ardID,&S.snsType,&S.snsID);
+      if ((String)server.argName(k) == (String)"logID")  breakLOGID(server.arg(k),&S.ardID,&S.snsType,&S.snsID);
       if ((String)server.argName(k) == (String)"IP") {
-        IPString2ByteArray(String(server.arg(k)),tempIP);
-        S.IP = tempIP;
+        IPString2ByteArray(String(server.arg(k)),S.IP);
       }
       if ((String)server.argName(k) == (String)"varName") snprintf(S.snsName,29,"%s", server.arg(k).c_str());
       if ((String)server.argName(k) == (String)"varValue") S.snsValue = server.arg(k).toDouble();
@@ -544,13 +545,10 @@ uint8_t tempIP[4] = {0,0,0,0};
   S.timeLogged = t; //time logged by me is when I received this.
   if (S.timeRead == 0  || S.timeRead < t-24*60*60 || S.timeRead > t+24*60*60)     S.timeRead = t;
 
-//regardless of mapping sensor or similar sensors, write this to the sd card
-  writeSensorSD(S,"/Data/" + (String) year() + ".txt");
 
   
   int sn = findDev(&S,true);
-
-  //special cases
+     //special cases
       
   //bmp temp received... check for AHT
   if (S.snsType == 10 && findSns(4,false)>-1) {
@@ -618,62 +616,3 @@ uint8_t tempIP[4] = {0,0,0,0};
 }
 
 
-//old IP fcns
-String IP2String(byte* IP) {
-//reconstruct a string from 4 bytes. If the first or second element is 0 then use 192 or 168
-  String IPs = "";
-
-  for (byte j=0;j<3;j++){
-    if (IP[j] ==0) {
-      if (j==0) IPs = IPs + String(192,DEC) + ".";
-      else IPs = IPs + String(168,DEC) + ".";
-    } else     IPs = IPs + String(IP[j],DEC) + ".";
-  }
-
-  IPs = IPs + String(IP[3],DEC);
-  return IPs;
-}
-
-bool IPString2ByteArray(String IPstr,byte* IP) {
-        
-    String temp;
-    
-    int strOffset; 
-    IPstr = IPstr + "."; //need the string to end with .
-    for(byte j=0;j<4;j++) {
-      strOffset = IPstr.indexOf(".", 0);
-      if (strOffset == -1) { //did not find the . , IPstr not correct. abort.
-        return false;
-      } else {
-        temp = IPstr.substring(0, strOffset);
-        IP[j] = temp.toInt();
-        IPstr.remove(0, strOffset + 1);
-      }
-    }
-    
-    return true;
-}
-
-
-bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
-    
-    String temp;
-    
-    int strOffset = logID.indexOf(".", 0);
-    if (strOffset == -1) { //did not find the . , logID not correct. abort.
-      return false;
-    } else {
-      temp = logID.substring(0, strOffset);
-      *ardID = temp.toInt();
-      logID.remove(0, strOffset + 1);
-
-      strOffset = logID.indexOf(".", 0);
-      temp = logID.substring(0, strOffset);
-      *snsID = temp.toInt();
-      logID.remove(0, strOffset + 1);
-
-      *snsNum = logID.toInt();
-    }
-    
-    return true;
-}
