@@ -124,6 +124,7 @@ bank 1 ADC (can use these with wifi, bank 2 is shares pins with wifi)
 38 - not generally exposed on most boards
 39-same
 
+however, note that 36, 39, 34, 35 are INPUT only!!
 
 
 
@@ -147,7 +148,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 //for calibrating current sensor
 #ifdef _USECALIBRATIONMODE
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {36, 39, 34, 35,32,33}; //which pins should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {32,33,25,26,36}; //which pins should be stored for charting?
 
 #endif
 

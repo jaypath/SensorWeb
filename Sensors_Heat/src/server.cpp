@@ -21,12 +21,12 @@ IP_TYPE SERVERIP[NUMSERVERS];
 
 WiFi_type WIFI_INFO;
 
-#ifdef _DEBUG
 void SerialWrite(String msg) {
+  #ifdef _DEBUG
     Serial.printf("%s",msg.c_str());
+    #endif
   return;
 }
-#endif
   
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
@@ -412,9 +412,16 @@ ESP. restart();
 }
 
 void handleRoot() {
-byte arduinoID = WIFI_INFO.MYIP[3];
+
+#ifdef _DEBUG
+  Serial.println("Hit handleroot.")
+#endif
+
 #ifdef  ARDID
-   arduinoID = ARDID;
+  byte arduinoID = ARDID;
+#else
+  byte arduinoID = WIFI_INFO.MYIP[3];
+
 #endif
 
 String currentLine = "<!DOCTYPE html><html>\n";

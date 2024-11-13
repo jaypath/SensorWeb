@@ -1,3 +1,4 @@
+#define _DEBUG
 
 #include <Wire.h>
 
@@ -174,7 +175,7 @@ void setup()
   SERVERIP[2].IP = {192,168,68,100};
 
     #ifdef _DEBUG
-      SerialWrite((String) "servers set");
+      SerialWrite( "servers set");
     #endif
 
 
@@ -186,7 +187,7 @@ void setup()
 
 #ifdef _USESSD1306
   #ifdef _DEBUG
-    SerialWrite((String)"oled begin");
+    SerialWrite("oled begin");
   #endif
 
   
@@ -246,7 +247,7 @@ void setup()
 
   while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
         #ifdef _DEBUG
-  SerialWrite((String)"-  Unable to find BME680. Trying again in 5 seconds.\n"));
+  SerialWrite("-  Unable to find BME680. Trying again in 5 seconds.\n"));
   #endif
 
       delay(5000);
@@ -282,7 +283,7 @@ while (connectWiFi() != 0) {
 #endif
 
 #ifdef _DEBUG
-  SerialWrite((String)"setuptime done. OTA next.\n");
+  SerialWrite("setuptime done. OTA next.\n");
 #endif
  
 #ifdef _USESSD1306
@@ -378,7 +379,7 @@ ALIVESINCE = now();
 
 
     #ifdef _DEBUG
-    SerialWrite((String) "set up HTML server... ");
+    SerialWrite( "set up HTML server... ");
     #endif
     server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
     server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
@@ -392,7 +393,7 @@ ALIVESINCE = now();
     server.begin();
     
     #ifdef _DEBUG
-            SerialWrite((String) "HTML server started!\n");
+            SerialWrite( "HTML server started!\n");
     #endif
   #endif
 
@@ -427,7 +428,7 @@ ALIVESINCE = now();
     {
       for (byte retry = 0;retry<10;retry++) {
         #ifdef _DEBUG
-        SerialWrite((String) "AHT2x not connected or failed to load calibration coefficient. Retry number " + (String) retry + "\n"); //(F()) save string to flash & keeps dynamic memory free
+        SerialWrite( "AHT2x not connected or failed to load calibration coefficient. Retry number " + (String) retry + "\n"); //(F()) save string to flash & keeps dynamic memory free
         #endif
   
         if (aht21.begin() == true) continue;
@@ -438,7 +439,7 @@ ALIVESINCE = now();
 
   #ifdef DHTTYPE
     #ifdef _DEBUG
-      SerialWrite((String) "dht begin\n");
+      SerialWrite( "dht begin\n");
       #endif
  
       dht.begin();
@@ -477,7 +478,7 @@ ALIVESINCE = now();
   #endif
   #ifdef _USEBME
          #ifdef _DEBUG
-    SerialWrite((String) "bme begin\n");
+    SerialWrite( "bme begin\n");
        #endif
     while (!bme.begin()) {
       #ifdef _USESSD1306
@@ -522,21 +523,16 @@ void loop() {
 
   updateTime(1,0);
   
-  #ifndef _USELOWPOWER
     ArduinoOTA.handle();
     server.handleClient();
-  #endif
-
   
-
-  if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
-
+  
   time_t t = now(); // store the current time in time variable t
 
   #ifdef _USELOWPOWER
 
          #ifdef _DEBUG
-    SerialWrite((String)"Checking for low power state.\n");
+    SerialWrite("Checking for low power state.\n");
        #endif
 
 
@@ -565,7 +561,7 @@ void loop() {
         for (byte k=0;k<SENSORNUM;k++) {
           
                    #ifdef _DEBUG
-SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\n");
+SerialWrite( "Going to attempt read and write sensor " + (String) k + "\n");
        #endif
         
           ReadData(&Sensors[k]); //read value 
@@ -573,7 +569,7 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
         }
 
                    #ifdef _DEBUG
-        SerialWrite((String) "Entering sleep.\n");
+        SerialWrite( "Entering sleep.\n");
        #endif
       //  Serial.flush();
       
@@ -592,7 +588,7 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
     //do stuff every second
     
     #ifdef _DEBUG
-      SerialWrite((String) ".");
+      SerialWrite( ".");
     #endif
 
     for (byte k=0;k<SENSORNUM;k++) {
@@ -616,7 +612,8 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
     OldTime[1] = minute();
 
     #ifdef _DEBUG
-    SerialWrite((String) "\nTime is " + dateify(t,"hh:nn:ss") +" \n");
+    String s = "\nTime is " + (String) dateify(t,"hh:nn:ss") +" \n";
+    SerialWrite( s);
     #endif
 
     
@@ -628,9 +625,11 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
 
 
   if (OldTime[2] != hour()) {
+      if (WIFI_INFO.MYIP != WiFi.localIP())    WIFI_INFO.MYIP = WiFi.localIP(); //update if wifi changed
+
   
     #ifdef _DEBUG
-    SerialWrite((String) "\nNew hour... TimeUpdate running. \n");
+    SerialWrite( "\nNew hour... TimeUpdate running. \n");
     #endif
   
     checkDST();
@@ -662,7 +661,7 @@ SerialWrite((String) "Going to attempt read and write sensor " + (String) k + "\
     #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 
       #ifdef _DEBUG
-        SerialWrite((String) "Reset HVACs...\n");
+        SerialWrite( "Reset HVACs...\n");
       #endif
       initHVAC();
 
