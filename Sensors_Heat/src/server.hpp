@@ -31,7 +31,7 @@
 
 
 extern bool KiyaanServer;
-extern SensorVal Sensors[SENSORNUM];
+extern struct SensorVal Sensors[SENSORNUM];
 extern time_t ALIVESINCE;
 
 struct IP_TYPE {

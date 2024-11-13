@@ -20,9 +20,9 @@ const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a 
 
 
 #define ARDNAME "Heat" //unique name
-#define SENSORNUM 8 //be sure this matches SENSORTYPES
+#define SENSORNUM 8 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {50,51,55,55,55,55,55,55};
+const uint8_t SENSORTYPES[SENSORNUM] = {50,51,55,55,55,55,55,55}; //max is 8
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
@@ -45,7 +45,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //binary switches
 //#define _CHECKAIRCON 1
 #define _CHECKHEAT 1
-#define _USEMUX
+#define _USEMUX //use analog input multiplexor to allow for >6 inputs
 //#define _USECALIBRATIONMODE 6 
 
 /*sens types
