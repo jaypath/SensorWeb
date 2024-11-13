@@ -306,8 +306,10 @@ void handlerForRoot(bool allsensors) {
   WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
   WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
   WEBHTML =WEBHTML  + "</style></head>";
-  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
 
+  #ifdef _USEROOTCHART
+  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+  #endif
   WEBHTML = WEBHTML + "<body>";
   
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
@@ -395,11 +397,11 @@ WEBHTML = WEBHTML + "---------------------<br>";
     }
 
     byte usedINDEX = 0;  
-
+    byte delta=2;
 
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:100px\">Plot</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
     if (allsensors && bitRead(Sensors[j].Flags,1)==0) continue;
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
@@ -412,6 +414,15 @@ WEBHTML = WEBHTML + "---------------------<br>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+      
+      delta=2;
+      if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
+      if (Sensors[j].snsType==3) delta = 1;
+      if (Sensors[j].snsType==9) delta = 3; //bmp
+      if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
+      if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
+      
+      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&starttime=" + (String) (t - 86400) + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
       WEBHTML = WEBHTML + "</tr>";
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
@@ -425,6 +436,15 @@ WEBHTML = WEBHTML + "---------------------<br>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
           WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
           WEBHTML = WEBHTML + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+          
+          delta=2;
+          if (Sensors[jj].snsType==4 || Sensors[jj].snsType==1 || Sensors[jj].snsType==10) delta = 4;
+          if (Sensors[jj].snsType==3) delta = 1;
+          if (Sensors[jj].snsType==9) delta = 3; //bmp
+          if (Sensors[jj].snsType==60 || Sensors[jj].snsType==61) delta = 3; //batery
+          if (Sensors[jj].snsType>=50 && Sensors[jj].snsType<60) delta = 15; //HVAC reads ~q2 min
+
+          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&starttime=" + (String) (t - 86400) + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
           WEBHTML = WEBHTML + "</tr>";
         }
       }
@@ -433,11 +453,12 @@ WEBHTML = WEBHTML + "---------------------<br>";
 
   WEBHTML += "</table>";   
 
+#ifdef _USEROOTCHART
   //add chart
   WEBHTML += "<br>-----------------------<br>\n";
   WEBHTML += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
   WEBHTML += "<br>-----------------------<br>\n";
-
+#endif
 
   WEBHTML += "</p>";
 
@@ -446,7 +467,8 @@ WEBHTML = WEBHTML + "---------------------<br>";
     #endif
 
   WEBHTML =WEBHTML  + "<script>";
-
+#ifdef _USEROOTCHART
+  
   //chart functions
     WEBHTML =WEBHTML  + "google.charts.load('current',{packages:['corechart']});\n";
     WEBHTML =WEBHTML  + "google.charts.setOnLoadCallback(drawChart);\n";
@@ -473,7 +495,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
     WEBHTML += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
     WEBHTML += "chart.draw(data, options);\n"; 
     WEBHTML += "}\n";
-
+#endif
 
   WEBHTML += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
   WEBHTML += "</script> \n";
@@ -526,6 +548,126 @@ void handleNotFound(){
   server.send(404, "text/plain", "404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
 }
 
+void handleRETRIEVEDATA() {
+  byte ardID=0,  snsType=0,  snsID=0, N=0,delta=1;
+  uint32_t starttime=0, endtime=0;
+
+
+
+    if (server.args()==0) {
+      server.send(401, "text/plain", "Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=10&starttime=1&endtime=1&delta=1  (where either N or endtime are required and delta is optional)");
+      return;
+    }
+
+    for (byte k=0;k<server.args();k++) {
+        if ((String)server.argName(k) == (String)"ID")  breakLOGID(server.arg(k),&ardID,&snsType,&snsID);
+        if ((String)server.argName(k) == (String)"ardID")  ardID=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"snsType")  snsType=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"snsID")  snsID=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"N")  N=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"starttime")  starttime=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"endtime")  endtime=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"delta")  delta=server.arg(k).toInt(); //read only every Nth value
+    }
+
+    if (ardID==0 || snsType == 0 || snsID==0) {
+      server.send(401, "text/plain", "Inappropriate call... invalid arduino sensor ID");
+      return;
+    }
+
+    if (N>100) N=100; //don't let the array get too large!
+    if (N==0) N=50;
+    if (endtime==0) endtime--; //this make endtime the max value, will just read N values.
+    if (endtime<starttime) endtime = -1;
+    if (delta==0) delta=1;
+
+  uint32_t t[N]={0};
+  double v[N]={0};
+
+  bool success =   readSensorSD(ardID,snsType,snsID,t,v,&N,starttime,endtime,delta);
+
+  if (success == false)  {
+    server.send(401, "text/plain", "Failed to read associated file.");
+    return;
+  }
+
+
+  int sn = findDev(ardID,snsType,snsID,false);
+
+
+  WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>\n";
+  WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
+  WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
+  WEBHTML =WEBHTML  + "</style></head>";
+  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
+  WEBHTML = WEBHTML + "<br>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(now(),"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
+
+  WEBHTML = WEBHTML + "<p>";
+
+  if (sn<0 || sn>=SENSORNUM)   WEBHTML += "WARNING!! Arduino: " + (String) ardID + "." + (String) snsType + "." + (String) snsID + " was NOT found in the active list, though I did find an associated file. <br>";
+  else {
+      WEBHTML += "Request for Arduino: " + (String) Sensors[sn].snsName + " " + (String) Sensors[sn].ardID + "." + (String) (String) Sensors[sn].snsType + "." + (String) Sensors[sn].snsID + "<br>";
+  }
+
+  WEBHTML += "Start time: " + (String) dateify(t[0],"mm/dd/yyyy hh:nn:ss") + " to " + (String) dateify(t[N-1],"mm/dd/yyyy hh:nn:ss")  +  "<br>";
+
+  //add chart
+  WEBHTML += "<br>-----------------------<br>\n";
+  WEBHTML += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:600px;\"></div>\n";
+  WEBHTML += "<br>-----------------------<br>\n";
+
+
+  WEBHTML += "</p>\n";
+
+  WEBHTML =WEBHTML  + "<script>";
+
+  //chart functions
+    WEBHTML =WEBHTML  + "google.charts.load('current',{packages:['corechart']});\n";
+    WEBHTML =WEBHTML  + "google.charts.setOnLoadCallback(drawChart);\n";
+    
+    WEBHTML += "function drawChart() {\n";
+
+    WEBHTML += "const data = google.visualization.arrayToDataTable([\n";
+    WEBHTML += "['t','val'],\n";
+
+    for (byte jj = 0;jj<N;jj++) {
+      WEBHTML += "[" + (String) (((float) -1*(now()-t[jj]))/3600) + "," + (String) v[jj] + "]";
+      if (jj<N-1) WEBHTML += ",";
+      WEBHTML += "\n";
+    }
+    WEBHTML += "]);\n\n";
+
+        // Set Options
+    WEBHTML += "const options = {\n";
+    WEBHTML += "hAxis: {title: 'Historical data for " + (String) Sensors[sn].snsName + " in hours'}, \n";
+    WEBHTML += "vAxis: {title: 'Value'},\n";
+    WEBHTML += "legend: 'none'\n};\n";
+
+    WEBHTML += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
+    WEBHTML += "chart.draw(data, options);\n"; 
+    WEBHTML += "}\n";  
+
+  WEBHTML += "</script> \n";
+    WEBHTML += "Returned " + (String) N + " samples<br>\n";
+
+    WEBHTML += "unixtime,value<br>\n";
+  for (byte j=0;j<N;j++)     WEBHTML += (String) t[j] + "," + (String) v[j] + "<br>\n";
+
+  WEBHTML += "</body></html>\n";   
+
+
+
+  server.send(200, "text/html", WEBHTML.c_str());   //send the data requested
+  
+
+}
+
+
+
 void handlePost() {
 SensorVal S;
 
@@ -545,9 +687,10 @@ SensorVal S;
   S.timeLogged = t; //time logged by me is when I received this.
   if (S.timeRead == 0  || S.timeRead < t-24*60*60 || S.timeRead > t+24*60*60)     S.timeRead = t;
 
-
+  storeSensorSD(&S); //store this reading on SD
   
   int sn = findDev(&S,true);
+
      //special cases
       
   //bmp temp received... check for AHT

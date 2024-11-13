@@ -11,9 +11,10 @@ union SensorValBytes {
 //    ~SensorValBytes(){};
 };
 
-bool writeSensorSD(String filename)
+bool writeSensorsSD(String filename)
 {
     union SensorValBytes D;
+
 
 
     File f = SD.open(filename, FILE_WRITE);
@@ -31,7 +32,7 @@ bool writeSensorSD(String filename)
 }
 
 
-bool readSensorSD(String filename) //read last available sensorvals back from disk
+bool readSensorsSD(String filename) //read last available sensorvals back from disk
 {
     union SensorValBytes D;
 
@@ -49,4 +50,55 @@ bool readSensorSD(String filename) //read last available sensorvals back from di
 
     return true;
 
+}
+
+bool storeSensorSD(struct SensorVal *S) {
+
+    String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + ".dat";
+    File f = SD.open(filename, FILE_APPEND);
+    if (f==false) return false;
+    union SensorValBytes D;
+    D.sensordata=*S;
+
+    f.write(D.bytes,sizeof(SensorVal));
+
+    f.close();
+    return true;
+    
+}
+
+bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N, uint32_t starttime, uint32_t endtime,byte avgN ) {
+
+    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + ".dat";
+    File f = SD.open(filename, FILE_READ);
+    union SensorValBytes D;
+    byte cnt = 0, deltacnt=0;
+    double avgV = 0;
+    if (f==false) return false;
+
+    while (f.available()) {
+        f.read(D.bytes,sizeof(SensorVal));
+
+        if (D.sensordata.timeLogged < starttime) continue; //ignore values that aren't in the time range
+
+        if (D.sensordata.timeLogged>endtime) break;
+
+        if (cnt<*N) {
+            avgV += D.sensordata.snsValue;
+            deltacnt++;
+
+            if (deltacnt>=avgN) {
+                t[cnt] = D.sensordata.timeLogged;
+                v[cnt] = avgV/deltacnt;
+                deltacnt=0;
+                avgV=0;
+                cnt++;
+            } 
+        } 
+    }
+
+    *N=cnt;
+    f.close();
+
+    return true;
 }

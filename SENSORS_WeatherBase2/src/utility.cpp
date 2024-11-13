@@ -243,6 +243,32 @@ uint8_t countDev() {
   return c;
 }
 
+int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest) {
+  //overloaded, simpler version
+  //provide the desired devID and snsname, and will return the index to sensors array that represents that node
+  //special cases:
+  //  if snsID = 0 then just find the first blank entry
+  //if no finddev identified and oldest = true, will return first empty or oldest
+  //if no finddev and oldest = false, will return -1
+  
+  if (snsID==0) { 
+    return -1;  //can't find a 0 id sensor!
+  }
+
+  for (int j=0;j<SENSORNUM;j++)  {
+      if (Sensors[j].ardID == ardID && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) {
+        return j;
+      }
+    }
+    
+//if I got here, then nothing found.
+  if (oldest) {
+    return findOldestDev();
+  } 
+
+  return -1; //dev not found
+}
+
 int16_t findDev(struct SensorVal *S, bool oldest) {
   //provide the desired devID and snsname, and will return the index to sensors array that represents that node
   //special cases:

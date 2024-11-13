@@ -5,6 +5,9 @@
 #include <header.hpp>
 #include <timesetup.hpp>
 
+#include <server.hpp>
+
+
 #ifdef _USEBME680
   #include <Zanshin_BME680.h>
 #endif

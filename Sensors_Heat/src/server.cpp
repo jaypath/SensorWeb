@@ -179,29 +179,7 @@ HTTPClient http;
 byte ipindex=0;
 bool isGood = false;
 
-  #ifdef _DEBUG
-    Serial.println(" ");
-  Serial.println("*****************");
-  Serial.println("Sending Data");
-  Serial.print("Device: ");
-      Serial.println(snsreading->snsName);
-  Serial.print("SnsType: ");
-      Serial.println(snsreading->snsType);
-  Serial.print("Value: ");
-      Serial.println(snsreading->snsValue);
-  Serial.print("LastLogged: ");
-      Serial.println(snsreading->LastReadTime);
-  Serial.print("isFlagged: ");
-      Serial.println(bitRead(snsreading->Flags,0));
-  Serial.print("isMonitored: ");
-      Serial.println(bitRead(snsreading->Flags,1));
-  Serial.print("Flags: ");
-      Serial.println(snsreading->Flags);          
 
-  #endif
-
-
-  
   if(WiFi.status()== WL_CONNECTED){
     String payload;
     String URL;
@@ -233,15 +211,6 @@ bool isGood = false;
       httpCode = (int) http.GET();
       payload = http.getString();
       http.end();
-
-        #ifdef _DEBUG
-          Serial.print("Received: ");
-          Serial.println(payload);
-          Serial.print("Code: ");
-          Serial.println(httpCode);
-          Serial.println("*****************");
-          Serial.println(" ");
-        #endif
 
 
         if (httpCode == 200) {
@@ -701,4 +670,25 @@ void Byte2Bin(uint8_t value, char* output, bool invert) {
   }
 
   return;
+}
+
+
+bool wait_ms(uint16_t ms) {
+
+
+  uint32_t mend = millis() + ms;
+  if ((uint32_t) (0-ms)<mend) return false; //0-ms should be some massive number... if it is less than mend then we are near the millis rollover
+  
+
+  while (millis() < mend) {
+    //handle these tasks
+    //be available for interrupts
+    #ifndef _USELOWPOWER
+      ArduinoOTA.handle();
+      server.handleClient();
+    #endif
+
+  }
+
+  return true;
 }

@@ -151,6 +151,7 @@ uint16_t temp2color(int temp, bool invertgray = false);
 
 
 
+
 void setup()
 {
   WEBHTML.reserve(7000); 
@@ -177,20 +178,21 @@ tft.init();
 
   tft.setCursor(0,0);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-  tft.setTextFont(1);
+  tft.setTextFont(2);
   tft.setTextSize(1);
-  tft.setTextDatum(TL_DATUM);
-
-  tft.setTextSize(1);
-  
+  tft.setTextDatum(TL_DATUM); 
   
   tft.printf("Running setup\n");
 
       //init globals
     initSensor(-256);
 
+  tft.printf("SD Card mounting...");
+
   if(!SD.begin(41)){  //CS=41
+    tft.setTextColor(TFT_RED);
     tft.println("SD Mount Failed");
+    tft.setTextColor(FG_COLOR);
     #ifdef _DEBUG
       Serial.println("SD mount failed... ");
     #endif
@@ -201,10 +203,19 @@ tft.init();
       Serial.println("SD mounted... ");
     #endif
 
-    tft.println("SD Mount Succeeded...");
-     tft.print("Sensor data loaded from SD? ");
-     bool sdread = readSensorSD("/Data/Sensors.dat");
-    tft.println((sdread==true)?"yes":"no");
+    tft.println("OK.\n");
+     tft.print("Loading historical data from SD... ");
+     bool sdread = readSensorsSD("/Data/SensorBackup.dat");
+     if (sdread) {
+      tft.setTextColor(TFT_GREEN);
+      tft.println("OK\n");
+      tft.setTextColor(FG_COLOR);
+     } else {
+      tft.setTextColor(TFT_RED);
+      tft.println("FAIL\n");
+      tft.setTextColor(FG_COLOR);
+     }
+
     #ifdef _DEBUG
       Serial.print("Sensor data loaded? ");
       Serial.println((sdread==true)?"yes":"no");
@@ -212,7 +223,6 @@ tft.init();
 
   }
     
-
 
   I.ScreenNum = 0;
   I.isFlagged = false;
@@ -237,17 +247,18 @@ tft.init();
   #endif
 
   byte retries = connectWiFi();
-  tft.println("Attempting Wifi connection, please wait...");
+  tft.println("Connecting  Wifi...\n");
   if (WiFi.status() != WL_CONNECTED)
   {
     tft.print("Wifi failed after ");
     tft.print(retries);
-    tft.println(" attempts.");
+    tft.println(" attempts. Halting.\n");
+    while(true);
   } else {
-    tft.print("Wifi cnnected after " );
-    tft.print(retries);
-    tft.print(" attempts. Wifi IP is ");
-    tft.println(WiFi.localIP());  
+    tft.printf("Wifi connected after %u attempts.\nWifi IP is",retries );
+    tft.setTextColor(TFT_GREEN);    
+    tft.printf("%s\n", WiFi.localIP().toString().c_str());  
+    tft.setTextColor(FG_COLOR);
   }
 
     #ifdef _DEBUG
@@ -270,7 +281,7 @@ tft.println("Connecting ArduinoOTA...");
   ArduinoOTA.onStart([]() {
     tft.fillScreen(BG_COLOR);            // Clear screen
     tft.setTextFont(2);
-    tft.setTextSize(1);
+
     tft.setCursor(0,0);
     tft.println("OTA started, receiving data.");
   });
@@ -303,6 +314,10 @@ tft.println("Connecting ArduinoOTA...");
 
   ArduinoOTA.begin();
 
+    tft.setTextColor(TFT_GREEN);
+    tft.printf(" OTA OK.\n");
+    tft.setTextColor(FG_COLOR);
+
     #ifdef _DEBUG
       Serial.println("connected!");
     #endif
@@ -319,13 +334,19 @@ tft.println("Connecting ArduinoOTA...");
     server.on("/GETSTATUS",handleGETSTATUS);
     server.on("/REBOOT",handleReboot);
     server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
+    server.on("/RETRIEVEDATA",handleRETRIEVEDATA);
 
     server.onNotFound(handleNotFound);
     #ifdef _DEBUG
       Serial.print("Starting server... ");
     #endif
+    tft.printf("Starting server...");
 
     server.begin();
+    tft.setTextColor(TFT_GREEN);
+    tft.printf(" SERVER OK.\n");
+    tft.setTextColor(FG_COLOR);
+
     #ifdef _DEBUG
       Serial.println("connected!");
     #endif
@@ -336,21 +357,23 @@ tft.println("Connecting ArduinoOTA...");
     timeClient.begin(); //time is in UTC
     updateTime(10,250); //check if DST and set time to EST or EDT
     
-    tft.print("TimeClient OK.  ");
+    tft.setTextColor(TFT_GREEN);
+    tft.printf(" TimeClient OK.\n");
+    tft.setTextColor(FG_COLOR);
+
     tft.println("Starting...");
-
-    delay(250);
-
     ALIVESINCE = now();
 
-    #ifdef _DEBUG
+    #ifdef _DEBUG    
       Serial.println("Done");
       delay(3000);
     #endif
+    tft.setTextColor(TFT_GREEN);
+    tft.printf(" Done with setup.\n");
+    tft.setTextColor(FG_COLOR);
 
-    tft.println("Done with setup.");
-    delay(250);
-
+    tft.println("Check weather, then start.");
+    
 }
 
 
@@ -1246,7 +1269,7 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
         *fg=tft.color565(0,0,255);
         *bg=BG_COLOR;
       } else {
-        snprintf(tempPres,10,"%dhPa~",(int) tempval);
+        snprintf(tempPres,10,"%dhPa-",(int) tempval);
         *fg=FG_COLOR;
         *bg=BG_COLOR;
       }
@@ -1408,28 +1431,34 @@ void fcnDrawClock(time_t t) {
 
 
 void fncDrawCurrentCondition(time_t t) {
-  if (t<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
+  if (I.localWeather==255)     I.localWeather=find_sensor_name("Outside", 4);  
+  if (I.localWeather<255 && (int8_t) Sensors[I.localWeather].snsValue!=I.currentTemp && t-Sensors[I.localWeather].timeLogged<180) {
+    I.currentTemp=(int8_t) Sensors[I.localWeather].snsValue;
+  } else {
+      if (t<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
+  }
+
   I.lastCurrentCondition = t;
 
   int Y = I.HEADER_Y, Z = 10,   X=180+(tft.width()-180)/2; //middle of area on side of icon
   tft.fillRect(180,Y,tft.width()-180,180,BG_COLOR); //clear the cc area
   int FNTSZ = 8;
-  int temp0;
   byte section_spacer = 3;
   bool islocal=false;
   String st = "Local";
 
-  I.localWeather = 255; //set to 255 as false, or to snsnum to use outdoor temps    
-  I.localWeather=find_sensor_name("Outside", 4);
+  I.localWeather=find_sensor_name("Outside", 4); //reset periodically, in case there is a change
+  I.currentTemp = WeatherData.getTemperature(t);
+  
   if (I.localWeather<255) {
     if (t-Sensors[I.localWeather].timeLogged>60*30) {
       I.localWeather = 255; //localweather is only useful if <30 minutes old 
-      temp0 = WeatherData.getTemperature(t);
     } 
     else {
-      temp0 = Sensors[I.localWeather].snsValue;
+      I.currentTemp = (int8_t) Sensors[I.localWeather].snsValue;
+      st+=" @" + (String) dateify(Sensors[I.localWeather].timeRead,"h1:nn");
       byte tind = find_sensor_name("Outside",61);
-      if (tind<255)       st += (String) ((int) Sensors[tind].snsValue) + "%";
+      if (tind<255)       st += " Bat" + (String) ((int) Sensors[tind].snsValue) + "%";
       islocal=true;
     }
   }
@@ -1439,7 +1468,7 @@ void fncDrawCurrentCondition(time_t t) {
   uint32_t FH = setFont(FNTSZ);
 
   
-  fcnPrintTxtColor(temp0,FNTSZ,X,Y+Z+FH/2);
+  fcnPrintTxtColor(I.currentTemp,FNTSZ,X,Y+Z+FH/2);
 
   tft.setTextColor(FG_COLOR,BG_COLOR);
   Z+=FH+section_spacer;
@@ -1451,8 +1480,8 @@ void fncDrawCurrentCondition(time_t t) {
     WeatherData.getDailyTemp(0,tempMaxmin);
     if (tempMaxmin[0] == -125) tempMaxmin[0] = WeatherData.getTemperature(t);
     //does local max/min trump reported?
-    if (tempMaxmin[0]<temp0) tempMaxmin[0]=temp0;
-    if (tempMaxmin[1]>temp0) tempMaxmin[1]=temp0;
+    if (tempMaxmin[0]<I.currentTemp) tempMaxmin[0]=I.currentTemp;
+    if (tempMaxmin[1]>I.currentTemp) tempMaxmin[1]=I.currentTemp;
     I.Tmax = tempMaxmin[0];
     I.Tmin = tempMaxmin[1];
     
@@ -1642,7 +1671,10 @@ uint16_t TESTRUN = 120;
 uint32_t WTHRFAIL = 0;
 #endif
 
+
+
 void loop() {
+
   time_t t = now(); // store the current time in time variable t
      #ifdef _DEBUG
        if (I.flagViewTime==0) {
@@ -1731,7 +1763,7 @@ void loop() {
     OldTime[2] = hour(); 
 
   //overwrite  sensors to the sd card
-    writeSensorSD("/Data/Sensors.dat");
+    writeSensorsSD("/Data/SensorBackup.dat");
     #ifdef _DEBUG
        if (I.flagViewTime==0) {
        Serial.printf("Loop sdcard write sensors.dat: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);

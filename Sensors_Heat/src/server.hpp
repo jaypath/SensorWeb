@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <sensors.hpp>
 #include <timesetup.hpp>
+#include "ArduinoOTA.h"
 
 
 //Server requests time out after 2 seconds
@@ -27,6 +28,7 @@
   extern WiFiClient wfclient;
   extern HTTPClient http;
 #endif
+
 
 extern bool KiyaanServer;
 extern SensorVal Sensors[SENSORNUM];
@@ -72,5 +74,6 @@ bool SendData(struct SensorVal*);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 byte connectWiFi();
+bool wait_ms(uint16_t ms);
 
 #endif

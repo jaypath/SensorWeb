@@ -64,6 +64,7 @@ struct Screen {
     bool isLeak;
     uint8_t localWeather; //index of outside sensor
 
+    int8_t currentTemp;
     int8_t Tmax;
     int8_t Tmin;
 };

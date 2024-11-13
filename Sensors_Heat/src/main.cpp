@@ -1,4 +1,3 @@
-#include "ArduinoOTA.h"
 
 #include <Wire.h>
 
@@ -115,6 +114,7 @@ uint32_t LAST_SERVER_STATUS_UPDATE = 0;
 
 //function declarations
 
+
 #ifdef _USELOWPOWER
 
 uint16_t SleepCounter = 0;
@@ -155,6 +155,18 @@ void setup()
     Serial.println("Begin Setup");
   #endif
 
+
+  #ifdef _USEMUX
+    pinMode(DIOPINS[0],OUTPUT);
+    pinMode(DIOPINS[1],OUTPUT);
+    pinMode(DIOPINS[2],OUTPUT);
+    pinMode(DIOPINS[3],OUTPUT);
+    pinMode(DIOPINS[4],INPUT);
+    digitalWrite(DIOPINS[0],LOW);
+    digitalWrite(DIOPINS[1],LOW);
+    digitalWrite(DIOPINS[2],LOW);
+    digitalWrite(DIOPINS[3],LOW);
+  #endif
 
 
   SERVERIP[0].IP = {192,168,68,93};
@@ -504,7 +516,6 @@ ALIVESINCE = now();
     oled.println(minute());
   #endif
 }
-
 
 
 void loop() {

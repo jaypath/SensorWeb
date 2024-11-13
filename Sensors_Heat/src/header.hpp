@@ -6,7 +6,7 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
-#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
+//#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
 //#define _WEBCHART 2
 #ifdef _WEBCHART
@@ -14,15 +14,15 @@
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
 #define ARDNAME "Heat" //unique name
-#define SENSORNUM 7 //be sure this matches SENSORTYPES
+#define SENSORNUM 8 //be sure this matches SENSORTYPES
 
-const uint8_t SENSORTYPES[SENSORNUM] = {50,55,55,55,55,55,55};
+const uint8_t SENSORTYPES[SENSORNUM] = {50,51,55,55,55,55,55,55};
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
@@ -45,6 +45,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //binary switches
 //#define _CHECKAIRCON 1
 #define _CHECKHEAT 1
+#define _USEMUX
 //#define _USECALIBRATIONMODE 6 
 
 /*sens types
@@ -102,7 +103,7 @@ GPIO 2,4,5,12,13,14,15 support pullup and pulldown
   
 
 GPIO21 is SDA and 22 is SCL
-  GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
+GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO4 (often labeled as "D4" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO5 (often labeled as "D5" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO12 (often labeled as "D12" on development boards) - Supports both internal pull-up and pull-down resistors.
@@ -112,6 +113,19 @@ GPIO15 (often labeled as "D15" on development boards) - Supports both internal p
 GPIO25 - Supports internal pull-up resistor.
 GPIO26 - Supports internal pull-up resistor.
 GPIO27 - Supports internal pull-up resistor
+
+bank 1 ADC (can use these with wifi, bank 2 is shares pins with wifi)
+32 - bank 1 adc, not affected by wifi
+33 -same
+34 -same
+35-same
+36-same
+37 - not generally exposed on most boards
+38 - not generally exposed on most boards
+39-same
+
+
+
 
 ADC pins are labeled as their GPIO. NOTE: ADC bank 2 cannot be used with wifi, use bank 1 instead (which is pins 36, 39, 34, 35,32,33 numbered starting from the pin next to EN)
 */
@@ -130,7 +144,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 */
 
-
+//for calibrating current sensor
 #ifdef _USECALIBRATIONMODE
   #define _NUMWEBCHARTPNTS 50
   const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {36, 39, 34, 35,32,33}; //which pins should be stored for charting?
@@ -173,8 +187,15 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 #ifdef _CHECKHEAT
 //  const uint8_t DIO_INPUTS=6; //6 sensors
+  #ifdef _USEMUX
+  //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
+  const uint8_t DIOPINS[5] = {36, 39, 34, 35,32}; //first 4 lines are DIO to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin)
+
+  #else
   const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
-  const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+  #endif
+    const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+
 #endif
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
