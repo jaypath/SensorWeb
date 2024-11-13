@@ -498,7 +498,8 @@ uint16_t  sc_interval;
         break;
         }
       case 20: //bme680
-        {//sc_multiplier = 1;
+        {
+          //sc_multiplier = 1;
         //sc_offset=00;
         sc_interval=60*30;//seconds 
 
@@ -533,7 +534,8 @@ uint16_t  sc_interval;
          }
 
         case 51: //heat, gas valve
-        {//sc_multiplier = 4096/256;
+        {
+          //sc_multiplier = 4096/256;
         //sc_offset=0;
           sc_interval=60*30;//seconds 
 
@@ -550,7 +552,8 @@ uint16_t  sc_interval;
           break;
         }
         case 55: //heat
-        {//sc_multiplier = 4096/256;
+        {
+          //sc_multiplier = 4096/256;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
 
@@ -572,7 +575,8 @@ uint16_t  sc_interval;
 
       #ifdef _CHECKAIRCON
         case 56: //aircon compressor
-          {//sc_multiplier = 4096/256;
+          {
+            //sc_multiplier = 4096/256;
           //sc_offset=0;
           sc_interval=60*30;//seconds 
           Sensors[i].snsPin=DIOPINS[0];
@@ -585,7 +589,8 @@ uint16_t  sc_interval;
           break;
           }
         case 57: //aircon fan
-          {//sc_multiplier = 4096/256;
+          {
+            //sc_multiplier = 4096/256;
           //sc_offset=0;
           sc_interval=60*30;//seconds 
           Sensors[i].snsPin=DIOPINS[1];
@@ -612,9 +617,9 @@ uint16_t  sc_interval;
           Sensors[i].limitLower = -0.5;
           Sensors[i].PollingInt=10*60;
           Sensors[i].SendingInt=10*60;
+          #endif
           break;
         }
-        #endif
 
       case 60: //battery
         {
@@ -733,7 +738,7 @@ int peak_to_peak(int pin, int ms) {
   int minVal=16000;
   int buffer = 0;
   uint32_t t0, t1;
-  byte bitval=0;
+  
 
   t0 = millis();
   t1 = t0;
@@ -1106,7 +1111,7 @@ bool ReadData(struct SensorVal *P) {
           nsamps=1; //number of samples to average
 
           //set the MUX channel
-          bitval = 0;
+          byte bitval = 0;
           for (byte j=0;j<4;j++) {
             bitval = bitRead(P->snsPin,0);
             if (bitval==0) digitalWrite(DIOPINS[j],LOW);
@@ -1141,7 +1146,7 @@ bool ReadData(struct SensorVal *P) {
 
         #ifdef _USEMUX
           //set the MUX channel
-          bitval = 0;
+          byte bitval = 0;
           for (byte j=0;j<4;j++) {
             bitval = bitRead(P->snsPin,0);
             if (bitval==0) digitalWrite(DIOPINS[j],LOW);
@@ -1506,7 +1511,9 @@ void initSensor(int k) {
   //special cases... k>255 then expire any sensor that is older than k mimnutes
   //k<0 then init ALL sensors
   time_t t=now();
-  if (k<-255)  (byte i=0;i<SENSORNUM;i++) initSensor(i); //init all sensors
+  if (k<-255)  {
+    for (byte i=0;i<SENSORNUM;i++) initSensor(i); //init all sensors
+  }
     
   if (k>255) { //init all sensors that are this old in unixtime minutes
     for (byte i=0;i<SENSORNUM;i++)  {

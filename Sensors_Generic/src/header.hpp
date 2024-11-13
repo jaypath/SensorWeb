@@ -44,7 +44,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USELEAK 
 //binary switches
 //#define _CHECKAIRCON 1
-#define _CHECKHEAT 1
+#define _CHECKHEAT 1 //check which lines are charged to provide heat
 #define _USEMUX //use analog input multiplexor to allow for >6 inputs
 //#define _USECALIBRATIONMODE 6 
 
