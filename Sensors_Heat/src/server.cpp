@@ -55,6 +55,31 @@ bool WifiStatus(void) {
 }
 uint8_t connectWiFi()
 {
+//rerturn 0 if connected, else number of times I tried and failed
+  
+WiFi.mode(WIFI_STA);
+  #ifdef _DEBUG
+  SerialWrite((String) "wifi begin\n");
+       #endif
+
+  
+  WiFi.begin(ESP_SSID, ESP_PASS);
+
+  while (WiFi.status() != WL_CONNECTED)  {
+  #ifdef _DEBUG
+    SerialWrite((String) "Connecting\n");
+       #endif
+  }
+
+  #ifdef _DEBUG
+    SerialWrite((String) "connected\n");
+       #endif
+
+return 1;
+
+
+#ifdef _NOTDEFINED
+
   //rerturn 0 if connected, else number of times I tried and failed
   uint8_t retries = 100;
   byte connected = 0;
@@ -136,6 +161,7 @@ uint8_t connectWiFi()
 
   return connected;
 
+#endif
 }
 
 
@@ -161,9 +187,11 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 bool SendData(struct SensorVal *snsreading) {
 
 
-byte arduinoID = WIFI_INFO.MYIP[3];
+
 #ifdef  ARDID
-   arduinoID = ARDID;
+   byte arduinoID = ARDID;
+#else
+byte arduinoID = WIFI_INFO.MYIP[3];
 #endif
 
 if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
@@ -185,7 +213,7 @@ bool isGood = false;
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + WIFI_INFO.MYIP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -357,9 +385,11 @@ double limitUpper=-1, limitLower=-1;
 uint16_t PollingInt=0;
   uint16_t SendingInt=0;
 byte k;
-byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
-   arduinoID = ARDID;
+byte   arduinoID = ARDID;
+#else
+byte arduinoID = WIFI_INFO.MYIP[3];
+
 #endif
 
 
@@ -439,7 +469,7 @@ currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
 
-currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WiFi.localIP().toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 
