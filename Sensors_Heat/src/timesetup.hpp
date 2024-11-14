@@ -7,6 +7,8 @@
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <header.hpp>
+
 
 extern WiFiUDP ntpUDP;
 extern NTPClient timeClient;
