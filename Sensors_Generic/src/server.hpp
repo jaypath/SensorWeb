@@ -56,7 +56,9 @@ extern WiFi_type WIFI_INFO;
 void initHVAC(void);
 #endif
 
+
 void SerialWrite(String);
+
 bool WifiStatus(void);
 bool Server_Message(String URL, String* payload, int* httpCode);
 void handleREBOOT(void);

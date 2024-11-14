@@ -180,7 +180,7 @@ void handleReboot() {
 }
 
 void handleCLEARSENSOR() {
-  byte j=0;
+  int j=-1;
   for (uint8_t i = 0; i < server.args(); i++) {
     if (server.argName(i)=="SensorNum") j=server.arg(i).toInt();
   }

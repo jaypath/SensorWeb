@@ -459,8 +459,8 @@ bool WeatherInfo::updateWeather(uint16_t synctime)
 {
 
     time_t tnow = now();
-    if (this->lastUpdateT+synctime > tnow) return false; //not time to update
-    if ((bool) this->lastUpdateStatus==false && (uint32_t) this->lastUpdateAttempt+30 > tnow) return false; //last update failed and was at least 30s ago
+    if (this->lastUpdateT+synctime > tnow && this->lastUpdateStatus==true) return false; //not time to update
+    if ((uint32_t) this->lastUpdateAttempt+30 > tnow) return false; //last update failed and was at least 30s ago
 
     #ifdef _DEBUG
 Serial.printf("Updateweather: init...");
@@ -471,8 +471,6 @@ Serial.printf("Updateweather: init...");
     this->lastUpdateStatus=false;
     this->lastUpdateAttempt = tnow;
 
-
-    bool isgood = false;
     String url;
     JsonDocument doc;
     int httpCode;
@@ -499,6 +497,7 @@ Serial.printf(" done at %s.\n",dateify(tnow));
             #ifdef _DEBUG
                     Serial.printf("updateweather: failed to update grid points\n");                
             #endif
+            
             return false; //failed
 
         }
@@ -821,7 +820,7 @@ Serial.printf(" done at %s.\n",dateify(tnow));
 
     this->lastUpdateT = tnow; //mark the last successful update
     this->lastUpdateStatus = true;
-
+    
     return true;
 }
 

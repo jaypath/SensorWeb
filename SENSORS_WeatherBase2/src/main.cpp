@@ -355,13 +355,15 @@ tft.println("Connecting ArduinoOTA...");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
     timeClient.begin(); //time is in UTC
-    updateTime(10,250); //check if DST and set time to EST or EDT
+    updateTime(100,250); //check if DST and set time to EST or EDT
     
     tft.setTextColor(TFT_GREEN);
     tft.printf(" TimeClient OK.\n");
     tft.setTextColor(FG_COLOR);
 
     tft.println("Starting...");
+
+
     ALIVESINCE = now();
 
     #ifdef _DEBUG    
@@ -375,81 +377,6 @@ tft.println("Connecting ArduinoOTA...");
     tft.println("Check weather, then start.");
     
 }
-
-
-
-
-//sensor fcns
-
-void parseLine_to_Sensor(String token) {
-  //the token contains:
-  String logID; //#.#.# [as string], ARDID, SNStype, SNSID
-  SensorVal S;
-
-  String temp;
-  int16_t strOffset;
-
-  
-  strOffset = token.indexOf(",",0);
-  if (strOffset == -1) { //did not find the comma, we may have cut the last one. abort.
-    return;
-  } else {
-    //element 1 is IP
-    logID= token.substring(0,strOffset); //end index is NOT inclusive
-    token.remove(0,strOffset+1);
-
-    IPString2ByteArray(logID,S.IP);
-
-    //element2 is logID
-    logID= token.substring(0,strOffset); //end index is NOT inclusive
-    token.remove(0,strOffset+1);
-    if (breakLOGID(logID,&S.ardID,&S.snsType,&S.snsID) == false) return;
-
-  }
-
-//timelogged
-  strOffset = token.indexOf(",",0);
-  temp= token.substring(0,strOffset); //
-  token.remove(0,strOffset+1);
-  stringToLong(temp,&S.timeRead);
-
-//  uint32_t timeReceived
-  strOffset = token.indexOf(",",0);
-  temp= token.substring(0,strOffset); //
-  token.remove(0,strOffset+1);
-  stringToLong(temp,&S.timeLogged);
-
-//  String varName; // [as string]
-  strOffset = token.indexOf(",",0);
-  temp = token.substring(0,strOffset); 
-  token.remove(0,strOffset+1);
-  snprintf(S.snsName,29,"%s",temp.c_str());
-  
-//  double value;
-  strOffset = token.indexOf(",",0);
-  temp= token.substring(0,strOffset); 
-  token.remove(0,strOffset+1);
-  S.snsValue = temp.toDouble();
-  
-//bool isFlagged; last one
-  strOffset = token.indexOf(",",0);
-  if (strOffset==-1) temp= token;
-  else temp= token.substring(0,strOffset); 
-  //token.remove(0,strOffset+1);
-  if (temp.toInt()!=0) {
-    bitWrite(S.Flags,0,1);
-  }
-  
-
-  int sn = findDev(&S,true);
-
-  if (sn<0) return;
-  Sensors[sn] = S;
-
-
-}
-
-
 
 //weather FCNs
 
@@ -1742,17 +1669,6 @@ void loop() {
 
     I.isLeak = false;
     if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
-
-    #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop check flags: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-       while(true);
-       }
-     #endif
-
     
   }
 
@@ -1762,28 +1678,12 @@ void loop() {
  
     OldTime[2] = hour(); 
 
-  //overwrite  sensors to the sd card
-    writeSensorsSD("/Data/SensorBackup.dat");
-    #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop sdcard write sensors.dat: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-       while(true);
-       }
-     #endif
+    
     //expire any measurements that are older than N hours.
     initSensor(OLDESTSENSORHR*60);
-        #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop initsensor: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
-       while(true);
-       }
-     #endif
+
+      //overwrite  sensors to the sd card
+    writeSensorsSD("/Data/SensorBackup.dat");
 
       
   }

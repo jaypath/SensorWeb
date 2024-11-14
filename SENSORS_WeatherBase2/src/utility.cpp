@@ -205,7 +205,7 @@ int16_t findOldestDev() {
 
 void initSensor(int k) {
   //special cases... k>255 then expire any sensor that is older than k MINUTES
-  //k<0 then init ALL sensors
+  //k<=-256 then init ALL sensors
 
 
 
