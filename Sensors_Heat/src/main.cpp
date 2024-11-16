@@ -629,9 +629,6 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
 
     }
 
-
-
-
   }
   
   if (OldTime[1] != minute()) {

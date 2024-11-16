@@ -128,8 +128,6 @@ void onWiFiEvent(WiFiEvent_t event) {
   }
 }
 
-
-
 bool Server_Message(String URL, String* payload, int* httpCode) {
   WiFiClient wfclient;
   HTTPClient http;

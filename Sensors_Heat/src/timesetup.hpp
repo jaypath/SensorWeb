@@ -9,7 +9,6 @@
 #include <WiFiUdp.h>
 #include <header.hpp>
 
-
 extern WiFiUDP ntpUDP;
 extern NTPClient timeClient;
 extern long DSTOFFSET;
