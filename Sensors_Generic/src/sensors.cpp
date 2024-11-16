@@ -1449,7 +1449,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
   bool lastflag = false;
   bool thisflag = false;
 
-  if (P->snsType==50 || P->snsType==55 || P->snsType==56 || P->snsType==57) { //HVAC is a special case
+  if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
     lastflag = bitRead(P->Flags,0); //this is the last flag status
     if (P->LastsnsValue <  P->snsValue) { //currently flagged
       bitWrite(P->Flags,0,1); //currently flagged

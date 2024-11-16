@@ -526,7 +526,7 @@ uint16_t  sc_interval;
           #endif
           Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=60;
+          Sensors[i].PollingInt=120;
           Sensors[i].SendingInt=300; 
           bitWrite(Sensors[i].Flags,3,1); //calculated
           
@@ -547,8 +547,8 @@ uint16_t  sc_interval;
           #endif
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30; //short poll int given that gas may not be on often 
-          Sensors[i].SendingInt=600; 
+          Sensors[i].PollingInt=120;
+          Sensors[i].SendingInt=300; 
           break;
         }
         case 55: //heat
@@ -567,7 +567,7 @@ uint16_t  sc_interval;
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=600; 
+          Sensors[i].SendingInt=300; 
           break;
         }
       #endif
@@ -735,8 +735,8 @@ int peak_to_peak(int pin, int ms) {
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
   
   int maxVal = 0;
-  int minVal=6000;
-  uint16_t buffer = 0;
+  int minVal=16000;
+  int buffer = 0;
   uint32_t t0;
   
 
@@ -1126,19 +1126,20 @@ bool ReadData(struct SensorVal *P) {
             Serial.println (" was the bit array of chans 1-4.");
             #endif
 
-          wait_ms(50); //provide time for channel switch and charge capacitors
+          wait_ms(500); //provide time for channel switch and charge capacitors
 
-            val = peak_to_peak(DIOPINS[4],50); 
+            val = peak_to_peak(DIOPINS[4],50);
+            val = peak_to_peak(DIOPINS[4],50); //only keep the second reading
 
 //          for (byte j=0;j<nsamps;j++) {
   //          val += peak_to_peak(DIOPINS[4],50);
     //      }
       //    val = val/nsamps; //average
            #ifdef _DEBUG
-            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
+            Serial.printf ("%s reading: %i\n", P->snsName, val);
             #endif
 
-          if (val > P->limitUpper)           P->snsValue += (double) P->PollingInt/60; //snsvalue is the number of minutes the system was on
+          if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
 
           #ifndef _USECALIBRATIONMODE
             //note that for heat, the total time (case 50) accounts for slot 0 
@@ -1176,9 +1177,10 @@ bool ReadData(struct SensorVal *P) {
             Serial.println (" was the bit array of chans 1-4.");
             #endif
 
-          wait_ms(50); //provide time for channel switch and charge capacitors
+          wait_ms(500); //provide time for channel switch and charge capacitors
 
-        val = peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles. 
+        val = peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles
+        val = peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles. Take 2 readings, keep the second
         
 //          for (byte j=0;j<nsamps;j++) {
   //          val += peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles
@@ -1186,7 +1188,7 @@ bool ReadData(struct SensorVal *P) {
       //    val = val/nsamps; //average
 
            #ifdef _DEBUG
-            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
+            Serial.printf ("%s reading: %i\n", P->snsName, val);
             #endif
         
 
@@ -1447,7 +1449,7 @@ bool checkSensorValFlag(struct SensorVal *P) {
   bool lastflag = false;
   bool thisflag = false;
 
-  if (P->snsType==50 || P->snsType==55 || P->snsType==56 || P->snsType==57) { //HVAC is a special case
+  if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
     lastflag = bitRead(P->Flags,0); //this is the last flag status
     if (P->LastsnsValue <  P->snsValue) { //currently flagged
       bitWrite(P->Flags,0,1); //currently flagged
