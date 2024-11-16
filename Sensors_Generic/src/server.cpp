@@ -21,12 +21,6 @@ IP_TYPE SERVERIP[NUMSERVERS];
 
 WiFi_type WIFI_INFO;
 
-#ifdef _DEBUG
-void SerialWrite(String msg) {
-    Serial.printf("%s",msg.c_str());
-  return;
-}
-#endif
   
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
@@ -39,6 +33,11 @@ void initHVAC(void){
 }
 #endif
 
+
+void assignIP(byte ip[4],IPAddress IPA) {
+   assignIP(ip, IPA[0],IPA[1],IPA[2],IPA[3]);
+
+}
 void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
   //ip is a 4 byte array
   ip[0] = m1;
@@ -49,27 +48,34 @@ void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
 
 
 bool WifiStatus(void) {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  return false;
-  
+  if (WiFi.status() != WL_CONNECTED) 
+  {
+    WIFI_INFO.status = 0;
+    return false;
+  }
+  WIFI_INFO.status = 1;
+  return false; 
 }
-uint8_t connectWiFi()
+
+void connectWiFi()
 {
+//rerturn nothing, as event trigger async
+  
+
   //rerturn 0 if connected, else number of times I tried and failed
-  uint8_t retries = 100;
-  byte connected = 0;
   IPAddress temp;
 
   assignIP(WIFI_INFO.DHCP,192,168,68,1);
-  assignIP(WIFI_INFO.DNS,192,168,68,1);
+  assignIP(WIFI_INFO.DNS,192,168,1,1);
+  assignIP(WIFI_INFO.DNS2,192,168,68,1);
   assignIP(WIFI_INFO.GATEWAY,192,168,68,1);
   assignIP(WIFI_INFO.SUBNET,255,255,252,0);
 
 
   if (WifiStatus()) {
-    WIFI_INFO.MYIP = WiFi.localIP();
-    WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
-    return connected;
+    assignIP(WIFI_INFO.MYIP, WiFi.localIP());
+    
+    return;
   } else {
     if (ASSIGNEDIP[0]==0) {
       WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
@@ -79,73 +85,55 @@ uint8_t connectWiFi()
       WIFI_INFO.MYIP[2] = ASSIGNEDIP[2];    
       WIFI_INFO.MYIP[3] = ASSIGNEDIP[3];    
 
-      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
+      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.GATEWAY,  WIFI_INFO.SUBNET,WIFI_INFO.DNS,WIFI_INFO.DNS2);
+      
     }
   }
   
   WiFi.mode(WIFI_STA);
   #ifdef _DEBUG
-  SerialWrite((String) "wifi begin\n");
+  Serial.printf( "wifi begin\n");
        #endif
 
-  
+  WiFi.onEvent(onWiFiEvent); 
   WiFi.begin(ESP_SSID, ESP_PASS);
 
-  if (WiFi.status() != WL_CONNECTED)  {
-  #ifdef _DEBUG
-    SerialWrite((String) "Connecting\n");
-       #endif
-    
-    #ifdef _USESSD1306
-      oled.print("Connecting");
-    #endif
-    for (byte j=0;j<retries;j++) {
-  #ifdef _DEBUG
-      SerialWrite((String) ".");
-       #endif
-      #ifdef _USESSD1306
-        oled.print(".");
-      #endif
-
-      delay(250);
-      if (WifiStatus()) {
-        WIFI_INFO.MYIP = WiFi.localIP();
-        
-  #ifdef _DEBUG
-        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
-       #endif
-
-        #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("WiFi OK.");
-          oled.println("timesetup next.");      
-        #endif
-
-        return 0;
-      }
-      connected = j;
-    }
-        
-  }
-
-  #ifdef _DEBUG
-  SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
-       #endif
-          
-
-  return connected;
-
+  
 }
 
-
+void onWiFiEvent(WiFiEvent_t event) {
+  switch (event) {
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      {
+        #ifdef _DEBUG 
+          Serial.print("WiFi begin failed ");
+        #endif
+        WIFI_INFO.status =  0;
+      break;
+      }
+    case SYSTEM_EVENT_STA_GOT_IP:
+      {
+        #ifdef _DEBUG 
+        Serial.print("WiFi begin succeeded ");
+        #endif
+    
+        // Connected successfully
+        WIFI_INFO.status =  1;
+        assignIP(WIFI_INFO.MYIP, WiFi.localIP());    
+        break;
+      }
+    default:
+       // Display additional events???
+       break;      
+  }
+}
 
 bool Server_Message(String URL, String* payload, int* httpCode) {
   WiFiClient wfclient;
   HTTPClient http;
 
 
-  if(WiFi.status()== WL_CONNECTED){
+  if (WIFI_INFO.status >0 ){
      http.useHTTP10(true);
      http.begin(wfclient,URL.c_str());
      *httpCode = http.GET();
@@ -161,16 +149,14 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 bool SendData(struct SensorVal *snsreading) {
 
 
-byte arduinoID = WIFI_INFO.MYIP[3];
+
 #ifdef  ARDID
-   arduinoID = ARDID;
+   byte arduinoID = ARDID;
+#else
+byte arduinoID = WIFI_INFO.MYIP[3];
 #endif
 
 if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
-
-  #ifdef _DEBUG
-SerialWrite((String) "SENDDATA: Sending data. Sensor is currently named " + (String) snsreading->snsName + (String) "\n");
-       #endif
 
 
 WiFiClient wfclient;
@@ -180,12 +166,12 @@ byte ipindex=0;
 bool isGood = false;
 
 
-  if(WiFi.status()== WL_CONNECTED){
+  if(WIFI_INFO.status>0){
     String payload;
     String URL;
     String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + WIFI_INFO.MYIP.toString() + "," + "&varName=" + String(snsreading->snsName);
+    tempstring = "/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=" + String(snsreading->snsName);
     tempstring = tempstring + "&varValue=";
     tempstring = tempstring + String(snsreading->snsValue, DEC);
     tempstring = tempstring + "&Flags=";
@@ -194,8 +180,12 @@ bool isGood = false;
     tempstring = tempstring + String(arduinoID, DEC);
     tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC);
 
-    do {
-      URL = "http://" + SERVERIP[ipindex].IP.toString();
+    while(ipindex<NUMSERVERS) {
+      if (SERVERIP[ipindex].IP[0]==0 || SERVERIP[ipindex].IP[3]==0) {
+        ipindex++;
+        continue;
+      }
+      URL = "http://" + IP2String( SERVERIP[ipindex].IP);
       URL = URL + tempstring;
     
       http.useHTTP10(true);
@@ -220,7 +210,7 @@ bool isGood = false;
 
       ipindex++;
 
-    } while(ipindex<NUMSERVERS);
+    } ;
   
     
   }
@@ -357,9 +347,11 @@ double limitUpper=-1, limitLower=-1;
 uint16_t PollingInt=0;
   uint16_t SendingInt=0;
 byte k;
-byte arduinoID = WIFI_INFO.MYIP[3];
 #ifdef  ARDID
-   arduinoID = ARDID;
+byte   arduinoID = ARDID;
+#else
+byte arduinoID = WIFI_INFO.MYIP[3];
+
 #endif
 
 
@@ -412,9 +404,16 @@ ESP. restart();
 }
 
 void handleRoot() {
-byte arduinoID = WIFI_INFO.MYIP[3];
+
+#ifdef _DEBUG
+  Serial.println("Hit handleroot.");
+#endif
+
 #ifdef  ARDID
-   arduinoID = ARDID;
+  byte arduinoID = ARDID;
+#else
+  byte arduinoID = WiFi.localIP()[3];
+
 #endif
 
 String currentLine = "<!DOCTYPE html><html>\n";
@@ -432,7 +431,7 @@ currentLine += (String) "body {  font-family: arial, sans-serif; }\n";
 currentLine += "</style></head>\n";
 currentLine += "<body>";
 
-currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WIFI_INFO.MYIP.toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
+currentLine +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WiFi.localIP().toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
 currentLine += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 
@@ -691,4 +690,9 @@ bool wait_ms(uint16_t ms) {
   }
 
   return true;
+}
+
+String IP2String(byte IP[]) {
+  String s = (String) IP[0] + "." + (String) IP[1] + "." + (String) IP[2] + "." + (String) IP[3];
+  return s;
 }

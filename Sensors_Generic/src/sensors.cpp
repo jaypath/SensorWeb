@@ -527,7 +527,7 @@ uint16_t  sc_interval;
           Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
           Sensors[i].limitLower = -1;
           Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=600; 
+          Sensors[i].SendingInt=300; 
           bitWrite(Sensors[i].Flags,3,1); //calculated
           
           break;
@@ -541,14 +541,14 @@ uint16_t  sc_interval;
 
           snprintf(Sensors[i].snsName,31,"%s_GAS",ARDNAME);
           #ifdef _USEMUX
-            Sensors[i].snsPin=0b0000; //the DIO configuration to select this channel            
+            Sensors[i].snsPin=0; //the DIO configuration to select this channel            
           #else
             //undefined. gas is not measured if notusing mux
           #endif
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=300;
-          Sensors[i].SendingInt=1800; 
+          Sensors[i].PollingInt=30; //short poll int given that gas may not be on often 
+          Sensors[i].SendingInt=600; 
           break;
         }
         case 55: //heat
@@ -566,8 +566,8 @@ uint16_t  sc_interval;
           #endif
           Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=300;
-          Sensors[i].SendingInt=1800; 
+          Sensors[i].PollingInt=120;
+          Sensors[i].SendingInt=600; 
           break;
         }
       #endif
@@ -584,8 +584,8 @@ uint16_t  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=5*60;
+          Sensors[i].PollingInt=120;
+          Sensors[i].SendingInt=300;
           break;
           }
         case 57: //aircon fan
@@ -598,8 +598,8 @@ uint16_t  sc_interval;
           snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
           Sensors[i].limitUpper = 700;
           Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=5*60;
+          Sensors[i].PollingInt=120;
+          Sensors[i].SendingInt=300;
           break;
           }
           
@@ -735,19 +735,18 @@ int peak_to_peak(int pin, int ms) {
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
   
   int maxVal = 0;
-  int minVal=16000;
-  int buffer = 0;
-  uint32_t t0, t1;
+  int minVal=6000;
+  uint16_t buffer = 0;
+  uint32_t t0;
   
 
   t0 = millis();
-  t1 = t0;
 
-  while (t1<=t0+ms) { 
+  while (millis()<=t0+ms) { 
     buffer = analogRead(pin);
     if (maxVal<buffer) maxVal = buffer;
     if (minVal>buffer) minVal = buffer;
-    t1 = millis();        
+
   }
   
 
@@ -1112,20 +1111,34 @@ bool ReadData(struct SensorVal *P) {
 
           //set the MUX channel
           byte bitval = 0;
+          #ifdef _DEBUG
+            Serial.print ("gas byte array: ");
+            #endif
           for (byte j=0;j<4;j++) {
-            bitval = bitRead(P->snsPin,0);
+            bitval = bitRead(P->snsPin,j);
+            #ifdef _DEBUG
+            Serial.print (bitval);
+            #endif
             if (bitval==0) digitalWrite(DIOPINS[j],LOW);
             else digitalWrite(DIOPINS[j],HIGH);
           }
+          #ifdef _DEBUG
+            Serial.println (" was the bit array of chans 1-4.");
+            #endif
 
-          wait_ms(250); //provide time for channel switch and charge capacitors
+          wait_ms(50); //provide time for channel switch and charge capacitors
 
-          for (byte j=0;j<nsamps;j++) {
-            val += peak_to_peak(DIOPINS[4],50);
-          }
-          val = val/nsamps; //average
+            val = peak_to_peak(DIOPINS[4],50); 
 
-          if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
+//          for (byte j=0;j<nsamps;j++) {
+  //          val += peak_to_peak(DIOPINS[4],50);
+    //      }
+      //    val = val/nsamps; //average
+           #ifdef _DEBUG
+            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
+            #endif
+
+          if (val > P->limitUpper)           P->snsValue += (double) P->PollingInt/60; //snsvalue is the number of minutes the system was on
 
           #ifndef _USECALIBRATIONMODE
             //note that for heat, the total time (case 50) accounts for slot 0 
@@ -1147,21 +1160,38 @@ bool ReadData(struct SensorVal *P) {
         #ifdef _USEMUX
           //set the MUX channel
           byte bitval = 0;
+
+          #ifdef _DEBUG
+            Serial.printf ("%s byte array: ", P->snsName);
+            #endif
           for (byte j=0;j<4;j++) {
-            bitval = bitRead(P->snsPin,0);
+            bitval = bitRead(P->snsPin,j);
+            #ifdef _DEBUG
+            Serial.print (bitval);
+            #endif
             if (bitval==0) digitalWrite(DIOPINS[j],LOW);
             else digitalWrite(DIOPINS[j],HIGH);
           }
+          #ifdef _DEBUG
+            Serial.println (" was the bit array of chans 1-4.");
+            #endif
 
-          wait_ms(250); //provide time for channel switch and charge capacitors
+          wait_ms(50); //provide time for channel switch and charge capacitors
 
-          for (byte j=0;j<nsamps;j++) {
-            val += peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles
-          }
-          val = val/nsamps; //average
+        val = peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles. 
+        
+//          for (byte j=0;j<nsamps;j++) {
+  //          val += peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles
+    //      }
+      //    val = val/nsamps; //average
+
+           #ifdef _DEBUG
+            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
+            #endif
+        
 
           if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
-
+          
           #ifndef _USECALIBRATIONMODE
             //note that for heat, the total time (case 50) accounts for slot 0 , gas (case 51) takes 1, so these take id + 1
             if (HVACHX[P->snsID+1].lastRead+HVACHX[P->snsID+1].interval <= P->LastReadTime) {
@@ -1326,27 +1356,6 @@ bool ReadData(struct SensorVal *P) {
   #endif
 
   
-
-#ifdef _DEBUG
-      Serial.println(" ");
-      Serial.println("*****************");
-      Serial.println("Reading Sensor");
-      Serial.print("Device: ");
-          Serial.println(P->snsName);
-      Serial.print("SnsType: ");
-          Serial.println(P->snsType);
-      Serial.print("snsID: ");
-          Serial.println(P->snsID);
-      Serial.print("Value: ");
-          Serial.println(P->snsValue);
-      Serial.print("LastLogged: ");
-          Serial.println(P->LastReadTime);
-      Serial.print("isFlagged: ");
-          Serial.println(bitRead(P->Flags,0));          
-      Serial.println("*****************");
-      Serial.println(" ");
-
-      #endif
 
 
 return true;
