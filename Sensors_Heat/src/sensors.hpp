@@ -16,7 +16,6 @@
   #include "bsec.h"  
 #endif
 
-
 #ifdef DHTTYPE
   #include <Adafruit_Sensor.h>
   #include <DHT.h>

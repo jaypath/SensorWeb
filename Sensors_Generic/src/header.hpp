@@ -86,8 +86,6 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 */
 
-
-
    /*
   FOR ESP32:
   //16-33 are valid pins, though not all are exposed. For example, 15 is usable but must be high at boot. 14 goes high at boot 

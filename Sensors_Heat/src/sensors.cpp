@@ -1193,8 +1193,7 @@ bool ReadData(struct SensorVal *P) {
         
 
           if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
-           
-
+          
           #ifndef _USECALIBRATIONMODE
             //note that for heat, the total time (case 50) accounts for slot 0 , gas (case 51) takes 1, so these take id + 1
             if (HVACHX[P->snsID+1].lastRead+HVACHX[P->snsID+1].interval <= P->LastReadTime) {

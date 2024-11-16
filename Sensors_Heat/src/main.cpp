@@ -603,9 +603,6 @@ SerialWrite( "Going to attempt read and write sensor " + (String) k + "\n");
 
     }
 
-
-
-
   }
   
   if (OldTime[1] != minute()) {

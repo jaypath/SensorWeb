@@ -164,8 +164,6 @@ return 1;
 #endif
 }
 
-
-
 bool Server_Message(String URL, String* payload, int* httpCode) {
   WiFiClient wfclient;
   HTTPClient http;

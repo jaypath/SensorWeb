@@ -8,7 +8,6 @@
 #include <timesetup.hpp>
 #include "ArduinoOTA.h"
 
-
 //Server requests time out after 2 seconds
 #define TIMEOUT_TIME 2000
 
