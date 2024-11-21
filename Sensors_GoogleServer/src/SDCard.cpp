@@ -1,6 +1,4 @@
 #include <SDCard.hpp>
-#include <globals.hpp>
-#include <SD.h>
 
 
 //this allows a sensorval struct to be written to file as a series of bytes
@@ -10,6 +8,9 @@ union SensorValBytes {
 //    SensorValBytes(){};
 //    ~SensorValBytes(){};
 };
+
+
+
 
 bool writeSensorsSD(String filename)
 {
@@ -184,4 +185,3 @@ uint32_t read32(File &f) {
   ((uint8_t *)&result)[3] = f.read(); // MSB
   return result;
 }
-

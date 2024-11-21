@@ -422,7 +422,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
       if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
       if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
       
-      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&starttime=" + (String) (t - 86400) + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
       WEBHTML = WEBHTML + "</tr>";
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
@@ -444,7 +444,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
           if (Sensors[jj].snsType==60 || Sensors[jj].snsType==61) delta = 3; //batery
           if (Sensors[jj].snsType>=50 && Sensors[jj].snsType<60) delta = 15; //HVAC reads ~q2 min
 
-          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&starttime=" + (String) (t - 86400) + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
           WEBHTML = WEBHTML + "</tr>";
         }
       }
@@ -552,10 +552,10 @@ void handleRETRIEVEDATA() {
   byte ardID=0,  snsType=0,  snsID=0, N=0,delta=1;
   uint32_t starttime=0, endtime=0;
 
-
+time_t tn=now();
 
     if (server.args()==0) {
-      server.send(401, "text/plain", "Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=10&starttime=1&endtime=1&delta=1  (where either N or endtime are required and delta is optional)");
+      server.send(401, "text/plain", "Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=100&endtime=1731761847&delta=1 or RETRIEVEDATA?ID=1.1.1&N=100&starttime=1731700000&endtime=1731761847&delta=10");
       return;
     }
 
@@ -583,8 +583,11 @@ void handleRETRIEVEDATA() {
 
   uint32_t t[N]={0};
   double v[N]={0};
-
-  bool success =   readSensorSD(ardID,snsType,snsID,t,v,&N,starttime,endtime,delta);
+  uint32_t sampn=0; //sample number
+  
+  bool success=false;
+  if (starttime>0)  success =   readSensorSD(ardID,snsType,snsID,t,v,&N,&sampn,starttime,endtime,delta);
+  else    success =   readSensorSD(ardID,snsType,snsID,t,v,&N,&sampn,endtime,delta); //this fills from tn backwards to N*delta samples
 
   if (success == false)  {
     server.send(401, "text/plain", "Failed to read associated file.");
@@ -604,7 +607,7 @@ void handleRETRIEVEDATA() {
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
   WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(now(),"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
+  WEBHTML = WEBHTML + "<h2>" + dateify(tn,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
 
   WEBHTML = WEBHTML + "<p>";
 
@@ -614,7 +617,7 @@ void handleRETRIEVEDATA() {
   }
 
   WEBHTML += "Start time: " + (String) dateify(t[0],"mm/dd/yyyy hh:nn:ss") + " to " + (String) dateify(t[N-1],"mm/dd/yyyy hh:nn:ss")  +  "<br>";
-
+  
   //add chart
   WEBHTML += "<br>-----------------------<br>\n";
   WEBHTML += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:600px;\"></div>\n";
@@ -652,7 +655,7 @@ void handleRETRIEVEDATA() {
     WEBHTML += "}\n";  
 
   WEBHTML += "</script> \n";
-    WEBHTML += "Returned " + (String) N + " samples<br>\n";
+    WEBHTML += "Returned " + (String) N + " avg samples out of " + (String) sampn + " individual samples. <br>\n";
 
     WEBHTML += "unixtime,value<br>\n";
   for (byte j=0;j<N;j++)     WEBHTML += (String) t[j] + "," + (String) v[j] + "<br>\n";

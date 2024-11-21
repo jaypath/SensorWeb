@@ -2,8 +2,8 @@
 #define SDCard_HPP
 
 #include <SD.h>
-#include <utility.hpp>
 #include <globals.hpp>
+#include <timesetup.hpp>
 
 //declared as global constants
 extern SensorVal Sensors[SENSORNUM];
