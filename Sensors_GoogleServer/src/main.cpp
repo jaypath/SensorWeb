@@ -77,6 +77,7 @@ extern int Ypos ;
 extern bool isFlagged ;
 extern char tempbuf[70];     
 extern time_t ALIVESINCE;
+double bg_luminance; 
 
 int fcn_write_sensor_data(byte i, int y);
 void clearTFT();
@@ -118,6 +119,8 @@ void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y, String hea
 //if x and y are not provided, just print at the current x/y position
 
 uint16_t bg = BG_COLOR;
+
+
 String temp = (String) value1;
 temp+= (String) "/" + ((String) value2);
 
@@ -223,8 +226,8 @@ uint16_t temp2color16(int temp, uint16_t *BG) {
   24, 200, 0, 200, //21 - 24
   27, 200, 0, 100, //25 - 27
   29, 200, 100, 100, //28 - 29
-  32, 200, 200, 200, //30 - 32
-  34, 150, 150, 200, //33 - 34
+  32, 255, 255, 255, //30 - 32
+  34, 150, 150, 255, //33 - 34
   37, 0, 0, 150, //35 - 37
   39, 0, 50, 200, //38 - 39
   42, 0, 100, 200, //40 - 42
@@ -252,13 +255,14 @@ uint16_t temp2color16(int temp, uint16_t *BG) {
   }
 
 *BG = BG_COLOR;
-uint8_t Grayscale;
+double  lumin; //luminance, from 0 to 255
 
- Grayscale = (uint8_t) ((double) 0.299 * temp_colors[j+1] + 0.587 * temp_colors[j+2] + 0.114 * temp_colors[j+3]); //based on human luminance, this is the gray that closest matches the rgb color
- Grayscale += 128; //note that this is a byte, will wrap around at 255
+//0.2126*R + 0.7152*G + 0.0722*B trying this luminance option
+ lumin =  ((double) 0.2126 * temp_colors[j+1] + 0.7152 * temp_colors[j+2] + 0.0722 * temp_colors[j+3]); //this is the perceived luminance of the color
 
-  if ( abs((int) Grayscale-((*BG>>11)*255/31)) >50) { //Ideal grayscale is very different than current BG grayscale. Note that I am scaling BG color from 5 bit to 8 bit
-    *BG = tft.color565(Grayscale,Grayscale,Grayscale); 
+  if ( abs( lumin-bg_luminance)<25) { //if luminance is similar to bg luminance then...
+    byte l = lumin + 128; //note that this wraps around at 255
+    *BG = tft.color565(l,l,l); 
   } 
 
   return tft.color565(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
@@ -284,6 +288,14 @@ void setup()
   tft.setRotation(2);
 
   clearTFT();
+
+  //set bg_luminance value 1 time
+  
+//0.2126*R + 0.7152*G + 0.0722*B trying this luminance option
+  uint32_t bg24 = tft.color16to24(BG_COLOR);
+  bg_luminance = 0.2126*((bg24>>16)&0xff) + 0.7152*((bg24>>8)&0xff) + 0.0722*(bg24&0xff);
+
+
 
   tft.printf("Running setup\n");
 
@@ -863,17 +875,17 @@ void drawScreen_Weather() {
   uint8_t bmpsz = 180;
   drawBmp(tempbuf,15,Y,-1); //no transparent, as -1 will prevent transparency
    
+  byte FNTSZ=8;
   tft.setTextFont(8);
   Y+=bmpsz/2;
   X = (bmpsz+15) + (tft.width() - (bmpsz + 15))/2 ;
-  byte FNTSZ=8;
-  fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y);
+  fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y-5); //adjust midpoint by 5 px for visual appeal
 
 
-   FNTSZ = 6;
+  FNTSZ = 6;
   tft.setTextFont(FNTSZ);
-  fcnPrintTxtColor(daily_tempMAX[0],FNTSZ,X,Y-tft.fontHeight(FNTSZ)/2-tft.fontHeight(8)/2); 
-  fcnPrintTxtColor(daily_tempMIN[0],FNTSZ,X,Y+tft.fontHeight(FNTSZ)/2+tft.fontHeight(8)/2+3); //offset lower more
+  fcnPrintTxtColor(daily_tempMAX[0],FNTSZ,X,Y-bmpsz/2 + tft.fontHeight(FNTSZ)/2+5); 
+  fcnPrintTxtColor(daily_tempMIN[0],FNTSZ,X,Y+bmpsz/2 - tft.fontHeight(FNTSZ)/2+5); //these fonts are offset too high, so adjust lower
 
 
 
@@ -889,23 +901,24 @@ void drawScreen_Weather() {
  
 //draw 60x60 hourly bmps
   X=TFT_WIDTH/4;
-  for (byte j=1;j<5;j++) {
-    snprintf(tempbuf,55,"/Icons/BMP60x60/%d.bmp",ID2Icon(hourly_weatherID[j*2]));
+    FNTSZ = 2;
+  for (byte j=1;j<5;j++) {    
+    if (((n+j*2*3600)<sunrise && (n+j*2*3600)<sunset) || ( (n+j*2*3600)>sunset)) snprintf(tempbuf,66,"/Icons/BMP60x60night/%d.bmp",ID2Icon(hourly_weatherID[j*2]));  //it is the night 
+    else     snprintf(tempbuf,55,"/Icons/BMP60x60day/%d.bmp",ID2Icon(hourly_weatherID[j*2]));
     drawBmp(tempbuf,(j-1)*X+X/2-30,Y);
  
-    FNTSZ = 2;
     tft.setTextFont(FNTSZ);
     tft.setTextDatum(MC_DATUM);
 
-    snprintf(tempbuf,55," @%s",dateify((now()+j*2*3600),"hh"));  
-    fcnPrintTxtColor(hourly_temp[j*2],4,(j-1)*X+X/2,Y+2+60+tft.fontHeight(FNTSZ)/2,"",(String) tempbuf);
+    snprintf(tempbuf,55," @%s",dateify((n+j*2*3600),"hh"));  
+    fcnPrintTxtColor(hourly_temp[j*2],4,(j-1)*X+X/2,Y+60+tft.fontHeight(FNTSZ),"",(String) tempbuf);
 
 //    tft.drawString(tempbuf,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)/2);
 
   }
 
 //  Y += 60+2+2*(tft.fontHeight(4)+2);
-  Y += 60+2+1*(tft.fontHeight(FNTSZ)+2);
+  Y += 60+(tft.fontHeight(FNTSZ)+2);
   
   
   X=TFT_WIDTH/3;
@@ -916,7 +929,7 @@ void drawScreen_Weather() {
     FNTSZ=4;
     tft.setTextFont(FNTSZ);
     fcnPrintTxtColor2(daily_tempMAX[j],daily_tempMIN[j],FNTSZ,(j-1)*X+X/2,Y+2+60+tft.fontHeight(FNTSZ)/2);
-    snprintf(tempbuf,55,"%s",fcnDOW(now()+j*86400));
+    snprintf(tempbuf,55,"%s",fcnDOW(n+j*86400));
     tft.setTextDatum(MC_DATUM);    
     tft.drawString(tempbuf,(j-1)*X+X/2,Y+2+60+tft.fontHeight(FNTSZ)+2,2);
   }
@@ -1012,9 +1025,9 @@ void drawScreen_list() {
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setTextFont(4);
   tft.setTextDatum(MC_DATUM);
-  dateify(now(),"hh:nn mm/dd"); //puts in tempbuf
+    
   Ypos = Ypos + tft.fontHeight(4)/2;
-  tft.drawString(tempbuf, TFT_WIDTH / 2, Ypos);
+  tft.drawString(dateify(now(),"hh:nn mm/dd"), TFT_WIDTH / 2, Ypos);
   tft.setTextDatum(TL_DATUM);
 
   Ypos += tft.fontHeight(4)/2 + 6;

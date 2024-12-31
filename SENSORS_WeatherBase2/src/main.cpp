@@ -1425,7 +1425,7 @@ void fncDrawCurrentCondition(time_t t) {
       else snprintf(tempbuf,14,"PoP: %u%%",WeatherData.getDailyPoP(0));
     }
 
-    if (WeatherData.getDailyPoP(0)>50)  tft.setTextColor(tft.color565(255,0,0),tft.color565(0,0,255));
+    if (WeatherData.getDailyPoP(0)>30)  tft.setTextColor(tft.color565(255,0,0),tft.color565(0,0,255));
     else tft.setTextColor(FG_COLOR,BG_COLOR);
     fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
     Z=Z+FH+section_spacer;

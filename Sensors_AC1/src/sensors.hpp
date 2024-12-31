@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <header.hpp>
 #include <timesetup.hpp>
+#include <server.hpp>
+
 
 #ifdef _USEBME680
   #include <Zanshin_BME680.h>
@@ -13,7 +15,6 @@
   #include "bsec.h"  
 #endif
 
-
 #ifdef DHTTYPE
   #include <Adafruit_Sensor.h>
   #include <DHT.h>
@@ -22,6 +23,9 @@
 
 #ifdef _USEAHT
   #include <AHTxx.h>
+#endif
+#ifdef _USEAHTADA
+  #include <Adafruit_AHTX0.h>
 #endif
 
 #ifdef _USEBMP
@@ -67,6 +71,22 @@ struct SensorVal {
 };
 
 extern SensorVal Sensors[SENSORNUM];
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+  struct HISTORY {
+    uint32_t lastRead;
+    uint16_t interval;
+    double values[_HVACHXPNTS];
+  };
+  
+  extern HISTORY HVACHX[];
+
+  #ifdef _USECALIBRATIONMODE
+
+    void checkHVAC(void);
+  #endif
+#endif
+
+extern uint8_t HVACSNSNUM;
 
 #ifdef _WEBCHART
   struct SensorChart {
@@ -84,19 +104,6 @@ extern SensorVal Sensors[SENSORNUM];
 #endif
 
 
-#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
-  struct HISTORY {
-    uint32_t lastRead;
-    uint16_t interval;
-    double values[_HVACHXPNTS];
-  };
-  extern HISTORY HVACHX[SENSORNUM];
-
-  #ifdef _USECALIBRATIONMODE
-
-    void checkHVAC(void);
-  #endif
-#endif
 
 
 
@@ -117,10 +124,12 @@ extern SensorVal Sensors[SENSORNUM];
 #endif
 
 #ifdef _USEAHT
-extern AHTxx aht21;
+extern AHTxx aht;
 #endif
 
-
+#ifdef _USEAHTADA
+  extern Adafruit_AHTX0 aht;
+#endif
 
 #ifdef _USEBMP
 extern  Adafruit_BMP280 bmp; // I2C

@@ -159,7 +159,7 @@ void setup()
 
   WIFI_INFO.status=0;
   WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi automatically, or to assigned IP if desired.
-  connectWiFi(); //this is done async, so can continue processing
+  connectWiFi(); //this is done async if 32, so can continue processing
 
 
   Wire.begin(); 
@@ -167,22 +167,8 @@ void setup()
   #ifdef _DEBUG
     Serial.println("wire ok");
   #endif
+ 
 
-  #ifdef _USEMUX
-    pinMode(DIOPINS[0],OUTPUT);
-    pinMode(DIOPINS[1],OUTPUT);
-    pinMode(DIOPINS[2],OUTPUT);
-    pinMode(DIOPINS[3],OUTPUT);
-    pinMode(DIOPINS[4],INPUT);
-    digitalWrite(DIOPINS[0],LOW);
-    digitalWrite(DIOPINS[1],LOW);
-    digitalWrite(DIOPINS[2],LOW);
-    digitalWrite(DIOPINS[3],LOW);
-  #ifdef _DEBUG
-    Serial.println("dio configured");
-  #endif
-
-  #endif
 
 
 
@@ -260,9 +246,9 @@ void setup()
   #ifdef _USEBME680
 
   while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
-        #ifdef _DEBUG
-  Serial.println("-  Unable to find BME680. Trying again in 5 seconds.\n"));
-  #endif
+    #ifdef _DEBUG
+    Serial.println("-  Unable to find BME680. Trying again in 5 seconds.\n"));
+    #endif
 
       delay(5000);
     }  // of loop until device is located
@@ -283,18 +269,20 @@ void setup()
   oled.print("WiFi Starting.");
 #endif
 
-
+  #ifdef _USE32
   //by now wifi should have connected, but wait for it if not
   if (WIFI_INFO.status==0)  do {
     #ifdef _USESSD1306
     oled.print(".");
     #endif
     #ifdef _DEBUG
-      Serial.print(".");
-      #endif
-      delay(200);
+    Serial.print(".");
+    #endif
+    delay(200);
 
   } while (WIFI_INFO.status==0);
+  #endif
+
 
 #ifdef _USESSD1306
   oled.clear();
@@ -327,7 +315,7 @@ updateTime(10,250); //check if DST and set time to EST
 
 ALIVESINCE = now();
 OldTime[0] = 100;//some arbitrary seconds that will trigger a second update
-OldTime[1] = minute();
+OldTime[1] = 61; //some arbitrary seconds that will trigger a second update
 OldTime[2] = hour();
 OldTime[3] = day();
 
@@ -351,8 +339,14 @@ OldTime[3] = day();
 
   ArduinoOTA.onStart([]() {
     #ifdef _DEBUG
-    Serial.println("OTA started");
+    Serial.println("OTA started...");
     #endif
+    #ifdef _USESSD1306
+      oled.clear();
+      oled.setCursor(0,0);
+      oled.printf("OTA data incoming...\n");
+    #endif
+    
   });
   ArduinoOTA.onEnd([]() {
     #ifdef _DEBUG
@@ -364,12 +358,7 @@ OldTime[3] = day();
         Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
     #endif
     #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      oled.println("Receiving OTA:");
-      String strbuff = "Progress: " + (100*progress / total);
-      oled.println("OTA start.");   
-      oled.println(strbuff);
+      if ((int) (progress )%10==0) oled.print(".");   
     #endif
 
   });
@@ -396,33 +385,34 @@ OldTime[3] = day();
     #endif
   });
   ArduinoOTA.begin();
-    #ifdef _USESSD1306
-      oled.clear();
-      oled.setCursor(0,0);
-      oled.println("OTA OK.");      
-    #endif
-
-
-    #ifdef _DEBUG
-    Serial.println( "set up HTML server... ");
-    #endif
-    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-    server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
-    server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
-    server.on("/SETTHRESH", handleSETTHRESH);               
-    server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
-    server.on("/NEXTSNS", handleNEXT);
-    server.on("/LASTSNS", handleLAST);
-    server.on("/REBOOT", handleREBOOT);
-    server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
-    server.begin();
-    
-    #ifdef _DEBUG
-            Serial.println( "HTML server started!\n");
-    #endif
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("OTA OK.");      
   #endif
 
 
+  #ifdef _DEBUG
+  Serial.println( "set up HTML server... ");
+  #endif
+  server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+  server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
+  server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
+  server.on("/SETTHRESH", handleSETTHRESH);               
+  server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
+  server.on("/NEXTSNS", handleNEXT);
+  server.on("/LASTSNS", handleLAST);
+  server.on("/REBOOT", handleREBOOT);
+  server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
+  server.begin();
+  
+  #ifdef _DEBUG
+          Serial.println( "HTML server started!\n");
+  #endif
+#endif
+
+
+  byte retry = 0;
 
   /*
    * 
@@ -448,17 +438,22 @@ OldTime[3] = day();
     #endif
   
   
-  #ifdef _USEAHT
-    if (aht21.begin() != true)
-    {
-      for (byte retry = 0;retry<10;retry++) {
-        #ifdef _DEBUG
-        Serial.printf( "AHT2x not connected or failed to load calibration coefficient. Retry number " + (String) retry + "\n"); //(F()) save string to flash & keeps dynamic memory free
-        #endif
-  
-        if (aht21.begin() == true) continue;
-      }
+  #if defined(_USEAHT) || defined(_USEAHTADA)
+    retry  = 0;
+    while (aht.begin() != true && retry<10) {
+      #ifdef _DEBUG
+      Serial.printf( "AHT not connected. Retry number %d\n" , retry ); //(F()) save string to flash & keeps dynamic memory free
+      #endif
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("No aht x%d!",retry);          
+      #endif
+      delay(250);
+      retry++;
     }
+
 
   #endif
 
@@ -472,25 +467,33 @@ OldTime[3] = day();
 
 
   #ifdef _USEBMP
+
     #ifdef _DEBUG
         Serial.println("bmp begin");
     #endif
-    uint32_t t = millis();
-    uint32_t deltaT = 0;
-    while (!bmp.begin(0x76) && deltaT<5000) { //default address is 0x77, but amazon review says this is 0x76
-      deltaT = millis()-t;
-      #ifdef _USESSD1306
-        oled.println("BMP failed.");
-        #ifdef _DEBUG
-            Serial.println("bmp failed.");
-        #endif
-        delay(100);
-        oled.clear();
-        oled.setCursor(0,0);
-      #else
-        delay(100);
+    retry = 0;
+
+    byte trybmp = _USEBMP;
+    while (bmp.begin(trybmp) != true && retry<20) {
+      #ifdef _DEBUG
+      Serial.printf( "BMP fail at 0x%d.\nRetry number %d\n" , trybmp, retry ); //(F()) save string to flash & keeps dynamic memory free
       #endif
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("BMP fail at 0x%d.\nRetry number %d\n" , trybmp, retry);          
+      #endif
+
+      if (retry==10) { //try swapping address
+        if (trybmp == 0x76) trybmp = 0x77;
+        else trybmp = 0x76;
+      }
+
+      delay(250);
+      retry++;
     }
+  
  
     /* Default settings from datasheet. */
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
@@ -535,11 +538,7 @@ OldTime[3] = day();
 
   #ifdef _USESSD1306
     oled.clear();
-    oled.setCursor(0,0);
-    oled.println(WIFI_INFO.MYIP.toString());
-    oled.print(hour());
-    oled.print(":");
-    oled.println(minute());
+    oled.printf("SETUP COMPLETE\n");
   #endif
 
 
@@ -635,7 +634,7 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
   if (OldTime[1] != minute()) {
     
     if (WIFI_INFO.status==0) WiFi.reconnect(); //try restarting wifi
-    if (WIFI_INFO.MYIP[4] != WiFi.localIP()[4]) assignIP(WIFI_INFO.MYIP,WiFi.localIP()); //update if wifi changed
+    if (WIFI_INFO.MYIP[3] != WiFi.localIP()[3]) assignIP(WIFI_INFO.MYIP,WiFi.localIP()); //update if wifi changed
 
     OldTime[1] = minute();
 

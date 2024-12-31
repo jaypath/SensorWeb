@@ -62,7 +62,10 @@ String IP2String(byte IP[]);
 void assignIP(byte ip[4],IPAddress IPA);
 void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4);
 bool WifiStatus(void);
+#ifdef _USE32
 void onWiFiEvent(WiFiEvent_t event);
+#endif
+
 bool Server_Message(String URL, String* payload, int* httpCode);
 void handleREBOOT(void);
 void handleRoot(void);

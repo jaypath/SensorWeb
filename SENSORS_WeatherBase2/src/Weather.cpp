@@ -23,8 +23,17 @@ int8_t WeatherInfo::getTemperature(uint32_t dt, bool wetbulb,bool asindex)
     if (asindex) 
     {
         if (wetbulb) return this->wetBulbTemperature[dt];
+
+        //if not wetbulb temp, then see if I should return local temp, which is index 0
+        if (dt==0 && I.localWeather<255) {
+            if (now()-Sensors[I.localWeather].timeLogged<1800) { //localweather is only useful if <30 minutes old 
+                return I.currentTemp;
+            }
+        }
+
         return this->temperature[dt];
     }
+    
     if (dt==0) dt = now();
     //return hourly temperature, so long as request is within limits
     byte i = getIndex(dt);
@@ -669,6 +678,7 @@ Serial.printf(" done at %s.\n",dateify(tnow));
 
                 this->rainmm[cnt] = uint8_t ((double) properties_value["value"]); // 17.7777777777778, ...
                 if (this->rainmm[cnt]>0) this->flag_rain = true;
+                else this->flag_rain = false;
                 cnt++;
             }
             if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
@@ -688,6 +698,7 @@ Serial.printf(" done at %s.\n",dateify(tnow));
 
                 this->icemm[cnt] = uint8_t ((double) properties_value["value"]); // 17.7777777777778, ...
                 if (this->icemm[cnt]>0) this->flag_ice = true;
+                else this->flag_ice = false;
                 cnt++;
             }
             if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
@@ -704,8 +715,9 @@ Serial.printf(" done at %s.\n",dateify(tnow));
             byte i = getIndex(dt);
             while (cnt<i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
-                this->snowmm[cnt] = uint8_t ((double) properties_value["value"]); // 17.7777777777778, ...
-                if (this->snowmm[cnt]>0) this->flag_snow = true;
+                this->snowmm[cnt] = uint8_t ((double) properties_value["value"]); 
+                if (this->snowmm[cnt]>1) this->flag_snow = true; //snow flag only for measurable amount of snow
+                else this->flag_snow = false;
                 cnt++;                            
             }
             if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!

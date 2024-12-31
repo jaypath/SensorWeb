@@ -6,15 +6,13 @@
 //#define _DEBUG 1
 //#define _WEBDEBUG
 
+//#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
+
 //#define _WEBCHART 2
-
-#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
-
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
 #endif
-
 
 const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
@@ -22,17 +20,17 @@ const byte ASSIGNEDIP[4] = {0,168,68,0}; //assign here if this sensor has a dedi
 
 
 #define ARDNAME "ACDown" //unique name
-#define SENSORNUM 2 //be sure this matches SENSORTYPES
+#define SENSORNUM 6 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {56,57};
+const uint8_t SENSORTYPES[SENSORNUM] = {50,56,57,4,5,9}; //max is 8. NOTE THAT HVAC SENSORS SHOULD BE FIRST!!
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
-
 //#define _USEDHT 1
 //#define _USEAHT 1
-//#define _USEBMP  1
+#define _USEAHTADA 0x38 //required for aht with bmp combined
+#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
@@ -40,14 +38,15 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
-//#define _USESSD1306  1
+#define _USESSD1306  1
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
 //#define _USESLABATTERY  A0 //set to the pin that is analogin
 //#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
 //#define _USELEAK 
 //binary switches
 #define _CHECKAIRCON 1
-//#define _CHECKHEAT 1
+//#define _CHECKHEAT 1 //check which lines are charged to provide heat
+//#define _USEMUX //use analog input multiplexor to allow for >6 inputs
 //#define _USECALIBRATIONMODE 6 
 
 /*sens types
@@ -88,8 +87,6 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 */
 
-
-
    /*
   FOR ESP32:
   //16-33 are valid pins, though not all are exposed. For example, 15 is usable but must be high at boot. 14 goes high at boot 
@@ -105,7 +102,7 @@ GPIO 2,4,5,12,13,14,15 support pullup and pulldown
   
 
 GPIO21 is SDA and 22 is SCL
-  GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
+GPIO2 (often labeled as "D2" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO4 (often labeled as "D4" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO5 (often labeled as "D5" on development boards) - Supports both internal pull-up and pull-down resistors.
 GPIO12 (often labeled as "D12" on development boards) - Supports both internal pull-up and pull-down resistors.
@@ -115,6 +112,20 @@ GPIO15 (often labeled as "D15" on development boards) - Supports both internal p
 GPIO25 - Supports internal pull-up resistor.
 GPIO26 - Supports internal pull-up resistor.
 GPIO27 - Supports internal pull-up resistor
+
+bank 1 ADC (can use these with wifi, bank 2 is shares pins with wifi)
+32 - bank 1 adc, not affected by wifi
+33 -same
+34 -same
+35-same
+36-same
+37 - not generally exposed on most boards
+38 - not generally exposed on most boards
+39-same
+
+however, note that 36, 39, 34, 35 are INPUT only!!
+
+
 
 ADC pins are labeled as their GPIO. NOTE: ADC bank 2 cannot be used with wifi, use bank 1 instead (which is pins 36, 39, 34, 35,32,33 numbered starting from the pin next to EN)
 */
@@ -133,10 +144,10 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 */
 
-
+//for calibrating current sensor
 #ifdef _USECALIBRATIONMODE
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {36, 39, 34, 35,32,33}; //which pins should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {32,33,25,26,36}; //which pins should be stored for charting?
 
 #endif
 
@@ -163,21 +174,31 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 #endif
 
 #ifdef _USESSD1306
-  //#define _OLEDTYPE &Adafruit128x64
+  #define _OLEDTYPE &Adafruit128x64
   //#define _OLEDTYPE &Adafruit128x32
   //#define _OLEDINVERT 0
 #endif
 
 
+//note that 36, 39, 34, 35 are INPUT only!!
 #ifdef _CHECKAIRCON 
-  const uint8_t DIO_INPUTS=2; //two pins assigned
-  const uint8_t DIOPINS[2] = {34,35}; //comp then fan
+  //const uint8_t DIO_INPUTS=2; //two pins assigned
+  const uint8_t DIOPINS[4] = {35,34,33,32}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out. Here in is read, out is turn on DIO to high
 #endif
 
 #ifdef _CHECKHEAT
 //  const uint8_t DIO_INPUTS=6; //6 sensors
+  #ifdef _USEMUX
+  //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
+  //36 is first pin from EN, and the rest are consecutive
+  
+  const uint8_t DIOPINS[5] = {32,33,25,26,36}; //first 4 lines are DIO to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin). So 36 will be Analog and 32 will be s0...
+
+  #else
   const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
-  const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+  #endif
+    const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+
 #endif
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)

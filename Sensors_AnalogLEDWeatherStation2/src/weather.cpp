@@ -129,7 +129,7 @@ String HTTP_GET_request(const char* URL) {
 
 bool get_weather_data(weather_info_t& weather_info) {
   if (!(millis() < last_weather_update || millis() - last_weather_update >= WEATHER_UPDATE_INTERVAL)) return false;
-String request_url = "http://192.168.68.93/REQUESTWEATHER?hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_temp=0&hourly_temp=4&hour=0&sunrise=0@sunset=0";
+String request_url = "http://192.168.68.93/REQUESTWEATHER?hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_temp=0&hourly_temp=4&hour=0&sunrise=0&sunset=0";
 
   String data = HTTP_GET_request(request_url.c_str());
 

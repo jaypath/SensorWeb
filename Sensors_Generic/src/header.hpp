@@ -29,7 +29,8 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 //#define _USEDHT 1
 //#define _USEAHT 1
-//#define _USEBMP  1
+//#define _USEAHTADA 1
+//#define _USEBMP  0x76
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
@@ -44,8 +45,8 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USELEAK 
 //binary switches
 //#define _CHECKAIRCON 1
-#define _CHECKHEAT 1 //check which lines are charged to provide heat
-#define _USEMUX //use analog input multiplexor to allow for >6 inputs
+//#define _CHECKHEAT 1 //check which lines are charged to provide heat
+//#define _USEMUX //use analog input multiplexor to allow for >6 inputs
 //#define _USECALIBRATIONMODE 6 
 
 /*sens types
@@ -173,15 +174,15 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 #endif
 
 #ifdef _USESSD1306
-  //#define _OLEDTYPE &Adafruit128x64
+  #define _OLEDTYPE &Adafruit128x64
   //#define _OLEDTYPE &Adafruit128x32
   //#define _OLEDINVERT 0
 #endif
 
 
 #ifdef _CHECKAIRCON 
-  const uint8_t DIO_INPUTS=2; //two pins assigned
-  const uint8_t DIOPINS[2] = {34,35}; //comp then fan
+  //const uint8_t DIO_INPUTS=2; //two pins assigned
+  const uint8_t DIOPINS[4] = {35,34,39,36}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out
 #endif
 
 #ifdef _CHECKHEAT

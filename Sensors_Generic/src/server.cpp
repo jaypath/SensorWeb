@@ -24,6 +24,8 @@ WiFi_type WIFI_INFO;
   
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
+  
+  
   for (byte j=0;j<SENSORNUM;j++)  {
     if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
       SendData(&Sensors[j]);
@@ -53,8 +55,8 @@ bool WifiStatus(void) {
     WIFI_INFO.status = 0;
     return false;
   }
-  WIFI_INFO.status = 1;
-  return false; 
+  WIFI_INFO.status = WL_CONNECTED;
+  return true; 
 }
 
 void connectWiFi()
@@ -95,12 +97,27 @@ void connectWiFi()
   Serial.printf( "wifi begin\n");
        #endif
 
-  WiFi.onEvent(onWiFiEvent); 
+  #ifdef _USE32
+    WiFi.onEvent(onWiFiEvent); 
+  #endif
   WiFi.begin(ESP_SSID, ESP_PASS);
 
+  #ifndef _USE32
+    //cannot do this async, so wait for wifi here
+    while ( WiFi.status() != WL_CONNECTED) {
+      #ifdef _DEBUG
+        Serial.print(".");
+      #endif
+      delay(500);
+    }
+
+    WifiStatus(); //assign wifi status
+    
+  #endif
   
 }
 
+#ifdef _USE32
 void onWiFiEvent(WiFiEvent_t event) {
   switch (event) {
     case SYSTEM_EVENT_STA_DISCONNECTED:
@@ -118,7 +135,7 @@ void onWiFiEvent(WiFiEvent_t event) {
         #endif
     
         // Connected successfully
-        WIFI_INFO.status =  1;
+        WifiStatus(); //assign wifi status
         assignIP(WIFI_INFO.MYIP, WiFi.localIP());    
         break;
       }
@@ -127,6 +144,7 @@ void onWiFiEvent(WiFiEvent_t event) {
        break;      
   }
 }
+#endif
 
 bool Server_Message(String URL, String* payload, int* httpCode) {
   WiFiClient wfclient;
@@ -598,17 +616,18 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine += "const data_HVAC = google.visualization.arrayToDataTable([\n";
       //header
       currentLine += "['HoursAgo',";
-      for (byte j=0;j<SENSORNUM;j++) {
+      
+      for (byte j=0;j<HVACSNSNUM;j++) {
         currentLine += "'" + (String) Sensors[j].snsName + "'";
-        if (j<SENSORNUM-1) currentLine += ",";
+        if (j<HVACSNSNUM-1) currentLine += ",";
         else currentLine += "],\n";
       }
       //data points
       for (int jj = 0;jj<_HVACHXPNTS;jj++) {
         currentLine += "[" + (String) (jj+1) + ",";        
-        for (byte j=0;j<SENSORNUM;j++) {
+        for (byte j=0;j<HVACSNSNUM;j++) {
           currentLine += (String)  HVACHX[j].values[jj];
-          if (j<SENSORNUM-1) currentLine += ",";
+          if (j<HVACSNSNUM-1) currentLine += ",";
           else currentLine += "]";
         }
         if (jj<_HVACHXPNTS-1) currentLine += ",\n";
