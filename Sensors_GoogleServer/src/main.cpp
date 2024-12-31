@@ -696,8 +696,12 @@ void loop()
   
     if (t-ALTSCREEN<ALTSCREENTIME && SHOWMAIN==false) drawScreen_list;
     else {
-      SHOWMAIN=true;
+      if (SHOWMAIN==false) {
+        SHOWMAIN=true;
+        drawScreen_Weather();
+      }
       drawScreen_Clock();
+
     }
     
     if (ready && ((lastUploadSuccess && (OldTime[1]%uploadQ)==0) || (lastUploadSuccess==false && (OldTime[1]%uploadQFailed)==0))) {
