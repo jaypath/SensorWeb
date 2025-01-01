@@ -266,6 +266,7 @@ void handleREQUESTWEATHER() {
       if (server.argName(i)=="isHot") WEBHTML += (String) ((I.isHot==true)?1:0) + ";";
       if (server.argName(i)=="isCold") WEBHTML += (String) ((I.isCold==true)?1:0) + ";";
       if (server.argName(i)=="isLeak") WEBHTML += (String) ((I.isLeak==true)?1:0) + ";";
+      if (server.argName(i)=="isExpired") WEBHTML += (String) ((I.isExpired==true)?1:0) + ";";
 
     }
   }
@@ -357,6 +358,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
     if (I.isHot==true) WEBHTML = WEBHTML + "     Interior room(s) over max temp<br>";
     if (I.isCold==true) WEBHTML = WEBHTML + "     Interior room(s) below min temp<br>";
     if (I.isSoilDry==true) WEBHTML = WEBHTML + "     Plant(s) dry<br>";
+    if (I.isExpired==true) WEBHTML = WEBHTML + "     Critical Sensors Expired<br>";
 
     WEBHTML = WEBHTML + "</font>---------------------<br>";      
   }
@@ -401,7 +403,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
 
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:100px\">Plot</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
     if (allsensors && bitRead(Sensors[j].Flags,1)==0) continue;
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
@@ -414,6 +416,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?"N":"Y") + "</td>";
       
       delta=2;
       if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
@@ -436,6 +439,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
           WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
           WEBHTML = WEBHTML + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[jj].expired==0)?"N":"Y") + "</td>";
           
           delta=2;
           if (Sensors[jj].snsType==4 || Sensors[jj].snsType==1 || Sensors[jj].snsType==10) delta = 4;
@@ -673,6 +677,7 @@ time_t tn=now();
 
 void handlePost() {
 SensorVal S;
+S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7 is 1 then an alarm should be raised if no response)
 
   if (server.args()==0) return;
 
@@ -685,9 +690,12 @@ SensorVal S;
       if ((String)server.argName(k) == (String)"varValue") S.snsValue = server.arg(k).toDouble();
       if ((String)server.argName(k) == (String)"timeLogged") S.timeRead = server.arg(k).toDouble();      //time logged at sensor is time read by me
       if ((String)server.argName(k) == (String)"Flags") S.Flags = server.arg(k).toInt();
+      if ((String)server.argName(k) == (String)"SendingInt") S.SendingInt = server.arg(k).toInt();
   }
   time_t t = now();
   S.timeLogged = t; //time logged by me is when I received this.
+  S.expired = false;
+  
   if (S.timeRead == 0  || S.timeRead < t-24*60*60 || S.timeRead > t+24*60*60)     S.timeRead = t;
 
   storeSensorSD(&S); //store this reading on SD

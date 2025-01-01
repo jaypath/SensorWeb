@@ -118,7 +118,7 @@ void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHi
   //returns index to the highest flagged sensorval and lowest flagged sensorval with name like snsname and type like snsType. index is 255 if no lowval is flagged
 
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = not used by the server
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this is a monitored sensor, so alarm if I don't get a read on time!
 
   byte cnt = find_sensor_count(snsname,snsType);
   
@@ -186,19 +186,28 @@ uint8_t find_sensor_name(String snsname,uint8_t snsType,uint8_t snsID) {
 
 //sensor fcns
 int16_t findOldestDev() {
-  //return 0 entry or oldest
+  //return 0 entry or oldest expired noncritical (but never critical sensors)
   int oldestInd = 0;
   int  i=0;
+
   for (i=0;i<SENSORNUM;i++) {
-    if (Sensors[i].ardID == 0 && Sensors[i].snsType == 0 && Sensors[i].snsID ==0) return i;
-    if (Sensors[oldestInd].timeLogged == 0) {
-      oldestInd = i;
-    }    else {
-      if (Sensors[i].timeLogged< Sensors[oldestInd].timeLogged && Sensors[i].timeLogged >0) oldestInd = i;
+    //find a zero slot
+    if (isSensorInit(i) == false) return i;
+
+    //find an expired noncritical slot
+    if (Sensors[i].expired == 1  && bitRead(Sensors[oldestInd].Flags,7)==0) {
+      return i;
     }
   }
+
   
-//  if (Sensors[oldestInd].timeLogged == 0) oldestInd = -1;
+  if (oldestInd == 0) { //still no oldest ind! find oldest noncritical sensor
+    for (i=0;i<SENSORNUM;i++) {
+      if (bitRead(Sensors[i].Flags,7)==1) continue; //ignore critical sensors
+      if (oldestInd==0 || Sensors[i].timeLogged < Sensors[oldestInd].timeLogged) oldestInd = i;
+    }
+    
+  }
 
   return oldestInd;
 }
@@ -235,6 +244,38 @@ void initSensor(int k) {
   
 }
 
+bool isSensorInit(byte i) {
+  //check if sensor is initialized
+  if (i>=SENSORNUM) return false;
+  if (Sensors[i].ardID>0 && Sensors[i].snsID > 0 && Sensors[i].snsType >0) return true;
+  return false;  
+}
+
+bool checkExpiration(int i, time_t t) {
+  //check for expired sensors. special case if i is <0 then cycle through all sensors.
+
+  if (t==0) t=now();
+
+  if (i<0) {
+    for (int k=0;k<SENSORNUM;k++) checkExpiration(k,t);
+  }
+
+  if (isSensorInit(i)) {
+    if ((t-Sensors[i].timeLogged) > (1.5*Sensors[i].SendingInt))  /*consider a sensor expired if more than 150% of sendingint has passed*/     {
+      Sensors[i].expired=1;
+      return true;
+    }
+    else {
+      Sensors[i].expired=0;
+      return false;
+    }
+  } 
+
+  return false;
+  
+}
+
+
 uint8_t countDev() {
   uint8_t c = 0;
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -269,12 +310,12 @@ int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest) {
   return -1; //dev not found
 }
 
-int16_t findDev(struct SensorVal *S, bool oldest) {
+int16_t findDev(struct SensorVal *S, bool findBlank) {
   //provide the desired devID and snsname, and will return the index to sensors array that represents that node
   //special cases:
   //  if snsID = 0 then just find the first blank entry
-  //if no finddev identified and oldest = true, will return first empty or oldest
-  //if no finddev and oldest = false, will return -1
+  //if no finddev identified and findBlank = true, will return first empty or oldest
+  //if no finddev and findBlank = false, will return -1
   
   if (S->snsID==0) {
         
@@ -289,7 +330,7 @@ int16_t findDev(struct SensorVal *S, bool oldest) {
     }
     
 //if I got here, then nothing found.
-  if (oldest) {
+  if (findBlank) {
   
     return findOldestDev();
   } 
@@ -324,13 +365,28 @@ int16_t findSns(byte snstype, bool newest) {
 
 uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
   //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
-  //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
+  //special use cases for snstype:
+  /*
+    -1 = check all relevant sensor types
+    -2 = temperature
+    -3 = hvac
+    -4 = 
+    -10 = expired critical sensors
+    */
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = Not used by server
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this is a monitored sensor, so alarm if I don't get a read on time!
 
 byte count =0;
-int snsArr[10] = {0}; //this is for special cases
 
+if (snsType == -10) { //count expired and critical sensors
+  time_t t=now();
+  for (byte j = 0; j<SENSORNUM; j++) {    
+    if (isSensorInit(j) && Sensors[j].expired && bitRead(Sensors[j].Flags,7)==1) count++;
+  }
+  return count;
+}
+
+int snsArr[10] = {0}; //this is for special cases
 
 if (snsType == -1) { //critical sensors, all types
 snsArr[0] = 1; 
@@ -341,7 +397,7 @@ snsArr[4] = 17;
 snsArr[5] = 3;
 snsArr[6] = 61;
 snsArr[7] = 70;
-snsArr[8] = -1;
+snsArr[8] = -1; //change this to 5 for AHT RH, 2 for DHT RH, etc
 snsArr[9] = -1;
 } 
 
@@ -375,7 +431,7 @@ snsArr[9] = -1;
   for (byte j = 0; j<SENSORNUM; j++) {
     if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
       
-      if ((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings)) {
+      if (((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings) /*flagged*/) || (Sensors[j].expired && bitRead(Sensors[j].Flags,7)==1 /*expired*/)) {
         if (snsType==3) {
           if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
         } else {

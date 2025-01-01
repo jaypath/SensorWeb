@@ -5,6 +5,9 @@
 #include <header.hpp>
 #include <timesetup.hpp>
 
+#include <server.hpp>
+
+
 #ifdef _USEBME680
   #include <Zanshin_BME680.h>
 #endif
@@ -12,7 +15,6 @@
 #ifdef _USEBME680_BSEC
   #include "bsec.h"  
 #endif
-
 
 #ifdef DHTTYPE
   #include <Adafruit_Sensor.h>
@@ -22,6 +24,9 @@
 
 #ifdef _USEAHT
   #include <AHTxx.h>
+#endif
+#ifdef _USEAHTADA
+  #include <Adafruit_AHTX0.h>
 #endif
 
 #ifdef _USEBMP
@@ -117,10 +122,12 @@ extern SensorVal Sensors[SENSORNUM];
 #endif
 
 #ifdef _USEAHT
-extern AHTxx aht21;
+extern AHTxx aht;
 #endif
 
-
+#ifdef _USEAHTADA
+  extern Adafruit_AHTX0 aht;
+#endif
 
 #ifdef _USEBMP
 extern  Adafruit_BMP280 bmp; // I2C

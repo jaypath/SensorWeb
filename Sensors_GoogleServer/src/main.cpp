@@ -1356,6 +1356,7 @@ uint8_t tempIP[4] = {0,0,0,0};
       if ((String)server.argName(k) == (String)"varValue") S.snsValue = server.arg(k).toDouble();
       if ((String)server.argName(k) == (String)"timeLogged") S.timeRead = server.arg(k).toDouble();      //time logged at sensor is time read by me
       if ((String)server.argName(k) == (String)"Flags") S.Flags = server.arg(k).toInt();
+      if ((String)server.argName(k) == (String)"SendingInt") S.SendingInt = server.arg(k).toInt();
   }
   
 

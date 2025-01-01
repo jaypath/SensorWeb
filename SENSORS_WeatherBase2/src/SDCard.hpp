@@ -9,8 +9,8 @@
 extern SensorVal Sensors[SENSORNUM];
 
 
-bool writeSensorsSD(String filename);
-bool readSensorsSD(String filename);
+bool writeSensorsSD(String filename = "/Data/SensorBackupv2.dat");
+bool readSensorsSD(String filename = "/Data/SensorBackupv2.dat");
 bool storeSensorSD(struct SensorVal *S);
 bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN);
 bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN);

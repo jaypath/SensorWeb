@@ -48,7 +48,9 @@ struct Screen {
     uint8_t weatherTime = 60; //how many MINUTES to show weather values?
 
     uint8_t ScreenNum;
+    uint8_t alarmIndex;
     
+    bool isExpired = false; //are any critical sensors expired?
     bool isFlagged=false;
     bool wasFlagged=false;
     uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
@@ -93,8 +95,10 @@ struct SensorVal {
   double snsValue;
   uint32_t timeRead;
   uint32_t timeLogged;  
+  uint16_t SendingInt;  
   uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = not used here, used only by the sensor (to indicate changed values that were not yet sent)
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this is a critically monitored sensor, so alarm if I don't get a read on time!
+  uint8_t expired; //set to 1 if this sensor is  expired by time
 };
 
 

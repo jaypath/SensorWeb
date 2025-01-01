@@ -144,7 +144,7 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1,bool autocontrast=f
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1);
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
-void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y);
+void drawBox(byte sensorInd, int X, int Y, byte boxsize_x,byte boxsize_y);
 uint16_t temp2color(int temp, bool invertgray = false);
 
 
@@ -203,7 +203,7 @@ tft.init();
 
     tft.println("OK.\n");
      tft.print("Loading historical data from SD... ");
-     bool sdread = readSensorsSD("/Data/SensorBackup.dat");
+     bool sdread = readSensorsSD();
      if (sdread) {
       tft.setTextColor(TFT_GREEN);
       tft.println("OK\n");
@@ -253,7 +253,7 @@ tft.init();
     tft.println(" attempts. Halting.\n");
     while(true);
   } else {
-    tft.printf("Wifi connected after %u attempts.\nWifi IP is",retries );
+    tft.printf("Wifi connected after %u attempts.\nWifi IP is ... ",retries );
     tft.setTextColor(TFT_GREEN);    
     tft.printf("%s\n", WiFi.localIP().toString().c_str());  
     tft.setTextColor(FG_COLOR);
@@ -265,7 +265,7 @@ tft.init();
     #endif
 
 
-tft.println("Connecting ArduinoOTA...");
+tft.print("Connecting ArduinoOTA... ");
 
     // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
@@ -349,7 +349,7 @@ tft.println("Connecting ArduinoOTA...");
       Serial.println("connected!");
     #endif
 
-    tft.println("Set up TimeClient...");
+    tft.print("Set up TimeClient... ");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
     timeClient.begin(); //time is in UTC
@@ -359,7 +359,7 @@ tft.println("Connecting ArduinoOTA...");
     tft.printf(" TimeClient OK.\n");
     tft.setTextColor(FG_COLOR);
 
-    tft.println("Starting...");
+    tft.print("Starting... ");
 
 
     ALIVESINCE = now();
@@ -930,7 +930,7 @@ uint16_t set_color(byte r, byte g, byte b) {
   return tft.color565(r,g, b);
 }
 
-void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
+void drawBox(byte sensorInd, int X, int Y, byte boxsize_x,byte boxsize_y) {
   /*uint8_t box_nl_border[3] = {0,125,0};
   uint8_t box_nl_fill[3] = {120,255,120};
   uint8_t box_high_border[3] = {150,20,20}; //r,g,b
@@ -942,7 +942,7 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   uint8_t box_wet_border[3] = {0,0,255};
   uint8_t box_wet_fill[3] = {0,190,255};
   */
-  
+
   uint16_t box_border = set_color(200,175,200);
   uint16_t box_fill = set_color(75,50,75);
   uint16_t text_color = set_color(255,225,255);
@@ -950,203 +950,167 @@ void drawBox(String roomname, int X, int Y, byte boxsize_x,byte boxsize_y) {
   String box_text = "";
   char tempbuf[14];
 
-  byte isHigh = 255,isLow=255;
+  box_text = (String) Sensors[sensorInd].snsName + (String) "_";
 
-  //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
-  //temperature
-  isHigh = 255;
-  isLow = 255;
+  if (Sensors[sensorInd].expired) {
+    box_text += "EXP!_";
+    box_border = set_color(150,150,150);
+    box_fill = set_color(200,200,200);
+    text_color = set_color(55,55,55);
+  } else {
 
-  find_limit_sensortypes(roomname,1,&isHigh,&isLow);
-  if (isLow != 255) {
-    box_text += (String) ((int) Sensors[isLow].snsValue) + "F(LOW)|";
-    box_border = set_color(20,20,150);
-    box_fill = set_color(150,150,255);
-    text_color = set_color(255-150,255-150,255-255);
+    //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
+    byte snstype = Sensors[sensorInd].snsType;
+    if (snstype==1 || snstype==4 || snstype==10 || snstype==14 || snstype==17) {
+      //temperature
+      box_text += (String) ((int) Sensors[sensorInd].snsValue) + "F_";
+      if (bitRead(Sensors[sensorInd].Flags,5)==1) {        
+        box_border = set_color(150,20,20);
+        box_fill = set_color(255,100,100);
+        text_color = set_color(255-255,255-100,255-100);
+      }
+      else {
+        box_border = set_color(20,20,150);
+        box_fill = set_color(150,150,255);
+        text_color = set_color(255-150,255-150,255-255);
+      }
+
+    }
+    if (snstype==3) {
+      //soil
+      box_text += (String) "DRY_";
+      box_border = set_color(65,45,20);
+      box_fill = set_color(250,170,100);
+      text_color = set_color(255-250,255-170,255-100);
+    }
+
+    if (snstype==2 || snstype==5 || snstype==15 || snstype==18) {
+      //humidity
+      box_text += (String) ((int) Sensors[sensorInd].snsValue) + "%RH_";
+      if (bitRead(Sensors[sensorInd].Flags,5)==0) {
+        box_border = set_color(65,45,20);
+        box_fill = set_color(250,170,100);
+        text_color = set_color(255-250,255-170,255-100);
+      }
+      else {
+        box_border = set_color(0,0,255);
+        box_fill = set_color(0,190,255);
+        text_color = set_color(255-0,255-190,255-255);
+      }
+    }
+
+    if (snstype==58) {
+      //leak
+      box_text += "LEAK_";
+      box_border = set_color(0,0,255);
+      box_fill = set_color(0,190,255);
+      text_color = set_color(255-0,255-190,255-255);
+    }
+
+    if (snstype==60 || snstype==61) {
+      //bat
+      box_text += (String) ((int) Sensors[sensorInd].snsValue) + "%(LOW)_";
+      box_border = set_color(20,20,150);
+      box_fill = set_color(150,150,255);
+      text_color = set_color(255-150,255-150,255-255);
+    }
+
+
+    if (snstype==9 || snstype==13 || snstype==19) {
+      //air pressure
+      box_text += (String) ((int) Sensors[sensorInd].snsValue) + "hPA_";
+      if (bitRead(Sensors[sensorInd].Flags,5)==0) { //low pressure    
+        box_border = set_color(20,20,100);
+        box_fill = set_color(100,100,255);
+        text_color = set_color(255-100,255-100,255-255);
+      } 
+      else {
+        box_border = set_color(100,20,20);
+        box_fill = set_color(255,100,100);
+        text_color = set_color(255-255,255-100,255-100);
+      }
+    }
   }
-  if (isHigh != 255) {
-    box_text += (String) ((int) Sensors[isHigh].snsValue) + "F(HIGH)|";
-    box_border = set_color(150,20,20);
-    box_fill = set_color(255,100,100);
-    text_color = set_color(255-255,255-100,255-100);
-  }
-
-  isHigh = 255;
-  isLow = 255;
-  find_limit_sensortypes(roomname,4,&isHigh,&isLow);
-  if (isLow != 255) {
-    box_text += (String) ((int) Sensors[isLow].snsValue) + "F(LOW)|";
-    box_border = set_color(20,20,150);
-    box_fill = set_color(150,150,255);
-    text_color = set_color(255-150,255-150,255-255);
-  }
-  if (isHigh != 255) {
-    box_text += (String) ((int) Sensors[isHigh].snsValue) + "F(HIGH)|";
-    box_border = set_color(150,20,20);
-    box_fill = set_color(255,100,100);
-    text_color = set_color(255-255,255-100,255-100);
-  }
-
-  //soil
-  isHigh = 255;
-  isLow = 255;
-  find_limit_sensortypes(roomname,3,&isHigh,&isLow);    
-  if (isHigh != 255) {
-    box_text += "DRY|";
-    box_border = set_color(65,45,20);
-    box_fill = set_color(250,170,100);
-    text_color = set_color(255-250,255-170,255-100);
-  } 
-
-  //leak
-  isHigh = 255;
-  isLow = 255;
-  find_limit_sensortypes(roomname,70,&isHigh,&isLow);    
-  if (isHigh != 255) { //leak is a 1, no leak is a 0
-    box_text += "LEAK|";
-    box_border = set_color(0,0,255);
-    box_fill = set_color(0,190,255);
-    text_color = set_color(255-0,255-190,255-255);
-  }
- 
-
-  //bat
-  isHigh = 255;
-  isLow = 255;
-  find_limit_sensortypes(roomname,61,&isHigh,&isLow);    
-  if (isLow != 255) {
-    box_text += (String) ((int) Sensors[isLow].snsValue) + "%(LOW)|";
-    box_border = set_color(20,20,150);
-    box_fill = set_color(150,150,255);
-    text_color = set_color(255-150,255-150,255-255);
-  }
-
 
   //draw  box
 //  tft.fillRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_fill);
   //tft.drawRoundRect(X,Y,boxsize_x-2,boxsize_y-2,8,box_border);
   tft.fillRect(X,Y,boxsize_x-2,boxsize_y-2,box_fill);
   tft.drawRect(X,Y,boxsize_x-2,boxsize_y-2,box_border);
-  tft.setTextColor(0,box_fill);
+  tft.setTextColor(text_color,box_fill);
   
   Y+=  2;
-  byte FNTSZ = 2;
-  uint32_t FH=setFont(FNTSZ);
-   
-  snprintf(tempbuf,13,"%s",roomname.c_str());
-  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+boxsize_x/2,Y+FH/2);
-  Y+=2+FH;
-
-  tft.setTextColor(text_color,box_fill);
       
-  //print each line to the |, then print on the next line
-  FNTSZ = 1;
-  FH = setFont(0);
+  //print each line to the _, then print on the next line
+  byte FNTSZ = 1;
+  uint32_t FH = setFont(FNTSZ);
   int strOffset = -1;
   String tempstr;
   while (box_text.length()>1) {
-    strOffset = box_text.indexOf("|", 0);
+    strOffset = box_text.indexOf("_", 0);
     if (strOffset == -1) { //did not find the break point
       tempstr = box_text;
       box_text = "";
     } else {
       tempstr = box_text.substring(0, strOffset);
-      box_text.remove(0, strOffset + 1); //include the trailing "|"
+      box_text.remove(0, strOffset + 1); //include the trailing "_"
     }
 
-    if (tempstr.length()>1) {
+    if (tempstr.length()>=1) {
       fcnPrintTxtCenter(tempstr,FNTSZ, X+boxsize_x/2,Y+FH/2);
       Y+=2+FH;
     }
   } 
-
   
 }
 
 void fcnDrawSensors(int Y) {
   /*
-  need to show:
-  outside r1/c1
-  attic r1/c2
-  upstairs hall r1/c3
-  Upstairs BR r2/c1
-  FamRm r2/c2
-  DR r2/c3
-  LR r3/c1
-  Office r3/c2
-  Den r3/c3
+  going to show 6x2 flagged sensors (so up to 12)
+  will save the last leave off position and continue from that on each redraw
 */
 
-   
   int X = 0;
   
-  /* don't do this anymore...
-//print time at top
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  byte FNTSZ=4;
-
-  X = 3*tft.width()/4;
-  snprintf(tempbuf,6,"%s",dateify(now(),"hh:nn"));
-  tft.setTextFont(FNTSZ);
-
-  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,tft.fontHeight(FNTSZ)/2);
-  */
-
   byte boxsize_x=50,boxsize_y=50;
   byte gapx = 4;
   byte gapy = 2;
+  
   String roomname;
 
   X = 0;
  
-  byte rows = 2;
-  byte cols = 6;
+  byte rows = 2, cols = 6;
+
+
+  //fill an array with next 12 alarm entries
+  int alarms[rows*cols];
+  byte alarmArrayInd = 0;
+  byte localInd = 0;
+
+//init alarms
+  for (byte k = 0;k<(rows*cols);k++) alarms[k]=-1;
+  
+//fill up to 12 alarm spots, and remember where we left off
+  for (byte k = 0;k<SENSORNUM;k++) {
+    localInd = (k+I.alarmIndex)%SENSORNUM; //this is the index to sensor array, which will loop around at SENSORNUM
+    if (isSensorInit(localInd)==false) continue; //skip blanks
+    if ((Sensors[localInd].snsType>=50 && Sensors[localInd].snsType<60) || Sensors[localInd].snsType==99) continue; //skip HVAC and other
+
+    if (bitRead(Sensors[localInd].Flags,0)==1 || Sensors[localInd].expired==true) alarms[alarmArrayInd++] = localInd;
+    if (alarmArrayInd>=(rows*cols)) break;
+  }
+  I.alarmIndex = (localInd+1)%SENSORNUM;
+
+  alarmArrayInd = 0;
 
   for (byte r=0;r<rows;r++) {
+    if (alarms[alarmArrayInd]==-1) break;
     for (byte c=0;c<cols;c++) {
-      switch ((uint16_t) r<<8 | c) { //this puts the row into the first 8 bits and column into the next 8, so can check both row and column in 1 case
-        case 0:
-          roomname = "Outside";
-          break;
-        case 0<<8 | 1:
-          roomname = "Attic";
-          break;
-        case 0<<8 | 2:
-          roomname = "UpHall";
-          break;
-        case 0<<8 | 3:
-          roomname = "MastBR";
-          break;
-        case 0<<8 | 4:
-          roomname = "FamRm";
-          break;
-        case 0<<8 | 5:
-          roomname = "FRBoP";
-          break;
-        case 1<<8 | 0:
-          roomname = "Dining";
-          break;
-        case 1<<8 | 1:
-          roomname = "LivRm";
-          break;
-        case 1<<8 | 2:
-          roomname = "Office";
-          break;
-        case 1<<8 | 3:
-          roomname = "Den";
-          break;
-        case 1<<8 | 4:
-          roomname = "Garage";
-          break;
-        case 1<<8 | 5:
-          roomname = "Bmnt";
-          break;
-      }
-
-
-      drawBox(roomname,  X,  Y,boxsize_x,boxsize_y);
+      //draw each alarm index in a box
+      if (alarms[alarmArrayInd]==-1) break;
+      drawBox(alarms[alarmArrayInd++],  X,  Y,boxsize_x,boxsize_y);
         
-
       X=X+boxsize_x+gapx;
     }
     Y+=boxsize_y + gapy;
@@ -1271,7 +1235,7 @@ void fcnDrawClock(time_t t) {
   I.lastClock = t;
 
   
-  //if isflagged, then show rooms with flags
+  //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
   if (I.isFlagged) {
     if (t>I.lastFlagView+I.flagViewTime) {
       I.lastFlagView = t;
@@ -1632,8 +1596,7 @@ void loop() {
     //do stuff every minute
 
     I.isFlagged = false;
-    
-    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means only flag for soil or temp or battery
+    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means flag for all common sensors. Note that it is possible for count to be zero for expired sensors in some cases (when morerecentthan is >0)
     
     checkHeat(); //this updates I.isheat and I.isac
 
@@ -1648,6 +1611,12 @@ void loop() {
 
     I.isLeak = false;
     if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
+
+    I.isExpired = false;
+    if (countFlagged(-10)>0) { //this counts expired sensors, and will not fail regardless of morerecentthan used above
+      I.isExpired = true;
+      I.isFlagged = true; //set this flag as well, because expired sensors could fail to register in the generic countflagged call if morerecentthan is set
+    }
     
   }
 
@@ -1658,11 +1627,11 @@ void loop() {
     OldTime[2] = hour(); 
 
     
-    //expire any measurements that are older than N hours.
-    initSensor(OLDESTSENSORHR*60);
+    //expire any measurements that are too old
+    checkExpiration(-1,t);
 
-      //overwrite  sensors to the sd card
-    writeSensorsSD("/Data/SensorBackup.dat");
+    //overwrite  sensors to the sd card
+    writeSensorsSD();
 
       
   }

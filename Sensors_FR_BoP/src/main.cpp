@@ -55,9 +55,9 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 #endif
 
 #ifdef _USESOILRES
-  const int SOILPIN = A4; //A4 is the same as GPIO 32 on the esp32 //  A0;  // use A0 on ESP8266 Analog Pin ADC0 = A0
+  const int SOILPIN = 32; //A4 is the same as GPIO 32 on the esp32 //  A0;  // use A0 on ESP8266 Analog Pin ADC0 = A0
   const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
-  #define SOILRESISTANCE 4700 //ohms
+  //#define SOILRESISTANCE 4700 //ohms
 #endif
 
 #ifdef _USEHCSR04
@@ -104,9 +104,12 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
   // static const uint8_t SDA   = 4;
   // static const uint8_t SCL  = 5;
   static const uint8_t LED   = 2;
+    #define _ADCRATE 1023
+
 #endif
 //8266... I think they're the same. If not, then use nodemcu or wemos
 #ifdef _USE32
+  #define _ADCRATE 4095
 /*  static const uint8_t TX = 1;
   static const uint8_t RX = 3;
   static const uint8_t SDA = 21;
@@ -390,8 +393,10 @@ byte CURRENTSENSOR_WEB = 1;
     uint8_t MinBrightness; //sin amp
     uint32_t last_LED_update;
     byte LEDredrawRefreshMS;
-    CRGB color; //current color 1 
-    uint32_t  LED_TIMING[LEDCOUNT];
+    CRGB color1; //current color start
+    CRGB color2; //current color end //color will be a random uniformly distributed value between color 1 and 2
+    uint32_t  LED_TIMING[LEDCOUNT]; //keeps track of the time of each LED in animations where each LED is in a different cycle (like sparkling gaussians, type 5)
+    uint32_t  LED_BASE[LEDCOUNT]; //keeps track of the base color of each LED (generated as a random between color1 and color2), necessary where LEDs are cycling independently. In other cases, LED[0] will be the base color. Note this resets when LED completes a cycle
     
 
     void LED_update(void) {
@@ -429,8 +434,7 @@ byte CURRENTSENSOR_WEB = 1;
         if (this->animation_style==5) {
           DIR=0;
           L1=LEDCOUNT*300; //use L1 for limit of random chance
-          T1=750; //use T1 for standard deviaiton of guassian, msec
-          
+          T1=750; //use T1 for standard deviaiton of guassian, msec          
         }
 
 
@@ -441,7 +445,7 @@ byte CURRENTSENSOR_WEB = 1;
 
 
       #ifdef _DEBUG
-        Serial.printf("global color is %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
+        Serial.printf("global color is %d to %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color1,this->color2,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
       #endif
 
       FastLED.show();
@@ -449,37 +453,45 @@ byte CURRENTSENSOR_WEB = 1;
     }
 
     uint32_t LED_setLED(byte j, double L1, double T1, int8_t DIR, uint32_t m) {
+      //given an LED position, info on timing such as cosine cycle, animation direction, etc - set the color and brightness of that LED 
+      //L1 T1 can have differing values, but if L1==0 then it is just static color
       uint32_t temp;
       byte brightness;
 
-      if (L1==0 && j>0) return this->LED_TIMING[0]; //all LEDs are the same for this animation style, just return the first value
+      if (L1==0 && j>0) return this->LED_BASE[0]; //all LEDs are the same for this animation style, just return the first base value
 
-      if (this->animation_style==3 || this->animation_style==4) {
-        temp = LED_scale_brightness(this->color,this->MaxBrightness);
-        this->LED_TIMING[0] = temp;
+      if (this->animation_style==3 || this->animation_style==4) { //got here because j=0 so we completed a draw cycle. Choose new colors
+        temp = LED_choose_color(this->MaxBrightness); //note that this will be the same color if color1 = color2
+        this->LED_BASE[0] = temp;
         return temp;
       }
 
       if (this->animation_style==5) {
-        //special case where LED_ARRAY holds the times of the peak display
+        //guassian shimmering... LED_TIMING holds the times of the peak display
         if (this->LED_TIMING[j]==0) {
+          //this LED position has completed a cycle. Reset the next peak time and choose a new color
           this->LED_TIMING[j]=m + random(25,25+L1);
+          this->LED_BASE[j]=LED_choose_color(this->MaxBrightness);
           return 0;
         }
-        //use guassian to determine brightness:
+
+        //determine the brightness as a guassian distribution:
         brightness = this->MaxBrightness * ((double) pow(2.71828,-1*((pow((double) m-this->LED_TIMING[j],2)/(2*pow(T1,2)))))); //m is current time, led_array is time of peak, T1 is standrad dev
-        if (brightness < this->MinBrightness && this->LED_TIMING[j]<m) { //the peak is in the past, enter a new one
-          this->LED_TIMING[j]=m + random(25,25+L1);
+        if (brightness < this->MinBrightness && this->LED_TIMING[j]<m) { //the peak is in the past and the brightness has tapered to below threshold, set the timing to 0 to reset on next cycke
+          this->LED_TIMING[j]=0;
           return 0;
         }
         else {
-          return LED_scale_brightness(this->color,brightness);
+          return LED_scale_brightness(this->LED_BASE[j],brightness);
         }
       }
 
+      //if we got here then it is a cosine wave
+
       brightness = (uint8_t) ((double) (this->MaxBrightness-this->MinBrightness) * (cos((double) 2*PI*(j*L1 +(DIR)* m*T1)) + 1)/2 + this->MinBrightness);
-      
-      temp =  LED_scale_brightness(this->color,brightness);
+      if (brightness == this->MinBrightness) this->LED_BASE[0] = LED_choose_color(this->MaxBrightness); //completed a cycle of the cosine wave, choose new color. Only the first element needs to change.
+
+      temp =  LED_scale_brightness(this->LED_BASE[0],brightness); //only need the first value of LED_VASE, all the colors are the same
   
   /*
       #ifdef _DEBUG
@@ -491,6 +503,7 @@ byte CURRENTSENSOR_WEB = 1;
     }
 
     uint32_t LED_scale_brightness(CRGB colorin, byte BRIGHTNESS_SCALE) {
+      //scales brightness of the provided color
       double r = (double) colorin.red*BRIGHTNESS_SCALE/100;
       double g = (double) colorin.green*BRIGHTNESS_SCALE/100;
       double b = (double) colorin.blue*BRIGHTNESS_SCALE/100;
@@ -503,99 +516,198 @@ byte CURRENTSENSOR_WEB = 1;
       return  (uint32_t) ((byte) r << 16 | (byte) g << 8 |  ((byte) b));
     }
 
-    void LED_set_color(byte r, byte g, byte b) {
-      this->color =   (uint32_t) ((byte) r << 16 | (byte) (g) << 8 | (byte) (b));
+    uint32_t LED_choose_color(byte BRIGHTNESS_SCALE=100) {      
+      //chooses a color between 1 and 2 (and sets brightness)
+      byte r1 = (byte) ((double) this->color1.red *BRIGHTNESS_SCALE/100);
+      byte g1 = (byte) ((double) this->color1.green *BRIGHTNESS_SCALE/100);
+      byte b1 = (byte) ((double) this->color1.blue *BRIGHTNESS_SCALE/100);
+
+      byte r2 = (byte) ((double) this->color2.red *BRIGHTNESS_SCALE/100);
+      byte g2 = (byte) ((double) this->color2.green *BRIGHTNESS_SCALE/100);
+      byte b2 = (byte) ((double) this->color2.blue *BRIGHTNESS_SCALE/100);
+
+
+      return (uint32_t) (this->LED_scale_color(r1,r2)<<16) | (this->LED_scale_color(g1,g2)<<8) | (this->LED_scale_color(b1,b2));
+    }
+
+    byte LED_scale_color(byte c1, byte c2) {
+      //random uniformly choose a color that is between c1 and c2
+      if (c1==c2) return c1;
+      randomSeed(micros()); 
+      if (c1>c2) return random(c2,c1+1);
+      return random(c1,c2+1);
+    }
+
+
+    void LED_set_color(byte r1, byte g1, byte b1, byte r2, byte g2, byte b2) {
+      this->color1 =   (uint32_t) ((byte) r1 << 16 | (byte) (g1) << 8 | (byte) (b1));
+      this->color2 =   (uint32_t) ((byte) r2 << 16 | (byte) (g2) << 8 | (byte) (b2));
 
       #ifdef _DEBUG
-        Serial.printf("LED_set_color R color is now %d.\n",this->color.red);
+        Serial.printf("LED_set_color R color1 is now %d.\n",this->color1.red);
       #endif 
 
     }
 
     void LED_set_color_soil(struct SensorVal *sns) {
       //while log(resistivity) is linearly correlated with moiusture, it is roughly linear in our range
-      //let's scale from blue at <=50% max, green <=80%, and then scale the last 20% 
+      //let's scale from blue to green to yellow to red
 
-      byte r=0,g=0,b=0;      
-      byte ii = 0;
+      byte r1=0,g1=0,b1=0,r2=0,g2=0,b2=0;      
+      byte animStyle = 0;
 
-      double snspct = sns->snsValue / sns->limitUpper; 
-      if (snspct < .5) ii=0;
-      else {
-        if (snspct < .8) ii=1;
-        else {
-          if (snspct>=1) ii=6;
-          else {
-            for (byte i=2; i<=5;i++) {
-              if ((double) snspct>=1-(1-0.8)/i) ii=i;
-            }
-          }
+      byte  snspct = (byte) (100*((double)sns->snsValue / sns->limitUpper)); 
+      byte snslim = 0;
+      byte animStylestep = 0;
 
-        }          
-      }
+      do {
+        animStylestep++;
+        snslim += 10;
+        if (snspct <= snslim) animStyle=animStylestep;        
+        if (snspct>100) animStyle=11;
+      } while (animStyle ==0);
 
-      switch (ii) {
-        case 6:
+      animStyle--; //added one extra
+
+      switch (animStyle) {
+        case 11: //very high... pulse red.
           LED_animation_defaults(3);
           this->MaxBrightness = 100;
           this->MinBrightness = 10;
           this->sin_T = 1000;
-          r=255;
-          g=0;
-          b=0;
+          r1=255;
+          g1=0;
+          b1=0;
+          r2=255;
+          g2=0;
+          b2=0;
           
           break;
-        case 5:
-          LED_animation_defaults(2);
+        case 10: //high sparkle red
+          LED_animation_defaults(5);
           this->MaxBrightness = 30;
           this->MinBrightness = 5;
           this->sin_T = 1000;
-          r=255;
-          g=105;
-          b=10;
+          r1=255;
+          g1=0;
+          b1=0;
+          r2=255;
+          g2=0;
+          b2=0;
+          break;
+        case 9: 
+          LED_animation_defaults(5);
+          this->MaxBrightness = 30;
+          this->MinBrightness = 5;
+          r1=255;
+          g1=0;
+          b1=0;
+          r2=255;
+          g2=50;
+          b2=0;
+          break;
+        case 8:
+          LED_animation_defaults(5);
+          this->MaxBrightness = 25;
+          this->MinBrightness = 5;
+          r1=255;
+          g1=50;
+          b1=0;
+          r2=255;
+          g2=100;
+          b2=0;
+          break;
+        case 7:
+          LED_animation_defaults(5);
+          this->MaxBrightness = 25;
+          this->MinBrightness = 5;
+          r1=255;
+          g1=255;
+          b1=0;
+          r2=150;
+          g2=255;
+          b2=0;
+          break;
+        case 6:
+          LED_animation_defaults(5);
+          this->MaxBrightness = 15;
+          this->MinBrightness = 5;
+          r1=150;
+          g1=255;
+          b1=0;
+          r2=50;
+          g2=255;
+          b2=0;
+          break;
+        case 5:
+          LED_animation_defaults(5);
+          this->MaxBrightness = 15;
+          this->MinBrightness = 5;
+          r1=50;
+          g1=255;
+          b1=0;
+          r2=0;
+          g2=255;
+          b2=0;
           break;
         case 4:
           LED_animation_defaults(5);
-          this->MaxBrightness = 20;
+          this->MaxBrightness = 15;
           this->MinBrightness = 5;
-          r=255;
-          g=175;
-          b=20;
+          r1=0;
+          g1=255;
+          b1=0;
+          r2=0;
+          g2=255;
+          b2=100;
           break;
         case 3:
           LED_animation_defaults(5);
-          this->MaxBrightness = 10;
+          this->MaxBrightness = 15;
           this->MinBrightness = 5;
-          r=255;
-          g=255;
-          b=0;
+          r1=0;
+          g1=255;
+          b1=50;
+          r2=0;
+          g2=255;
+          b2=200;
           break;
         case 2:
           LED_animation_defaults(5);
-          this->MaxBrightness = 10;
+          this->MaxBrightness = 15;
           this->MinBrightness = 5;
-          r=50;
-          g=255;
-          b=0;
+          r1=0;
+          g1=255;
+          b1=100;
+          r2=0;
+          g2=150;
+          b2=255;
           break;
         case 1:
           LED_animation_defaults(5);
-          this->MaxBrightness = 10;
+          this->MaxBrightness = 15;
           this->MinBrightness = 5;
-          r=0;
-          g=255;
-          b=100;
+          r1=0;
+          g1=255;
+          b1=100;
+          r2=0;
+          g2=200;
+          b2=255;
           break;
         case 0:
           LED_animation_defaults(5);
-          this->MaxBrightness = 10;
+          this->MaxBrightness = 15;
           this->MinBrightness = 5;
-          r=0;
-          g=255;
-          b=255;
+          r1=0;
+          g1=0;
+          b1=0;
+          r2=0;
+          g2=150;
+          b2=255;
           break;
+
       }
-      this->LED_set_color(r,g,b);
+      this->LED_set_color(r1,g1,b1,r2,g2,b2);
     }
 
     void LED_animation_defaults(byte anim) {
@@ -656,7 +768,7 @@ byte i;
 
   LEDs.LED_animation_defaults(1);
   LEDs.LEDredrawRefreshMS=20;
-  LEDs.LED_set_color(255,255,255); //default is white
+  LEDs.LED_set_color(255,255,255,255,255,255); //default is white
 #endif 
   
   #ifdef _USESOILRES
@@ -1051,16 +1163,16 @@ byte i;
         #ifdef _USESOILCAP
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
-          Sensors[i].limitUpper = 290;
-          Sensors[i].limitLower = 25;
+          Sensors[i].limitUpper = 150;
+          Sensors[i].limitLower = 0;
           Sensors[i].PollingInt=120;
           Sensors[i].SendingInt=600;
         #endif
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 2000;
-          Sensors[i].limitLower = 1000;
+          Sensors[i].limitUpper = 150;
+          Sensors[i].limitLower = 0;
           Sensors[i].PollingInt=60;
           Sensors[i].SendingInt=300;
         #endif
@@ -1950,19 +2062,24 @@ bool ReadData(struct SensorVal *P) {
 
   switch (P->snsType) {
     case 1: //DHT temp
+    {
       #ifdef DHTTYPE
         //DHT Temp
         P->snsValue =  (dht.readTemperature()*9/5+32);
       #endif
       break;
+    }
     case 2: //DHT RH
+    {
       #ifdef DHTTYPE
         //DHT Temp
         P->snsValue = dht.readHumidity();
       #endif
       break;
+    }
     case 3: //soil
-      #ifdef _USESOILCAP
+    {
+        #ifdef _USESOILCAP
         //soil moisture v1.2
         val = analogRead(P->snsPin);
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
@@ -1971,21 +2088,28 @@ bool ReadData(struct SensorVal *P) {
       #endif
 
       #ifdef _USESOILRES
-        //soil moisture by stainless steel wire (Resistance)
-        digitalWrite(SOILDIO, HIGH);
-        val = analogRead(P->snsPin);
-        digitalWrite(SOILDIO, LOW);
-        //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
-        //so R_soil = R_fixed * (3.3/Vsoil -1)
-      
-        #ifdef _USE32
-          val = val * (3.3 / 4095); //12 bit
-          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
-        #endif
-        #ifdef _USE8266
-          val = val * (3.3 / 1023); //it's 1023 because the value 1024 is overflow
-          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
-        #endif
+        //soil moisture by stainless steel probe unit (Resistance is characterized by a voltage signal, that varies between 0 (wet) and ~500 (dry) on a 1024 resolution scale 0 to 3.3v)
+        
+        val=0;
+        uint8_t nsamp=10;
+        for (uint8_t ii=0;ii<nsamp;ii++) {        
+          digitalWrite(SOILDIO, HIGH);
+          delay(5);
+          val += analogRead(P->snsPin);
+          digitalWrite(SOILDIO, LOW);
+          delay(5); //wait X ms for reading to settle
+        }
+        val=val/nsamp;
+
+        //convert val to voltage
+        val = 3.3 * (val / _ADCRATE);
+
+        //the chip I am using is a voltage divider with a 10K r1. 
+        //equation for R2 is R2 = R1 * (V2/(V-v2))
+
+        P->snsValue = (double) 10000 * (val/(3.3-val));
+
+
 
         #ifdef _USELED
           LEDs.LED_set_color_soil(P);
@@ -1994,7 +2118,9 @@ bool ReadData(struct SensorVal *P) {
       #endif
 
       break;
+    }
     case 4: //AHT Temp
+    {
       #ifdef _USEAHT
         //AHT21 temperature
           val = aht21.readTemperature();
@@ -2015,7 +2141,9 @@ bool ReadData(struct SensorVal *P) {
           }
       #endif
       break;
+    }
     case 5: //AHT RH
+    {
       //AHT21 humidity
         #ifdef _USEAHT
           val = aht21.readHumidity();
@@ -2036,8 +2164,9 @@ bool ReadData(struct SensorVal *P) {
           }
       #endif
       break;
-
+    }
     case 7: //dist
+    {
       #ifdef _USEHCSR04
         #define USONIC_DIV 58   //conversion for ultrasonic distance time to cm
         digitalWrite(TRIGPIN, LOW);
@@ -2056,7 +2185,9 @@ bool ReadData(struct SensorVal *P) {
       #endif
 
       break;
+    }
     case 9: //BMP pres
+    {
       #ifdef _USEBMP
          P->snsValue = bmp.readPressure()/100; //in hPa
         #ifdef _USEBARPRED
@@ -2076,8 +2207,10 @@ bool ReadData(struct SensorVal *P) {
 
       #endif
       break;
+    }
     case 10: //BMP temp
-      #ifdef _USEBMP
+    {
+        #ifdef _USEBMP
         P->snsValue = ( bmp.readTemperature()*9/5+32);
       #endif
       break;
@@ -2152,7 +2285,9 @@ bool ReadData(struct SensorVal *P) {
         }
       #endif
       break;
+    }
     case 13: //BME pres
+    {
       #ifdef _USEBME
          P->snsValue = bme.readPressure(); //in Pa
         #ifdef _USEBARPRED
@@ -2171,7 +2306,9 @@ bool ReadData(struct SensorVal *P) {
         #endif
       #endif
       break;
+    }
     case 14: //BMEtemp
+    {
       #ifdef _USEBME
         P->snsValue = (( bme.readTemperature()*9/5+32) );
       #endif
@@ -2188,6 +2325,7 @@ bool ReadData(struct SensorVal *P) {
 
       #endif
       break;
+    }
   }
 
   checkSensorValFlag(P); //sets isFlagged

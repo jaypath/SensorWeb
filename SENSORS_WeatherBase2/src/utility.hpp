@@ -21,7 +21,7 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels);
 bool stringToLong(String s, uint32_t* val);
 int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token);
-
+bool isSensorInit(byte i);
 
 int16_t findDev(struct SensorVal *S, bool oldest = false);
 int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest);
@@ -33,7 +33,7 @@ uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
 void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
-
+bool checkExpiration(int i, time_t t=0);
 String IPbytes2String(byte* IP);
 bool IPString2ByteArray(String IPstr,byte* IP) ;
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);

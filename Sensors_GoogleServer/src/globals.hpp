@@ -152,6 +152,7 @@ struct SensorVal {
   double snsValue_MIN;
   uint32_t timeRead;
   uint32_t timeLogged;
+  uint16_t SendingInt;
   bool isSent;  
   uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value  
 };

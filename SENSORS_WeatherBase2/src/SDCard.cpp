@@ -32,6 +32,22 @@ bool writeSensorsSD(String filename)
 }
 
 
+
+bool storeSensorSD(struct SensorVal *S) {
+
+    String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v2.dat";
+    File f = SD.open(filename, FILE_APPEND);
+    if (f==false) return false;
+    union SensorValBytes D; 
+    D.sensordata=*S;
+
+    f.write(D.bytes,sizeof(SensorVal));
+
+    f.close();
+    return true;
+    
+}
+
 bool readSensorsSD(String filename) //read last available sensorvals back from disk
 {
     union SensorValBytes D;
@@ -52,24 +68,10 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
 
 }
 
-bool storeSensorSD(struct SensorVal *S) {
-
-    String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + ".dat";
-    File f = SD.open(filename, FILE_APPEND);
-    if (f==false) return false;
-    union SensorValBytes D; 
-    D.sensordata=*S;
-
-    f.write(D.bytes,sizeof(SensorVal));
-
-    f.close();
-    return true;
-    
-}
-
+//overloaded version to read multiple values and average them together
 bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN ) {
 
-    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + ".dat";
+    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + "_v2.dat";
     File f = SD.open(filename, FILE_READ);
     union SensorValBytes D;
     byte cnt = 0, deltacnt=0;
@@ -109,7 +111,7 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     if (starttime==0) starttime = tn;
     if (avgN==0) avgN=1;
 
-    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + ".dat";
+    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + "_v2.dat";
     File f = SD.open(filename, FILE_READ);
     union SensorValBytes D;
     double avgV = 0;

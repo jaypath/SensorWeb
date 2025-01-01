@@ -157,6 +157,14 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 #endif
 
 #ifdef _USESOILRES
+  //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
+  #define SOILR_MAX 150 //%max resistance value (dependent on R1 choice)
+  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
+#endif
+
+
+#ifdef _USESOILRESOLD
   #define SOILRESISTANCE 4700
   #define SOILR_MAX 2000
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
@@ -217,7 +225,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
   #define _USE8266 1
   #define _ADCRATE 1023
 #elif defined(ESP32)
-  #define _USE32
+  #define _USE32 1
   #define _ADCRATE 4095
 #else
   #error Arduino architecture unrecognized by this code.

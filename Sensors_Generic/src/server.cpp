@@ -196,7 +196,7 @@ bool isGood = false;
     tempstring = tempstring + String(snsreading->Flags, DEC);
     tempstring = tempstring + "&logID=";
     tempstring = tempstring + String(arduinoID, DEC);
-    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC);
+    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC) + "&SendingInt=" + String(snsreading->SendingInt, DEC);
 
     while(ipindex<NUMSERVERS) {
       if (SERVERIP[ipindex].IP[0]==0 || SERVERIP[ipindex].IP[3]==0) {
@@ -233,7 +233,7 @@ bool isGood = false;
     
   }
 
-  if (isGood) bitWrite(snsreading->Flags,7,0); //even if there was no change in the flag status, I wrote the value so set bit 7 to zero
+  if (isGood) bitWrite(snsreading->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
 
   return isGood;
 
