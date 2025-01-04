@@ -25,7 +25,7 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 #endif
 
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 - flag matters (some sensors don't use isflagged, RMB7 - last value had a different flag than this value)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
 
 #ifdef _USEBME680
@@ -90,7 +90,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
   //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
   //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = change status and I did not send data yet
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
 
 byte count =0;
 int snsArr[10] = {0}; //this is for special cases
@@ -207,7 +207,8 @@ uint16_t  sc_interval;
 
 
     Sensors[i].Flags = 0;
-    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status since prior read, RMB7 = flag status changed and I have not sent data yet
+    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status since prior read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
+    bitWrite(Sensors[i].Flags,7,1); //default sensors to monitored level
     if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
     else bitWrite(Sensors[i].Flags,1,0);
     
@@ -243,7 +244,7 @@ uint16_t  sc_interval;
         //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
-
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         #ifdef DHTTYPE
           Sensors[i].snsPin=DHTPIN;
           snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
@@ -309,11 +310,12 @@ uint16_t  sc_interval;
         #endif
         break;
         }
-      case 5:
+      case 5: //aht rh
         {
           //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
         #if defined(_USEAHT) || defined(_USEAHTADA)
           Sensors[i].snsPin=0;
@@ -337,6 +339,7 @@ uint16_t  sc_interval;
         {
           //sc_multiplier = 1;
         //sc_offset=50;
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0; //not used
         snprintf(Sensors[i].snsName,31,"%s_Dist",ARDNAME);
@@ -350,6 +353,7 @@ uint16_t  sc_interval;
         {
           //sc_multiplier = .5; //[multiply by 2]
         //sc_offset=-950; //now range is <100, so multiplier of .5 is ok
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*60;//seconds 
         Sensors[i].snsPin=0; //i2c
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
@@ -384,6 +388,7 @@ uint16_t  sc_interval;
         {
           //sc_multiplier = 1;
         //sc_offset=0;
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*30;//seconds 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
@@ -398,6 +403,7 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=10; //to eliminate neg numbs
         sc_interval=60*30;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_Pred",ARDNAME);
@@ -413,6 +419,7 @@ uint16_t  sc_interval;
         {
           //sc_multiplier = .5;
         //sc_offset=-950; //now range is <100, so multiply by 2
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*60;//seconds 
         Sensors[i].snsPin=0; //i2c
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
@@ -446,6 +453,7 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_BMErh",ARDNAME);
@@ -467,6 +475,7 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
@@ -501,6 +510,7 @@ uint16_t  sc_interval;
              //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
@@ -522,6 +532,7 @@ uint16_t  sc_interval;
           //sc_multiplier = .5;
         //sc_offset=-950; //now range is <100, so multiply by 2
         sc_interval=60*60;//seconds 
+        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         Sensors[i].snsPin=0;
         snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
         Sensors[i].limitUpper = 1020;
@@ -745,6 +756,7 @@ uint16_t  sc_interval;
       case 90: //Sleep info
         {
           sc_interval=60*30;//seconds 
+          bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
           Sensors[i].snsPin=0;
           //pinMode(Sensors[i].snsPin, INPUT);
@@ -850,7 +862,34 @@ bool ReadData(struct SensorVal *P) {
         #endif
 
         #ifdef _USESOILRES
-        //soil moisture by stainless steel wire (Resistance)
+        //soil moisture by stainless steel probe (voltage out = 0 to Vcc)
+        val=0;
+        nsamps=100;
+
+        digitalWrite(_USESOILRES, HIGH);
+        delay(100); //wait X ms for reading to settle
+        for (byte ii=0;ii<nsamps;ii++) {                  
+          val += analogRead(P->snsPin);
+          delay(1);
+        }
+          digitalWrite(_USESOILRES, LOW);
+        val=val/nsamps;
+
+
+        //convert val to voltage
+        val = 3.3 * (val / _ADCRATE);
+
+        //the chip I am using is a voltage divider with a 10K r1. 
+        //equation for R2 is R2 = R1 * (V2/(V-v2))
+
+        P->snsValue = (double) 10000 * (val/(3.3-val));
+               
+        
+        #endif
+
+
+        #ifdef _USESOILRESOLD
+        //soil moisture by stainless steel wire (Resistance)        
         digitalWrite(_USESOILRES, HIGH);
         val = analogRead(P->snsPin);
         digitalWrite(_USESOILRES, LOW);
@@ -1511,11 +1550,9 @@ bool checkSensorValFlag(struct SensorVal *P) {
       bitWrite(P->Flags,0,1); //currently flagged
       bitWrite(P->Flags,5,1); //value is high
       if (lastflag) {
-        bitWrite(P->Flags,6,0); //no change in flag
-        bitWrite(P->Flags,7,0); //no change in flag
+        bitWrite(P->Flags,6,0); //no change in flag        
       } else {
-        bitWrite(P->Flags,6,1); //changed to high
-        bitWrite(P->Flags,7,1); //changed to high and I have not sent data
+        bitWrite(P->Flags,6,1); //change in flag status
       }
       return true; //flagged
     } else { //currently NOT flagged
@@ -1523,10 +1560,8 @@ bool checkSensorValFlag(struct SensorVal *P) {
       bitWrite(P->Flags,5,0); //irrelevant
       if (lastflag) {
         bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
-        bitWrite(P->Flags,7,1); // and I have not sent data
       } else {
         bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
-        bitWrite(P->Flags,7,0); //no change
       }
         return false; //not flagged
     }
@@ -1546,10 +1581,9 @@ bool checkSensorValFlag(struct SensorVal *P) {
   //now check for changes...  
   if (lastflag!=thisflag) {
     bitWrite(P->Flags,6,1); //change detected
-    bitWrite(P->Flags,7,1); //changed to flagged and I have not sent    
+    
   } else {
     bitWrite(P->Flags,6,0);
-    bitWrite(P->Flags,7,0);
   }
   
   return bitRead(P->Flags,0);

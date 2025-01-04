@@ -11,8 +11,6 @@ long DSTOFFSET = 0;
 
 char DATESTRING[25]="";
 
-
-
 //Time fcn
 bool updateTime(byte retries,uint16_t waittime) {
   bool isgood = timeClient.update();

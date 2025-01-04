@@ -24,6 +24,8 @@ WiFi_type WIFI_INFO;
   
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
+  
+  
   for (byte j=0;j<SENSORNUM;j++)  {
     if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
       SendData(&Sensors[j]);
@@ -194,7 +196,7 @@ bool isGood = false;
     tempstring = tempstring + String(snsreading->Flags, DEC);
     tempstring = tempstring + "&logID=";
     tempstring = tempstring + String(arduinoID, DEC);
-    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC);
+    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC) + "&SendingInt=" + String(snsreading->SendingInt, DEC);
 
     while(ipindex<NUMSERVERS) {
       if (SERVERIP[ipindex].IP[0]==0 || SERVERIP[ipindex].IP[3]==0) {
@@ -231,7 +233,7 @@ bool isGood = false;
     
   }
 
-  if (isGood) bitWrite(snsreading->Flags,7,0); //even if there was no change in the flag status, I wrote the value so set bit 7 to zero
+  if (isGood) bitWrite(snsreading->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
 
   return isGood;
 
@@ -614,17 +616,18 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine += "const data_HVAC = google.visualization.arrayToDataTable([\n";
       //header
       currentLine += "['HoursAgo',";
-      for (byte j=0;j<SENSORNUM;j++) {
+      
+      for (byte j=0;j<HVACSNSNUM;j++) {
         currentLine += "'" + (String) Sensors[j].snsName + "'";
-        if (j<SENSORNUM-1) currentLine += ",";
+        if (j<HVACSNSNUM-1) currentLine += ",";
         else currentLine += "],\n";
       }
       //data points
       for (int jj = 0;jj<_HVACHXPNTS;jj++) {
         currentLine += "[" + (String) (jj+1) + ",";        
-        for (byte j=0;j<SENSORNUM;j++) {
+        for (byte j=0;j<HVACSNSNUM;j++) {
           currentLine += (String)  HVACHX[j].values[jj];
-          if (j<SENSORNUM-1) currentLine += ",";
+          if (j<HVACSNSNUM-1) currentLine += ",";
           else currentLine += "]";
         }
         if (jj<_HVACHXPNTS-1) currentLine += ",\n";

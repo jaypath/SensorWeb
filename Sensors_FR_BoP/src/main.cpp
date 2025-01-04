@@ -22,7 +22,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USEBME 1
 //#define _USEHCSR04 1 //distance
 //#define _USESOILCAP 1
-#define _USESOILRES 33 //for esp32 //D5 //for esp8266 //this is the pin that turns on to test soil... not to be confused with soilpin, the Analog in pin
+#define _USESOILRES 33 //for esp32 use any adc1 such as 33 //for esp8266 D5 ////this is the pin that turns on to test soil... not to be confused with soilpin, the Analog in pin
 //#define _USEBARPRED 1
 //#define _USESSD1306  1
 //#define _OLEDTYPE &Adafruit128x64
@@ -2091,14 +2091,16 @@ bool ReadData(struct SensorVal *P) {
         //soil moisture by stainless steel probe unit (Resistance is characterized by a voltage signal, that varies between 0 (wet) and ~500 (dry) on a 1024 resolution scale 0 to 3.3v)
         
         val=0;
-        uint8_t nsamp=10;
-        for (uint8_t ii=0;ii<nsamp;ii++) {        
+        uint8_t nsamp=100;
           digitalWrite(SOILDIO, HIGH);
-          delay(5);
+          delay(100);
+        
+        for (uint8_t ii=0;ii<nsamp;ii++) {        
           val += analogRead(P->snsPin);
-          digitalWrite(SOILDIO, LOW);
-          delay(5); //wait X ms for reading to settle
+          
+          delay(1); //wait X ms for reading to settle
         }
+        digitalWrite(SOILDIO, LOW);
         val=val/nsamp;
 
         //convert val to voltage

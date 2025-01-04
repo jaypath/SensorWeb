@@ -864,15 +864,17 @@ bool ReadData(struct SensorVal *P) {
         #ifdef _USESOILRES
         //soil moisture by stainless steel probe (voltage out = 0 to Vcc)
         val=0;
-        byte nsamp=10;
-        for (byte ii=0;ii<nsamp;ii++) {        
-          digitalWrite(_USESOILRES, HIGH);
-          delay(1);
+        nsamps=100;
+
+        digitalWrite(_USESOILRES, HIGH);
+        delay(100); //wait X ms for reading to settle
+        for (byte ii=0;ii<nsamps;ii++) {                  
           val += analogRead(P->snsPin);
-          digitalWrite(_USESOILRES, LOW);
-          delay(10); //wait X ms for reading to settle
+          delay(1);
         }
-        val=val/nsamp;
+          digitalWrite(_USESOILRES, LOW);
+        val=val/nsamps;
+
 
         //convert val to voltage
         val = 3.3 * (val / _ADCRATE);
@@ -881,6 +883,7 @@ bool ReadData(struct SensorVal *P) {
         //equation for R2 is R2 = R1 * (V2/(V-v2))
 
         P->snsValue = (double) 10000 * (val/(3.3-val));
+               
         
         #endif
 
