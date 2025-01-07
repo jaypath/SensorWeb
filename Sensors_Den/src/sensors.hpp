@@ -88,19 +88,20 @@ extern SensorVal Sensors[SENSORNUM];
   extern SensorChart SensorCharts[_WEBCHART];
 #endif
 
-
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
   struct HISTORY {
     uint32_t lastRead;
     uint16_t interval;
     double values[_HVACHXPNTS];
   };
-  extern HISTORY HVACHX[SENSORNUM];
+  
+  extern HISTORY HVACHX[];
 
   #ifdef _USECALIBRATIONMODE
 
     void checkHVAC(void);
   #endif
+  extern uint8_t HVACSNSNUM;
 #endif
 
 

@@ -24,6 +24,8 @@ WiFi_type WIFI_INFO;
   
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
+  
+  
   for (byte j=0;j<SENSORNUM;j++)  {
     if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
       SendData(&Sensors[j]);
@@ -53,8 +55,8 @@ bool WifiStatus(void) {
     WIFI_INFO.status = 0;
     return false;
   }
-  WIFI_INFO.status = 1;
-  return false; 
+  WIFI_INFO.status = WL_CONNECTED;
+  return true; 
 }
 
 void connectWiFi()
@@ -95,12 +97,27 @@ void connectWiFi()
   Serial.printf( "wifi begin\n");
        #endif
 
-  WiFi.onEvent(onWiFiEvent); 
+  #ifdef _USE32
+    WiFi.onEvent(onWiFiEvent); 
+  #endif
   WiFi.begin(ESP_SSID, ESP_PASS);
 
+  #ifndef _USE32
+    //cannot do this async, so wait for wifi here
+    while ( WiFi.status() != WL_CONNECTED) {
+      #ifdef _DEBUG
+        Serial.print(".");
+      #endif
+      delay(500);
+    }
+
+    WifiStatus(); //assign wifi status
+    
+  #endif
   
 }
 
+#ifdef _USE32
 void onWiFiEvent(WiFiEvent_t event) {
   switch (event) {
     case SYSTEM_EVENT_STA_DISCONNECTED:
@@ -118,7 +135,7 @@ void onWiFiEvent(WiFiEvent_t event) {
         #endif
     
         // Connected successfully
-        WIFI_INFO.status =  1;
+        WifiStatus(); //assign wifi status
         assignIP(WIFI_INFO.MYIP, WiFi.localIP());    
         break;
       }
@@ -127,6 +144,7 @@ void onWiFiEvent(WiFiEvent_t event) {
        break;      
   }
 }
+#endif
 
 bool Server_Message(String URL, String* payload, int* httpCode) {
   WiFiClient wfclient;
@@ -178,7 +196,7 @@ bool isGood = false;
     tempstring = tempstring + String(snsreading->Flags, DEC);
     tempstring = tempstring + "&logID=";
     tempstring = tempstring + String(arduinoID, DEC);
-    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC);
+    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC) + "&SendingInt=" + String(snsreading->SendingInt, DEC);
 
     while(ipindex<NUMSERVERS) {
       if (SERVERIP[ipindex].IP[0]==0 || SERVERIP[ipindex].IP[3]==0) {
@@ -215,7 +233,7 @@ bool isGood = false;
     
   }
 
-  if (isGood) bitWrite(snsreading->Flags,7,0); //even if there was no change in the flag status, I wrote the value so set bit 7 to zero
+  if (isGood) bitWrite(snsreading->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
 
   return isGood;
 
@@ -266,6 +284,11 @@ void handleUPDATESENSORPARAMS() {
     if (server.argName(i)=="Monitored") {
       if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,1,0);
       else bitWrite(Sensors[j].Flags,1,1);
+    }
+
+    if (server.argName(i)=="Critical") {
+      if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,7,0);
+      else bitWrite(Sensors[j].Flags,7,1);
     }
 
     if (server.argName(i)=="Outside") {
@@ -465,7 +488,7 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine = currentLine + "<table id=\"Logs\" style=\"width:70%\">";      
   currentLine = currentLine + "<tr><th>SnsType</th><th>SnsID</th><th>Value</th><th><button onclick=\"sortTable(3)\">UpperLim</button></th><th><button onclick=\"sortTable(4)\">LowerLim</button></th>";
   currentLine = currentLine + "<th><button onclick=\"sortTable(5)\">PollInt</button></th><th><button onclick=\"sortTable(6)\">SendInt</button></th><th><button onclick=\"sortTable(7)\">Flag</button></th>";
-  currentLine = currentLine + "<th><button onclick=\"sortTable(8)\">LastLog</button></th><th><button onclick=\"sortTable(9)\">LastSend</button></th><th>IsMonit</th><th>IsOut</th><th>Flags</th><th>SnsName</th>";
+  currentLine = currentLine + "<th><button onclick=\"sortTable(8)\">LastLog</button></th><th><button onclick=\"sortTable(9)\">LastSend</button></th><th>IsMonit</th><th>IsCritical</th><th>IsOut</th><th>Flags</th><th>SnsName</th>";
   currentLine = currentLine + "<th>Submit</th><th>Recheck</th></tr>\n"; 
   for (byte j=0;j<SENSORNUM;j++)  {
 
@@ -483,6 +506,7 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastReadTime) + "</td>";
       currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastSendTime) + "</td>";
       currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[j].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[j].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
       currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,2) + "</td>";
       Byte2Bin(Sensors[j].Flags,tempchar,true);
       currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
@@ -507,6 +531,7 @@ currentLine += "<br>-----------------------<br>\n";
           currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastReadTime) + "</td>";
           currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastSendTime) + "</td>";
           currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[jj].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[jj].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
           currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,2) + "</td>";
           Byte2Bin(Sensors[jj].Flags,tempchar,true);
           currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
@@ -598,17 +623,18 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine += "const data_HVAC = google.visualization.arrayToDataTable([\n";
       //header
       currentLine += "['HoursAgo',";
-      for (byte j=0;j<SENSORNUM;j++) {
+      
+      for (byte j=0;j<HVACSNSNUM;j++) {
         currentLine += "'" + (String) Sensors[j].snsName + "'";
-        if (j<SENSORNUM-1) currentLine += ",";
+        if (j<HVACSNSNUM-1) currentLine += ",";
         else currentLine += "],\n";
       }
       //data points
       for (int jj = 0;jj<_HVACHXPNTS;jj++) {
         currentLine += "[" + (String) (jj+1) + ",";        
-        for (byte j=0;j<SENSORNUM;j++) {
+        for (byte j=0;j<HVACSNSNUM;j++) {
           currentLine += (String)  HVACHX[j].values[jj];
-          if (j<SENSORNUM-1) currentLine += ",";
+          if (j<HVACSNSNUM-1) currentLine += ",";
           else currentLine += "]";
         }
         if (jj<_HVACHXPNTS-1) currentLine += ",\n";

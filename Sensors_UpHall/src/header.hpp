@@ -8,10 +8,10 @@
 
 //#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
-//#define _WEBCHART 2
+#define _WEBCHART 3
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {3,4,9}; //which sensors should be stored for charting?
 #endif
 
 const byte ASSIGNEDIP[4] = {192,168,68,98}; //assign here if this sensor has a dedicated IP.
@@ -20,22 +20,22 @@ const byte ASSIGNEDIP[4] = {192,168,68,98}; //assign here if this sensor has a d
 
 
 #define ARDNAME "UpHall" //unique name
-#define SENSORNUM 3 //be sure this matches SENSORTYPES //max is 8
+#define SENSORNUM 4 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5}; //max is 8
+const uint8_t SENSORTYPES[SENSORNUM] = {3,4,5,9}; //max is 8
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 //#define _USEDHT 1
-#define _USEAHT 1
-//#define _USEAHTADA 1
-#define _USEBMP  0x76
+//#define _USEAHT 1
+#define _USEAHTADA 0x38 //required for aht with bmp combined
+#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-#define _USESOILRES D3
+#define _USESOILRES D5
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
@@ -157,6 +157,14 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 #endif
 
 #ifdef _USESOILRES
+  //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
+  #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
+  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP
+  //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
+#endif
+
+
+#ifdef _USESOILRESOLD
   #define SOILRESISTANCE 4700
   #define SOILR_MAX 2000
   const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
@@ -217,7 +225,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
   #define _USE8266 1
   #define _ADCRATE 1023
 #elif defined(ESP32)
-  #define _USE32
+  #define _USE32 1
   #define _ADCRATE 4095
 #else
   #error Arduino architecture unrecognized by this code.

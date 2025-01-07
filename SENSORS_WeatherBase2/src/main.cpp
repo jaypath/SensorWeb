@@ -1595,28 +1595,29 @@ void loop() {
     OldTime[1] = minute();
     //do stuff every minute
 
-    I.isFlagged = false;
-    if (countFlagged(-1,B00000111,B00000011,0)>0) I.isFlagged = true; //-1 means flag for all common sensors. Note that it is possible for count to be zero for expired sensors in some cases (when morerecentthan is >0)
+    I.isFlagged = 0;
+    I.isSoilDry = 0;
+    I.isHot = 0;
+    I.isCold = 0;
+    I.isLeak = 0;
+    I.isExpired = 0;    
+
+    I.isFlagged =countFlagged(-1,B00000111,B00000011,0); //-1 means flag for all common sensors. Note that it is possible for count to be zero for expired sensors in some cases (when morerecentthan is >0)
     
     checkHeat(); //this updates I.isheat and I.isac
 
-    I.isSoilDry = false;
-    if (countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0)>0) I.isSoilDry = true;
+     I.isSoilDry =countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0);
 
-    I.isHot = false;
-    if (countFlagged(-2,B00100111,B00100011,(t>3600)?t-3600:0)>0) I.isHot = true;
+    I.isHot =countFlagged(-2,B00100111,B00100011,(t>3600)?t-3600:0);
 
-    I.isCold = false;
-    if (countFlagged(-2,B00100111,B00000011,(t>3600)?t-3600:0)>0) I.isCold = true;
+    I.isCold =countFlagged(-2,B00100111,B00000011,(t>3600)?t-3600:0);
 
-    I.isLeak = false;
-    if (countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0)>0) I.isLeak = true;
+    I.isLeak = countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0);
 
-    I.isExpired = false;
-    if (countFlagged(-10)>0) { //this counts expired sensors, and will not fail regardless of morerecentthan used above
-      I.isExpired = true;
-      I.isFlagged = true; //set this flag as well, because expired sensors could fail to register in the generic countflagged call if morerecentthan is set
-    }
+
+    I.isExpired = checkExpiration(-1,t,true); //this counts critical  expired sensors
+    I.isFlagged+=I.isExpired; //add expired count, because expired sensors don't otherwiseget included
+    
     
   }
 
@@ -1627,8 +1628,8 @@ void loop() {
     OldTime[2] = hour(); 
 
     
-    //expire any measurements that are too old
-    checkExpiration(-1,t);
+    //expire any measurements that are too old, and delete noncritical ones
+    checkExpiration(-1,t,false);
 
     //overwrite  sensors to the sd card
     writeSensorsSD();

@@ -259,14 +259,14 @@ void handleREQUESTWEATHER() {
         if (temptime==0) WEBHTML += (String) hour() + ";";
         else WEBHTML += (String) hour(temptime) + ";";
       }
-      if (server.argName(i)=="isFlagged") WEBHTML += (String) ((I.isFlagged==true)?1:0) + ";";
-      if (server.argName(i)=="isAC") WEBHTML += (String) (((I.isAC&1)==1)?1:0) + ";";
-      if (server.argName(i)=="isHeat") WEBHTML += (String) (((I.isHeat&1)==1)?1:0) + ";";
-      if (server.argName(i)=="isSoilDry") WEBHTML += (String) ((I.isSoilDry==true)?1:0) + ";";
-      if (server.argName(i)=="isHot") WEBHTML += (String) ((I.isHot==true)?1:0) + ";";
-      if (server.argName(i)=="isCold") WEBHTML += (String) ((I.isCold==true)?1:0) + ";";
-      if (server.argName(i)=="isLeak") WEBHTML += (String) ((I.isLeak==true)?1:0) + ";";
-      if (server.argName(i)=="isExpired") WEBHTML += (String) ((I.isExpired==true)?1:0) + ";";
+      if (server.argName(i)=="isFlagged") WEBHTML += (String) I.isFlagged + ";";
+      if (server.argName(i)=="isAC") WEBHTML += (String) I.isAC + ";";
+      if (server.argName(i)=="isHeat") WEBHTML += (String) I.isHeat + ";";
+      if (server.argName(i)=="isSoilDry") WEBHTML += (String) I.isSoilDry + ";";
+      if (server.argName(i)=="isHot") WEBHTML += (String) I.isHot + ";";
+      if (server.argName(i)=="isCold") WEBHTML += (String) I.isCold + ";";
+      if (server.argName(i)=="isLeak") WEBHTML += (String) I.isLeak + ";";
+      if (server.argName(i)=="isExpired") WEBHTML += (String) I.isExpired + ";";
 
     }
   }
@@ -348,17 +348,17 @@ WEBHTML = WEBHTML + "---------------------<br>";
   #endif
   WEBHTML = WEBHTML + "---------------------<br>";      
 
-  if (I.isFlagged || (I.isHeat&1)==1 || (I.isAC&1)==1) {
+  if (I.isFlagged || I.isHeat || I.isAC) {
     WEBHTML = WEBHTML + "<font color=\"#EE4B2B\">";      
     
-    if ((I.isHeat&1)==1) WEBHTML = WEBHTML + "Heat is on<br>";
-    if ((I.isAC&1)==1) WEBHTML = WEBHTML + "AC is on<br>";
-    if (I.isFlagged==true) WEBHTML = WEBHTML + "Critical sensors are flagged:<br>";
-    if (I.isLeak==true) WEBHTML = WEBHTML + "     A leak has been detected!!!<br>";
-    if (I.isHot==true) WEBHTML = WEBHTML + "     Interior room(s) over max temp<br>";
-    if (I.isCold==true) WEBHTML = WEBHTML + "     Interior room(s) below min temp<br>";
-    if (I.isSoilDry==true) WEBHTML = WEBHTML + "     Plant(s) dry<br>";
-    if (I.isExpired==true) WEBHTML = WEBHTML + "     Critical Sensors Expired<br>";
+    if (I.isHeat) WEBHTML = WEBHTML + "Heat is on<br>";
+    if (I.isAC) WEBHTML = WEBHTML + "AC is on<br>";
+    if (I.isFlagged) WEBHTML = WEBHTML + "Critical flags  (" + (String) I.isFlagged + "):<br>";
+    if (I.isLeak) WEBHTML = WEBHTML + "     Leak has been detected (" + (String) I.isLeak + ")!!!<br>";
+    if (I.isHot) WEBHTML = WEBHTML + "     Interior room(s) over max temp (" + (String) I.isHot + ")<br>";
+    if (I.isCold) WEBHTML = WEBHTML + "     Interior room(s) below min temp (" + (String) I.isCold + ")<br>";
+    if (I.isSoilDry) WEBHTML = WEBHTML + "     Plant(s) dry (" + (String) I.isSoilDry + ")<br>";
+    if (I.isExpired) WEBHTML = WEBHTML + "     Critical Sensors Expired (" + (String) I.isExpired + ")<br>";
 
     WEBHTML = WEBHTML + "</font>---------------------<br>";      
   }
@@ -416,7 +416,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
       WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
       WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?"N":"Y") + "</td>";
+      WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?((bitRead(Sensors[j].Flags,7))?"N*":"n"):((bitRead(Sensors[j].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
       
       delta=2;
       if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
@@ -439,7 +439,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
           WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
           WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
           WEBHTML = WEBHTML + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[jj].expired==0)?"N":"Y") + "</td>";
+          WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[jj].expired==0)?((bitRead(Sensors[jj].Flags,7))?"N*":"n"):((bitRead(Sensors[jj].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
           
           delta=2;
           if (Sensors[jj].snsType==4 || Sensors[jj].snsType==1 || Sensors[jj].snsType==10) delta = 4;

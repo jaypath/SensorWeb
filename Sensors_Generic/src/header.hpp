@@ -27,15 +27,19 @@ const uint8_t SENSORTYPES[SENSORNUM] = {50,51,55,55,55,55,55,55}; //max is 8
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
+
+
+
+//note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
 //#define _USEDHT 1
 //#define _USEAHT 1
-//#define _USEAHTADA 1
-//#define _USEBMP  0x76
+//#define _USEAHTADA 0x38 //required for aht with bmp combined
+//#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1
-//#define _USESOILRES D5
+//#define _USESOILRES D5 //pin used for power... for esp32 use any adc1 such as 33 //for esp8266 D5 ////this is the pin that turns on to test soil... not to be confused with soilpin, the Analog in pin
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
 //#define _USESSD1306  1
@@ -144,6 +148,32 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 */
 
+
+
+
+//automatically detect arduino type
+#if defined (ARDUINO_ARCH_ESP8266)
+  #define _USE8266 1
+  #define _ADCRATE 1023
+#elif defined(ESP32)
+  #define _USE32 1
+  #define _ADCRATE 4095
+#else
+  #error Arduino architecture unrecognized by this code.
+#endif
+
+// warnings
+#if defined(_CHECKAIRCON) && defined(_CHECKHEAT)
+  #error "Check air con and check heat cannot both be defined."
+#endif
+
+#if defined(_USECALIBRATIONMODE) && defined(_WEBCHART)
+  #error "CANNOT enable both webchart and usecalibration."
+#endif
+
+
+
+
 //for calibrating current sensor
 #ifdef _USECALIBRATIONMODE
   #define _NUMWEBCHARTPNTS 50
@@ -158,8 +188,13 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 #ifdef _USESOILRES
   //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
-  #define SOILR_MAX 150 //%max resistance value (dependent on R1 choice)
-  const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP
+  #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
+  #ifdef _USE32
+    const int SOILPIN = 32; // ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP or 32
+  #endif
+  #ifdef _USE8266
+    const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0;
+  #endif
   //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
 #endif
 
@@ -218,27 +253,5 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
   #define DHTTYPE    DHT11     // DHT11 or DHT22
   #define DHTPIN 2
 #endif
-
-
-//automatically detect arduino type
-#if defined (ARDUINO_ARCH_ESP8266)
-  #define _USE8266 1
-  #define _ADCRATE 1023
-#elif defined(ESP32)
-  #define _USE32 1
-  #define _ADCRATE 4095
-#else
-  #error Arduino architecture unrecognized by this code.
-#endif
-
-// warnings
-#if defined(_CHECKAIRCON) && defined(_CHECKHEAT)
-  #error "Check air con and check heat cannot both be defined."
-#endif
-
-#if defined(_USECALIBRATIONMODE) && defined(_WEBCHART)
-  #error "CANNOT enable both webchart and usecalibration."
-#endif
-
 
 #endif
