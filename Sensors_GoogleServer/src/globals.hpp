@@ -140,7 +140,6 @@ public:
 #define FG_COLOR  (uint16_t) TFT_BLACK //Foreground color
 #define BG_COLOR  (uint16_t) TFT_LIGHTGREY //light gray
 
-
 struct SensorVal {
   uint8_t IP[4];
   uint8_t ardID;

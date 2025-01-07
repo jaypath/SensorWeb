@@ -191,7 +191,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 #ifdef _USESOILRES
   //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
-  #define SOILR_MAX 150 //%max resistance value (dependent on R1 choice)
+  #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
   #ifdef _USE32
     const int SOILPIN = 32; // ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP or 32
   #endif

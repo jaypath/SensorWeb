@@ -241,37 +241,52 @@ void initSensor(int k) {
   Sensors[k].timeRead=0;
   Sensors[k].timeLogged=0;  
   Sensors[k].Flags = 0;
+  Sensors[k].expired = 0;
   
 }
 
-bool isSensorInit(byte i) {
+bool isSensorInit(int i) {
   //check if sensor is initialized
-  if (i>=SENSORNUM) return false;
+
+  if (i<0 || i>=SENSORNUM) return false;
   if (Sensors[i].ardID>0 && Sensors[i].snsID > 0 && Sensors[i].snsType >0) return true;
   return false;  
 }
 
-bool checkExpiration(int i, time_t t) {
+byte checkExpiration(int i, time_t t, bool onlyCritical) {
   //check for expired sensors. special case if i is <0 then cycle through all sensors.
+  //returns number of  expired sensors (if onlycritical=true then return critical exired count, if false then expire sensor but do not count it [and delete it if >24h old])
 
   if (t==0) t=now();
 
   if (i<0) {
-    for (int k=0;k<SENSORNUM;k++) checkExpiration(k,t);
+    byte countfalse = 0;
+    for (byte k=0;k<SENSORNUM;k++) countfalse+=checkExpiration(k,t,onlyCritical) ;
+    return countfalse;
   }
 
   if (isSensorInit(i)) {
-    if ((t-Sensors[i].timeLogged) > (1.5*Sensors[i].SendingInt))  /*consider a sensor expired if more than 150% of sendingint has passed*/     {
+    if ((t-Sensors[i].timeLogged) > (2.1*Sensors[i].SendingInt) || (t-Sensors[i].timeLogged) > 86400)  /*consider a sensor expired if more than 210% of sendingint has passed... ie at least 2 missed reads || sensor is at least 24h old*/     {
       Sensors[i].expired=1;
-      return true;
+      
+      if (bitRead(Sensors[i].Flags,7))       return 1; //critical expired
+      else {
+        if ((t-Sensors[i].timeLogged) > 86400) {
+          initSensor(i); //delete, and do not count this sensor!
+          return 0; //noncritical and deleted
+        }  
+        if (onlyCritical==false) return 1;
+        return 0; //noncritical expired
+      }
+
     }
     else {
       Sensors[i].expired=0;
-      return false;
+      return 0;
     }
   } 
 
-  return false;
+  return 0;
   
 }
 
@@ -379,10 +394,8 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 byte count =0;
 
 if (snsType == -10) { //count expired and critical sensors
-  time_t t=now();
-  for (byte j = 0; j<SENSORNUM; j++) {    
-    if (isSensorInit(j) && Sensors[j].expired && bitRead(Sensors[j].Flags,7)==1) count++;
-  }
+  count = checkExpiration(-1,0,true);
+
   return count;
 }
 
@@ -429,13 +442,15 @@ snsArr[9] = -1;
 
 
   for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
-      
-      if (((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings) /*flagged*/) || (Sensors[j].expired && bitRead(Sensors[j].Flags,7)==1 /*expired*/)) {
-        if (snsType==3) {
-          if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
-        } else {
-          if (Sensors[j].timeLogged> MoreRecentThan) count++;          
+    if (Sensors[j].expired==false) {
+      if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
+        
+        if (((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings) /*flagged*/)) {
+          if (snsType==3) {
+            if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
+          } else {
+            if (Sensors[j].timeLogged> MoreRecentThan) count++;          
+          }
         }
       }
     }

@@ -50,9 +50,9 @@ struct Screen {
     uint8_t ScreenNum;
     uint8_t alarmIndex;
     
-    bool isExpired = false; //are any critical sensors expired?
-    bool isFlagged=false;
-    bool wasFlagged=false;
+    uint8_t isExpired = false; //are any critical sensors expired?
+    uint8_t isFlagged=false;
+    uint8_t wasFlagged=false;
     uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
     uint8_t isAC=false; //first bit is compressor on, bits 1-6 are zones
     uint8_t isFan=false; //first bit is fan on, bits 1-6 are zones
@@ -60,10 +60,10 @@ struct Screen {
     uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
     uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
 
-    bool isHot;
-    bool isCold;
-    bool isSoilDry;
-    bool isLeak;
+    uint8_t isHot;
+    uint8_t isCold;
+    uint8_t isSoilDry;
+    uint8_t isLeak;
     uint8_t localWeather; //index of outside sensor
 
     int8_t currentTemp;
@@ -95,7 +95,7 @@ struct SensorVal {
   double snsValue;
   uint32_t timeRead;
   uint32_t timeLogged;  
-  uint16_t SendingInt;  
+  uint32_t SendingInt;  
   uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
   //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this is a critically monitored sensor, so alarm if I don't get a read on time!
   uint8_t expired; //set to 1 if this sensor is  expired by time

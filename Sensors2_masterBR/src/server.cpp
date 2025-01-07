@@ -286,6 +286,11 @@ void handleUPDATESENSORPARAMS() {
       else bitWrite(Sensors[j].Flags,1,1);
     }
 
+    if (server.argName(i)=="Critical") {
+      if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,7,0);
+      else bitWrite(Sensors[j].Flags,7,1);
+    }
+
     if (server.argName(i)=="Outside") {
       if (server.arg(i)=="0") bitWrite(Sensors[j].Flags,2,0);
       else bitWrite(Sensors[j].Flags,2,1);
@@ -483,7 +488,7 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine = currentLine + "<table id=\"Logs\" style=\"width:70%\">";      
   currentLine = currentLine + "<tr><th>SnsType</th><th>SnsID</th><th>Value</th><th><button onclick=\"sortTable(3)\">UpperLim</button></th><th><button onclick=\"sortTable(4)\">LowerLim</button></th>";
   currentLine = currentLine + "<th><button onclick=\"sortTable(5)\">PollInt</button></th><th><button onclick=\"sortTable(6)\">SendInt</button></th><th><button onclick=\"sortTable(7)\">Flag</button></th>";
-  currentLine = currentLine + "<th><button onclick=\"sortTable(8)\">LastLog</button></th><th><button onclick=\"sortTable(9)\">LastSend</button></th><th>IsMonit</th><th>IsOut</th><th>Flags</th><th>SnsName</th>";
+  currentLine = currentLine + "<th><button onclick=\"sortTable(8)\">LastLog</button></th><th><button onclick=\"sortTable(9)\">LastSend</button></th><th>IsMonit</th><th>IsCritical</th><th>IsOut</th><th>Flags</th><th>SnsName</th>";
   currentLine = currentLine + "<th>Submit</th><th>Recheck</th></tr>\n"; 
   for (byte j=0;j<SENSORNUM;j++)  {
 
@@ -501,6 +506,7 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastReadTime) + "</td>";
       currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastSendTime) + "</td>";
       currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[j].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[j].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
       currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,2) + "</td>";
       Byte2Bin(Sensors[j].Flags,tempchar,true);
       currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
@@ -525,6 +531,7 @@ currentLine += "<br>-----------------------<br>\n";
           currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastReadTime) + "</td>";
           currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastSendTime) + "</td>";
           currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[jj].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[jj].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
           currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,2) + "</td>";
           Byte2Bin(Sensors[jj].Flags,tempchar,true);
           currentLine = currentLine + "<td>" + (String) tempchar + "</td>";

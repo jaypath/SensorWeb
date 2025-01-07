@@ -1171,7 +1171,7 @@ byte i;
         #ifdef _USESOILRES
           Sensors[i].snsPin=SOILPIN;
           snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = 150;
+          Sensors[i].limitUpper = 750;
           Sensors[i].limitLower = 0;
           Sensors[i].PollingInt=60;
           Sensors[i].SendingInt=300;
@@ -1333,10 +1333,10 @@ bool checkSensorValFlag(struct SensorVal *P) {
       bitWrite(P->Flags,5,1); //value is high
       if (lastflag) {
         bitWrite(P->Flags,6,0); //no change in flag
-        bitWrite(P->Flags,7,0); //no change in flag
+
       } else {
         bitWrite(P->Flags,6,1); //changed to high
-        bitWrite(P->Flags,7,1); //changed to high and I have not sent data
+
       }
       return true; //flagged
     } else { //currently NOT flagged
@@ -1344,10 +1344,10 @@ bool checkSensorValFlag(struct SensorVal *P) {
       bitWrite(P->Flags,5,0); //irrelevant
       if (lastflag) {
         bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
-        bitWrite(P->Flags,7,1); // and I have not sent data
+
       } else {
         bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
-        bitWrite(P->Flags,7,0); //no change
+
       }
         return false; //not flagged
     }
@@ -1367,10 +1367,10 @@ bool checkSensorValFlag(struct SensorVal *P) {
   //now check for changes...  
   if (lastflag!=thisflag) {
     bitWrite(P->Flags,6,1); //change detected
-    bitWrite(P->Flags,7,1); //changed to flagged and I have not sent    
+    
   } else {
     bitWrite(P->Flags,6,0);
-    bitWrite(P->Flags,7,0);
+    
   }
   
   return bitRead(P->Flags,0);
@@ -1471,7 +1471,7 @@ void loop() {
       if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) goodread = ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
       
       if (goodread == true) {
-        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,7) /* isflagged changed since last read and this value was not sent*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,6) /* isflagged changed since last read and this value was not sent*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
       }
     }
   }
@@ -1547,6 +1547,11 @@ void handleUPDATESENSORPARAMS() {
     if (server.argName(i)=="Monitored") {
       if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,1,0);
       else bitWrite(Sensors[j].Flags,1,1);
+    }
+
+    if (server.argName(i)=="Critical") {
+      if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,7,0);
+      else bitWrite(Sensors[j].Flags,7,1);
     }
 
     if (server.argName(i)=="Outside") {
@@ -1807,7 +1812,12 @@ currentLine += "<br>-----------------------<br>";
   strPad(temp,padder,25);
   currentLine += "<label for=\"Mon\">" + (String) temp + "</label>";
   currentLine += "<input type=\"text\" id=\"Mon\" name=\"Monitored\" value=\"" + String(bitRead(Sensors[j].Flags,1),DEC) + "\"><br>";  
-  
+
+  snprintf(temp,29,"%s","Is Critical");
+  strPad(temp,padder,25);
+  currentLine += "<label for=\"Crit\">" + (String) temp + "</label>";
+  currentLine += "<input type=\"text\" id=\"Crit\" name=\"Critical\" value=\"" + String(bitRead(Sensors[j].Flags,7),DEC) + "\"><br>";  
+
 snprintf(temp,29,"%s","Is Outside");
 strPad(temp,padder,25);
   currentLine += "<label for=\"Out\">" + (String) temp + "</label>";

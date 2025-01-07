@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <header.hpp>
 #include <timesetup.hpp>
+
 #include <server.hpp>
 
 
@@ -71,22 +72,6 @@ struct SensorVal {
 };
 
 extern SensorVal Sensors[SENSORNUM];
-#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
-  struct HISTORY {
-    uint32_t lastRead;
-    uint16_t interval;
-    double values[_HVACHXPNTS];
-  };
-  
-  extern HISTORY HVACHX[];
-
-  #ifdef _USECALIBRATIONMODE
-
-    void checkHVAC(void);
-  #endif
-#endif
-
-extern uint8_t HVACSNSNUM;
 
 #ifdef _WEBCHART
   struct SensorChart {
@@ -103,7 +88,21 @@ extern uint8_t HVACSNSNUM;
   extern SensorChart SensorCharts[_WEBCHART];
 #endif
 
+#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+  struct HISTORY {
+    uint32_t lastRead;
+    uint16_t interval;
+    double values[_HVACHXPNTS];
+  };
+  
+  extern HISTORY HVACHX[];
 
+  #ifdef _USECALIBRATIONMODE
+
+    void checkHVAC(void);
+  #endif
+  extern uint8_t HVACSNSNUM;
+#endif
 
 
 
