@@ -158,6 +158,11 @@ struct SensorVal {
 };
 
 
+struct ScreenFlags {
+  uint16_t Flags; //From RMB: 0 = isAnyflagged; 1 = isOutOfRange; 2 = isHeat; 3 = isAC; 4 = isFan; 5 = isLeak; 6 = isExpired; 7 = 
+};
+
+
 //this server
 #ifdef _USE8266
   #include <ESP8266WiFi.h>

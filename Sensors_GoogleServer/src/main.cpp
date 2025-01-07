@@ -42,7 +42,6 @@ extern LGFX tft;            // declare display variable
 extern int32_t touch_x,touch_y;
 
 
-
 #define ESP_GOOGLE_SHEET_CLIENT_USE_PSRAM
 #define PROJECT_ID "arduinodatalog-415401"
 //Service Account's client email
@@ -63,6 +62,8 @@ uint32_t ALTSCREEN = 0;
 bool SHOWMAIN = true;
 
 extern SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
+struct ScreenFlags I;
+
 
 uint32_t lastUploadTime = 0;
 bool lastUploadSuccess = true;
@@ -388,7 +389,7 @@ delay(2000);
     // Set the callback for Google API access token generation status (for debug only)
     GSheet.setTokenCallback(tokenStatusCallback);
     // Set the seconds to refresh the auth token before expire (60 to 3540, default is 300 seconds)
-    GSheet.setPrerefreshSeconds(10 * 60);
+    GSheet.setPrerefreshSeconds(300);
 
     //Begin the access token generation for Google API authentication
     GSheet.begin(CLIENT_EMAIL, PROJECT_ID, PRIVATE_KEY);
@@ -597,7 +598,7 @@ void loop()
     //Call ready() repeatedly in loop for authentication checking and processing
   updateTime(1,0); //just try once
 
-  bool ready = GSheet.ready();
+  bool ready = GSheet.ready(); //maintains authentication
   time_t t = now();
   
 

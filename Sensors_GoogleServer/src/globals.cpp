@@ -15,6 +15,8 @@ uint32_t weathercalls=0;
 //sensor
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
 
+//Screen
+struct ScreenFlags I;
 
 //this server
 #ifdef _USE8266

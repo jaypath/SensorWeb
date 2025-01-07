@@ -269,6 +269,23 @@ String fcnMONTH(time_t t) {
 
     return "???";
 }
+String fcnMM(time_t t) {
+    byte m=month(t);
+    if (m == 1) return "Jan";
+    if (m == 2) return "Feb";
+    if (m == 3) return "Mar";
+    if (m == 4) return "Apr";
+    if (m == 5) return "May";
+    if (m == 6) return "Jun";
+    if (m == 7) return "Jul";
+    if (m == 8) return "Aug";
+    if (m == 9) return "Sep";
+    if (m == 10) return "Oct";
+    if (m == 11) return "Nov";
+    if (m == 12) return "Dec";
+
+    return "???";
+}
 
 
 
