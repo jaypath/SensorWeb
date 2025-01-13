@@ -288,9 +288,9 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
     //icon names found here: 
 
     //start with the worst weather, working to mildest
-    if (icon.indexOf("hurricane",0)>-1) return 700;
-    if (icon.indexOf("tropical_storm",0)>-1) return 503;
-    if (icon.indexOf("blizzard",0)>-1) return 601;
+    if (icon.indexOf("hurricane",0)>-1) return 504;
+    if (icon.indexOf("tropical_storm",0)>-1) return 504;
+    if (icon.indexOf("blizzard",0)>-1) return 603;
 
     if (icon.indexOf("snow",0)>-1) {
         
@@ -361,9 +361,10 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
     }
 
 
-    if (icon.indexOf("dust",0)>-1) return 804;
+    if (icon.indexOf("dust",0)>-1) return 761;
     if (icon.indexOf("hot",0)>-1) return 800;
-    if (icon.indexOf("cold",0)>-1) return 602;
+    if (icon.indexOf("cold",0)>-1) return 701;
+
 
 
     //clear weather
@@ -372,6 +373,8 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
     if (icon.indexOf("sct",0)>-1) return 801;
     if (icon.indexOf("few",0)>-1) return 801;
     if (icon.indexOf("skc",0)>-1) return 800;
+
+    if (icon.indexOf("fog",0)>-1) return 741;
 
     return 999;    
 }

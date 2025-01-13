@@ -4,15 +4,16 @@
 #define _USETOUCH
 //#define NOISY true
 #define _USEOTA
-#define ALTSCREENTIME 30
 
 
 #include <Arduino.h>
+#include "esp32/spiram.h"
 #include <String.h>
 
 #include <WiFi.h>
 #include <timesetup.hpp>
-
+//#include <WebServer.h>
+//#include <HTTPClient.h>
 
 #include <String.h>
 #include <NTPClient.h>
@@ -32,9 +33,21 @@
 #include <globals.hpp>
 
 
+// extern String GsheetID; //file ID for this month's spreadsheet
+// extern String GsheetName; //file name for this month's spreadsheet
+// extern String lastError;
+
 
 extern WebServer server;
 
+extern byte OldTime[5];
+extern int Ypos ;
+extern char tempbuf[70];     
+extern time_t ALIVESINCE;  
+extern String GsheetID; //file ID for this month's spreadsheet
+extern String GsheetName; //file name for this month's spreadsheet
+extern String lastError;
+extern const uint8_t temp_colors[104];
 
 extern LGFX tft;            // declare display variable
 
@@ -51,45 +64,35 @@ const char PRIVATE_KEY[] PROGMEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgk
 #define USER_EMAIL "jaypath@gmail.com"
 
 
-int hourly_temp[12];
-int hourly_weatherID[12];
+int8_t hourly_temp[24];
+int hourly_weatherID[24];
 int daily_weatherID[5];
 int daily_tempMAX[5];
 int daily_tempMIN[5];
-uint32_t sunrise,sunset;
 
-uint32_t ALTSCREEN = 0;
-bool SHOWMAIN = true;
 
 extern SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
-struct ScreenFlags I;
+extern struct ScreenFlags ScreenInfo;
 
-
-uint32_t lastUploadTime = 0;
-bool lastUploadSuccess = true;
-uint8_t UploadFailCount = 0;
-
-byte uploadQ = 20; //upload every __ minutes
-byte uploadQFailed = 2; //upload every __ minutes if the last one failed
-
-extern long DSTOFFSET;
 extern byte OldTime[5];
 extern int Ypos ;
-extern bool isFlagged ;
 extern char tempbuf[70];     
 extern time_t ALIVESINCE;
-double bg_luminance; 
 
 int fcn_write_sensor_data(byte i, int y);
 void clearTFT();
-void drawScreen_list();
+void drawScreen();
+void drawScreen_List();
 void drawScreen_Clock();
 void drawScreen_Weather();
+void drawScreen_Settings();
+void drawButton(String b1, String b2,  String b3,  String b4,  String b5,  String b6);
+
 void getWeather();
 
 String file_findSpreadsheetIDByName(String sheetname, bool createfile);
 bool file_deleteSpreadsheetByID(String fileID);
-String file_createSpreadsheet(String sheetname);
+String file_createSpreadsheet(String sheetname, bool checkfile);
 bool file_createHeaders(String sheetname,String Headers);
 void tokenStatusCallback(TokenInfo info);
 void file_deleteSpreadsheetByName(String filename);
@@ -100,17 +103,19 @@ void handlePost();
 void handleRoot();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
+bool SendData();
+bool uploadData(bool gReady);
+
 
 bool file_uploadSensorData(void);
-void fcnChooseTxtColor(byte snsIndex);
 
-#ifdef _USE24BITCOLOR
-uint32_t temp2color24(int temp);
-#endif
-uint16_t temp2color16(int temp, uint16_t *BG);
+uint16_t temp2color(int temp, bool autoadjustluminance = false);
 
+time_t t=0;
+
+void color2RGB(uint32_t color,byte* R, byte* G, byte *B, bool is24bit=false);
 void drawBmp(const char *filename, int16_t x, int16_t y, int32_t transparent = 0xFFFF);
-int ID2Icon(int weatherID);
+uint8_t color2luminance(uint32_t color, bool is16bit=true);
 void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1, String headstr="", String tailstr="");
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x=-1,int y=-1, String headstr="", String tailstr="");
 
@@ -118,8 +123,6 @@ void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x=-1,int y=-1, Stri
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y, String headstr, String tailstr) {
   //print two temperatures with appropriate color, centered at x and y (which are optional)
 //if x and y are not provided, just print at the current x/y position
-
-uint16_t bg = BG_COLOR;
 
 
 String temp = (String) value1;
@@ -139,15 +142,15 @@ tft.setTextDatum(TL_DATUM);
 
 tft.setCursor(X,Y);
 
-tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 if (headstr!="") tft.print(headstr.c_str());
-tft.setTextColor(temp2color16(value1,&bg),bg);
+tft.setTextColor(temp2color(value1),ScreenInfo.BG_COLOR);
 tft.print(value1);
-tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 tft.print("/");
-tft.setTextColor(temp2color16(value2,&bg),bg);
+tft.setTextColor(temp2color(value2),ScreenInfo.BG_COLOR);
 tft.print(value2);
-tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 if (tailstr!="") tft.print(tailstr.c_str());
 
 return;
@@ -158,18 +161,18 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y, String headstr, String t
   //print  temperature with appropriate color, centered at x and y (which are optional)
 //if x and y are not provided, just print at the current x/y position
 
-uint16_t bg=BG_COLOR;
+uint16_t bg=ScreenInfo.BG_COLOR;
 tft.setTextDatum(TL_DATUM);
 
 
 
 tft.setCursor(x-tft.textWidth( headstr + (String) value + tailstr)/2,y-tft.fontHeight(FNTSZ)/2); //set the correct x and y to center text at this location
 
-tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 if (headstr!="") tft.print(headstr.c_str());
-tft.setTextColor(temp2color16(value,&bg),bg);
+tft.setTextColor(temp2color(value),ScreenInfo.BG_COLOR);
 tft.print(value);
-tft.setTextColor(FG_COLOR,BG_COLOR);
+tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 if (tailstr!="") tft.print(tailstr.c_str());
 
 //tft.drawString(headstr + (String) value + tailstr,x,y);
@@ -179,101 +182,112 @@ return;
 }
 
 
-#ifdef _USE24BITCOLOR
-//returns 24 bit color
-uint32_t temp2color24(int temp) { 
-  uint8_t temp_colors[104] = {
-  20, 255, 0, 255, //20
-  24, 200, 0, 200, //21 - 24
-  27, 200, 0, 100, //25 - 27
-  29, 200, 100, 100, //28 - 29
-  32, 200, 200, 200, //30 - 32
-  34, 150, 150, 200, //33 - 34
-  37, 0, 0, 150, //35 - 37
-  39, 0, 50, 200, //38 - 39
-  42, 0, 100, 200, //40 - 42
-  44, 0, 150, 150, //43 - 44
-  47, 0, 200, 150, //45 - 47
-  51, 0, 200, 100, //48 - 51
-  54, 0, 150, 100, //52 - 54
-  59, 0, 100, 100, //55 - 59
-  64, 0, 100, 50, //60 - 64
-  69, 0, 100, 0, //65 - 69
-  72, 0, 150, 0, //70 - 72
-  75, 0, 200, 0, //73 - 75
-  79, 50, 200, 0, //76 - 79
-  82, 100, 200, 0, //80 - 82
-  84, 150, 200, 0, //83 - 84
-  87, 200, 100, 50, //85 - 87
-  89, 200, 100, 100, //88 - 89
-  92, 200, 50, 50, //90 - 92
-  94, 250, 50, 50, //93 - 94
-  100, 250, 0, 0 //95 - 100
-};
-  byte j = 0;
-  while (temp>temp_colors[j]) {
-    j=j+4;
-  }
 
-  return tft.color888(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
+
+uint8_t color2luminance(uint32_t color, bool is16bit) {
+//0.2126*R + 0.7152*G + 0.0722*B trying this luminance option
+//false if this is a 24 bit color
+
+byte R,G,B;
+
+if (is16bit) {
+  color2RGB(color,&R,&G,&B,false);
+} else {
+  color2RGB(color,&R,&G,&B,true);
 }
-#endif
 
+
+
+  return  (byte) ((double) 0.2126*R + 0.7152*G + 0.0722*B);
+
+  
+}
+
+void color2RGB(uint32_t color,byte* R, byte* G, byte *B, bool is24bit) {
+
+if (is24bit) {
+
+  *R = (color>>16)&0xff;
+  *G = (color>>8)&0xff;
+  *B = color&0xff;
+  return;
+}
+  double c;
+
+  c = 255*((color>>11)&0b11111)/0b11111;
+  *R = (byte) c;
+  
+  c = 255*((color>>5)&0b111111)/0b111111;
+  *G = (byte) c;
+
+  c = 255*(color&0b11111)/0b11111;
+  *B = (byte) c;  
+
+}
 
 //returns 16 bit color
-uint16_t temp2color16(int temp, uint16_t *BG) {
-  uint8_t temp_colors[104] = {
-  20, 255, 0, 255, //20
-  24, 200, 0, 200, //21 - 24
-  27, 200, 0, 100, //25 - 27
-  29, 200, 100, 100, //28 - 29
-  32, 255, 255, 255, //30 - 32
-  34, 150, 150, 255, //33 - 34
-  37, 0, 0, 150, //35 - 37
-  39, 0, 50, 200, //38 - 39
-  42, 0, 100, 200, //40 - 42
-  44, 0, 150, 150, //43 - 44
-  47, 0, 200, 150, //45 - 47
-  51, 0, 200, 100, //48 - 51
-  54, 0, 150, 100, //52 - 54
-  59, 0, 100, 100, //55 - 59
-  64, 0, 100, 50, //60 - 64
-  69, 0, 100, 0, //65 - 69
-  72, 0, 150, 0, //70 - 72
-  75, 0, 200, 0, //73 - 75
-  79, 50, 200, 0, //76 - 79
-  82, 100, 200, 0, //80 - 82
-  84, 150, 200, 0, //83 - 84
-  87, 200, 100, 50, //85 - 87
-  89, 200, 100, 100, //88 - 89
-  92, 200, 50, 50, //90 - 92
-  94, 250, 50, 50, //93 - 94
-  100, 250, 0, 0 //95 - 100
-};
+uint16_t temp2color(int temp, bool autoadjustluminance) {
+
+
   byte j = 0;
   while (temp>temp_colors[j]) {
     j=j+4;
   }
 
-*BG = BG_COLOR;
-double  lumin; //luminance, from 0 to 255
 
-//0.2126*R + 0.7152*G + 0.0722*B trying this luminance option
- lumin =  ((double) 0.2126 * temp_colors[j+1] + 0.7152 * temp_colors[j+2] + 0.0722 * temp_colors[j+3]); //this is the perceived luminance of the color
 
-  if ( abs( lumin-bg_luminance)<25) { //if luminance is similar to bg luminance then...
-    byte l = lumin + 128; //note that this wraps around at 255
-    *BG = tft.color565(l,l,l); 
-  } 
+  double r,g,b;
+  if (autoadjustluminance && false) {
 
-  return tft.color565(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
+    byte lumin;
+    #ifdef _USE24BITCOLOR
+      lumin =  color2luminance(tft.color888(temp_colors[j+1],temp_colors[j+2] ,temp_colors[j+3]),false); //this is the perceived luminance of the color
+    #else
+      lumin =  color2luminance(tft.color565(temp_colors[j+1],temp_colors[j+2] ,temp_colors[j+3]),true); //this is the perceived luminance of the color
+    #endif
+
+    //is the liminance within 20% (50 units) of BG luminance?
+    double deltalum = ScreenInfo.BG_luminance - lumin;
+    
+    if (abs(deltalum) <50) {   //luminance is too close   
+      if (deltalum<0) { //color is darker, but not dark enough
+        //decrease luiminance by 50-deltalum
+        r =  minmax((double) temp_colors[j+1] - (50+deltalum),0,255);
+        g =  minmax((double) temp_colors[j+2] - (50+deltalum),0,255);
+        b =  minmax((double) temp_colors[j+3] - (50+deltalum),0,255);        
+        
+      } else { //color is lighter, but not light enough
+        //increase luminance by 50-deltalum
+        r =  minmax((double) temp_colors[j+1] + (50-deltalum),0,255);
+        g =  minmax((double) temp_colors[j+2] + (50-deltalum),0,255);
+        b =  minmax((double) temp_colors[j+3] + (50-deltalum),0,255);        
+      }  
+      #ifdef _DEBUG
+        Serial.printf("temp2color: Luminance: %u\ndelta_BG: %d\nR: %d\nG: %d\nB: %d\n", lumin,deltalum,r,g,b);
+      #endif
+    }
+  } else {
+    r =  temp_colors[j+1] ;
+    g =  temp_colors[j+2] ;
+    b =  temp_colors[j+3] ;        
+  }
+
+    #ifdef _USE24BITCOLOR
+        return tft.color888((byte) r, (byte) g,(byte) b);
+      #else
+        return tft.color565((byte) r, (byte) g,(byte) b);
+      #endif
+
+  
+ 
 }
 
 
 
 
 void clearTFT() {
-  tft.fillScreen(BG_COLOR);                 // Fill with black
+  tft.fillScreen(ScreenInfo.BG_COLOR);                 // Fill with black
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
   tft.setCursor(0,0);
   Ypos = 0;
 }
@@ -289,49 +303,65 @@ void setup()
   tft.setRotation(2);
 
   clearTFT();
-
-  //set bg_luminance value 1 time
-  
-//0.2126*R + 0.7152*G + 0.0722*B trying this luminance option
-  uint32_t bg24 = tft.color16to24(BG_COLOR);
-  bg_luminance = 0.2126*((bg24>>16)&0xff) + 0.7152*((bg24>>8)&0xff) + 0.0722*(bg24&0xff);
-
-
+  tft.setTextFont(2);
 
   tft.printf("Running setup\n");
 
+
+
+  tft.printf("Mounting SD: ");
+
   if(!SD.begin(41)){  //CS=41
       tft.setTextColor(TFT_RED);
-      tft.println("SD Mount Failed");
-      tft.setTextColor(FG_COLOR);
+      tft.printf("SD Mount Failed\n");      
       while(false);
-
   } 
   else {
-    tft.println("SD Mount Succeeded");
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("SD Mount OK\n");
   }
+  tft.setTextColor(ScreenInfo.FG_COLOR);
 
-  bool sdread = readSensorsSD("/Data/SensorBackup.dat");
-  if (!sdread) {
+  tft.printf("Reading Variables:\n");
+  if (!readSensorsSD("/Data/SensorBackup.dat")) {
       
       tft.setTextColor(TFT_RED);
-      tft.println("FAILED SD READ\n");
-      tft.setTextColor(FG_COLOR);
+      tft.printf("-Failed to read Sensor Data\n");
       
-     }
+  } else {
+     tft.setTextColor(TFT_GREEN);
+      tft.printf("-Read Sensor Data\n");
+  }
 
+
+  if (!readScreenInfoSD()) {      
+      tft.setTextColor(TFT_RED);
+      tft.printf("-Failed to read settings\n");
+      
+  } else {
+     tft.setTextColor(TFT_GREEN);
+      tft.printf("-Read settings\n");
+  }
+
+  tft.setTextColor(ScreenInfo.FG_COLOR, ScreenInfo.BG_COLOR);
+
+
+  tft.printf("Specs:\n");
   // Get flash size and display
-  tft.printf("FLASH size: %d bytes",ESP.getMinFreeHeap());
-
+  tft.printf("-FLASH size: %d bytes\n",ESP.getMinFreeHeap());
   // Initialize PSRAM (if available) and show the total size
   if (psramFound()) {
-    tft.printf("PSRAM size: %d bytes",heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
-    
+     tft.setTextColor(TFT_GREEN);
+    tft.printf("-PSRAM size: %d bytes\n",heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
   } else {
-    tft.printf("No PSRAM found.");
+    tft.setTextColor(TFT_RED);
+    tft.printf("-No PSRAM found.\n");
   }
-delay(2000);
 
+  tft.setTextColor(ScreenInfo.FG_COLOR);
+
+
+  tft.printf("Connecting WiFi");
 
 #ifdef _DEBUG
     Serial.begin(115200);
@@ -355,36 +385,43 @@ delay(2000);
     Serial.print("Connecting to Wi-Fi");
 #endif
     unsigned long ms = millis();
+    tft.setTextColor(TFT_RED);
     while (WiFi.status() != WL_CONNECTED)
     {
-#ifdef _DEBUG
-        Serial.print(".");
-#endif
-        delay(300);
-#if defined(ARDUINO_RASPBERRY_PI_PICO_W)
+      #ifdef _DEBUG
+              Serial.print(".");
+      #endif
+      tft.printf(".");
+      delay(500);
+      #if defined(ARDUINO_RASPBERRY_PI_PICO_W)
         if (millis() - ms > 10000)
-            break;
-#endif
+        break;
+      #endif
     }
-#ifdef _DEBUG
-    Serial.println();
-    Serial.print("Connected with IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.println();
-#endif
+    tft.setTextColor(ScreenInfo.FG_COLOR);    
 
-  tft.setCursor(0,10);
-    tft.print("Connected with IP: ");
-    tft.println(WiFi.localIP());
+     tft.setTextColor(TFT_GREEN);
+    tft.printf("\n%s\n",WiFi.localIP().toString().c_str());
+    tft.setTextColor(ScreenInfo.FG_COLOR);
+
+    #ifdef _DEBUG
+        Serial.println();
+        Serial.print("Connected with IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.println();
+    #endif
 
 
     // The WiFi credentials are required for Pico W
     // due to it does not have reconnect feature.
-#if defined(ARDUINO_RASPBERRY_PI_PICO_W)
-    GSheet.clearAP();
-    GSheet.addAP(WIFI_SSID, WIFI_PASSWORD);
-    // You can add many WiFi credentials here
-#endif
+    #if defined(ARDUINO_RASPBERRY_PI_PICO_W)
+        GSheet.clearAP();
+        GSheet.addAP(WIFI_SSID, WIFI_PASSWORD);
+        // You can add many WiFi credentials here
+    #endif
+
+
+    tft.printf("Init GSheets... ");
 
     // Set the callback for Google API access token generation status (for debug only)
     GSheet.setTokenCallback(tokenStatusCallback);
@@ -399,80 +436,91 @@ delay(2000);
 
     // Or begin with the Service Account JSON file that uploaded to the Filesystem image or stored in SD memory card.
     // GSheet.begin("path/to/serviceaccount/json/file", esp_google_sheet_file_storage_type_flash /* or esp_google_sheet_file_storage_type_sd */);
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("OK\n");
+    tft.setTextColor(ScreenInfo.FG_COLOR);
+    
+    tft.printf("Connect to GSheets... ");
+    if (!GSheet.ready()) {
+      tft.setTextColor(TFT_RED);
+      tft.printf("Failed!\n");
+      tft.setTextColor(ScreenInfo.FG_COLOR);
+    } else {
+      tft.setTextColor(TFT_GREEN);
+      tft.printf("OK\n");
+      tft.setTextColor(ScreenInfo.FG_COLOR);    
+    }
 
+  #ifdef _USEOTA
+    tft.printf("Setting OTA... ");
 
-#ifdef _USEOTA
-
-   ArduinoOTA.setHostname(ARDNAME);
-  ArduinoOTA.onStart([]() {
-    #ifdef _DEBUG
-    Serial.println("OTA started");
-    #endif
-    #ifdef _USETFT
-      clearTFT();
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      tft.setCursor(0,0);
-      tft.setTextDatum(TL_DATUM);
-      tft.setTextFont(4);
-      tft.println("Receiving OTA:");
-      tft.setTextDatum(TL_DATUM);
-     
-    tft.drawRect(5,tft.height()/2-5,tft.width()-10,10,TFT_BLACK);
-    #endif  
-  });
-  ArduinoOTA.onEnd([]() {
-    #ifdef _DEBUG
-    Serial.println("OTA End");
-    #endif
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef _DEBUG
-        Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-    #endif
-    #ifdef _USETFT
-      //String strbuff = "Progress: " + (100*progress / total);
-      if (progress % 5 == 0) tft.fillRect(5,tft.height()/2-5,(int) (double (tft.width()-10)*progress / total),10,TFT_BLACK);
-       
-
+    ArduinoOTA.setHostname(ARDNAME);
+    ArduinoOTA.onStart([]() {
+      #ifdef _DEBUG
+      Serial.println("OTA started");
       #endif
+      #ifdef _USETFT
+        clearTFT();
+        tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+        tft.setCursor(0,0);
+        tft.setTextDatum(TL_DATUM);
+        tft.setTextFont(4);
+        tft.println("Receiving OTA:");
+        tft.setTextDatum(TL_DATUM);
+      
+      tft.drawRect(5,tft.height()/2-5,tft.width()-10,10,TFT_BLACK);
+      #endif  
+    });
+    ArduinoOTA.onEnd([]() {
+      #ifdef _DEBUG
+      Serial.println("OTA End");
+      #endif
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      #ifdef _DEBUG
+          Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+      #endif
+      #ifdef _USETFT
+        //String strbuff = "Progress: " + (100*progress / total);
+        if (progress % 5 == 0) tft.fillRect(5,tft.height()/2-5,(int) (double (tft.width()-10)*progress / total),10,TFT_BLACK);
+        
 
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef _DEBUG
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    #endif
-    #ifdef _USETFT
-      clearTFT();
-      tft.setCursor(0,0);
-      String strbuff;
-      strbuff = (String) "Error[%u]: " + (String) error + " ";
-      tft.print(strbuff);
-      if (error == OTA_AUTH_ERROR) tft.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) tft.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) tft.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) tft.println("Receive Failed");
-      else if (error == OTA_END_ERROR) tft.println("End Failed");
-    #endif
-  });
-  ArduinoOTA.begin();
-    #ifdef _USETFT
-      clearTFT();
-      tft.setCursor(0,0);
-      tft.println("OTA OK.");      
-    #endif
-#endif
+        #endif
+
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+      #ifdef _DEBUG
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+      #endif
+      #ifdef _USETFT
+        clearTFT();
+        tft.setCursor(0,0);
+        String strbuff;
+        strbuff = (String) "Error[%u]: " + (String) error + " ";
+        tft.print(strbuff);
+        if (error == OTA_AUTH_ERROR) tft.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) tft.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) tft.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) tft.println("Receive Failed");
+        else if (error == OTA_END_ERROR) tft.println("End Failed");
+      #endif
+    });
+    ArduinoOTA.begin();
+      tft.setTextColor(TFT_GREEN);
+      tft.printf("OK\n");
+      tft.setTextColor(ScreenInfo.FG_COLOR);    
+      
+  #endif
 
 
 
 
-    #ifdef _USETFT
-      tft.println("start Server.");
-    #endif
+    tft.printf("Start Server... ");
 
     server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
     server.on("/LIST", handleLIST);   
@@ -481,39 +529,50 @@ delay(2000);
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
     server.onNotFound(handleNotFound);
     server.begin();
-    //init globals
-    for (byte i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
-    tft.println("Set up TimeClient...");
+
+      tft.setTextColor(TFT_GREEN);
+      tft.printf("OK\n");
+      tft.setTextColor(ScreenInfo.FG_COLOR);    
+    
+
+    tft.printf("Set up TimeClient... ");
 
     timeClient.begin(); //time is in UTC
     updateTime(10,250); //check if DST and set time to EST or EDT
     
-
     OldTime[0] = 61; //force sec update.
     OldTime[2] = 61;
     OldTime[2] = 61;
     OldTime[3] = weekday(); //do not force daily update
 
-    tft.print("TimeClient OK.  ");
+    t = now();
+      tft.setTextColor(TFT_GREEN);
+      tft.printf("OK\n");
+      tft.setTextColor(ScreenInfo.FG_COLOR);    
+
+    tft.printf("Init globals... ");
+
 
     //init globals
-    for ( byte i=0;i<SENSORNUM;i++) {
-      initSensor(i);
-    }
+    ScreenInfo.BG_luminance = color2luminance(ScreenInfo.BG_COLOR,true);
+    ScreenInfo.clockHeight = tft.fontHeight(8)+6+tft.fontHeight(4)+1;
+    ScreenInfo.tftWidth = tft.width();
+    ScreenInfo.tftHeight = tft.height();
 
-  #ifdef _USETFT
-    clearTFT();
-    tft.setCursor(0,0);
-    tft.println(WiFi.localIP().toString());
-    tft.print(hour());
-    tft.print(":");
-    tft.println(minute());
-  #endif
+    //redraw everything
+    ScreenInfo.RedrawClock = 0; //seconds left before redraw
+    ScreenInfo.RedrawWeather = 0; //seconds left before redraw
+    ScreenInfo.RedrawList=0; //SECONDS left for this screen (then  goes to main)
+    
 
     getWeather();
-    ALIVESINCE = now();
+    ALIVESINCE = t;
+
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("OK\n");
+    tft.setTextColor(ScreenInfo.FG_COLOR);    
+
+
 }
 
 
@@ -572,7 +631,7 @@ void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent) {
         
           *tptr = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
           if (transparent>0 && transparent<=0xFFFF) {
-            if (*tptr==transparent) *tptr = BG_COLOR; //convert white pixels to background
+            if (*tptr==transparent) *tptr = ScreenInfo.BG_COLOR; //convert specified pixels to background
           }
           *tptr++;
         }
@@ -590,115 +649,280 @@ void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent) {
   bmpFS.close();
 }
 
+void drawScreen()
+{
+  bool isTouch = false; //no touch
+
+//  1. get touch info and update as appropriate
+#ifdef _USETOUCH
+  if (tft.getTouch(&touch_x, &touch_y)) {
+    isTouch = true;
+    
+    byte buttonNum = getButton(touch_x, touch_y,ScreenInfo.ScreenNum);
+    if (buttonNum>0) {
+      tft.fillCircle(touch_x,touch_y,12,TFT_GOLD);
+      delay(250);
+    }
+    
+
+    if (ScreenInfo.ScreenNum == 0) {
+      ScreenInfo.ScreenNum = 1; //on main screen, this means go to list screen
+      ScreenInfo.ForceRedraw=1; //force a screen redraw
+      ScreenInfo.snsListLastTime=0; //reset the list
+    } else {
+      if (ScreenInfo.ScreenNum == 1) {
+        //buttons on list screen are: 
+        /*
+          next page
+          main
+          upload
+          show alarmed
+          show all
+          settings
+        */
+
+        switch (buttonNum) {
+          case 0:
+          {
+            //no button
+            break;
+          }
+          case 1:
+          {
+            ScreenInfo.ForceRedraw=1; //force a redraw. since we have not changed the screen, this will redraw the list and start at the next list position
+            break;
+          }
+          case 2:
+          {
+            ScreenInfo.ScreenNum = 0; 
+            ScreenInfo.ForceRedraw=1; //force a screen redraw at main
+            break;
+          }
+          case 3:
+          {
+            ScreenInfo.lastUploadTime=0; //force an upload
+            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.snsLastDisplayed=0;
+            uploadData(true);
+            writeSensorsSD("/Data/SensorBackup.dat");
+            storeScreenInfoSD();
+            SendData(); //update server about our status
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+
+            break;
+          }
+          case 4:
+          {
+            ScreenInfo.showAlarmedOnly = 1;            
+            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+          case 5:
+          {
+            ScreenInfo.showAlarmedOnly = 0;
+            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+          case 6:
+          {
+            ScreenInfo.ScreenNum=2;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+        }
+      } else {
+        if (ScreenInfo.ScreenNum == 2) { //settings screen
+        byte buttonNum = getButton(touch_x, touch_y,ScreenInfo.ScreenNum);
+        //buttons on setting screen are: 
+        /*
+          main
+          list
+          select
+          reset
+          ++
+          --
+        */
+        switch (buttonNum) {
+          case 0:
+          {            
+            break;
+          }
+          case 1:
+          {
+            ScreenInfo.ScreenNum=0; //force a screen redraw at main
+            ScreenInfo.ForceRedraw=1;
+            break;
+          }
+          case 2:
+          {
+            ScreenInfo.ScreenNum = 1; //on main screen, this means go to list screen
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            ScreenInfo.snsListLastTime=0; //reset the list
+            break;
+          }
+          case 3:
+          {
+            ScreenInfo.settingsLine=(ScreenInfo.settingsLine+1)%10; //up to 10 lines are selectable
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+          case 4: 
+          {
+            //clean reboot
+            writeSensorsSD("/Data/SensorBackup.dat");
+            storeScreenInfoSD();
+            SendData(); //update server about our status
+            ESP.restart();
+            break;
+          }
+          case 5:
+          {
+            ScreenInfo.settingsSelected=1;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+          case 6:
+          {
+            ScreenInfo.settingsSelected=-1;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
+            break;
+          }
+        
+        }
+      }
+      }
+    }
 
 
+    #ifdef _DEBUG
+      Serial.printf("Touch: X= %d, Y= %d\n",touch_x, touch_y);
+    #endif
+  }
+  else {
+    isTouch = false;
+    touch_x = 0;
+    touch_y = 0;
+  }
+#elif
+    isTouch = false;
+    touch_x = 0;
+    touch_y = 0;
+
+#endif
+
+
+
+if (ScreenInfo.ForceRedraw==0 && ScreenInfo.RedrawList==0 && ScreenInfo.ScreenNum>0) {
+  ScreenInfo.ForceRedraw=1;
+  ScreenInfo.ScreenNum=0;
+  ScreenInfo.RedrawClock=60;
+  ScreenInfo.RedrawWeather=ScreenInfo.WeatherTime*60;;
+}
+
+
+switch (ScreenInfo.ScreenNum) {
+  case 0:
+  {
+    if (ScreenInfo.ForceRedraw) {
+      drawScreen_Clock();
+      drawScreen_Weather();
+     
+    } else {
+      if (ScreenInfo.RedrawClock==0)  drawScreen_Clock();
+      if (ScreenInfo.RedrawWeather==0) drawScreen_Weather();
+    }
+
+        
+    break;
+  }
+  case 1:
+  {
+    if (ScreenInfo.ForceRedraw) {
+      #ifdef _DEBUG
+        Serial.printf("Redraw list...\n");
+      #endif
+      drawScreen_List();     
+      #ifdef _DEBUG
+        Serial.printf(" ok.\n");
+      #endif
+
+    }
+    else if (ScreenInfo.RedrawList==0) ScreenInfo.ScreenNum=0;
+
+    break;
+  }
+  case 2:
+  {
+    if (ScreenInfo.ForceRedraw)    drawScreen_Settings();
+    else if (ScreenInfo.RedrawList==0) ScreenInfo.ScreenNum=0;
+    break;
+  }
+}
+
+ScreenInfo.ForceRedraw = 0;
+
+}
+
+
+bool uploadData(bool gReady) {
+    //check upload status here.
+
+  if (ScreenInfo.lastUploadSuccess && t-ScreenInfo.lastUploadTime<(ScreenInfo.uploadInterval*60)) return true; //everything is ok, just not time to upload!
+
+  if (gReady==false) return false; //gsheets not ready!
+
+  #ifdef _DEBUG
+    Serial.println("uploading to sheets!");
+  #endif
+
+  if (file_uploadSensorData()==false) {
+    ScreenInfo.lastUploadSuccess=false;
+    ScreenInfo.uploadFailCount++; //an actual error prevented upload!
+  }
+  else {
+    ScreenInfo.lastUploadSuccess=true;
+    ScreenInfo.lastUploadTime = t;
+    ScreenInfo.uploadFailCount=0; //upload success!
+  }
+
+  return true;
+}
 
 void loop()
 {
     //Call ready() repeatedly in loop for authentication checking and processing
+
+  t = now();
   updateTime(1,0); //just try once
+  timeClient.update();
+  
+  #ifdef _USEOTA
+    ArduinoOTA.handle();
+  #endif
+  
+  server.handleClient();
+
+  drawScreen();
 
   bool ready = GSheet.ready(); //maintains authentication
-  time_t t = now();
+  uploadData(ready);
   
-
-#ifdef _USEOTA
-  ArduinoOTA.handle();
-#endif
-#ifdef _USETOUCH
-  if (tft.getTouch(&touch_x, &touch_y)) {
-      #ifdef _DEBUG
-        Serial.printf("Touch: X= %d, Y= %d\n",touch_x, touch_y);
-      #endif
-
-    if (SHOWMAIN==false && (touch_x > TFT_WIDTH-40 && touch_y > TFT_HEIGHT-40)) {
-      //upload to gsheet
-      #ifdef _DEBUG
-        Serial.printf("Upload to gsheets requested\n");
-      #endif
-      lastUploadSuccess=file_uploadSensorData();
-      if (lastUploadSuccess==false) UploadFailCount++;
-
-      if (UploadFailCount>10) ESP.restart();
-
-      #ifdef _DEBUG
-        Serial.printf("Uploaded to google sheets %s.\n", lastUploadSuccess ? "succeeded" : "failed");
-      #endif
-      
-      drawScreen_list();
-      return;
-    } else {
-
-      ALTSCREEN = t;
-      SHOWMAIN = !SHOWMAIN;
-      if (SHOWMAIN) {
-        drawScreen_Clock();
-        drawScreen_Weather();
-      }      else     drawScreen_list();
-      delay(100);
-    }    
-  }
-
-#endif
-
-  server.handleClient();
-  timeClient.update();
+  
 
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
 
-    if (t-ALTSCREEN<ALTSCREENTIME && SHOWMAIN==false) {
+    if (ScreenInfo.RedrawClock>0) ScreenInfo.RedrawClock--;
+    if (ScreenInfo.RedrawWeather >0) ScreenInfo.RedrawWeather--;
+    if (ScreenInfo.RedrawList >0) ScreenInfo.RedrawList--;
 
-      uint32_t b = millis()/1000;
       
-      tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 
-      tft.setTextFont(SMALLFONT);
-      tft.setCursor(0,440);
-      tft.print(dateify(0,"hh:nn:ss"));
-      tft.print("  ");
-      tft.print((uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000);
-      tft.print("k  ");
-      tft.print((uint32_t) ESP.getMinFreeHeap()/1000);
-      tft.print("k");
-      
-      tft.setCursor(0,440+tft.fontHeight(SMALLFONT)+2);
-      
-      tft.printf("Alive since %s",dateify(ALIVESINCE));
-      /*
-      if (b > 86400) {
-        tft.print((int) (b)/86400);
-        tft.print("d");
-      } else {
-        if (b > 3600) {
-          tft.print((int) (b)/3600);
-          tft.print("h");
-        } else {
-          if (b > 120) {
-            tft.print((int) (b)/60);
-            tft.print("m");  
-          } else {
-            tft.print((int) (b));
-            tft.print("s");
-          } 
-          tft.print("             ");
-        }
-      }
-      */
-      
-      tft.setCursor(0,440+2*(tft.fontHeight(SMALLFONT)+2));
-      if (lastUploadTime>0) {
-      tft.printf("Last upload: %s @ %d min ago",lastUploadSuccess ? "success" : "fail", (int) ((now()-lastUploadTime)/60) );
-      tft.setCursor(0,440+3*(tft.fontHeight(SMALLFONT)+2));
-      }
-
-      tft.printf("Next Upload in: %d min, #Failed: %u min",uploadQ - minute(t)%uploadQ,UploadFailCount);
- 
-
-      tft.setCursor(0,Ypos);
-    }      
-  }
+  }      
       
   
 
@@ -707,73 +931,48 @@ void loop()
   OldTime[1] = minute();
   //do stuff every minute
   
-    if (t-ALTSCREEN<ALTSCREENTIME && SHOWMAIN==false) drawScreen_list;
-    else {
-      if (SHOWMAIN==false) {
-        SHOWMAIN=true;
-        drawScreen_Weather();
-      }
-      drawScreen_Clock();
 
+    //expire old sensors...
+    for (byte j=0;j<SENSORNUM;j++) {
+      if (t-Sensors[j].timeLogged>3*Sensors[j].SendingInt) {
+        bitWrite(Sensors[j].localFlags,1,1);
+        ScreenInfo.isExpired=true;
+      } 
     }
     
-    if (ready && ((lastUploadSuccess && (OldTime[1]%uploadQ)==0) || (lastUploadSuccess==false && (OldTime[1]%uploadQFailed)==0))) {
-      #ifdef _DEBUG
-        Serial.println("uploading to sheets!");
-      #endif
-      if (file_uploadSensorData()==false) {
-        //tft.setTextFont(SMALLFONT);
-        //sprintf(tempbuf,"Failed to upload!");
-        //tft.drawString(tempbuf, 0, Ypos);
-        //Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
-        lastUploadSuccess=false;
-      }
-      else {
-        lastUploadSuccess=true;
-      }
+  }
+
+  if (OldTime[2] != hour()) {
+    OldTime[2] = hour(); 
+    getWeather();
+    writeSensorsSD("/Data/SensorBackup.dat");
+    storeScreenInfoSD();
+
+    SendData(); //update server about our status
+  }
+
+  if (OldTime[3] != weekday()) {
+    
+    ScreenInfo.uploadFailCount = 0;
+
+    OldTime[3] = weekday();
+    //daily
+
+    if (day()==1) {
+      GsheetName = ""; //reset the sheet name on the first of the month!
+      GsheetID = "";
     }
 
-    if (OldTime[2] != hour()) {
-      OldTime[2] = hour(); 
-      getWeather();
-      drawScreen_Weather();
-      writeSensorsSD("/Data/SensorBackup.dat");
-    }
-
-    if (OldTime[3] != weekday()) {
+    for (byte j=0;j<SENSORNUM;j++) {
+      Sensors[j].snsValue_MAX = -10000;
+      Sensors[j].snsValue_MIN = 10000;
       
-      UploadFailCount = 0;
-
-      OldTime[3] = weekday();
-      //daily
-
-
-      for (byte j=0;j<SENSORNUM;j++) {
-        Sensors[j].snsValue_MAX = -10000;
-        Sensors[j].snsValue_MIN = 10000;
-        
-        if (t>86400 && Sensors[j].timeLogged<(t-86400)) initSensor(j);
-
-      }
-
-      
+      if (t-Sensors[j].timeLogged>86400 && bitRead(Sensors[j].localFlags,1)==0) initSensor(j); //expire one day old sensors that are not critical
 
     }
   }
 }
 
-
-
-void fcnChooseTxtColor(byte snsIndex) {
-
-  if (bitRead(Sensors[snsIndex].Flags,0)) {
-    tft.setTextColor(TFT_RED,TFT_BLACK);
-  }
-  else {
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-  }
-  return;
-}
 
 
 
@@ -786,7 +985,10 @@ void getWeather() {
     String tempstring;
     int httpCode=404;
 
-    tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=00&hourly_temp=1&hourly_temp=2&hourly_temp=3&hourly_temp=4&hourly_temp=5&hourly_temp=6&hourly_temp=7&hourly_temp=8&hourly_temp=9&hourly_temp=10&hourly_temp=11&hourly_weatherID=0&hourly_weatherID=1&hourly_weatherID=2&hourly_weatherID=3&hourly_weatherID=4&hourly_weatherID=5&hourly_weatherID=6&hourly_weatherID=7&hourly_weatherID=8&hourly_weatherID=9&hourly_weatherID=10&hourly_weatherID=11&daily_weatherID=0&daily_weatherID=1&daily_weatherID=2&daily_weatherID=3&daily_weatherID=4&daily_tempMax=0&daily_tempMax=1&daily_tempMax=3&daily_tempMax=2&daily_tempMax=4&daily_tempMin=0&daily_tempMin=1&daily_tempMin=2&daily_tempMin=3&daily_tempMin=4&isFlagged=1&sunrise=1&sunset=1";
+    tempstring = "http://192.168.68.93/REQUESTWEATHER?";
+    for (byte j=0;j<24;j++) tempstring += "hourly_temp=" + (String) j + "&";
+    for (byte j=0;j<24;j++) tempstring += "hourly_weatherID=" + (String) j + "&";
+    tempstring += "daily_weatherID=0&daily_weatherID=1&daily_weatherID=2&daily_weatherID=3&daily_weatherID=4&daily_tempMax=0&daily_tempMax=1&daily_tempMax=3&daily_tempMax=2&daily_tempMax=4&daily_tempMin=0&daily_tempMin=1&daily_tempMin=2&daily_tempMin=3&daily_tempMin=4&isFlagged=1&sunrise=1&sunset=1";
     http.useHTTP10(true);    
     http.begin(wfclient,tempstring.c_str());
     httpCode = http.GET();
@@ -795,12 +997,12 @@ void getWeather() {
 
 
 
-    for (byte j=0;j<12;j++) {
+    for (byte j=0;j<24;j++) {
       hourly_temp[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     }
 
-    for (byte j=0;j<12;j++) {
+    for (byte j=0;j<24;j++) {
       hourly_weatherID[j] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     }
@@ -820,14 +1022,15 @@ void getWeather() {
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     }
 
-    if (payload.substring(0, payload.indexOf(";",0)).toInt()==0) isFlagged=false;
-    else isFlagged=true;
+    ScreenInfo.isFlagged=payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+
+    ScreenInfo.sunrise=payload.substring(0, payload.indexOf(";",0)).toInt();
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
-    sunrise=payload.substring(0, payload.indexOf(";",0)).toInt();
-      payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    ScreenInfo.sunset = payload.substring(0, payload.indexOf(";",0)).toInt();
 
-    sunset = payload.substring(0, payload.indexOf(";",0)).toInt();
+    ScreenInfo.lastWeatherUpdate = t;
 
   }
 
@@ -835,13 +1038,14 @@ void getWeather() {
 
 
 void drawScreen_Clock() {
+  
   int Y = 0, X=0 ;
-  uint16_t clockHeight = tft.fontHeight(8)+6+tft.fontHeight(4)+1;
+  
 
-  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 
   //clear clock area and draw clock
-  tft.fillRect(0,0,tft.width(),clockHeight,BG_COLOR);
+  tft.fillRect(0,0,ScreenInfo.tftWidth,ScreenInfo.clockHeight,ScreenInfo.BG_COLOR);
   tft.setTextDatum(MC_DATUM);
   tft.setTextFont(8);
   X = TFT_WIDTH/2;
@@ -856,31 +1060,35 @@ void drawScreen_Clock() {
   tft.drawString(tempbuf,X,Y);
 
   tft.setTextDatum(TL_DATUM);
+
+  ScreenInfo.RedrawClock = 60; //next redraw in 1 minute
+
 }
 
 void drawScreen_Weather() {
   int Y = 0, X=0 ;
-  uint16_t clockHeight = tft.fontHeight(8)+6+tft.fontHeight(4)+1;
+  
 
-  Y+=clockHeight+1;
+  Y+=ScreenInfo.clockHeight+1;
 
-  tft.fillRect(0,clockHeight,tft.width(),tft.height()-clockHeight,BG_COLOR);
+  tft.fillRect(0,ScreenInfo.clockHeight,tft.width(),tft.height()-ScreenInfo.clockHeight,ScreenInfo.BG_COLOR);
 
-  tft.setTextColor(TFT_BLACK,BG_COLOR);
+  tft.setTextColor(TFT_BLACK,ScreenInfo.BG_COLOR);
   tft.setTextDatum(MC_DATUM);
     
   uint32_t n=now();
-  if ((n<sunrise && n<sunset) || ( n>sunset)) snprintf(tempbuf,66,"/Icons/BMP180x180night/%d.bmp",ID2Icon(daily_weatherID[0]));  //it is the night 
-  else snprintf(tempbuf,66,"/Icons/BMP180x180day/%d.bmp",ID2Icon(daily_weatherID[0]));
+  if ((n<ScreenInfo.sunrise && n<ScreenInfo.sunset) || ( n>ScreenInfo.sunset)) snprintf(tempbuf,66,"/Icons/BMP180x180night/%d.bmp",daily_weatherID[0]);  //it is the night 
+  else snprintf(tempbuf,66,"/Icons/BMP180x180day/%d.bmp",daily_weatherID[0]);
 
   uint8_t bmpsz = 180;
-  drawBmp(tempbuf,15,Y,-1); //no transparent, as -1 will prevent transparency
+  drawBmp(tempbuf,15,Y,-1); //no transparent, as -1 will prevent transparency (could also just specify BG color)
    
   byte FNTSZ=8;
   tft.setTextFont(8);
   Y+=bmpsz/2;
   X = (bmpsz+15) + (tft.width() - (bmpsz + 15))/2 ;
-  fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y-5); //adjust midpoint by 5 px for visual appeal
+  if (ScreenInfo.localTemp>-100)   fcnPrintTxtColor(ScreenInfo.localTemp,FNTSZ,X,Y-5); //adjust midpoint by 5 px for visual appeal. Use local temp
+  else fcnPrintTxtColor(hourly_temp[0],FNTSZ,X,Y-5); //adjust midpoint by 5 px for visual appeal
 
 
   FNTSZ = 6;
@@ -904,15 +1112,16 @@ void drawScreen_Weather() {
   X=TFT_WIDTH/4;
     FNTSZ = 2;
   for (byte j=1;j<5;j++) {    
-    if (((n+j*2*3600)<sunrise && (n+j*2*3600)<sunset) || ( (n+j*2*3600)>sunset)) snprintf(tempbuf,66,"/Icons/BMP60x60night/%d.bmp",ID2Icon(hourly_weatherID[j*2]));  //it is the night 
-    else     snprintf(tempbuf,55,"/Icons/BMP60x60day/%d.bmp",ID2Icon(hourly_weatherID[j*2]));
-    drawBmp(tempbuf,(j-1)*X+X/2-30,Y);
+    if (j*ScreenInfo.HourlyInterval>=24) break; //stop if we pass 24 hours
+    if (((n+j*ScreenInfo.HourlyInterval*3600)<ScreenInfo.sunrise && (n+j*ScreenInfo.HourlyInterval*3600)<ScreenInfo.sunset) || ( (n+j*ScreenInfo.HourlyInterval*3600)>ScreenInfo.sunset)) snprintf(tempbuf,66,"/Icons/BMP60x60night/%d.bmp",hourly_weatherID[j*ScreenInfo.HourlyInterval]);  //it is the night 
+    else     snprintf(tempbuf,55,"/Icons/BMP60x60day/%d.bmp",hourly_weatherID[j*ScreenInfo.HourlyInterval]);
+    drawBmp(tempbuf,(j-1)*X+X/2-30,Y,-1);
  
     tft.setTextFont(FNTSZ);
     tft.setTextDatum(MC_DATUM);
 
-    snprintf(tempbuf,55," @%s",dateify((n+j*2*3600),"hh"));  
-    fcnPrintTxtColor(hourly_temp[j*2],4,(j-1)*X+X/2,Y+60+tft.fontHeight(FNTSZ),"",(String) tempbuf);
+    snprintf(tempbuf,55," @%s",dateify((n+j*ScreenInfo.HourlyInterval*3600),"hh"));  
+    fcnPrintTxtColor(hourly_temp[j*ScreenInfo.HourlyInterval],4,(j-1)*X+X/2,Y+60+tft.fontHeight(FNTSZ),"",(String) tempbuf);
 
 //    tft.drawString(tempbuf,(j-1)*X+X/2,Y+2+60+tft.fontHeight(4)/2);
 
@@ -924,8 +1133,8 @@ void drawScreen_Weather() {
   
   X=TFT_WIDTH/3;
   for (byte j=1;j<4;j++) {
-    snprintf(tempbuf,65,"/Icons/BMP60x60/%d.bmp",ID2Icon(daily_weatherID[j]));
-    drawBmp(tempbuf,(j-1)*X+X/2-30,Y);
+    snprintf(tempbuf,65,"/Icons/BMP60x60day/%d.bmp",daily_weatherID[j]);
+    drawBmp(tempbuf,(j-1)*X+X/2-30,Y,-1);
 
     FNTSZ=4;
     tft.setTextFont(FNTSZ);
@@ -937,93 +1146,260 @@ void drawScreen_Weather() {
 
   Y += 60+5+tft.fontHeight(FNTSZ)+5;
   tft.setTextDatum(TL_DATUM);
-}
 
-int ID2Icon(int weatherID) {
-  //provide a weather ID, obtain an icon ID
-
-  if (weatherID>=200 && weatherID<300) { //t-storm group
-    if (weatherID==200 || weatherID==201 || weatherID==210 || weatherID==211 ||  weatherID>229) {
-      return 200;
-    } else {
-      return 201;
-    }
-  }
-    
-  if (weatherID>=300 && weatherID<400) { //drizzle group
-    return 301;
-  }
-
-  if (weatherID>=500 && weatherID<600) { //rain group
-    if (weatherID==500 || weatherID==520 ) return 500;
-    if (weatherID==501 || weatherID==521) return 501;
-    if (weatherID==502 || weatherID==522) return 502;
-    if (weatherID==503 || weatherID == 504 || weatherID==531) return 503;
-    if (weatherID==511) return 511;
-  }
-    
-  if (weatherID>=600 && weatherID<700) { //snow group
-    if (weatherID==600 || weatherID==615 || weatherID==620 ) return 600;
-    if (weatherID==601 || weatherID==616|| weatherID==621) return 601;
-    if (weatherID==602 || weatherID==622) return 602;
-    return 611; //sleet category
-    
-  }
-
-  if (weatherID>=700 && weatherID<800) { //atm group
-    return 700; //sleet category
-  }
-
-  if (weatherID>=800) { //clear group
-  
-    if (weatherID>=801 && weatherID<803) return 801;
-    return weatherID; //otherwise weatherID matches iconID!
-    
-  }
-
-  return 999;
+  ScreenInfo.RedrawWeather = ScreenInfo.WeatherTime*60;
 }
 
 
 int fcn_write_sensor_data(byte i, int y) {
     //i is the sensor number, y is Ypos
     //writes a line of data, then returns the new y pos
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      tft.setTextDatum(TL_DATUM);
-      fcnChooseTxtColor(i);
+    uint16_t xpos = 0;
 
+      tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+      tft.setTextDatum(TL_DATUM);
+      
       tft.setTextFont(SMALLFONT);
 
-      snprintf(tempbuf,60,"%d.%d", Sensors[i].ardID,Sensors[i].snsType);
+      snprintf(tempbuf,60,"%u.%u.%u", Sensors[i].ardID,Sensors[i].snsType,Sensors[i].snsID);
       tft.drawString(tempbuf, 0, y);
       
       dateify(Sensors[i].timeLogged,"hh:nn");
-      tft.drawString(tempbuf, 47, Ypos);
+      tft.drawString(DATESTRING, 47, Ypos);
 
       snprintf(tempbuf,60,"%s", Sensors[i].snsName);
       tft.drawString(tempbuf, 87, Ypos);
  
       snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MIN);
-      tft.drawString(tempbuf, 172, Ypos);
+      tft.drawString(tempbuf, 168, Ypos);
 
       snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue);
-      tft.drawString(tempbuf, 212, Ypos);
+      tft.drawString(tempbuf, 204, Ypos);
       
       snprintf(tempbuf,60,"%d",(int) Sensors[i].snsValue_MAX);
-      tft.drawString(tempbuf, 252, Ypos);
+      tft.drawString(tempbuf, 240, Ypos);
 
-      snprintf(tempbuf,60,"%s",Sensors[i].isSent ? "**" : "");
-      tft.drawString(tempbuf, 292, Ypos);
+      xpos=276;
+      if (bitRead(Sensors[i].localFlags,1)==1) { //expired
+        tft.setTextColor(TFT_YELLOW,ScreenInfo.BG_COLOR);  
+        if (bitRead(Sensors[i].Flags,7)==1) xpos+=tft.drawString("X",xpos,Ypos);
+        else xpos+=tft.drawString("x",1,2);
+      }
+      if (bitRead(Sensors[i].Flags,0)==1) { //flagged
+        tft.setTextColor(TFT_RED,ScreenInfo.BG_COLOR);  
+        xpos+=tft.drawString("!",xpos,Ypos);
+      }
+      tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);  
 
-      tft.setTextColor(FG_COLOR,BG_COLOR);
+      if (Sensors[i].localFlags&0b1) { //sent
+        xpos+=tft.drawString("SENT",xpos,Ypos);        
+      }
 
       return y + tft.fontHeight(SMALLFONT)+2;
 
 }
 
-void drawScreen_list() {
+void drawScreen_Settings() {
+  
+  byte isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsLine];
+  if (isSelected>15) {
+    ScreenInfo.settingsLine = 0;
+    ScreenInfo.settingsSelected=0;
+    isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsLine];
+  }
+
+  //was a button pushed?
+  if (ScreenInfo.settingsSelected!=0) {    
+    switch(isSelected) {
+      case 3:
+      {
+        ScreenInfo.lastWeatherUpdate=0;
+        getWeather();
+        break;
+      }
+      case 4:
+      {
+        ScreenInfo.HourlyInterval += ScreenInfo.settingsSelected;        
+        if (ScreenInfo.HourlyInterval>6) ScreenInfo.HourlyInterval=6;
+        if (ScreenInfo.HourlyInterval==0) ScreenInfo.HourlyInterval=1;
+        break;
+      }
+      case 5:
+      {
+        ScreenInfo.WeatherTime += ScreenInfo.settingsSelected*5;
+        if (ScreenInfo.WeatherTime>60) ScreenInfo.WeatherTime=60;
+        if (ScreenInfo.WeatherTime<5) ScreenInfo.WeatherTime=5;
+        break;
+      }
+      case 8:
+      {
+        ScreenInfo.uploadInterval += ScreenInfo.settingsSelected*5; //increment by 5 minutes
+        if (ScreenInfo.uploadInterval<5) ScreenInfo.uploadInterval=5;
+        if (ScreenInfo.uploadInterval>120) ScreenInfo.uploadInterval=120;
+        break;
+      }
+      case 9:
+      {
+            ScreenInfo.lastUploadTime=0; //force an upload
+            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.snsLastDisplayed=0;
+            uploadData(true);
+            writeSensorsSD("/Data/SensorBackup.dat");
+            storeScreenInfoSD();
+            SendData(); //update server about our status
+            
+        break;
+      }
+      case 13:
+      {
+        deleteFiles("SensorBackup.dat","/Data");
+        deleteFiles("ScreenFlags.dat","/Data");
+        break;
+      }
+
+      case 14:
+      {
+        deleteFiles("*.dat","/Data");
+        break;
+      }
+      
+    }
+
+    ScreenInfo.settingsSelected=0;
+  }
+
   clearTFT();
-  tft.setTextColor(FG_COLOR,BG_COLOR);
+  Ypos = 0;
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  tft.setTextFont(4);
+  tft.setTextDatum(MC_DATUM);
+
+
+  Ypos = Ypos + tft.fontHeight(4)/2;
+  tft.drawString(dateify(now(),"hh:nn mm/dd"), TFT_WIDTH / 2, Ypos);
+  tft.setTextDatum(TL_DATUM);
+  Ypos += tft.fontHeight(4)/2 + 6;
+  tft.fillRect(0,Ypos,TFT_WIDTH,2,TFT_DARKGRAY);
+  Ypos += 4;
+
+  tft.setTextFont(2);
+  //can show 15 lines, but only up to 10 can be selectable  
+  
+
+  if (isSelected==0) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"isExpired: %s\n", (ScreenInfo.isExpired!=0)?"Y":"N");
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+
+  if (isSelected==1) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"isFlagged: %s\n",(ScreenInfo.isFlagged!=0)?"Y":"N");
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==2) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"localTemp: %d at %s\n",ScreenInfo.localTemp, dateify(ScreenInfo.localTempTime, "mm/dd hh:nn"));
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==3) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"last weather: %s\n",dateify(ScreenInfo.lastWeatherUpdate,"mm/dd hh:nn"));
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+    if (isSelected==4) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Hourly weather interval: %u\n",ScreenInfo.HourlyInterval);
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==5) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Weather redraw: %u\n", ScreenInfo.WeatherTime);
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+
+  if (isSelected==6) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Free/Lowest Heap: %u, %u\n",(uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000,(uint32_t) ESP.getMinFreeHeap()/1000);
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  
+  if (isSelected==7) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Alive since %s\n",dateify(ALIVESINCE));
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==8) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Upload interval (minutes): %u\n",ScreenInfo.uploadInterval);
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==9) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"last Upload: %s %s\n",dateify(ScreenInfo.lastUploadTime,"mm/dd/yy hh:nn"), (ScreenInfo.lastUploadSuccess==true)?"Good":"Failed");
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==10) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+tft.setTextFont(2);
+  snprintf(tempbuf,70,"Gsheet Name: %s\n",GsheetName.c_str());
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==11) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Last error (at %s): \n", dateify(ScreenInfo.lastErrorTime,"mm/dd hh:nn:ss"));
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==12) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"%s\n",lastError.c_str());
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+
+  if (isSelected==13) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Delete Settings Data\n");
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+  if (isSelected==14) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(tempbuf,70,"Flush SD Data\n");
+tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(2) + 2;
+
+
+        //buttons on setting screen are: 
+        /*
+          main
+          list
+          select
+          reset
+          ++
+          --
+        */
+  drawButton((String) "Main",(String) "List",(String) "Select",(String) "Reset",(String) "++",(String) "--");
+  ScreenInfo.RedrawList = 60;
+
+}
+
+
+void drawScreen_List() {
+  clearTFT();
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
   tft.setTextFont(4);
   tft.setTextDatum(MC_DATUM);
     
@@ -1031,20 +1407,27 @@ void drawScreen_list() {
   tft.drawString(dateify(now(),"hh:nn mm/dd"), TFT_WIDTH / 2, Ypos);
   tft.setTextDatum(TL_DATUM);
 
-  Ypos += tft.fontHeight(4)/2 + 6;
+  Ypos += tft.fontHeight(4)/2 + 1;
+
+  tft.setTextFont(SMALLFONT);
+  snprintf(tempbuf,60,"Sensors: %u\n",countDev());
+  tft.drawString(tempbuf,0,Ypos);
+  Ypos += tft.fontHeight(1) + 1;
+
+
   tft.fillRect(0,Ypos,TFT_WIDTH,2,TFT_DARKGRAY);
 //            ardid time    name    min  cur   max    * for sent
 
   tft.fillRect(45,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
   tft.fillRect(85,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
-  tft.fillRect(170,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
-  tft.fillRect(210,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
-  tft.fillRect(250,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
-  tft.fillRect(290,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
+  tft.fillRect(166,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
+  tft.fillRect(200,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
+  tft.fillRect(236,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
+  tft.fillRect(272,Ypos,1,TFT_HEIGHT-Ypos,TFT_DARKGRAY);
   Ypos += 4;
 
   tft.setTextFont(SMALLFONT);
-  tft.setTextColor(TFT_DARKGRAY,BG_COLOR);
+  tft.setTextColor(TFT_DARKGRAY,ScreenInfo.BG_COLOR);
 
     snprintf(tempbuf,60,"ID");
     tft.drawString(tempbuf, 0, Ypos);
@@ -1056,62 +1439,140 @@ void drawScreen_list() {
     tft.drawString(tempbuf, 87, Ypos);
 
     snprintf(tempbuf,60,"MIN");
-    tft.drawString(tempbuf, 172, Ypos);
+    tft.drawString(tempbuf, 168, Ypos);
 
     snprintf(tempbuf,60,"Val");
-    tft.drawString(tempbuf, 212, Ypos);
+    tft.drawString(tempbuf, 204, Ypos);
 
     snprintf(tempbuf,60,"MAX");
-    tft.drawString(tempbuf, 252, Ypos);
+    tft.drawString(tempbuf, 240, Ypos);
 
-    snprintf(tempbuf,60,"SNT");
-    tft.drawString(tempbuf, 292, Ypos);
+    snprintf(tempbuf,60,"Status");
+    tft.drawString(tempbuf, 276, Ypos);
 
-  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 
   Ypos += tft.fontHeight(SMALLFONT) + 2;
 
   tft.setTextFont(SMALLFONT); //
-  byte usedINDEX = 0;  
-  byte snsindex[SENSORNUM];
+  
 
-//initialize index to Sensors 
-  for (byte i=0;i<SENSORNUM;i++) {
-    snsindex[i]=255;
-  }
+  //initialize ScreenInfo.snsListArray
+  if (t-ScreenInfo.snsListLastTime > 30) {
+    ScreenInfo.snsListLastTime = t;
+    ScreenInfo.snsLastDisplayed=0;
 
-  for(byte i=0;i<SENSORNUM;i++) {
-    //march through sensors and list by ArdID
-    
-    if (Sensors[i].snsID>0 && Sensors[i].snsType>0 && inIndex(i,snsindex,SENSORNUM) == false && Sensors[i].timeLogged>0 ) {
-      snsindex[usedINDEX++] = i;
-      Ypos = fcn_write_sensor_data(i,Ypos);
+    for (byte i=0;i<SENSORNUM;i++) {
+      //march through sensors and list specified number of  ArdIDs
+      //decide if this should be shown or not.
+      if (isSensorInit(i)==true) {
+        ScreenInfo.snsListArray[0][i] = bitRead(Sensors[i].Flags,0) +1; //1 if not flagged, 2 if flagged        
+      } 
+      else ScreenInfo.snsListArray[0][i] = 0;
+      ScreenInfo.snsListArray[1][i] = 255; //not in order yet
+    }
 
-      // now find all the remaining sensors for this ardid 
-      for(byte j=i+1;j<SENSORNUM;j++) {
-        if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,snsindex,SENSORNUM) == false && Sensors[j].ardID==Sensors[i].ardID) {
-          snsindex[usedINDEX++] = j;
+    //now put them in order...
+    for (byte i=0;i<SENSORNUM;i++) {
 
-          Ypos = fcn_write_sensor_data(j,Ypos);
+      if (ScreenInfo.snsListArray[0][i] > 0 && ScreenInfo.snsListArray[1][i] == 255) {
+        ScreenInfo.snsListArray[1][i] = ScreenInfo.snsLastDisplayed++;
+
+        //now put all related sensors next in order...
+        for (byte j=i+1;j<SENSORNUM;j++) {
+          if (ScreenInfo.snsListArray[0][j] > 0 && Sensors[j].snsType == Sensors[i].snsType && ScreenInfo.snsListArray[1][j] == 255) ScreenInfo.snsListArray[1][j] = ScreenInfo.snsLastDisplayed++;
         }
       }
     }
+    ScreenInfo.snsLastDisplayed = 0;
+
   }
 
-  //draw rectangle representing button to immediately upload
-  
-  tft.drawRoundRect(TFT_WIDTH-40,TFT_HEIGHT-40,39,39,5,TFT_BLUE);
-  
-  tft.fillRoundRect(TFT_WIDTH-40,TFT_HEIGHT-40,39,39,5,TFT_GOLD);
-  snprintf(tempbuf,60,"Upload");
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_BLUE,TFT_GOLD);
-  
-  tft.drawString(tempbuf, TFT_WIDTH-20,TFT_HEIGHT-20);
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  
+
+  // display the list in order, starting from the last value displayed
+    #ifdef _DEBUG
+      Serial.printf("ListArray starting at %u\n",ScreenInfo.snsLastDisplayed);
+    #endif
+
+  int  k;
+  byte counter = 0;
+  byte minval = 1;
+  if (ScreenInfo.showAlarmedOnly !=0) minval = 2;
+
+  for (byte i = 0; i<SENSORNUM; i++) {
+    //march through every value, display if it is the next one and exists and meets alarm criteria
+    
+    k = ScreenInfo.snsLastDisplayed+i;
+
+    if (k>=SENSORNUM) {      
+      k=-1;
+      break;
+    }
+
+    //search for value k!
+    
+    byte j;
+    for (j=0;j<SENSORNUM;j++)       if (ScreenInfo.snsListArray[1][j]==k) break;
+
+    if (j<SENSORNUM && ScreenInfo.snsListArray[0][j] >= minval) {
+      Ypos = fcn_write_sensor_data(j,Ypos);
+      if (++counter==30) break;
+    }
+
+  }
+  ScreenInfo.snsLastDisplayed=k+1;
+  if (ScreenInfo.snsLastDisplayed>=SENSORNUM) ScreenInfo.snsLastDisplayed=0;
+
+
+  //draw buttons on bottom 1/3 page
+          //buttons on list screen are: 
+        /*
+          next page
+          main
+          upload
+          show alarmed
+          show all
+          settings
+        */
+  drawButton((String) "Next",(String) "Main",(String) "Upload",(String) "Alarmed",(String) "ShowAll",(String) "Settings");
+  ScreenInfo.RedrawList = 60;
 }
 
+void drawButton(String b1, String b2,  String b3,  String b4,  String b5,  String b6) {
+  int16_t Y =  TFT_HEIGHT*0.75;
+  int16_t X = 0;
+  tft.setTextFont(SMALLFONT);
+  byte bspacer = 5;
+  byte bX = (byte) ((double)(TFT_WIDTH - 6*bspacer)/3);
+  byte bY = (byte) ((double) (TFT_HEIGHT*.25 - 4*bspacer)/2);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_BLACK,tft.color565(200,200,200));
+  char tempbuf[20] = {0};
+  for (byte i=0;i<2;i++) {
+    X = 0;
+    for (byte j=0;j<3;j++) {
+      tft.fillRoundRect(X+bspacer,Y+bspacer,bX,bY,4,tft.color565(200,200,200));
+      tft.drawRoundRect(X+bspacer,Y+bspacer,bX,bY,4,tft.color565(125,125,125));
+      if (j==0 && i==0) snprintf(tempbuf,60,b1.c_str());
+      if (j==1 && i==0) snprintf(tempbuf,60,b2.c_str());
+      if (j==2 && i==0) snprintf(tempbuf,60,b3.c_str());
+      if (j==0 && i==1) snprintf(tempbuf,60,b4.c_str());
+      if (j==1 && i==1) snprintf(tempbuf,60,b5.c_str());
+      if (j==2 && i==1) snprintf(tempbuf,60,b6.c_str());
+      
+      tft.drawString(tempbuf, (int) ((double) X+bX/2),(int) ((double) Y + bY/2),SMALLFONT);
+      X+=bX+bspacer+bspacer;     
+
+    }
+    Y+=bY+bspacer+bspacer;
+  }
+
+  tft.setTextDatum(TL_DATUM);
+
+  
+  tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+}
 
 
 
@@ -1208,7 +1669,7 @@ void handleRoot() {
 
   
   currentLine += "<a href=\"/LIST\">List all sensors</a><br>";
-  currentLine = currentLine + "isFlagged: " + (String) isFlagged + "<br>";
+  currentLine = currentLine + "isFlagged: " + (String) ScreenInfo.isFlagged + "<br>";
   currentLine = currentLine + "Sensor Data: <br>";
 
   currentLine = currentLine + "----------------------------------<br>";      
@@ -1365,19 +1826,35 @@ uint8_t tempIP[4] = {0,0,0,0};
           Serial.println("handlePOST parsed input.");
         #endif
 
-  S.timeLogged = now(); //time logged by me is when I received this.
-  if (S.timeRead == 0)     S.timeRead = now();
+  S.timeLogged = t; //time logged by me is when I received this.
+  if (S.timeRead == 0)     S.timeRead = t;
   
-  
-  S.isSent = false;
+  if (S.Flags&0b1) ScreenInfo.isFlagged=true; //this sensor is flagged!
+  bitWrite(S.localFlags,0,0); //is sent?
+  bitWrite(S.localFlags,1,0); //is expired?
 
   storeSensorSD(&S);
 
   int16_t sn = findDev(&S, true); //true makes sure finddev always returns a valid entry
+
+
   if (sn<0) {
+
+
     server.send(401, "text/plain", "Critical failure... I could not find the sensor or enter a new value. This should not be possible, so this error is undefined."); // Send HTTP status massive error
+    lastError = "Out of sensor space";
+    ScreenInfo.lastErrorTime = t;
+
     return;
   }
+
+    String stemp = S.snsName;
+    if ((stemp.indexOf("Outside")>-1 && S.snsType==4 ) ) { //outside temp
+      ScreenInfo.localTemp = S.snsValue;
+      ScreenInfo.localTempIndex = sn;
+      ScreenInfo.localTempTime = t;
+    }
+
 
   S.snsValue_MIN= Sensors[sn].snsValue_MIN;
   S.snsValue_MAX= Sensors[sn].snsValue_MAX;
@@ -1403,6 +1880,67 @@ uint8_t tempIP[4] = {0,0,0,0};
 }
 
 
+bool SendData() {
+  
+  //special case for senddata... just send info relative to google server (ie, was last upload successful)
+
+#ifdef  ARDID
+   byte arduinoID = ARDID;
+#else
+byte arduinoID = WiFi.localIP()[3];
+#endif
+
+//set flags value
+byte Flags=0;
+
+if (ScreenInfo.lastUploadSuccess==false)  bitWrite(Flags,0,1);
+bitWrite(Flags,1,1); //monitored
+bitWrite(Flags,7,1); //critical
+
+
+WiFiClient wfclient;
+HTTPClient http;
+
+if(WiFi.status() == WL_CONNECTED){
+  String payload;
+  String URL;
+  String tempstring;
+  int httpCode=404;
+  tempstring = "/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=GSheets";
+  tempstring = tempstring + "&varValue=";
+  tempstring = tempstring + String(ScreenInfo.uploadFailCount, DEC);
+  tempstring = tempstring + "&Flags=";
+  tempstring = tempstring + String(Flags, DEC);
+  tempstring = tempstring + "&logID=";
+  tempstring = tempstring + String(arduinoID, DEC);
+  tempstring = tempstring + ".99.1" + "&timeLogged=" + String(ScreenInfo.lastUploadTime, DEC) + "&isFlagged=" + String(bitRead(Flags,0), DEC) + "&SendingInt=" + String(3600, DEC);
+
+  URL = "http://192.168.68.93";
+  URL = URL + tempstring;
+
+  http.useHTTP10(true);
+//note that I'm coverting lastreadtime to GMT
+
+  #ifdef _DEBUG
+      Serial.print("sending this message: ");
+      Serial.println(URL.c_str());
+  #endif
+
+  http.begin(wfclient,URL.c_str());
+  httpCode = (int) http.GET();
+  payload = http.getString();
+  http.end();
+
+
+  if (httpCode == 200) {
+    ScreenInfo.LastServerUpdate = t;
+    return true;
+  }
+}
+
+return false;
+
+}
 
 
 //--------------------------------------
@@ -1411,7 +1949,7 @@ uint8_t tempIP[4] = {0,0,0,0};
 //--------------------------------------
 //SPREADSHEET FUNCTIONS
 
-bool file_deleteSpreadsheetByID(String fileID){
+bool file_deleteSpreadsheetByID(String fileID) {
   FirebaseJson response;
   
    bool success= GSheet.deleteFile(&response /* returned response */, fileID /* spreadsheet Id to delete */);
@@ -1450,7 +1988,8 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
   String thisFileID = "";
   
   String tmp;
-  bool success = GSheet.listFiles(&filelist /* returned response */);
+  bool success = GSheet.listFiles(&filelist /* returned list of all files */);
+
     #ifdef NOISY
       tft.setTextFont(SMALLFONT);
       snprintf(tempbuf,60,"%s search result: %s\n",sheetname.c_str(),success?"OK":"FAIL");
@@ -1460,7 +1999,7 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
   
   if (success) {
     #ifdef _DEBUG
-      filelist.toString(Serial, true);
+      Serial.println("Got the obj list!");
     #endif
 
     if (sheetname == "***") {
@@ -1475,6 +2014,9 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
     filelist.get(result,"files");
 
     if (result.success) {
+      #ifdef _DEBUG
+        Serial.println("File list in firebase!");
+      #endif
 
       FirebaseJsonArray thisfile;
       result.get<FirebaseJsonArray /* type e.g. FirebaseJson or FirebaseJsonArray */>(thisfile /* object that used to store value */);
@@ -1506,6 +2048,12 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
           }
           fileinfo.iteratorEnd();
           if (foundit) {
+                #ifdef _DEBUG
+                  Serial.println("Found file of interest!");
+                  Serial.printf("FileID is %s\n", thisFileID.c_str());
+
+                #endif
+
               #ifdef NOISY
                 tft.setTextFont(SMALLFONT);
                 snprintf(tempbuf,60,"FileID is %s\n",thisFileID.c_str());
@@ -1519,10 +2067,25 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
 
     }
 
-    resultstring= "ERROR: no files found";
+    resultstring= "ERROR: [" + sheetname + "] not  found,\nwith createfile=" + (String) createfile;
+                #ifdef _DEBUG
+                  Serial.println("Did not find the file.");
+                #endif
+
+    lastError = resultstring;
   
     if (createfile) {
-      resultstring = file_createSpreadsheet(sheetname);
+                  #ifdef _DEBUG
+                  Serial.printf("Trying to create file %s\n", GsheetName.c_str());
+
+                #endif
+
+      resultstring = file_createSpreadsheet(sheetname,false);
+                  #ifdef _DEBUG
+                  Serial.printf("result: %s\n", resultstring.c_str());
+
+                #endif
+
       resultstring = file_createHeaders(resultstring,"SnsID,IP Add,SnsName,Time Logged,Time Read,HumanTime,Flags,Reading");
       #ifdef NOISY
         tft.setTextFont(SMALLFONT);
@@ -1541,18 +2104,29 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
         Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
       #endif
     resultstring = "ERROR: gsheet error";
-    
+    lastError = resultstring;
+    ScreenInfo.lastErrorTime = t;
   }
+
   return resultstring; 
 
 }
 
 
-String file_createSpreadsheet(String sheetname) {
+String file_createSpreadsheet(String sheetname, bool checkFile=true) {
 
 
-  String fileID = file_findSpreadsheetIDByName(sheetname,true);
-  if (fileID.substring(0,5)!="ERROR") return fileID;
+  String fileID = "";
+  if (checkFile) {
+    file_findSpreadsheetIDByName(sheetname,false);
+  
+    if (fileID.substring(0,5)!="ERROR") {
+      lastError = "Tried to create a file that exists!";   
+      ScreenInfo.lastErrorTime = t;
+      return fileID;
+    }
+  } 
+
 
   FirebaseJson spreadsheet;
   spreadsheet.set("properties/title", sheetname);
@@ -1579,6 +2153,9 @@ String file_createSpreadsheet(String sheetname) {
       Ypos = Ypos + tft.fontHeight(SMALLFONT)+2;
     #endif
 
+    lastError = "ERROR: Gsheet failed to create";
+    ScreenInfo.lastErrorTime = t;
+    
   
     return "ERROR: Gsheet failed to create";
   }
@@ -1593,7 +2170,11 @@ bool file_createHeaders(String fileID,String Headers) {
   fileID = file_findSpreadsheetIDByName(sheetname);
   */
 
-  if (fileID.substring(0,5)=="ERROR") return false;
+  if (fileID.substring(0,5)=="ERROR") {
+    lastError = fileID;
+    ScreenInfo.lastErrorTime = t;
+     return false;
+  }
 
   uint8_t cnt = 0;
   int strOffset=-1;
@@ -1626,20 +2207,29 @@ bool file_uploadSensorData(void) {
   FirebaseJson valueRange;
   FirebaseJson response;
 
-  time_t t = now();
+  //time_t t = now(); now a global!
 
-  String logid;
-  String fileID = (String) "ArduinoLog" + (String) dateify(t,"yyyy-mm");
-  fileID = file_findSpreadsheetIDByName(fileID,false);
 
-  if (fileID=="" || fileID.substring(0,5)=="ERROR") return false;
+  if (GsheetID=="" || ScreenInfo.lastUploadSuccess==0) {
+    //need to reset file ID
+    GsheetName = "ArduinoLog" + (String) dateify(t,"yyyy-mm");
+    GsheetID = file_findSpreadsheetIDByName(GsheetName,true);
+    if (GsheetID=="" || GsheetID.substring(0,5)=="ERROR") {
+      lastError = GsheetID;
+      ScreenInfo.lastErrorTime = t;
+      return false;
+    }
 
+  }
+  
+
+  String logid="";
   byte rowInd = 0;
   byte snsArray[SENSORNUM] = {255};
   for (byte j=0;j<SENSORNUM;j++) snsArray[j]=255;
 
   for (byte j=0;j<SENSORNUM;j++) {
-    if (Sensors[j].timeLogged>0 && Sensors[j].isSent == false) {
+    if (isSensorInit(j) && Sensors[j].timeLogged>0 && bitRead(Sensors[j].localFlags,0)==0) {
       logid = (String) Sensors[j].ardID + "." + (String)  Sensors[j].snsType + "." + (String)  Sensors[j].snsID;
 
       valueRange.add("majorDimension", "ROWS");
@@ -1658,14 +2248,18 @@ bool file_uploadSensorData(void) {
 
         // For Google Sheet API ref doc, go to https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/append
 
-  bool success = GSheet.values.append(&response /* returned response */, fileID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
+  bool success = GSheet.values.append(&response /* returned response */, GsheetID /* spreadsheet Id to append */, "Sheet1!A1" /* range to append */, &valueRange /* data range to append */);
   if (success) {
 //            response.toString(Serial, true);
     for (byte j=0;j<SENSORNUM;j++) {
-      if (snsArray[j]!=255)     Sensors[snsArray[j]].isSent = true;
+      if (snsArray[j]!=255)     bitWrite(Sensors[snsArray[j]].localFlags,0,1);
     }
-    lastUploadTime = now(); 
-}
+    ScreenInfo.lastUploadTime = now(); 
+  } else {
+    lastError = "ERROR Failed to update: " + GsheetID;
+    ScreenInfo.lastErrorTime = t;
+    return false;
+  }
 
 return success;
 

@@ -22,7 +22,7 @@
 
 #include <Arduino.h>
 #include <String.h>
-#include "SPI.h"
+#include <SPI.h>
 
 #define LGFX_USE_V1         // set to use new version of library
 #include <LovyanGFX.hpp>    // main library
@@ -137,8 +137,8 @@ public:
 
 
 #define SENSORNUM 60
-#define FG_COLOR  (uint16_t) TFT_BLACK //Foreground color
-#define BG_COLOR  (uint16_t) TFT_LIGHTGREY //light gray
+//#define FG_COLOR  (uint16_t) TFT_BLACK //Foreground color
+//#define BG_COLOR  (uint16_t) TFT_LIGHTGREY //light gray
 
 struct SensorVal {
   uint8_t IP[4];
@@ -152,14 +152,112 @@ struct SensorVal {
   uint32_t timeRead;
   uint32_t timeLogged;
   uint16_t SendingInt;
-  bool isSent;  
+  uint8_t localFlags; //RMB to LMB... 0= issent, 1=isexpired, 2= 
   uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value  
 };
 
-
-struct ScreenFlags {
-  uint16_t Flags; //From RMB: 0 = isAnyflagged; 1 = isOutOfRange; 2 = isHeat; 3 = isAC; 4 = isFan; 5 = isLeak; 6 = isExpired; 7 = 
+struct TKiyaansBetter {
+  uint16_t BG_COLOR;
+    uint16_t FG_COLOR;
 };
+struct ScreenFlags {
+    // So we can have initializers and thiscan still bein a union
+    ScreenFlags();
+
+    uint16_t BG_COLOR = TFT_BLACK;
+    uint16_t FG_COLOR = TFT_LIGHTGRAY;
+    uint8_t BG_luminance=0;
+
+    uint8_t localTempIndex; //index of outside sensor
+    int8_t localTemp = -100; //based on local weather
+    uint32_t localTempTime=0; //last time the current condition was updated (this comes from a local sensor)
+    uint32_t sunset,sunrise;
+    uint32_t lastWeatherUpdate=0; //last time weather was updated
+
+    uint8_t RedrawClock = 0; //seconds left before redraw
+    uint16_t RedrawWeather = 0; //seconds left before redraw
+    uint8_t RedrawList=60; //SECONDS left for this screen (then  goes to main)
+    uint8_t WeatherTime = 5; //MINUTES between weather redraws    
+
+    uint8_t ForceRedraw=0; //redraw the screen now to screennum, regardless of timing
+    
+    uint8_t ScreenNum=0; //screens: main with clock and weather --> list with buttons on bottom (scrolls N pages to get all of them) --> main
+    uint8_t settingsLine=0; //index to  line  selected on subscreens
+    uint8_t settingsSelectable[10] = {3,4,5,8,9,13,14,99,99,99};
+    int8_t settingsSelected=0;
+    uint8_t snsLastDisplayed=0; //index to the last sensor displayed 
+    uint32_t snsListLastTime=0;
+    uint8_t snsListArray[2][SENSORNUM]; //index to the last sensor displayed 
+
+
+    uint8_t showAlarmedOnly = 0; //in list mode, show only alarmed sns?
+
+    uint8_t HourlyInterval = 2; //hours between daily weather display
+    long DSTOFFSET;
+    uint8_t isExpired = false; //are any critical sensors expired?
+    uint8_t isFlagged=false;
+    uint8_t wasFlagged=false;
+    uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
+    uint8_t isAC=false; //first bit is compressor on, bits 1-6 are zones
+    uint8_t isFan=false; //first bit is fan on, bits 1-6 are zones
+    uint8_t wasHeat=false; //first bit is heat on, bits 1-6 are zones
+    uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
+    uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
+
+    uint8_t isHot;
+    uint8_t isCold;
+    uint8_t isSoilDry;
+    uint8_t isLeak;
+
+
+    uint32_t lastUploadTime = 0;
+    bool lastUploadSuccess = false;
+    uint8_t uploadFailCount = 0;
+    uint16_t uploadInterval = 20; //MINUTES between uploads
+    uint32_t LastServerUpdate = 0; //last time data was sent to main server
+    //do not keep strings in this variable!
+    //String GsheetID= ""; //file ID for this month's spreadsheet
+    //String GsheetName= ""; //file name for this month's spreadsheet
+    //String lastError;
+    
+    uint16_t clockHeight = 0;
+    uint16_t tftWidth = 0;
+    uint16_t tftHeight = 0;
+
+    uint32_t lastErrorTime=0;
+
+};
+
+
+const     uint8_t temp_colors[104] = {
+    20, 255, 0, 255, //20
+    24, 200, 0, 200, //21 - 24
+    27, 200, 0, 100, //25 - 27
+    29, 200, 100, 100, //28 - 29
+    32, 255, 255, 255, //30 - 32
+    34, 150, 150, 255, //33 - 34
+    37, 25, 25, 200, //35 - 37
+    39, 25, 75, 200, //38 - 39
+    42, 0, 125, 210, //40 - 42
+    44, 0, 150, 150, //43 - 44
+    47, 0, 200, 150, //45 - 47
+    51, 0, 200, 100, //48 - 51
+    54, 0, 150, 100, //52 - 54
+    59, 0, 100, 100, //55 - 59
+    64, 0, 120, 60, //60 - 64
+    69, 0, 150, 0, //65 - 69
+    72, 10, 175, 0, //70 - 72
+    75, 20, 200, 0, //73 - 75
+    79, 67, 220, 0, //76 - 79
+    82, 100, 220, 0, //80 - 82
+    84, 150, 200, 0, //83 - 84
+    87, 200, 100, 50, //85 - 87
+    89, 200, 100, 100, //88 - 89
+    92, 220, 50, 50, //90 - 92
+    94, 240, 50, 50, //93 - 94
+    100, 250, 0, 0 //95 - 100
+    };
+
 
 
 //this server

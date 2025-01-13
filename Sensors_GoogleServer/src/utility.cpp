@@ -241,14 +241,14 @@ void initSensor(int k) {
   Sensors[k].snsValue_MAX=-10000;
   Sensors[k].snsValue_MIN=10000;
 
-  Sensors[k].isSent=false;  
+  Sensors[k].localFlags=0;  
 
 }
 
 uint8_t countDev() {
   uint8_t c = 0;
   for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsID > 0) c++; 
+    if (isSensorInit(j)) c++; 
   }
   return c;
 }
@@ -497,4 +497,48 @@ bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
     }
     
     return true;
+}
+
+byte getButton(int32_t X, int32_t Y,  byte ScreenNum) {
+  //returns 0 if no button was pushed, otherwise the number of the button based on screenNum
+  if (ScreenNum == 0 || (X == 0 && Y == 0) ) return 0;
+
+  if (ScreenNum >= 1) {
+    if (Y < TFT_HEIGHT*0.75) return 0; //button press was not in button zone
+
+    //6 buttons at bottom, arranged on bottom 25% of screen [3 columns of 2 rows]
+    byte deltaX = TFT_WIDTH * 0.33; //width of each button row
+    byte deltaY = TFT_HEIGHT * 0.125; //height of each button row
+
+    if (Y<TFT_HEIGHT*0.75 + deltaY) { //row 1
+      if (X<deltaX) return 1;
+      if (X<2*deltaX) return 2;
+      return 3;
+    } else {
+      if (X<deltaX) return 4;
+      if (X<2*deltaX) return 5;
+      return 6;
+    }
+  }
+return 0;
+}
+
+
+
+
+bool isSensorInit(int i) {
+  //check if sensor is initialized
+
+  if (i<0 || i>=SENSORNUM) return false;
+  
+  if (Sensors[i].ardID>0 && Sensors[i].snsID > 0 && Sensors[i].snsType >0) return true;
+  return false;  
+}
+
+double minmax(double value, double minval, double maxval) {
+  if (value<minval) value = minval;
+  if (value>maxval) value = maxval;
+
+  return value;
+
 }

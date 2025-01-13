@@ -69,6 +69,7 @@ void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
 void handleUPDATEDEFAULTS();
 void handleRETRIEVEDATA();
+void handleFILELIST();
 bool SendData(struct SensorVal*);
 
 byte connectWiFi();

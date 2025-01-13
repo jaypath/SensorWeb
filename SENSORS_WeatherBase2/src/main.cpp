@@ -130,7 +130,6 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
 uint16_t set_color(byte r, byte g, byte b);
 uint32_t setFont(uint8_t FNTSZ);
-int ID2Icon(int); //provide a weather ID, obtain an icon ID
 void drawBmp(const char*, int16_t, int16_t, uint16_t alpha = TRANSPARENT_COLOR);
 void fcnDrawHeader(time_t t);
 void fcnDrawClock(time_t t);
@@ -410,52 +409,6 @@ char buf[12] = "";
 
 }
 
-
-
-int ID2Icon(int weatherID) {
-  //provide a weather ID, obtain an icon ID
-
-  if (weatherID>=200 && weatherID<300) { //t-storm group
-    if (weatherID==200 || weatherID==201 || weatherID==210 || weatherID==211 ||  weatherID>229) {
-      return 200;
-    } else {
-      return 201;
-    }
-  }
-    
-  if (weatherID>=300 && weatherID<400) { //drizzle group
-    return 301;
-  }
-
-  if (weatherID>=500 && weatherID<600) { //rain group
-    if (weatherID==500 || weatherID==520 ) return 500;
-    if (weatherID==501 || weatherID==521) return 501;
-    if (weatherID==502 || weatherID==522) return 502;
-    if (weatherID==503 || weatherID == 504 || weatherID==531) return 503;
-    if (weatherID==511) return 611; //511 is freezing rain, but can use sleet icon for this
-  }
-    
-  if (weatherID>=600 && weatherID<700) { //snow group
-    if (weatherID==600 || weatherID==615 || weatherID==620 ) return 600;
-    if (weatherID==601 || weatherID==616|| weatherID==621) return 601;
-    if (weatherID==602 || weatherID==622) return 602;
-    return 611; //sleet category
-    
-  }
-
-  if (weatherID>=700 && weatherID<800) { //atm group
-    return 700; //sleet category
-  }
-
-  if (weatherID>=800) { //clear group
-  
-    if (weatherID>=801 && weatherID<803) return 801;
-    return weatherID; //otherwise weatherID matches iconID!
-    
-  }
-
-  return 999;
-}
 
 
 //tft drawing fcn
@@ -1426,9 +1379,9 @@ byte deltaY = setFont(FNTSZ);
 byte section_spacer = 3;
 
 //draw icon for NOW
-int iconID = ID2Icon(WeatherData.getWeatherID(0));
-if (t > WeatherData.sunrise  && t< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180dayG/%d.bmp", iconID);
-else snprintf(tempbuf,44,"/BMP180nightG/%d.bmp",iconID);
+int iconID = WeatherData.getWeatherID(0);
+if (t > WeatherData.sunrise  && t< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID);
+else snprintf(tempbuf,44,"/BMP180x180night/%d.bmp",iconID);
 
 drawBmp(tempbuf,0,Y);
 
@@ -1471,7 +1424,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
     
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
-    iconID = ID2Icon(WeatherData.getWeatherID(t+i*I.HourlyInterval*60*60));
+    iconID = WeatherData.getWeatherID(t+i*I.HourlyInterval*60*60);
     if (t+i*I.HourlyInterval*3600 > WeatherData.sunrise  && t+i*I.HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
     else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
     
@@ -1506,7 +1459,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
   for (i=1;i<6;i++) {
     Z=0;
     X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
-    iconID = ID2Icon(WeatherData.getDailyWeatherID(i,true));
+    iconID = WeatherData.getDailyWeatherID(i,true);
     snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //alway print day icons for future days
 
     drawBmp(tempbuf,X,Y);

@@ -300,7 +300,7 @@ void handlerForRoot(bool allsensors) {
   time_t t=now();
 
 
-  LAST_WEB_REQUEST = now(); //this is the time of the last web request
+  LAST_WEB_REQUEST = t; //this is the time of the last web request
 
   WEBHTML = "";
   WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
@@ -672,6 +672,7 @@ time_t tn=now();
   
 
 }
+
 
 
 

@@ -8,8 +8,10 @@
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP,"time.nist.gov",(long) GLOBAL_TIMEZONE_OFFSET,10800000); //3rd param is offset, 4th param is update frequency
-long DSTOFFSET = 0;
 
+
+extern struct ScreenFlags ScreenInfo;
+ 
 char DATESTRING[25]="";
 
 
@@ -114,7 +116,7 @@ bool updateTime(byte retries,uint16_t waittime) {
 }
 
 void checkDST(void) {
-   DSTOFFSET = 0; //starting default
+  ScreenInfo.DSTOFFSET = 0; //starting default
   timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET);
   setTime(timeClient.getEpochTime());
   
@@ -129,14 +131,14 @@ void checkDST(void) {
 //check if time offset is EST (-5h) or EDT (-4h)
   int m=month();
 
-  if (m > 3 && m < 11) DSTOFFSET = 3600;
+  if (m > 3 && m < 11) ScreenInfo.DSTOFFSET = 3600;
   else {
     if (m == 3) {
       //need to figure out if it is past the second sunday at 2 am
 
       time_t m1 = makeUnixTime(year(),month(),7,2,0,0); //this is the last day of the first week of March at 2 am. We want second sunday at 2 am
-      if (n< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
-      else DSTOFFSET = 3600;
+      if (n< m1 + ((7-weekday(m1)+1)*24*60*60)) ScreenInfo.DSTOFFSET = 0; 
+      else ScreenInfo.DSTOFFSET = 3600;
 
       //7-weekday(m1)+1 is the next sunday 
       /*explanation:
@@ -156,8 +158,8 @@ void checkDST(void) {
       //need to figure out if it is past the first sunday at 2 am
       time_t m1 = makeUnixTime(year(),month(),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
       if (weekday(m1)>1) m1 += (7-(weekday(m1)-1))*86400; //this is the first sunday of the month.
-      if (n< m1) DSTOFFSET = 3600; //still in the summer timezone
-      else DSTOFFSET = 0;
+      if (n< m1) ScreenInfo.DSTOFFSET = 3600; //still in the summer timezone
+      else ScreenInfo.DSTOFFSET = 0;
 
     /*explanation...
       if weekday(m1) is 1 then it is sunday, add 0
@@ -175,7 +177,7 @@ void checkDST(void) {
     }
   }
 
-  timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
+  timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET+ScreenInfo.DSTOFFSET);
   setTime(timeClient.getEpochTime());
 
   #ifdef _DEBUG

@@ -22,7 +22,7 @@ bool stringToLong(String s, uint32_t* val);
 int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token);
 
-
+bool isSensorInit(int i);
 int16_t findDev(struct SensorVal *S, bool oldest = false);
 int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest);
 int16_t findSns(byte snstype, bool newest = false);
@@ -38,5 +38,7 @@ String IPbytes2String(byte* IP);
 bool IPString2ByteArray(String IPstr,byte* IP) ;
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 String IP2String(byte* IP);
+byte getButton(int32_t X, int32_t Y, byte ScreenNum=0);
 
+double minmax(double value, double minval, double maxval); //restricts value to min and max range
 #endif

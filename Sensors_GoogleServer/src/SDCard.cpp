@@ -1,5 +1,6 @@
 #include <SDCard.hpp>
-
+//#define _DEBUG
+extern String lastError;
 
 //this allows a sensorval struct to be written to file as a series of bytes
 union SensorValBytes {
@@ -11,9 +12,59 @@ union SensorValBytes {
 
 
 
+union ScreenInfoBytes {
+    struct ScreenFlags screendata;
+    uint8_t bytes[sizeof(ScreenFlags)];
+
+    ScreenInfoBytes() {};
+};
+
+
+//storing variables
+bool storeScreenInfoSD() {
+
+    String filename = "/Data/ScreenFlags.dat";
+    File f = SD.open(filename, FILE_APPEND);
+    if (f==false) {
+        lastError = "Failed to write to SD";
+        return false;
+    }
+    union ScreenInfoBytes D; 
+    D.screendata=ScreenInfo;
+
+    f.write(D.bytes,sizeof(ScreenFlags));
+
+    f.close();
+    return true;
+    
+}
+
+bool readScreenInfoSD() //read last screenInfo
+{
+    union ScreenInfoBytes D; 
+    String filename = "/Data/ScreenFlags.dat";
+
+    File f = SD.open(filename, FILE_READ);
+    if (f==false)  {
+        lastError = "Failed to read screenInfo from SD";
+        ScreenInfo.lastErrorTime = now();
+        return false;
+    }
+
+    while (f.available()) {
+        f.read(D.bytes,sizeof(ScreenFlags));
+        ScreenInfo = D.screendata;
+    }
+
+    f.close();
+
+    return true;
+
+}
+
 
 bool writeSensorsSD(String filename)
-{
+{ // write all the sensors to file
     union SensorValBytes D;
 
 
@@ -33,28 +84,9 @@ bool writeSensorsSD(String filename)
 }
 
 
-bool readSensorsSD(String filename) //read last available sensorvals back from disk
-{
-    union SensorValBytes D;
-
-
-    File f = SD.open(filename, FILE_READ);
-    if (f==false) return false;
-
-    byte cnt = 0;
-    while (f.available()) {
-        f.read(D.bytes,sizeof(SensorVal));
-        Sensors[cnt++] = D.sensordata;
-    }
-
-    f.close();
-
-    return true;
-
-}
 
 bool storeSensorSD(struct SensorVal *S) {
-
+    //write a specific sensor to file
     String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + ".dat";
     File f = SD.open(filename, FILE_APPEND);
     if (f==false) return false;
@@ -66,6 +98,41 @@ bool storeSensorSD(struct SensorVal *S) {
     f.close();
     return true;
     
+}
+
+bool readSensorsSD(String filename) //read last available sensorvals back from disk
+{
+    union SensorValBytes D;
+
+    //if I am reading in sensor vals, reset the sensor index.
+    initSensor(-256); //reset them all!
+    
+
+
+    File f = SD.open(filename, FILE_READ);
+    if (f==false) {
+        lastError = "Failed to open Sensor file";
+        ScreenInfo.lastErrorTime = now();
+
+        return false;
+    }
+
+    byte cnt = 0;
+    while (f.available()) {
+        f.read(D.bytes,sizeof(SensorVal));
+        if (cnt<SENSORNUM)             Sensors[cnt++] = D.sensordata;
+        
+    }
+    #ifdef _DEBUG
+        Serial.printf("readsensor cnt: %u\n",cnt);
+    #endif
+    if (cnt==0) {
+        lastError = "Read ZERO sensors from SD";
+        ScreenInfo.lastErrorTime = now();
+    }
+    f.close();
+
+    return true;
 }
 
 bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN ) {
@@ -90,7 +157,7 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
             deltacnt++;
 
             if (deltacnt>=avgN) {
-                t[cnt] = D.sensordata.timeLogged;
+                  t[cnt] = D.sensordata.timeLogged;
                 v[cnt] = avgV/deltacnt;
                 deltacnt=0;
                 avgV=0;
@@ -170,6 +237,8 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     return true;
 }
 
+
+//screen
 uint16_t read16(File &f) {
   uint16_t result;
   ((uint8_t *)&result)[0] = f.read(); // LSB
@@ -184,4 +253,77 @@ uint32_t read32(File &f) {
   ((uint8_t *)&result)[2] = f.read();
   ((uint8_t *)&result)[3] = f.read(); // MSB
   return result;
+}
+
+
+void deleteFiles(const char* pattern,const char* directory) {
+  File dir = SD.open(directory); // Open the root directory
+
+    String filename ;;
+
+  if (!dir) {
+    #ifdef _DEBUG 
+    Serial.println("Error opening root directory.");
+    #endif
+    return;
+  }
+
+
+  while (true) {
+    File entry = dir.openNextFile();
+    filename  = (String) directory + "/" + entry.name();
+    #ifdef _DEBUG
+        Serial.printf("Current file: %s\n",filename);
+    #endif
+    if (!entry) {
+      // no more files
+      break;
+    }
+
+    if (matchPattern(entry.name(), pattern)) {
+        #ifdef _DEBUG
+        Serial.print("Deleting: ");
+        Serial.println(filename);
+        #endif
+      if (!SD.remove(filename)) {
+        #ifdef _DEBUG
+        Serial.print("Error deleting: ");
+        Serial.println(filename);
+        #endif
+        
+      }
+    }
+    entry.close();
+  }
+  dir.close();
+}
+
+
+// Simple wildcard matching function (supports * only)
+bool matchPattern(const char* filename, const char* pattern) {
+  const char* fnPtr = filename;
+  const char* patPtr = pattern;
+
+  while (*fnPtr != '\0' || *patPtr != '\0') {
+    if (*patPtr == '*') {
+      patPtr++; // Skip the '*'
+      if (*patPtr == '\0') {
+        return true; // '*' at the end matches everything remaining
+      }
+      while (*fnPtr != '\0') {
+        if (matchPattern(fnPtr, patPtr)) {
+          return true;
+        }
+        fnPtr++;
+      }
+      return false; // No match found after '*'
+    } else if (*fnPtr == *patPtr) {
+      fnPtr++;
+      patPtr++;
+    } else {
+      return false; // Mismatch
+    }
+  }
+
+  return (*fnPtr == '\0' && *patPtr == '\0'); // Both strings must be at the end
 }
