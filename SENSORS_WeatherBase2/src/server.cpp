@@ -243,15 +243,15 @@ void handleREQUESTWEATHER() {
         WEBHTML += (String) WeatherData.sunset + ";"; 
   } else {
     for (uint8_t i = 0; i < server.args(); i++) {
-      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature(server.arg(i).toInt(),false,true) + ";";
+      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature(t + server.arg(i).toInt()*3600,false,false) + ";";
       WeatherData.getDailyTemp(server.arg(i).toInt(),dailyT);
         if (server.argName(i)=="daily_tempMax") WEBHTML += (String) dailyT[0] + ";";
       if (server.argName(i)=="daily_tempMin") WEBHTML += (String) dailyT[1] + ";";
       if (server.argName(i)=="daily_weatherID") WEBHTML += (String) WeatherData.getDailyWeatherID(server.arg(i).toInt(),true) + ";";
-      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID(server.arg(i).toInt()) + ";";
+      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID(t + server.arg(i).toInt()*3600) + ";";
       if (server.argName(i)=="daily_pop") WEBHTML += (String) WeatherData.getDailyPoP(server.arg(i).toInt(),true) + ";";
-      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP(server.arg(i).toInt()) + ";";
-      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow(server.arg(i).toInt()) + ";";      
+      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP(t + server.arg(i).toInt()*3600) + ";";
+      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow(t + server.arg(i).toInt()*3600) + ";";      
       if (server.argName(i)=="sunrise") WEBHTML += (String) WeatherData.sunrise + ";";
       if (server.argName(i)=="sunset") WEBHTML += (String) WeatherData.sunset + ";";
       if (server.argName(i)=="hour") {

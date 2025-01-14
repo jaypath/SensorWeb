@@ -194,16 +194,13 @@ struct ScreenFlags {
 
     uint8_t HourlyInterval = 2; //hours between daily weather display
     long DSTOFFSET;
-    uint8_t isExpired = false; //are any critical sensors expired?
-    uint8_t isFlagged=false;
-    uint8_t wasFlagged=false;
-    uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
-    uint8_t isAC=false; //first bit is compressor on, bits 1-6 are zones
-    uint8_t isFan=false; //first bit is fan on, bits 1-6 are zones
-    uint8_t wasHeat=false; //first bit is heat on, bits 1-6 are zones
-    uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
-    uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
 
+    uint8_t isExpired = 0; //#expired
+    uint8_t isFlagged=0; //#flagged
+    uint8_t isCritical=0; //#flagged
+    uint8_t isHeat=0; //first bit is heat on, bits 1-6 are zones
+    uint8_t isAC=0; //first bit is compressor on, bits 1-6 are zones
+    uint8_t isFan=0; //first bit is fan on, bits 1-6 are zones
     uint8_t isHot;
     uint8_t isCold;
     uint8_t isSoilDry;
@@ -219,25 +216,22 @@ struct ScreenFlags {
     //String GsheetID= ""; //file ID for this month's spreadsheet
     //String GsheetName= ""; //file name for this month's spreadsheet
     //String lastError;
-    
-    uint16_t clockHeight = 0;
-    uint16_t tftWidth = 0;
-    uint16_t tftHeight = 0;
-
     uint32_t lastErrorTime=0;
 
 };
 
 
+    
+
 const     uint8_t temp_colors[104] = {
     20, 255, 0, 255, //20
     24, 200, 0, 200, //21 - 24
-    27, 200, 0, 100, //25 - 27
-    29, 200, 100, 100, //28 - 29
+    27, 250, 150, 150, //25 - 27
+    29, 250, 200, 200, //28 - 29
     32, 255, 255, 255, //30 - 32
     34, 150, 150, 255, //33 - 34
-    37, 25, 25, 200, //35 - 37
-    39, 25, 75, 200, //38 - 39
+    37, 50, 50, 200, //35 - 37
+    39, 50, 100, 200, //38 - 39
     42, 0, 125, 210, //40 - 42
     44, 0, 150, 150, //43 - 44
     47, 0, 200, 150, //45 - 47

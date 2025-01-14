@@ -70,6 +70,7 @@ int daily_weatherID[5];
 int daily_tempMAX[5];
 int daily_tempMIN[5];
 
+byte clockHeight = 0;
 
 extern SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
 extern struct ScreenFlags ScreenInfo;
@@ -97,7 +98,6 @@ bool file_createHeaders(String sheetname,String Headers);
 void tokenStatusCallback(TokenInfo info);
 void file_deleteSpreadsheetByName(String filename);
 
-void handleLIST();
 void handleNotFound();
 void handlePost();
 void handleRoot();
@@ -468,7 +468,7 @@ void setup()
         tft.println("Receiving OTA:");
         tft.setTextDatum(TL_DATUM);
       
-      tft.drawRect(5,tft.height()/2-5,tft.width()-10,10,TFT_BLACK);
+      tft.drawRect(5,tft.height()/2-5,tft.width()-10,10,ScreenInfo.FG_COLOR);
       #endif  
     });
     ArduinoOTA.onEnd([]() {
@@ -482,7 +482,7 @@ void setup()
       #endif
       #ifdef _USETFT
         //String strbuff = "Progress: " + (100*progress / total);
-        if (progress % 5 == 0) tft.fillRect(5,tft.height()/2-5,(int) (double (tft.width()-10)*progress / total),10,TFT_BLACK);
+        if (progress % 5 == 0) tft.fillRect(5,tft.height()/2-5,(int) (double (tft.width()-10)*progress / total),10,ScreenInfo.FG_COLOR);
         
 
         #endif
@@ -523,7 +523,6 @@ void setup()
     tft.printf("Start Server... ");
 
     server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-    server.on("/LIST", handleLIST);   
     server.on("/POST", handlePost);   
     server.on("/CLEARSENSOR",handleCLEARSENSOR);
     server.on("/TIMEUPDATE",handleTIMEUPDATE);
@@ -555,10 +554,8 @@ void setup()
 
     //init globals
     ScreenInfo.BG_luminance = color2luminance(ScreenInfo.BG_COLOR,true);
-    ScreenInfo.clockHeight = tft.fontHeight(8)+6+tft.fontHeight(4)+1;
-    ScreenInfo.tftWidth = tft.width();
-    ScreenInfo.tftHeight = tft.height();
-
+    clockHeight = tft.fontHeight(8)+6+tft.fontHeight(4)+1;
+    
     //redraw everything
     ScreenInfo.RedrawClock = 0; //seconds left before redraw
     ScreenInfo.RedrawWeather = 0; //seconds left before redraw
@@ -930,14 +927,37 @@ void loop()
   if (OldTime[1] != minute()) {
   OldTime[1] = minute();
   //do stuff every minute
-  
+    ScreenInfo.RedrawClock=0; //synchronize to time
 
-    //expire old sensors...
+    //expire old sensors and characterize summary stats
+    ScreenInfo.isFlagged = 0;
+    ScreenInfo.isExpired=0;
+    ScreenInfo.isSoilDry=0;
+    ScreenInfo.isHeat=0;
+    ScreenInfo.isCold=0;
+
     for (byte j=0;j<SENSORNUM;j++) {
+      if (isSensorInit(j)==false) continue;
+      bitWrite(Sensors[j].localFlags,1,0); //not expired... will change it back if needed.
+
       if (t-Sensors[j].timeLogged>3*Sensors[j].SendingInt) {
-        bitWrite(Sensors[j].localFlags,1,1);
-        ScreenInfo.isExpired=true;
-      } 
+        bitWrite(Sensors[j].localFlags,1,1); //is expired
+        ScreenInfo.isExpired++;
+      } else {
+        if (Sensors[j].Flags&1) {
+          ScreenInfo.isFlagged++;
+          if (Sensors[j].Flags&0b10000000) ScreenInfo.isCritical++; //a critical sensor is flagged!
+          if (Sensors[j].snsType ==1 || Sensors[j].snsType ==4 || Sensors[j].snsType ==10 || Sensors[j].snsType ==14 ||  Sensors[j].snsType ==17) {
+            if (Sensors[j].Flags&0b100000) ScreenInfo.isHot++;
+            else ScreenInfo.isCold++;
+            continue;
+          }
+          if (Sensors[j].snsType ==3) {
+            ScreenInfo.isSoilDry++;
+            continue;
+          }
+        }
+      }
     }
     
   }
@@ -1022,7 +1042,7 @@ void getWeather() {
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     }
 
-    ScreenInfo.isFlagged=payload.substring(0, payload.indexOf(";",0)).toInt();
+    //ScreenInfo.isFlagged=payload.substring(0, payload.indexOf(";",0)).toInt(); //do not store isflagged here, just remove it from the list
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
     ScreenInfo.sunrise=payload.substring(0, payload.indexOf(";",0)).toInt();
@@ -1041,11 +1061,17 @@ void drawScreen_Clock() {
   
   int Y = 0, X=0 ;
   
-
+  //if isdry, draw a box around the entire screen the color of the border...
+  
   tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 
   //clear clock area and draw clock
-  tft.fillRect(0,0,ScreenInfo.tftWidth,ScreenInfo.clockHeight,ScreenInfo.BG_COLOR);
+
+  if (ScreenInfo.isSoilDry) {
+    tft.fillRect(0,0,TFT_WIDTH,clockHeight,tft.color565(200,200,145));
+  }
+  else tft.fillRect(0,0,TFT_WIDTH,clockHeight,ScreenInfo.BG_COLOR);
+
   tft.setTextDatum(MC_DATUM);
   tft.setTextFont(8);
   X = TFT_WIDTH/2;
@@ -1069,9 +1095,12 @@ void drawScreen_Weather() {
   int Y = 0, X=0 ;
   
 
-  Y+=ScreenInfo.clockHeight+1;
+  Y+=clockHeight+1;
 
-  tft.fillRect(0,ScreenInfo.clockHeight,tft.width(),tft.height()-ScreenInfo.clockHeight,ScreenInfo.BG_COLOR);
+  if (ScreenInfo.isSoilDry) {
+    tft.fillRect(0,clockHeight,TFT_WIDTH,TFT_HEIGHT-clockHeight,tft.color565(200,200,145));
+  } else   tft.fillRect(0,clockHeight,TFT_WIDTH,TFT_HEIGHT-clockHeight,ScreenInfo.BG_COLOR);
+
 
   tft.setTextColor(TFT_BLACK,ScreenInfo.BG_COLOR);
   tft.setTextDatum(MC_DATUM);
@@ -1410,7 +1439,7 @@ void drawScreen_List() {
   Ypos += tft.fontHeight(4)/2 + 1;
 
   tft.setTextFont(SMALLFONT);
-  snprintf(tempbuf,60,"Sensors: %u\n",countDev());
+  snprintf(tempbuf,60,"All:%u Dry:%u Hot:%u Cold:%u Exp:%u\n",countDev(),ScreenInfo.isSoilDry,ScreenInfo.isHot,ScreenInfo.isCold,ScreenInfo.isExpired);
   tft.drawString(tempbuf,0,Ypos);
   Ypos += tft.fontHeight(1) + 1;
 
@@ -1603,59 +1632,6 @@ void handleTIMEUPDATE() {
   return;
 }
 
-void handleLIST() {
-
-  
-  char tempchar[9] = "";
-
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Sensor Server LIST</title></head><body><p>";
-
-  if (server.args()>0) {
-    for (byte j=0;j<SENSORNUM;j++)  {
-        currentLine += (String) Sensors[j].ardID + "<br>";
-        currentLine += IP2String(Sensors[j].IP) + "<br>";
-        currentLine += (String) Sensors[j].snsID + "<br>";
-        currentLine += (String) Sensors[j].snsType + "<br>";
-        currentLine += (String) Sensors[j].snsName + "<br>";
-        currentLine += (String) Sensors[j].snsValue + "<br>";
-        currentLine += (String) Sensors[j].snsValue_MAX + "<br>";
-        currentLine += (String) Sensors[j].snsValue_MIN + "<br>";
-        currentLine += (String) Sensors[j].timeRead + "<br>";
-        currentLine += (String) Sensors[j].timeLogged + "<br>";
-        Byte2Bin(Sensors[j].Flags,tempchar,true);
-        currentLine += (String) tempchar + "<br>";
-        currentLine += "<br>";      
-    }
-  } else {
-    String logID; //#.#.# [as string], ARDID, SNStype, SNSID
-    SensorVal S;
-
-    for (byte k=0;k<server.args();k++) {   
-      if ((String)server.argName(k) == (String)"logID")  breakLOGID(String(server.arg(k)),&S.ardID,&S.snsType,&S.snsID);
-    }
-    int16_t j = findDev(&S, true); //true makes sure finddev always returns a valid entry
-
-
-    if (j>=0) { 
-      currentLine += (String) Sensors[j].ardID + "<br>";
-      currentLine += IP2String(Sensors[j].IP) + "<br>";
-      currentLine += (String) Sensors[j].snsID + "<br>";
-      currentLine += (String) Sensors[j].snsType + "<br>";
-      currentLine += (String) Sensors[j].snsName + "<br>";
-      currentLine += (String) Sensors[j].snsValue + "<br>";
-      currentLine += (String) Sensors[j].snsValue_MAX + "<br>";
-      currentLine += (String) Sensors[j].snsValue_MIN + "<br>";
-      currentLine += (String) Sensors[j].timeRead + "<br>";
-      currentLine += (String) Sensors[j].timeLogged + "<br>";
-      Byte2Bin(Sensors[j].Flags,tempchar,true);
-      currentLine += (String) tempchar + "<br>";
-      currentLine += "<br>";      
-    }
-  }
-currentLine += "</p></body></html>";
-  
-  server.send(200, "text/html", currentLine.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
-}
 
 void handleRoot() {
 
@@ -1829,7 +1805,9 @@ uint8_t tempIP[4] = {0,0,0,0};
   S.timeLogged = t; //time logged by me is when I received this.
   if (S.timeRead == 0)     S.timeRead = t;
   
-  if (S.Flags&0b1) ScreenInfo.isFlagged=true; //this sensor is flagged!
+  if (S.Flags&0b1)        ScreenInfo.isFlagged=1; //any sensor is flagged!
+    
+
   bitWrite(S.localFlags,0,0); //is sent?
   bitWrite(S.localFlags,1,0); //is expired?
 
