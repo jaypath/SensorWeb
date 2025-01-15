@@ -1212,7 +1212,7 @@ int fcn_write_sensor_data(byte i, int y) {
       if (bitRead(Sensors[i].localFlags,1)==1) { //expired
         tft.setTextColor(TFT_YELLOW,ScreenInfo.BG_COLOR);  
         if (bitRead(Sensors[i].Flags,7)==1) xpos+=tft.drawString("X",xpos,Ypos);
-        else xpos+=tft.drawString("x",1,2);
+        else xpos+=tft.drawString("x",xpos,Ypos);
       }
       if (bitRead(Sensors[i].Flags,0)==1) { //flagged
         tft.setTextColor(TFT_RED,ScreenInfo.BG_COLOR);  
@@ -1495,7 +1495,8 @@ void drawScreen_List() {
       //march through sensors and list specified number of  ArdIDs
       //decide if this should be shown or not.
       if (isSensorInit(i)==true) {
-        ScreenInfo.snsListArray[0][i] = bitRead(Sensors[i].Flags,0) +1; //1 if not flagged, 2 if flagged        
+        ScreenInfo.snsListArray[0][i] = bitRead(Sensors[i].Flags,0) +1; //1 if not flagged, 2 if [flagged ]
+        if (bitRead(Sensors[i].localFlags,1) && bitRead(Sensors[i].Flags,7)) ScreenInfo.snsListArray[0][i]++; //also count critical expred sensors as flagged
       } 
       else ScreenInfo.snsListArray[0][i] = 0;
       ScreenInfo.snsListArray[1][i] = 255; //not in order yet
@@ -1570,6 +1571,9 @@ void drawScreen_List() {
 void drawButton(String b1, String b2,  String b3,  String b4,  String b5,  String b6) {
   int16_t Y =  TFT_HEIGHT*0.75;
   int16_t X = 0;
+
+  tft.fillRect(X,Y,TFT_WIDTH,TFT_HEIGHT*0.25,ScreenInfo.BG_COLOR);
+
   tft.setTextFont(SMALLFONT);
   byte bspacer = 5;
   byte bX = (byte) ((double)(TFT_WIDTH - 6*bspacer)/3);
