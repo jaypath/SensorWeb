@@ -15,7 +15,6 @@
 //#include <WebServer.h>
 //#include <HTTPClient.h>
 
-#include <String.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <SDCard.hpp>
