@@ -55,33 +55,6 @@ char* strPad(char* str, char* pad, byte L)     // Simple C string function
 }
 
 
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
-  
-  File root = fs.open(dirname);
-  if(!root){
-    return;
-  }
-  if(!root.isDirectory()){
-    return;
-  }
-
-  File file = root.openNextFile();
-  while(file){
-    if(file.isDirectory()){
-  //    Serial.print("  DIR : ");
-    //  Serial.println(file.name());
-      if(levels){
-        listDir(fs, file.name(), levels -1);
-      }
-    } else {
-      // Serial.print("  FILE: ");
-      // Serial.print(file.name());
-      // Serial.print("  SIZE: ");
-      // Serial.println(file.size());
-    }
-    file = root.openNextFile();
-  }
-}
 
 
 bool stringToLong(String s, uint32_t* val) {
@@ -343,7 +316,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 
 byte count =0;
 
-if (snsType == -10) { //count expired and critical sensors
+if (snsType == -10) { //count expired and critical sensors only
   count = checkExpiration(-1,0,true);
 
   return count;
@@ -390,11 +363,12 @@ snsArr[8] = -1;
 snsArr[9] = -1;
 } 
 
+if (snsType==-100) {}; //special case, look for any sensor!
 
   for (byte j = 0; j<SENSORNUM; j++) {
-    if (bitRead(Sensors[j].localFlags,1)==1) {
-      if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
-        
+    //is this a sensor we care about?
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || (snsType>0 && (int) Sensors[j].snsType == snsType)) {
+      if (bitRead(Sensors[j].localFlags,1)==0) { //not expired  
         if (((Sensors[j].Flags & flagsthatmatter) ==  (flagsthatmatter & flagsettings) /*flagged*/)) {
           if (snsType==3) {
             if (bitRead(Sensors[j].Flags,5) && Sensors[j].timeLogged> MoreRecentThan) count++;          
@@ -402,8 +376,10 @@ snsArr[9] = -1;
             if (Sensors[j].timeLogged> MoreRecentThan) count++;          
           }
         }
-      }
-    }
+      } else {
+       if  (bitRead(Sensors[j].Flags,7)==1) count++; //expired and critical
+      }      
+    } 
   }
 
   return count;
@@ -564,7 +540,34 @@ void tallyFlags() {
 
 
     ScreenInfo.isExpired = checkExpiration(-1,ScreenInfo.t,true); //this counts critical  expired sensors
-    ScreenInfo.isFlagged+=ScreenInfo.isExpired; //add expired count, because expired sensors don't otherwiseget included
+
+    //initialize ScreenInfo.snsListArray
+    byte sla_ind=0;
+
+    for (byte i=0;i<SENSORNUM;i++) {
+      //march through sensors and list specified number of  ArdIDs
+      //decide if this should be shown or not.
+      if (isSensorInit(i)==true) {
+        ScreenInfo.snsListArray[0][i] = bitRead(Sensors[i].Flags,0) +1; //1 if not flagged, 2 if [flagged ]
+        if (bitRead(Sensors[i].localFlags,1) && bitRead(Sensors[i].Flags,7)) ScreenInfo.snsListArray[0][i]++; //also count critical expred sensors as flagged
+      } 
+      else ScreenInfo.snsListArray[0][i] = 0;
+      ScreenInfo.snsListArray[1][i] = 255; //not in order yet
+    }
+
+    //now put them in order...
+    for (byte i=0;i<SENSORNUM;i++) {
+
+      if (ScreenInfo.snsListArray[0][i] > 0 && ScreenInfo.snsListArray[1][i] == 255) {
+        ScreenInfo.snsListArray[1][i] = sla_ind++;
+
+        //now put all related sensors next in order...
+        for (byte j=i+1;j<SENSORNUM;j++) {
+          if (ScreenInfo.snsListArray[0][j] > 0 && Sensors[j].snsType == Sensors[i].snsType && ScreenInfo.snsListArray[1][j] == 255) ScreenInfo.snsListArray[1][j] = sla_ind++;
+        }
+      }
+    }
+
 }
 
 

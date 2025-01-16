@@ -346,3 +346,31 @@ bool matchPattern(const char* filename, const char* pattern) {
 
   return (*fnPtr == '\0' && *patPtr == '\0'); // Both strings must be at the end
 }
+
+void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
+  
+  File root = fs.open(dirname);
+  if(!root){
+    return;
+  }
+  if(!root.isDirectory()){
+    return;
+  }
+
+  File file = root.openNextFile();
+  while(file){
+    if(file.isDirectory()){
+  //    Serial.print("  DIR : ");
+    //  Serial.println(file.name());
+      if(levels){
+        listDir(fs, file.name(), levels -1);
+      }
+    } else {
+      // Serial.print("  FILE: ");
+      // Serial.print(file.name());
+      // Serial.print("  SIZE: ");
+      // Serial.println(file.size());
+    }
+    file = root.openNextFile();
+  }
+}

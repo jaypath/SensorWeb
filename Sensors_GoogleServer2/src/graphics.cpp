@@ -106,19 +106,23 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
 }
 
 void fcnDrawClock() {
-    ScreenInfo.t = now();
-  if (ScreenInfo.t-ScreenInfo.lastDrawClock<ScreenInfo.intervalClockDraw*60 && ScreenInfo.lastDrawClock>0) return;
 
   bool forcedraw = false;
-  int Y = tft.height() - ScreenInfo.CLOCK_Y;
-  
-  if (ScreenInfo.lastDrawClock==0) forcedraw=true;
-  ScreenInfo.lastDrawClock = ScreenInfo.t;
 
+if (ScreenInfo.lastDrawClock==0) forcedraw=true;
   
+  if (ScreenInfo.ForceRedraw==true || ScreenInfo.wasFlagged!=ScreenInfo.isFlagged) {
+    //force full redraw
+    if (ScreenInfo.isFlagged==false) ScreenInfo.ClockFlagScreen = 0; //stop showing flags
+    ScreenInfo.lastDrawHeader=0; //redraw header
+    forcedraw=true;
+  }
+  int Y = tft.height() - ScreenInfo.CLOCK_Y;
+
   //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
-  if (ScreenInfo.isFlagged) {
-    if (ScreenInfo.t>ScreenInfo.lastFlagView+ScreenInfo.flagViewTime) {
+  if (ScreenInfo.isFlagged || forcedraw) {
+    if (ScreenInfo.t>ScreenInfo.lastFlagView+ScreenInfo.flagViewTimeSEC || forcedraw) {
+      ScreenInfo.lastDrawHeader=0; //redraw header
       ScreenInfo.lastFlagView = ScreenInfo.t;
       if (ScreenInfo.ClockFlagScreen==1) {
         ScreenInfo.ClockFlagScreen = 0; //stop showing flags
@@ -131,13 +135,13 @@ void fcnDrawClock() {
         return;
       }
     } 
-    else if (ScreenInfo.ClockFlagScreen==1) return;
+    else if (ScreenInfo.ClockFlagScreen==1) return; //don't do the rest of the clock stuff, just keep showing flags
   }
   
-  if (ScreenInfo.wasFlagged==true && ScreenInfo.isFlagged == false) {
-    //force full redraw
-    forcedraw=true;
-  }
+  if (forcedraw==false && ScreenInfo.t-ScreenInfo.lastDrawClock<ScreenInfo.intervalClockDraw*60 && ScreenInfo.lastDrawClock>0) return;
+
+  
+  ScreenInfo.lastDrawClock = ScreenInfo.t;
 
 
   //otherwise print time at bottom
@@ -191,7 +195,7 @@ void fcnDrawCurrentCondition() {
 int8_t lt = -120;
   bool islocal=false;
 
-    if (ScreenInfo.t-ScreenInfo.lastDrawCurrentCondition < (ScreenInfo.intervalCurrentCondition*60) && ScreenInfo.lastDrawCurrentCondition>0) return; //not time to update cc
+    if (ScreenInfo.ForceRedraw==false && (ScreenInfo.t-ScreenInfo.lastDrawCurrentCondition < (ScreenInfo.intervalCurrentCondition*60) && ScreenInfo.lastDrawCurrentCondition>0)) return; //not time to update cc
 
     if (ScreenInfo.localTempIndex>=SENSORNUM || isSensorInit(ScreenInfo.localTempIndex) || Sensors[ScreenInfo.localTempIndex].snsType!=4 || (Sensors[ScreenInfo.localTempIndex].Flags&0b100)==0 || (Sensors[ScreenInfo.localTempIndex].Flags&0b10)==0)     ScreenInfo.localTempIndex=find_sensor_name("Outside", 4);  //this is not the sensor we are looking for... find it
     if (ScreenInfo.localTempIndex<SENSORNUM   && ScreenInfo.t-ScreenInfo.localTempTime<600) islocal =true; //use local
@@ -286,7 +290,7 @@ int8_t lt = -120;
 
 void fcnDrawHeader() {
   //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
-  if (((ScreenInfo.isFlagged!=ScreenInfo.wasFlagged || ScreenInfo.isAC != ScreenInfo.wasAC || ScreenInfo.isFan!=ScreenInfo.wasFan || ScreenInfo.isHeat != ScreenInfo.wasHeat) ) || ScreenInfo.lastDrawHeader == 0 || ScreenInfo.t>ScreenInfo.lastDrawHeader+3599)     ScreenInfo.lastDrawHeader = ScreenInfo.t;
+  if (ScreenInfo.ForceRedraw==true || ((ScreenInfo.isFlagged!=ScreenInfo.wasFlagged || ScreenInfo.isAC != ScreenInfo.wasAC || ScreenInfo.isFan!=ScreenInfo.wasFan || ScreenInfo.isHeat != ScreenInfo.wasHeat) ) || ScreenInfo.lastDrawHeader == 0 || ScreenInfo.t>ScreenInfo.lastDrawHeader+3599)     ScreenInfo.lastDrawHeader = ScreenInfo.t;
   else return;
 
   tft.fillRect(0,0,tft.width(),ScreenInfo.HEADER_Y,ScreenInfo.BG_COLOR); //clear the header area
@@ -299,7 +303,8 @@ void fcnDrawHeader() {
   tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR); //without second arg it is transparent background
   
   tft.setTextDatum(TL_DATUM);
-  st = dateify(ScreenInfo.t,"dow mm/dd");
+  if (ScreenInfo.ClockFlagScreen==1) st = dateify(ScreenInfo.t,"hh:nn");
+  else   st = dateify(ScreenInfo.t,"dow mm/dd");
   tft.drawString(st,x,y);
   x += tft.textWidth(st)+10;
   
@@ -353,7 +358,7 @@ void fcnDrawHeader() {
 
 void fcnDrawWeather() {
 
-if ((uint32_t) (ScreenInfo.t-ScreenInfo.lastDrawWeather<ScreenInfo.intervalWeatherDraw*60) && ScreenInfo.lastDrawWeather>0) return;
+if (ScreenInfo.ForceRedraw==false && (uint32_t) (ScreenInfo.t-ScreenInfo.lastDrawWeather<ScreenInfo.intervalWeatherDraw*60) && ScreenInfo.lastDrawWeather>0) return;
 ScreenInfo.lastDrawWeather = ScreenInfo.t;
 
 int X=0,Y = ScreenInfo.HEADER_Y,Z=0; //header ends at 30
@@ -854,7 +859,9 @@ void drawScreen()
     if (ScreenInfo.ScreenNum == 0) {
       ScreenInfo.ScreenNum = 1; //on main screen, this means go to list screen
       ScreenInfo.ForceRedraw=1; //force a screen redraw
-      ScreenInfo.snsListLastTime=0; //reset the list
+      ScreenInfo.lastDrawList=0;
+      ScreenInfo.snsLastDisplayed=0;
+      ScreenInfo.lastFlagTally=0;     
     } else {
       if (ScreenInfo.ScreenNum == 1) {
         //buttons on list screen are: 
@@ -881,14 +888,19 @@ void drawScreen()
           case 2:
           {
             ScreenInfo.ScreenNum = 0; 
+            ScreenInfo.lastDrawHeader=0; //redraw header
+            ScreenInfo.lastDrawClock=0; //redraw clock
+            ScreenInfo.lastDrawCurrentCondition=0; //redraw current condition
+            ScreenInfo.lastDrawWeather=0;
             ScreenInfo.ForceRedraw=1; //force a screen redraw at main
             break;
           }
           case 3:
           {
             ScreenInfo.lastGsheetUploadTime=0; //force an upload
-            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.lastDrawList=0;
             ScreenInfo.snsLastDisplayed=0;
+            ScreenInfo.lastFlagTally=0;     
             uploadData(true);
             writeSensorsSD("/Data/SensorBackup.dat");
             storeScreenInfoSD();
@@ -900,14 +912,19 @@ void drawScreen()
           case 4:
           {
             ScreenInfo.showAlarmedOnly = 1;            
-            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.lastDrawList=0;
+            ScreenInfo.snsLastDisplayed=0;
+            ScreenInfo.lastFlagTally=0;     
             ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
           case 5:
           {
             ScreenInfo.showAlarmedOnly = 0;
-            ScreenInfo.snsListLastTime=0;
+            ScreenInfo.lastDrawList=0;
+            ScreenInfo.snsLastDisplayed=0;
+            ScreenInfo.lastFlagTally=0;     
+
             ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
@@ -923,8 +940,9 @@ void drawScreen()
         byte buttonNum = getButton(ScreenInfo.touch_x, ScreenInfo.touch_y,ScreenInfo.ScreenNum);
         //buttons on setting screen are: 
         /*
-          main
+          
           list
+          main
           select
           reset
           ++
@@ -937,20 +955,26 @@ void drawScreen()
           }
           case 1:
           {
-            ScreenInfo.ScreenNum=0; //force a screen redraw at main
-            ScreenInfo.ForceRedraw=1;
+            ScreenInfo.ScreenNum = 1; // go to list screen
+            ScreenInfo.lastDrawList=0;
+            ScreenInfo.snsLastDisplayed=0;
+            ScreenInfo.lastFlagTally=0;     
+            ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
           case 2:
           {
-            ScreenInfo.ScreenNum = 1; //on main screen, this means go to list screen
-            ScreenInfo.ForceRedraw=1; //force a screen redraw
-            ScreenInfo.snsListLastTime=0; //reset the list
+            ScreenInfo.ScreenNum = 0; 
+            ScreenInfo.lastDrawHeader=0; //redraw header
+            ScreenInfo.lastDrawClock=0; //redraw clock
+            ScreenInfo.lastDrawCurrentCondition=0; //redraw current condition
+            ScreenInfo.lastDrawWeather=0;
+            ScreenInfo.ForceRedraw=1; //force a screen redraw at main
             break;
           }
           case 3:
           {
-            ScreenInfo.settingsLine=(ScreenInfo.settingsLine+1)%10; //up to 10 lines are selectable
+            ScreenInfo.settingsSelectableIndex=(ScreenInfo.settingsSelectableIndex+1)%10; //up to 10 lines are selectable
             ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
@@ -965,13 +989,13 @@ void drawScreen()
           }
           case 5:
           {
-            ScreenInfo.settingsSelected=1;
+            ScreenInfo.settingsActivated=1;
             ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
           case 6:
           {
-            ScreenInfo.settingsSelected=-1;
+            ScreenInfo.settingsActivated=-1;
             ScreenInfo.ForceRedraw=1; //force a screen redraw
             break;
           }
@@ -1000,7 +1024,7 @@ void drawScreen()
 
 
 
-if ((uint32_t) ScreenInfo.ForceRedraw==0 && ScreenInfo.ScreenNum>0 && (ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60) {
+if ((uint32_t) ScreenInfo.ForceRedraw==0 && ScreenInfo.ScreenNum>0 && (ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60 && ScreenInfo.lastDrawList>0) {
   ScreenInfo.ForceRedraw=1;
   ScreenInfo.ScreenNum=0;
 }
@@ -1027,27 +1051,23 @@ switch (ScreenInfo.ScreenNum) {
   case 1:
   {
     if (ScreenInfo.ForceRedraw) {
-      #ifdef _DEBUG
-        Serial.printf("Redraw list...\n");
-      #endif
-      
+      ScreenInfo.lastDrawList=0;
+            
       fcnDrawList();     
-      #ifdef _DEBUG
-        Serial.printf("drawlist ok.\n");
-      #endif
-
+      
     }
-    else if ((ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60) ScreenInfo.ScreenNum=0;
+    else if ((ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60 && ScreenInfo.lastDrawList>0) ScreenInfo.ScreenNum=0;
 
     break;
   }
   case 2:
   {
     if (ScreenInfo.ForceRedraw)    {
-      
-        fcnDrawSettings();
+      ScreenInfo.lastDrawList=0;
+            
+      fcnDrawSettings();
     }
-    else if ((ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60) ScreenInfo.ScreenNum=0;
+    else if ((ScreenInfo.t-ScreenInfo.lastDrawList)>ScreenInfo.intervalListDraw*60 && ScreenInfo.lastDrawList>0) ScreenInfo.ScreenNum=0;
     break;
   }
 }
@@ -1133,7 +1153,7 @@ void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent) {
 
 
 void fcnDrawList() {
-    ScreenInfo.lastDrawList = ScreenInfo.t;
+  ScreenInfo.lastDrawList = ScreenInfo.t;
 
   clearTFT();
   tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
@@ -1151,41 +1171,48 @@ void fcnDrawList() {
   tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(1) + 1;
 
-
-  tft.fillRect(0,ScreenInfo.Ypos,TFT_WIDTH,2,TFT_DARKGRAY);
+int xl=0;
+  tft.fillRect(xl,ScreenInfo.Ypos,TFT_WIDTH,2,TFT_DARKGRAY);
 //            ardid time    name    min  cur   max    * for sent
+xl+=50;
 
-  tft.fillRect(45,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
-  tft.fillRect(85,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
-  tft.fillRect(166,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
-  tft.fillRect(200,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
-  tft.fillRect(236,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
-  tft.fillRect(272,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  xl+=35;
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  xl+=80;
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  xl+=34;
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  xl+=36;
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
+  xl+=36;
+  tft.fillRect(xl,ScreenInfo.Ypos,1,TFT_HEIGHT-ScreenInfo.Ypos,TFT_DARKGRAY);
   ScreenInfo.Ypos += 4;
 
   tft.setTextFont(SMALLFONT);
   tft.setTextColor(TFT_DARKGRAY,ScreenInfo.BG_COLOR);
 
+    xl=0;
     snprintf(ScreenInfo.tempbuf,60,"ID");
-    tft.drawString(ScreenInfo.tempbuf, 0, ScreenInfo.Ypos);
-
+    tft.drawString(ScreenInfo.tempbuf, xl, ScreenInfo.Ypos);
+    xl+=50;
     snprintf(ScreenInfo.tempbuf,60,"Time");
-    tft.drawString(ScreenInfo.tempbuf, 47, ScreenInfo.Ypos);
-
+    tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
+xl+=35;
     snprintf(ScreenInfo.tempbuf,60,"Name");
-    tft.drawString(ScreenInfo.tempbuf, 87, ScreenInfo.Ypos);
-
+    tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
+  xl+=80;
     snprintf(ScreenInfo.tempbuf,60,"MIN");
-    tft.drawString(ScreenInfo.tempbuf, 168, ScreenInfo.Ypos);
-
+tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
+xl+=34;
     snprintf(ScreenInfo.tempbuf,60,"Val");
-    tft.drawString(ScreenInfo.tempbuf, 204, ScreenInfo.Ypos);
-
+tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
+xl+=36;
     snprintf(ScreenInfo.tempbuf,60,"MAX");
-    tft.drawString(ScreenInfo.tempbuf, 240, ScreenInfo.Ypos);
-
+tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
+xl+=36;
     snprintf(ScreenInfo.tempbuf,60,"Status");
-    tft.drawString(ScreenInfo.tempbuf, 276, ScreenInfo.Ypos);
+tft.drawString(ScreenInfo.tempbuf, xl+2, ScreenInfo.Ypos);
 
   tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 
@@ -1193,39 +1220,8 @@ void fcnDrawList() {
 
   tft.setTextFont(SMALLFONT); //
   
-
-  //initialize ScreenInfo.snsListArray
-  if (ScreenInfo.t-ScreenInfo.snsListLastTime > 30) {
-    ScreenInfo.snsListLastTime = ScreenInfo.t;
-    ScreenInfo.snsLastDisplayed=0;
-
-    for (byte i=0;i<SENSORNUM;i++) {
-      //march through sensors and list specified number of  ArdIDs
-      //decide if this should be shown or not.
-      if (isSensorInit(i)==true) {
-        ScreenInfo.snsListArray[0][i] = bitRead(Sensors[i].Flags,0) +1; //1 if not flagged, 2 if [flagged ]
-        if (bitRead(Sensors[i].localFlags,1) && bitRead(Sensors[i].Flags,7)) ScreenInfo.snsListArray[0][i]++; //also count critical expred sensors as flagged
-      } 
-      else ScreenInfo.snsListArray[0][i] = 0;
-      ScreenInfo.snsListArray[1][i] = 255; //not in order yet
-    }
-
-    //now put them in order...
-    for (byte i=0;i<SENSORNUM;i++) {
-
-      if (ScreenInfo.snsListArray[0][i] > 0 && ScreenInfo.snsListArray[1][i] == 255) {
-        ScreenInfo.snsListArray[1][i] = ScreenInfo.snsLastDisplayed++;
-
-        //now put all related sensors next in order...
-        for (byte j=i+1;j<SENSORNUM;j++) {
-          if (ScreenInfo.snsListArray[0][j] > 0 && Sensors[j].snsType == Sensors[i].snsType && ScreenInfo.snsListArray[1][j] == 255) ScreenInfo.snsListArray[1][j] = ScreenInfo.snsLastDisplayed++;
-        }
-      }
-    }
-    ScreenInfo.snsLastDisplayed = 0;
-
-  }
-
+            
+  
 
   // display the list in order, starting from the last value displayed
     #ifdef _DEBUG
@@ -1318,71 +1314,93 @@ void drawButton(String b1, String b2,  String b3,  String b4,  String b5,  Strin
 
 void fcnDrawSettings() {
   ScreenInfo.lastDrawList = ScreenInfo.t;
-  byte isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsLine];
-  if (isSelected>15) {
-    ScreenInfo.settingsLine = 0;
-    ScreenInfo.settingsSelected=0;
-    isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsLine];
+  byte isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsSelectableIndex];
+  if (isSelected>7) {
+    ScreenInfo.settingsSelectableIndex = 0;
+    ScreenInfo.settingsActivated=0;
+    isSelected = ScreenInfo.settingsSelectable[ScreenInfo.settingsSelectableIndex];
   }
 
   //was a button pushed?
-  if (ScreenInfo.settingsSelected!=0) {    
+  if (ScreenInfo.settingsActivated!=0) {    
     switch(isSelected) {
-      case 3:
+      case 0:
       {
         ScreenInfo.lastDrawWeather=0;
         getWeather();
         break;
       }
-      case 4:
+      case 1:
       {
-        ScreenInfo.HourlyInterval += ScreenInfo.settingsSelected;        
-        if (ScreenInfo.HourlyInterval>6) ScreenInfo.HourlyInterval=6;
-        if (ScreenInfo.HourlyInterval==0) ScreenInfo.HourlyInterval=1;
-        break;
-      }
-      case 5:
-      {
-        ScreenInfo.intervalWeatherDraw += ScreenInfo.settingsSelected*5;
+        //line 1: interval for weather screen  - is selectable
+        ScreenInfo.intervalWeatherDraw += ScreenInfo.settingsActivated*5;
         if (ScreenInfo.intervalWeatherDraw>60) ScreenInfo.intervalWeatherDraw=5;
         if (ScreenInfo.intervalWeatherDraw<5) ScreenInfo.intervalWeatherDraw=60;
         break;
+
       }
-      case 8:
+      case 2:
       {
-        ScreenInfo.uploadGsheetInterval += ScreenInfo.settingsSelected*5; //increment by 5 minutes
+        //line 2: interval for hrly weather  - is selectable
+        ScreenInfo.HourlyInterval += ScreenInfo.settingsActivated;        
+        if (ScreenInfo.HourlyInterval>6) ScreenInfo.HourlyInterval=6;
+        if (ScreenInfo.HourlyInterval==0) ScreenInfo.HourlyInterval=1;
+        break;
+
+
+      }
+
+      case 3:
+      {
+        //line 3: show flags - is selectable
+        ScreenInfo.flagViewTimeSEC += ScreenInfo.settingsActivated*5;
+        if (ScreenInfo.flagViewTimeSEC>60) ScreenInfo.flagViewTimeSEC=5;
+        if (ScreenInfo.flagViewTimeSEC<5) ScreenInfo.flagViewTimeSEC=60;
+        break;
+      }
+
+      case 4:
+      {
+        //line 4: upload int - is selectable
+        ScreenInfo.uploadGsheetInterval += ScreenInfo.settingsActivated*5; //increment by 5 minutes
         if (ScreenInfo.uploadGsheetInterval<5) ScreenInfo.uploadGsheetInterval=120;
         if (ScreenInfo.uploadGsheetInterval>120) ScreenInfo.uploadGsheetInterval=5;
         break;
       }
-      case 9:
+      case 5:
       {
-            ScreenInfo.lastGsheetUploadTime=0; //force an upload
-            ScreenInfo.snsListLastTime=0;
-            ScreenInfo.snsLastDisplayed=0;
-            uploadData(true);
-            writeSensorsSD("/Data/SensorBackup.dat");
-            storeScreenInfoSD();
-            SendData(); //update server about our status
+//line 5: upload gsheet- is selectable
+        ScreenInfo.lastGsheetUploadTime=0; //force an upload
+        ScreenInfo.lastDrawList=0;
+        ScreenInfo.ForceRedraw=1;
+        ScreenInfo.snsLastDisplayed=0;
+        uploadData(true);
+        writeSensorsSD("/Data/SensorBackup.dat");
+        storeScreenInfoSD();
+        SendData(); //update server about our status
             
         break;
+
       }
-      case 13:
+
+      case 6:
       {
+//line 6: delete settings - is selectable
         deleteFiles("SensorBackup.dat","/Data");
         deleteFiles("ScreenFlags.dat","/Data");
         break;
       }
 
-      case 14:
+      case 7:
       {
+//line 7: delete SD data - is selectable
         deleteFiles("*.dat","/Data");
         break;
       }
-      
+
     }
 
-    ScreenInfo.settingsSelected=0;
+    ScreenInfo.settingsActivated=0;
   }
 
   clearTFT();
@@ -1400,117 +1418,115 @@ void fcnDrawSettings() {
   ScreenInfo.Ypos += 4;
 
   tft.setTextFont(2);
-  //can show 15 lines, but only up to 10 can be selectable  
+  //can show 15 lines, but only up to 10 can be selectable  - see button settings in drawscreen. ScreenInfo.settingsActivated has the current selection
   
-
-  if (isSelected==0) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  byte i=0;
+//line 0: last weather [update] - is selectable
+  if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"isExpired: %s\n", (ScreenInfo.isExpired!=0)?"Y":"N");
-  tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
-
-
-  if (isSelected==1) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"isFlagged: %s\n",(ScreenInfo.isFlagged!=0)?"Y":"N");
-  tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
-
-  if (isSelected==2) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"localTemp: %d at %s\n",ScreenInfo.localTemp, dateify(ScreenInfo.localTempTime, "mm/dd hh:nn"));
+  snprintf(ScreenInfo.tempbuf,70,"last weather: %s [update now]\n",dateify(ScreenInfo.lastDrawWeather,"mm/dd hh:nn"));
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  if (isSelected==3) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+//line 1: interval for weather screen  - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"last weather: %s\n",dateify(ScreenInfo.lastDrawWeather,"mm/dd hh:nn"));
+  snprintf(ScreenInfo.tempbuf,70,"Weather check every %u minutes\n", ScreenInfo.intervalWeatherDraw);
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-    if (isSelected==4) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+//line 2: interval for hrly weather  - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Weather interval (hrs): %u\n",ScreenInfo.HourlyInterval);
+  snprintf(ScreenInfo.tempbuf,70,"Display wthr with a %u hr gap\n",ScreenInfo.HourlyInterval);
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  if (isSelected==5) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+//line 3: show flags - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Weather redraw (min): %u\n", ScreenInfo.intervalWeatherDraw);
+  snprintf(ScreenInfo.tempbuf,70,"Display flag data for %u sec\n",ScreenInfo.flagViewTimeSEC);
+tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
+  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
+
+//line 4: upload int - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(ScreenInfo.tempbuf,70,"Gsheet Upload every %u min\n",ScreenInfo.uploadGsheetInterval);
+tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
+  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
+
+//line 5: upload gsheet- is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(ScreenInfo.tempbuf,70,"last Gsheet was %s at %s [upload now]\n",(ScreenInfo.lastGsheetUploadSuccess==true)?"OK":"LOST",dateify(ScreenInfo.lastGsheetUploadTime,"mm/dd hh:nn"));
   tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-
-  if (isSelected==6) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+//line 6: delete settings - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Free/Lowest Heap: %u, %u\n",(uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000,(uint32_t) ESP.getMinFreeHeap()/1000);
+  snprintf(ScreenInfo.tempbuf,70,"Delete Settings Data\n");
+tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
+  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
+
+//line 7: delete SD data - is selectable
+    if (isSelected==i++) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(ScreenInfo.tempbuf,70,"DELETE Saved Sensor and Settings Data\n");
+tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
+  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
+
+//line not selectable
+    if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
+  snprintf(ScreenInfo.tempbuf,70,"Free/Lowest Heap: %u/%u\n",(uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT)/1000,(uint32_t) ESP.getMinFreeHeap()/1000);
   tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  
-  if (isSelected==7) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+//line not selectable
+    if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
   snprintf(ScreenInfo.tempbuf,70,"Alive since %s\n",dateify(ScreenInfo.ALIVESINCE));
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  if (isSelected==8) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Upload interval (minutes): %u\n",ScreenInfo.uploadGsheetInterval);
-tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
-
-  if (isSelected==9) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"last Upload: %s %s\n",dateify(ScreenInfo.lastGsheetUploadTime,"mm/dd/yy hh:nn"), (ScreenInfo.lastGsheetUploadSuccess==true)?"Good":"Failed");
-tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
-
-  if (isSelected==10) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+//line not selectable
+    if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
 tft.setTextFont(2);
-  snprintf(ScreenInfo.tempbuf,70,"Gsheet Name: %s\n",GsheetName.c_str());
+  snprintf(ScreenInfo.tempbuf,70,"Current Gsheet: %s\n",GsheetName.c_str());
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  if (isSelected==11) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+//line not selectable
+    if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
   snprintf(ScreenInfo.tempbuf,70,"Last error (at %s): \n", dateify(ScreenInfo.lastErrorTime,"mm/dd hh:nn:ss"));
   tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
-  if (isSelected==12) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
+//line not selectable
+    if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
   snprintf(ScreenInfo.tempbuf,70,"%s\n",lastError.c_str());
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
 
-  if (isSelected==13) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Delete Settings Data\n");
-tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
-
-  if (isSelected==14) tft.setTextColor(TFT_RED,TFT_SKYBLUE);
-  else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"Flush SD Data\n");
-tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
-  ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 
 
         //buttons on setting screen are: 
         /*
-          main
           list
+          main
           select
           reset
           ++
           --
         */
-  drawButton((String) "Main",(String) "List",(String) "Select",(String) "Reset",(String) "++",(String) "--");
-  ScreenInfo.lastDrawList = ScreenInfo.t;
-
+  drawButton((String) "List",(String) "Main",(String) "Select",(String) "Reset",(String) "++",(String) "--");
+  
 }
 
 
@@ -1562,9 +1578,9 @@ int fcn_write_sensor_data(byte i, int y) {
       tft.drawString(ScreenInfo.tempbuf, 0, y);
       
       dateify(Sensors[i].timeLogged,"hh:nn");
-      tft.drawString(DATESTRING, 47, ScreenInfo.Ypos);
+      tft.drawString(DATESTRING, 52, ScreenInfo.Ypos);
 
-      snprintf(ScreenInfo.tempbuf,60,"%s", Sensors[i].snsName);
+      snprintf(ScreenInfo.tempbuf,59,"%s", Sensors[i].snsName);
       tft.drawString(ScreenInfo.tempbuf, 87, ScreenInfo.Ypos);
  
       snprintf(ScreenInfo.tempbuf,60,"%d",(int) Sensors[i].snsValue_MIN);

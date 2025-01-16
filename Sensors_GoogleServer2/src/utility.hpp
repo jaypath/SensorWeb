@@ -21,7 +21,6 @@ void pushDoubleArray(double arr[], byte N, double value);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 char* strPad(char* str, char* pad, byte L);
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels);
 bool stringToLong(String s, uint32_t* val);
 int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token);

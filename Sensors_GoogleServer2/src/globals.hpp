@@ -197,38 +197,39 @@ struct ScreenFlags {
     uint16_t CURRENT_hPA; 
     uint16_t LAST_hPA;
     
+    
     uint8_t intervalCurrentCondition=2; //minutes for current condition
     uint8_t intervalWeatherDraw = 5; //MINUTES between weather redraws    
     uint8_t intervalClockDraw = 1; //MINUTES between  redraws    
-    uint8_t intervalListDraw = 1; //MINUTES between  redraws    
-    uint8_t intervalFlagTallySEC = 60; //SECONDS between  redraws    
-    
     int8_t lastTempDisplayed=-120;
     uint32_t lastDrawCurrentCondition=0; //last time current condition was updated
     uint32_t lastDrawHeader=0; //last time  redraw
     uint32_t lastDrawClock=0; //last time  redraw
     uint32_t lastDrawWeather=0; //last time  redraw
-    uint32_t lastDrawList=0; //SECONDS (then  goes to main)
+    uint8_t alarmIndex; //last sensor displayed on alarm screen
+    uint8_t ClockFlagScreen=0;
+    uint8_t flagViewTimeSEC=30; //seconds to show flags
+    uint8_t HourlyInterval = 2; //hours between daily weather display
+
+    uint8_t intervalFlagTallySEC = 60; //SECONDS between  tally
     uint32_t lastFlagTally=0; 
     uint32_t lastFlagView=0; //last time flags were shown
-    uint8_t flagViewTime=0; //seconds to show flags
-    uint8_t alarmIndex; //last sensor displayed on alarm screen
-
-    uint8_t ForceRedraw=0; //redraw the screen now to screennum, regardless of timing
     
-    uint8_t ClockFlagScreen=0;
+    uint8_t ForceRedraw=0; //redraw the screen now to screennum, regardless of timing
     uint8_t ScreenNum=0; //screens: main with clock and weather --> list with buttons on bottom (scrolls N pages to get all of them) --> main
-    uint8_t settingsLine=0; //index to  line  selected on subscreens
-    uint8_t settingsSelectable[10] = {3,4,5,8,9,13,14,99,99,99};
-    int8_t settingsSelected=0;
+    
+
+    uint8_t intervalListDraw = 1; //MINUTES between  redraws    
+    uint32_t lastDrawList=0; //SECONDS (then  goes to main)
+    uint8_t settingsSelectableIndex=0; //index to  line  selected on subscreens //which element of settingsSelectable is currently slected
+    uint8_t settingsSelectable[10] = {0,1,2,3,4,5,6,7,99,99};
+    int8_t settingsActivated=0; //was a settings line activated? will be either + or - depending on increment or decrement
     uint8_t snsLastDisplayed=0; //index to the last sensor displayed 
-    uint32_t snsListLastTime=0;
     uint8_t snsListArray[2][SENSORNUM]; //index to the last sensor displayed 
-
-
     uint8_t showAlarmedOnly = 0; //in list mode, show only alarmed sns?
 
-    uint8_t HourlyInterval = 2; //hours between daily weather display
+
+
     long DSTOFFSET;
 
     uint8_t isExpired; //#expired
@@ -273,8 +274,8 @@ const     uint8_t temp_colors[104] = {
     29, 250, 200, 200, //28 - 29
     32, 255, 255, 255, //30 - 32
     34, 150, 150, 255, //33 - 34
-    37, 50, 50, 200, //35 - 37
-    39, 50, 100, 200, //38 - 39
+    37, 100, 100, 200, //35 - 37
+    39, 100, 150, 250, //38 - 39
     42, 0, 125, 210, //40 - 42
     44, 0, 150, 150, //43 - 44
     47, 0, 200, 150, //45 - 47
