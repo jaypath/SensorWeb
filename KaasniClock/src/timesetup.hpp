@@ -22,6 +22,8 @@ bool updateTime(byte retries=10,uint16_t waittime=250);
 bool checkTime(void);
 String fcnDOW(time_t t, bool caps=false);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
+String fcnMMM(time_t t, bool abb);
+
 time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) ;
 time_t convertStrTime(String str);
 #endif

@@ -41,13 +41,11 @@ struct Screen {
     uint32_t time_lastPic;
     uint32_t time_lastClock;
     uint32_t time_lastWeather;
-    uint32_t int_Pic_MIN;//miin
-    uint32_t int_Clock_SEC; //SEC
-    uint32_t int_Weather_MIN; //min
+    uint8_t int_Weather_MIN; //min
 
 
     int8_t wthr_currentTemp;
-    int8_t wthr_currentWeatherID;
+    uint16_t wthr_currentWeatherID;
     int8_t wthr_DailyHigh;
     int8_t wthr_DailyLow;
     int16_t wthr_DailyWeatherID;
@@ -57,7 +55,12 @@ struct Screen {
     uint32_t ALIVESINCE;
 };
 
-extern struct Screen I;
+extern struct Screen myScreen;
+
+
+String breakString(String *inputstr,String token);
+
+
 
 //automatically detect arduino type
 #if defined (ARDUINO_ARCH_ESP8266)

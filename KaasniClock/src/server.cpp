@@ -21,9 +21,8 @@
 
 
 
-
 bool getWeather() {
-  if (I.time_lastWeather>0 && I.t-I.time_lastWeather < I.int_Weather_MIN*60 ) return false; //not time to update
+  if (myScreen.time_lastWeather>0 && myScreen.t-myScreen.time_lastWeather < myScreen.int_Weather_MIN*60 ) return false; //not time to update
 
   WiFiClient wfclient;
   HTTPClient http;
@@ -44,30 +43,30 @@ bool getWeather() {
 
     if (!(httpCode >= 200 && httpCode < 300)) return false;
     
-    I.wthr_currentTemp = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_currentTemp = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     
-    I.wthr_currentWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_currentWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
-    I.wthr_DailyWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_DailyWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     
-    I.wthr_DailyHigh = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_DailyHigh = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     
-    I.wthr_DailyLow = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_DailyLow = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     
-    I.wthr_DailyPoP = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_DailyPoP = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
     
-    I.wthr_sunrise = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_sunrise = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
-    I.wthr_sunset = payload.substring(0, payload.indexOf(";",0)).toInt(); 
+    myScreen.wthr_sunset = payload.substring(0, payload.indexOf(";",0)).toInt(); 
     
-    I.time_lastWeather = I.t;
+    myScreen.time_lastWeather = myScreen.t;
     return true;
   }
 return false;

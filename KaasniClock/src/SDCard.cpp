@@ -37,9 +37,10 @@ String getNthFileName(String dirName, uint8_t filenum) {
     }
     if (!entry.isDirectory()) { // Count only files, not subdirectories
         if (count==filenum) {
+            String st = entry.name();
             entry.close();
             dir.close();
-            return entry.name();
+            return st;
         }
       count++;
     }

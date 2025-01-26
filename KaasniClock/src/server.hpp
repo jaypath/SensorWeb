@@ -28,7 +28,7 @@
 #endif
 
 //declared as global constants
-extern Screen I;
+extern Screen myScreen;
 
 
 

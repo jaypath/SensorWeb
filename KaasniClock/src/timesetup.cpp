@@ -4,7 +4,6 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include "server.hpp"
-#include "utilities.hpp"
 
 
 #define TIMEUPDATEINT 10800000
@@ -15,6 +14,7 @@ long DSTOFFSET = 0;
 
 char DATESTRING[25]="";
 
+extern  Screen myScreen;
 
 time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
 {
@@ -185,6 +185,40 @@ void checkDST(void) {
     Serial.printf("checkDST: Ending time is: %s\n\n",dateify(n,"mm/dd/yyyy hh:mm:ss"));
   #endif
 }
+
+
+String fcnMMM(time_t t, bool abb) {
+  if (abb) {
+    if (month(t) == 1) return "Jan";
+    if (month(t) == 2) return "Feb";
+    if (month(t) == 3) return "Mar";
+    if (month(t) == 4) return "Apr";
+    if (month(t) == 5) return "May";
+    if (month(t) == 6) return "Jun";
+    if (month(t) == 7) return "Jul";
+    if (month(t) == 8) return "Aug";
+    if (month(t) == 9) return "Sep";
+    if (month(t) == 10) return "Oct";
+    if (month(t) == 11) return "Nov";
+    if (month(t) == 12) return "Dec";
+
+  } else {
+    if (month(t) == 1) return "January";
+    if (month(t) == 2) return "February";
+    if (month(t) == 3) return "March";
+    if (month(t) == 4) return "April";
+    if (month(t) == 5) return "May";
+    if (month(t) == 6) return "June";
+    if (month(t) == 7) return "July";
+    if (month(t) == 8) return "August";
+    if (month(t) == 9) return "September";
+    if (month(t) == 10) return "October";
+    if (month(t) == 11) return "November";
+    if (month(t) == 12) return "December";
+  }
+    return "???";
+}
+
 
 
 String fcnDOW(time_t t, bool caps) {

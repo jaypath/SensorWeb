@@ -2,7 +2,9 @@
 #define GRAPHICS_HPP
 
 
-#include "GLOBALS.hpp"
+#include "Globals.hpp"
+#include "SDCard.hpp"
+#include "timesetup.hpp"
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -128,7 +130,6 @@ public:
 
 
 static LGFX tft;
-
 
 
 #endif
