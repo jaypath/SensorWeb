@@ -45,6 +45,12 @@ uint8_t HVACSNSNUM = 0;
 
 SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
+#ifdef _USETFLUNA
+TFLunaType LocalTF;
+uint8_t tfAddr = _USETFLUNA;
+TFLI2C tflI2C;
+#endif
+
 #ifdef _WEBCHART
   SensorChart SensorCharts[_WEBCHART];
 #endif
@@ -1080,9 +1086,9 @@ bool ReadData(struct SensorVal *P) {
           P->snsValue = (duration / USONIC_DIV); 
         #endif
         #ifdef _USETFLUNA
-          int16_t tempval
+          int16_t tempval;
           tflI2C.getData(tempval, tfAddr);
-          if (temporary_dist <= 0)           P->snsValue = -1000;
+          if (tempval <= 0)           P->snsValue = -1000;
           else           P->snsValue = tempval; //in cm
 
 

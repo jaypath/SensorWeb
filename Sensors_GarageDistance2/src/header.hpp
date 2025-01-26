@@ -19,10 +19,10 @@ const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a 
 #define ESP_PASS "snakesquirrel" // Your network password here
 
 
-#define ARDNAME "Heat" //unique name
-#define SENSORNUM 8 //be sure this matches SENSORTYPES //max is 8
+#define ARDNAME "Garage" //unique name
+#define SENSORNUM 4 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {50,51,55,55,55,55,55,55}; //max is 8
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,7,9}; //max is 8
 
 const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
@@ -31,10 +31,10 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 
 //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
-//#define _USEDHT 1 //specify DHT pin
+//#define _USEDHT D6 //specify DHT pin
 //#define _USEAHT 1
-//#define _USEAHTADA 0x38 //required for aht with bmp combined
-//#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
+#define _USEAHTADA 0x38 //required for aht with bmp combined
+#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
 //#define _USEBME 1
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
@@ -42,7 +42,7 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 //#define _USESOILRES D5 //pin used for power... for esp32 use any adc1 such as 33 //for esp8266 D5 ////this is the pin that turns on to test soil... not to be confused with soilpin, the Analog in pin
 //#define _USEBARPRED 1
 //#define _USEHCSR04 1 //distance
-//#define _USETFLUNA 1 // distance
+#define _USETFLUNA 0x10 // distance, this is the i2c address
 //#define _USESSD1306  1
 //#define _USELIBATTERY  A0 //set to the pin that is analogin
 //#define _USESLABATTERY  A0 //set to the pin that is analogin
@@ -251,7 +251,7 @@ D8 is GPIO15 and is pulled to GND. Can be used as CS, but will not boot if pulle
 
 #ifdef _USEDHT
 
-  #define DHTTYPE    DHT11     // DHT11 or DHT22
+  #define DHTTYPE    DHT22     // DHT11 or DHT22
   
 #endif
 
