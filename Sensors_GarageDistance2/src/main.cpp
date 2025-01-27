@@ -14,7 +14,6 @@
 #include <MD_Parola.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
-#define INVERT //if defined, do inversion when in stop zone
 
 //Defining variables for the LED display:
 //FOR HARDWARE TYPE, only uncomment the only that fits your hardware type
@@ -25,8 +24,8 @@
 #define CLK_PIN     18
 #define DATA_PIN    23
 
-MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
-//MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
+//MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
+MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
 
 
 extern TFLunaType LocalTF;
@@ -133,28 +132,6 @@ if (drawnow) {
 
   
 
-#ifdef _USE8266
-  #include "LittleFS.h"
-
-  #define FileSys LittleFS
-
-#endif
-#ifdef _USE32
-  #include "SPIFFS.h" 
-  #include "FS.h"
-  #define FILESYS SPIFFS
-  #define FORMAT_FS_IF_FAILED false
-#endif
-
-
-#define FileSys LittleFS
-#define BG_COLOR 0xD69A
-
-
-//wellesley, MA
-#define LAT 42.307614
-#define LON -71.299288
-
 //gen global types
 
 
@@ -228,6 +205,12 @@ void setup()
 
   WIFI_INFO.status=0;
   WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi automatically, or to assigned IP if desired.
+
+  #ifdef _DEBUG
+    Serial.println("Wifi instantiating in background");
+  #endif
+
+
   connectWiFi(); //this is done async if 32, so can continue processing
 
 
@@ -239,7 +222,7 @@ void setup()
  
   //LCOAL CODE
   screen.begin();
-  screen.setIntensity(1);
+  screen.setIntensity(7);
   screen.displayClear();
   screen.setTextAlignment(PA_CENTER);
   screen.setInvert(false);
@@ -256,8 +239,6 @@ void setup()
 #ifdef _DEBUG
     Serial.println("servers set");
   #endif
-
-
 
   
 
@@ -345,18 +326,27 @@ void setup()
   oled.print("WiFi Starting.");
 #endif
 
-  #ifdef _USE32
-  //by now wifi should have connected, but wait for it if not
-  if (WIFI_INFO.status==0)  do {
-    #ifdef _USESSD1306
-    oled.print(".");
-    #endif
-    #ifdef _DEBUG
-    Serial.print(".");
-    #endif
-    delay(200);
 
-  } while (WIFI_INFO.status==0);
+  #ifdef _DEBUG
+  Serial.print("Is WiFi connected");
+  #endif
+
+//by now wifi should have connected, but wait for it if not
+if (WiFi.status() != WL_CONNECTED)  do {
+  #ifdef _USESSD1306
+  oled.print(".");
+  #endif
+  #ifdef _DEBUG
+  Serial.print(".");
+  #endif
+  delay(200);
+
+} while (WiFi.status() != WL_CONNECTED);
+WIFI_INFO.status=1;
+
+  #ifdef _DEBUG
+  Serial.print(" YES, address: ");
+  Serial.println(WiFi.localIP().toString().c_str());
   #endif
 
 
@@ -550,7 +540,7 @@ OldTime[3] = day();
     retry = 0;
 
     byte trybmp = _USEBMP;
-    while (bmp.begin(trybmp) != true && retry<20) {
+    while (bmp.begin() != true && retry<20) {
       #ifdef _DEBUG
       Serial.printf( "BMP fail at 0x%d.\nRetry number %d\n" , trybmp, retry ); //(F()) save string to flash & keeps dynamic memory free
       #endif

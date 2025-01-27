@@ -8,13 +8,13 @@
 
 //#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
-//#define _WEBCHART 2
+#define _WEBCHART 2
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
-  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {60,61}; //which sensors should be stored for charting?
+  const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,9}; //which sensors should be stored for charting?
 #endif
 
-const byte ASSIGNEDIP[4] = {192,168,68,105}; //assign here if this sensor has a dedicated IP.
+const byte ASSIGNEDIP[4] = {0,168,68,95}; //assign here if this sensor has a dedicated IP.
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
 
