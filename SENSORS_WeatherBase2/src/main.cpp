@@ -67,7 +67,15 @@
 #include "ArduinoJson.h"
 #include <SD.h>
 #include "ArduinoOTA.h"
+#include <esp_task_wdt.h> //watchdog timer libary
+#define WDT_TIMEOUT_MS 120000
 
+//most recent version of ESP IDE uses this config template... but older versions do not
+//  esp_task_wdt_config_t WDT_CONFIG = {
+//         .timeout_ms = WDT_TIMEOUT_MS,
+//         .idle_core_mask = (1 << 2) - 1,    // Bitmask of all cores
+//         .trigger_panic = true,
+//     }; 
 
 //#include "free_fonts.h"
 //#define BG_COLOR 0xD69A
@@ -111,7 +119,6 @@ extern uint8_t SECSCREEN;
 extern WiFi_type WIFI_INFO;
 extern Screen I;
 extern String WEBHTML;
-extern time_t ALIVESINCE;
 //extern uint8_t OldTime[4];
 extern WeatherInfo WeatherData;
 extern SensorVal Sensors[SENSORNUM];
@@ -151,6 +158,13 @@ uint16_t temp2color(int temp, bool invertgray = false);
 
 void setup()
 {
+
+  //watchdog reset
+  esp_task_wdt_deinit(); //wdt is enabled by default, so we need to deinit it first
+  //esp_task_wdt_init(&WDT_CONFIG); //setup watchdog 
+  esp_task_wdt_init(WDT_TIMEOUT_MS,true);
+  esp_task_wdt_add(NULL);                            //add the current thread
+  
   WEBHTML.reserve(7000); 
   #ifdef _DEBUG
     Serial.begin(115200);
@@ -188,20 +202,22 @@ tft.init();
 
   if(!SD.begin(41)){  //CS=41
     tft.setTextColor(TFT_RED);
-    tft.println("SD Mount Failed");
-    tft.setTextColor(FG_COLOR);
+    tft.println("FAIL - Reboot in 10s");
     #ifdef _DEBUG
       Serial.println("SD mount failed... ");
     #endif
-
+    delay(10000);
+    ESP.restart();
   } 
   else {
     #ifdef _DEBUG
       Serial.println("SD mounted... ");
     #endif
-
+    tft.setTextColor(TFT_GREEN);
     tft.println("OK.\n");
-     tft.print("Loading historical data from SD... ");
+    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+
+     tft.print("Loading data from SD... ");
      bool sdread = readSensorsSD();
      if (sdread) {
       tft.setTextColor(TFT_GREEN);
@@ -209,8 +225,9 @@ tft.init();
       tft.setTextColor(FG_COLOR);
      } else {
       tft.setTextColor(TFT_RED);
-      tft.println("FAIL\n");
-      tft.setTextColor(FG_COLOR);
+      tft.println("FAIL - Reboot in 10s");
+      delay(10000);
+      ESP.restart();
      }
 
     #ifdef _DEBUG
@@ -247,14 +264,12 @@ tft.init();
   tft.println("Connecting  Wifi...\n");
   if (WiFi.status() != WL_CONNECTED)
   {
-    tft.print("Wifi failed after ");
-    tft.print(retries);
-    tft.println(" attempts. Halting.\n");
-    while(true);
+    tft.printf("Wifi FAILED %d attempts - reboot in 10s",retries);    
+    delay(10000);
+    ESP.restart();
   } else {
-    tft.printf("Wifi connected after %u attempts.\nWifi IP is ... ",retries );
     tft.setTextColor(TFT_GREEN);    
-    tft.printf("%s\n", WiFi.localIP().toString().c_str());  
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\n",retries,WiFi.localIP().toString().c_str());
     tft.setTextColor(FG_COLOR);
   }
 
@@ -312,11 +327,11 @@ tft.print("Connecting ArduinoOTA... ");
   ArduinoOTA.begin();
 
     tft.setTextColor(TFT_GREEN);
-    tft.printf(" OTA OK.\n");
+    tft.printf("OK.\n");
     tft.setTextColor(FG_COLOR);
 
     #ifdef _DEBUG
-      Serial.println("connected!");
+      Serial.println("OTA connected!");
     #endif
   
 
@@ -337,42 +352,43 @@ tft.print("Connecting ArduinoOTA... ");
     #ifdef _DEBUG
       Serial.print("Starting server... ");
     #endif
-    tft.printf("Starting server...");
+    tft.printf("Starting server... ");
 
     server.begin();
     tft.setTextColor(TFT_GREEN);
-    tft.printf(" SERVER OK.\n");
+    tft.printf(" OK.\n");
     tft.setTextColor(FG_COLOR);
 
     #ifdef _DEBUG
-      Serial.println("connected!");
+      Serial.println("Server connected!");
     #endif
 
-    tft.print("Set up TimeClient... ");
+    tft.print("Set up time... ");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
     timeClient.begin(); //time is in UTC
-    updateTime(100,250); //check if DST and set time to EST or EDT
-    
-    tft.setTextColor(TFT_GREEN);
-    tft.printf(" TimeClient OK.\n");
-    tft.setTextColor(FG_COLOR);
+    if (updateTime(100,250)) { //check if DST and set time to EST or EDT    
+      tft.setTextColor(TFT_GREEN);
+      tft.printf("OK.\n");
+      tft.setTextColor(FG_COLOR);
+    } else {
+      tft.setTextColor(TFT_RED);
+      tft.printf("FAIL.\n");
+      tft.setTextColor(FG_COLOR);
+    }
 
-    tft.print("Starting... ");
-
-
-    ALIVESINCE = now();
+    I.currentTime = now();
+    I.ALIVESINCE = I.currentTime;
 
     #ifdef _DEBUG    
-      Serial.println("Done");
+      Serial.println("Setup done");
       delay(3000);
     #endif
     tft.setTextColor(TFT_GREEN);
-    tft.printf(" Done with setup.\n");
+    tft.printf("Setup Done.\n");
     tft.setTextColor(FG_COLOR);
 
-    tft.println("Check weather, then start.");
-    
+
 }
 
 //weather FCNs
@@ -680,11 +696,10 @@ I.isHeat=0;
 I.isAC=0;
 I.isFan=0;
 
-time_t t = now();
 
   for (byte j=0;j<SENSORNUM;j++) {
     if (Sensors[j].snsType == 55) { //heat
-      if ( (Sensors[j].Flags&1) == 1 && (double) t-Sensors[j].timeLogged < 1800 ) bitWrite(I.isHeat,Sensors[j].snsID,1); //Sensors[j].Flags&1 == 1 means that 0th bit is 1, ie flagged. note that 0th bit is that any heater is on or off!. If a reading is >30 minutes it is too old to be believed
+      if ( (Sensors[j].Flags&1) == 1 && (double) I.currentTime-Sensors[j].timeLogged < 1800 ) bitWrite(I.isHeat,Sensors[j].snsID,1); //Sensors[j].Flags&1 == 1 means that 0th bit is 1, ie flagged. note that 0th bit is that any heater is on or off!. If a reading is >30 minutes it is too old to be believed
       else bitWrite(I.isHeat,Sensors[j].snsID,0);
     } else {
       if (Sensors[j].snsType == 56 && (Sensors[j].Flags&1)==1) { //ac comp        
@@ -1255,7 +1270,7 @@ void fcnDrawClock(time_t t) {
 
 void fncDrawCurrentCondition(time_t t) {
   if (I.localWeather==255)     I.localWeather=find_sensor_name("Outside", 4);  
-  if (I.localWeather<255 && (int8_t) Sensors[I.localWeather].snsValue!=I.currentTemp && t-Sensors[I.localWeather].timeLogged<180) {
+  if (I.localWeather<255 && (int8_t) Sensors[I.localWeather].snsValue!=I.currentTemp && I.currentTime-Sensors[I.localWeather].timeLogged<180) {
     I.currentTemp=(int8_t) Sensors[I.localWeather].snsValue;
   } else {
       if (t<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
@@ -1274,7 +1289,7 @@ void fncDrawCurrentCondition(time_t t) {
   I.currentTemp = WeatherData.getTemperature(t);
   
   if (I.localWeather<255) {
-    if (t-Sensors[I.localWeather].timeLogged>60*30) {
+    if (I.currentTime-Sensors[I.localWeather].timeLogged>60*30) {
       I.localWeather = 255; //localweather is only useful if <30 minutes old 
     } 
     else {
@@ -1424,8 +1439,8 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
     
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
-    iconID = WeatherData.getWeatherID(t+i*I.HourlyInterval*60*60);
-    if (t+i*I.HourlyInterval*3600 > WeatherData.sunrise  && t+i*I.HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
+    iconID = WeatherData.getWeatherID(I.currentTime+i*I.HourlyInterval*60*60);
+    if (I.currentTime+i*I.HourlyInterval*3600 > WeatherData.sunrise  && I.currentTime+i*I.HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
     else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
     
     drawBmp(tempbuf,X,Y);
@@ -1436,7 +1451,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
 
     FNTSZ=1;
     deltaY = setFont(FNTSZ);
-    snprintf(tempbuf,6,"%s:00",dateify(t+i*I.HourlyInterval*60*60,"hh"));
+    snprintf(tempbuf,6,"%s:00",dateify(I.currentTime+i*I.HourlyInterval*60*60,"hh"));
     tft.setTextFont(FNTSZ); //small font
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
 
@@ -1468,7 +1483,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
     X = (i-1)*(tft.width()/5) + ((tft.width()/5))/2; 
     FNTSZ=2;
     deltaY = setFont(FNTSZ);
-    snprintf(tempbuf,31,"%s",dateify(now()+i*60*60*24,"DOW"));
+    snprintf(tempbuf,31,"%s",dateify(I.currentTime+i*60*60*24,"DOW"));
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
     
     Z+=deltaY;
@@ -1497,14 +1512,15 @@ uint32_t WTHRFAIL = 0;
 
 
 void loop() {
+  esp_task_wdt_reset(); //reset the watchdog!
 
-  time_t t = now(); // store the current time in time variable t
+  I.currentTime = now(); // store the current time in time variable t
      #ifdef _DEBUG
        if (I.flagViewTime==0) {
-        Serial.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        Serial.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         tft.clear();
         tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         while(true);
        }
      #endif
@@ -1513,20 +1529,20 @@ void loop() {
   ArduinoOTA.handle();
   #ifdef _DEBUG
        if (I.flagViewTime==0) {
-       Serial.printf("Loop OTA.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       Serial.printf("Loop OTA.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         tft.clear();
         tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
        while(true);
        }
      #endif
   server.handleClient();
       #ifdef _DEBUG
        if (I.flagViewTime==0) {
-       Serial.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       Serial.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         tft.clear();
         tft.setCursor(0,0);
-       tft.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       tft.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
        while(true);
        }
      #endif
@@ -1536,12 +1552,22 @@ void loop() {
   if (OldTime[1] != minute()) {
     WeatherData.updateWeather(3600);
 
+    if (WeatherData.lastUpdateAttempt>WeatherData.lastUpdateT+300 && I.currentTime-I.ALIVESINCE > 300) { //weather has not updated for 300 seconds!
+      tft.clear();
+      tft.setCursor(0,0);
+      tft.setTextColor(TFT_RED);
+      setFont(2);
+      tft.printf("Weather failed \nfor 5 minutes.\nRebooting 1 minute...");
+      delay(60000);
+      ESP.restart();
+    }
+
     #ifdef _DEBUG
        if (I.flagViewTime==0) {
-       Serial.printf("Loop update weather: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       Serial.printf("Loop update weather: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         tft.clear();
         tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
        while(true);
        }
      #endif
@@ -1555,20 +1581,20 @@ void loop() {
     I.isLeak = 0;
     I.isExpired = 0;    
 
-    I.isFlagged =countFlagged(-1,B00000111,B00000011,0); //-1 means flag for all common sensors. Note that it is possible for count to be zero for expired sensors in some cases (when morerecentthan is >0)
+    I.isFlagged =countFlagged(-1,0b00000111,0b00000011,0); //-1 means flag for all common sensors. Note that it is possible for count to be zero for expired sensors in some cases (when morerecentthan is >0)
     
     checkHeat(); //this updates I.isheat and I.isac
 
-     I.isSoilDry =countFlagged(3,B00000111,B00000011,(t>3600)?t-3600:0);
+     I.isSoilDry =countFlagged(3,0b00000111,0b00000011,(I.currentTime>3600)?I.currentTime-3600:0);
 
-    I.isHot =countFlagged(-2,B00100111,B00100011,(t>3600)?t-3600:0);
+    I.isHot =countFlagged(-2,0b00100111,0b00100011,(I.currentTime>3600)?I.currentTime-3600:0);
 
-    I.isCold =countFlagged(-2,B00100111,B00000011,(t>3600)?t-3600:0);
+    I.isCold =countFlagged(-2,0b00100111,0b00000011,(I.currentTime>3600)?I.currentTime-3600:0);
 
-    I.isLeak = countFlagged(70,B00000001,B00000001,(t>3600)?t-3600:0);
+    I.isLeak = countFlagged(70,0b00000001,0b00000001,(I.currentTime>3600)?I.currentTime-3600:0);
 
 
-    I.isExpired = checkExpiration(-1,t,true); //this counts critical  expired sensors
+    I.isExpired = checkExpiration(-1,I.currentTime,true); //this counts critical  expired sensors
     I.isFlagged+=I.isExpired; //add expired count, because expired sensors don't otherwiseget included
     
     
@@ -1582,7 +1608,7 @@ void loop() {
 
     
     //expire any measurements that are too old, and delete noncritical ones
-    checkExpiration(-1,t,false);
+    checkExpiration(-1,I.currentTime,false);
 
     //overwrite  sensors to the sd card
     writeSensorsSD();
@@ -1591,7 +1617,7 @@ void loop() {
   }
 
   if (OldTime[3] != weekday()) {
-    //if ((uint32_t) t-ALIVESINCE > 604800) ESP.restart(); //reset every week
+    //if ((uint32_t) I.currentTime-I.ALIVESINCE > 604800) ESP.restart(); //reset every week
     
     OldTime[3] = weekday();
   }
@@ -1603,22 +1629,22 @@ void loop() {
     //do stuff every second    
 
     if (I.wifi>0) I.wifi--;
-    fcnDrawScreen(t);
+    fcnDrawScreen(I.currentTime);
         #ifdef _DEBUG
        if (I.flagViewTime==0) {
-       Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+       Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
         tft.clear();
         tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"),t-ALIVESINCE);
+        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
        while(true);
        }
      #endif
   }
 
   #ifdef _DEBUG
-    if (WeatherData.getTemperature(t+3600)<0 && TESTRUN<3600) {
+    if (WeatherData.getTemperature(I.currentTime+3600)<0 && TESTRUN<3600) {
       Serial.printf("Loop %s: Weather data just failed\n",dateify(t));
-      WTHRFAIL = t;
+      WTHRFAIL = I.currentTime;
       TESTRUN = 3600;
     }
 

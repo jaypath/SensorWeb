@@ -51,25 +51,26 @@
 
 #ifdef _USETFLUNA
   #include <TFLI2C.h> // TFLuna-I2C Library v.0.1.0
-  TFLI2C tflI2C;
-  uint8_t tfAddr = 0x10; // Default I2C address for Tfluna
+  extern TFLI2C tflI2C;
+  extern uint8_t tfAddr; // Default I2C address for Tfluna
   struct TFLunaType {
-    uint8_t MAX_NEGLIGIBLE_DIST_CHANGE = 2;
-    uint8_t BASEOFFSET=71; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
-    int8_t GOLDILOCKS_DIST = 8; //cm from BASEOFFSET that are considered to have entered the perfect distance; 3 in ~ 8 cm
-    int8_t CRITICAL_DIST = -12; //cm from BASEOFFSET at which you are too close
-    uint16_t INVERT_TIME = 500; //in ms, time to show flashing when not critical
-    uint16_t CRITICAL_INVERT_HZ = 250; //ms to show flash when in crit range
-    uint16_t SCREEN_DRAW = 250; //in ms, wait between each screen draw
-    uint32_t LAST_DIST_TIME = 0;
-    uint16_t LAST_DISTANCE=0;
-    uint32_t LASTINVERT = 0; //time of last invert
-    bool ISINVERTED = false; //is the screen inverted now?
-    uint32_t LASTDRAW = 0;
+    uint8_t MIN_DIST_CHANGE = 2; //this is how many cm must have changed to register movement
+    uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
+    uint8_t ZONE_SHORTRANGE = 61; //cm from BASEOFFSET that is considered short range (show measures in inches now)
+    uint8_t ZONE_GOLDILOCKS = 10; //cm from BASEOFFSET that are considered to have entered the perfect distance; 3 in ~ 8 cm
+    uint8_t ZONE_CRITICAL = 4; //cm from BASEOFFSET at which you are too close
+    uint32_t LAST_DRAW = 0; //last time screen ws drawn, millis()!
+    int32_t LAST_DISTANCE=0; //cm of last distance
+    bool INVERTED = false; //sjhould  the screen be inverted now?
+    uint32_t SCREENRATE = 500; //in ms
+    bool ALLOWINVERT=false; //if true, do inversions
     uint16_t CHANGETOCLOCK = 30; //in seconds, time to change to clock if dist hasn't changed
-    uint8_t CLOSERANGE = 24; //Distance, in cm, at which the display switches from ft to  INCHES (note that all internal calcs are in metric, display in imperial)
+    bool CLOCKMODE = false; //show clock until distance change
+    uint8_t TFLUNASNS=3; //sensor number of TFLUNA
+    char MSG[20] = {0}; //screen message
   };
 
+  extern TFLunaType LocalTF;
 #endif
 
 
@@ -97,6 +98,7 @@ struct SensorVal {
 };
 
 extern SensorVal Sensors[SENSORNUM];
+
 
 #ifdef _WEBCHART
   struct SensorChart {

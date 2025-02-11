@@ -32,7 +32,8 @@
 
 struct Screen {
     uint8_t wifi;
-
+    time_t ALIVESINCE;
+    time_t currentTime;
     const byte CLOCK_Y = 105;
     const byte HEADER_Y = 30;
 

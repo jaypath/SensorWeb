@@ -214,7 +214,7 @@ void handleREQUESTUPDATE() {
 void handleGETSTATUS() {
   //someone requested the server's status
   WEBHTML = "STATUS:" + (String) LAST_WEB_REQUEST + ";";
-  WEBHTML += "ALIVESINCE:" + (String) ALIVESINCE + ";";
+  WEBHTML += "ALIVESINCE:" + (String) I.ALIVESINCE + ";";
   WEBHTML += "NUMDEVS:" + (String) countDev() + ";";
   
   server.send(200, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
@@ -228,7 +228,6 @@ void handleREQUESTWEATHER() {
 //otherwise, return the index value for the requested value
 
   int8_t dailyT[2];
-  time_t t=now();
 
   WEBHTML = "";
   if (server.args()==0) {
@@ -243,15 +242,16 @@ void handleREQUESTWEATHER() {
         WEBHTML += (String) WeatherData.sunset + ";"; 
   } else {
     for (uint8_t i = 0; i < server.args(); i++) {
-      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature(t + server.arg(i).toInt()*3600,false,false) + ";";
+      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature(I.currentTime + server.arg(i).toInt()*3600,false,false) + ";";
       WeatherData.getDailyTemp(server.arg(i).toInt(),dailyT);
         if (server.argName(i)=="daily_tempMax") WEBHTML += (String) dailyT[0] + ";";
       if (server.argName(i)=="daily_tempMin") WEBHTML += (String) dailyT[1] + ";";
       if (server.argName(i)=="daily_weatherID") WEBHTML += (String) WeatherData.getDailyWeatherID(server.arg(i).toInt(),true) + ";";
-      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID(t + server.arg(i).toInt()*3600) + ";";
+      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID(I.currentTime + server.arg(i).toInt()*3600) + ";";
       if (server.argName(i)=="daily_pop") WEBHTML += (String) WeatherData.getDailyPoP(server.arg(i).toInt(),true) + ";";
-      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP(t + server.arg(i).toInt()*3600) + ";";
-      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow(t + server.arg(i).toInt()*3600) + ";";      
+      if (server.argName(i)=="daily_snow") WEBHTML += (String) WeatherData.getDailySnow(server.arg(i).toInt()) + ";";
+      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP(I.currentTime + server.arg(i).toInt()*3600) + ";";
+      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow(I.currentTime + server.arg(i).toInt()*3600) + ";";      //note snow is returned in mm!!
       if (server.argName(i)=="sunrise") WEBHTML += (String) WeatherData.sunrise + ";";
       if (server.argName(i)=="sunset") WEBHTML += (String) WeatherData.sunset + ";";
       if (server.argName(i)=="hour") {
@@ -297,10 +297,9 @@ void handleALL(void) {
 }
 
 void handlerForRoot(bool allsensors) {
-  time_t t=now();
+  
 
-
-  LAST_WEB_REQUEST = t; //this is the time of the last web request
+  LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
 
   WEBHTML = "";
   WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
@@ -315,7 +314,7 @@ void handlerForRoot(bool allsensors) {
   
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
   WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(t,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
   #ifdef _USE8266
   WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
@@ -337,7 +336,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
   WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
-  WEBHTML = WEBHTML + "Alive since: " + dateify(ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
 
   #ifdef _DEBUG
 WEBHTML = WEBHTML + "---------------------<br>";      
@@ -425,7 +424,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
       if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
       if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
       
-      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
       WEBHTML = WEBHTML + "</tr>";
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
@@ -448,7 +447,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
           if (Sensors[jj].snsType==60 || Sensors[jj].snsType==61) delta = 3; //batery
           if (Sensors[jj].snsType>=50 && Sensors[jj].snsType<60) delta = 15; //HVAC reads ~q2 min
 
-          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&endtime=" + (String) (t) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
           WEBHTML = WEBHTML + "</tr>";
         }
       }
@@ -556,7 +555,6 @@ void handleRETRIEVEDATA() {
   byte ardID=0,  snsType=0,  snsID=0, N=0,delta=1;
   uint32_t starttime=0, endtime=0;
 
-time_t tn=now();
 
     if (server.args()==0) {
       server.send(401, "text/plain", "Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=100&endtime=1731761847&delta=1 or RETRIEVEDATA?ID=1.1.1&N=100&starttime=1731700000&endtime=1731761847&delta=10");
@@ -611,7 +609,7 @@ time_t tn=now();
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
   WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(tn,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
 
   WEBHTML = WEBHTML + "<p>";
 
@@ -642,7 +640,7 @@ time_t tn=now();
     WEBHTML += "['t','val'],\n";
 
     for (byte jj = 0;jj<N;jj++) {
-      WEBHTML += "[" + (String) (((float) -1*(now()-t[jj]))/3600) + "," + (String) v[jj] + "]";
+      WEBHTML += "[" + (String) (((float) -1*(I.currentTime-t[jj]))/3600) + "," + (String) v[jj] + "]";
       if (jj<N-1) WEBHTML += ",";
       WEBHTML += "\n";
     }
@@ -693,11 +691,11 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
       if ((String)server.argName(k) == (String)"Flags") S.Flags = server.arg(k).toInt();
       if ((String)server.argName(k) == (String)"SendingInt") S.SendingInt = server.arg(k).toInt();
   }
-  time_t t = now();
-  S.timeLogged = t; //time logged by me is when I received this.
+
+  S.timeLogged = I.currentTime; //time logged by me is when I received this.
   S.expired = false;
   
-  if (S.timeRead == 0  || S.timeRead < t-24*60*60 || S.timeRead > t+24*60*60)     S.timeRead = t;
+  if (S.timeRead == 0  || S.timeRead < I.currentTime-24*60*60 || S.timeRead > I.currentTime+24*60*60)     S.timeRead = I.currentTime;
 
   storeSensorSD(&S); //store this reading on SD
   
@@ -748,13 +746,13 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
 
  
 
-  if((S.snsType==9 || S.snsType == 13) && (LAST_BAR_READ==0 || LAST_BAR_READ < t - 60*60)) { //pressure
+  if((S.snsType==9 || S.snsType == 13) && (LAST_BAR_READ==0 || LAST_BAR_READ < I.currentTime - 60*60)) { //pressure
     LAST_BAR_READ = S.timeRead;
     LAST_BAR = S.snsValue;
   }
 
   String stemp = S.snsName;
-  if((stemp.indexOf("Outside")>-1 && S.snsType==61 ) && (LAST_BAT_READ==0 || LAST_BAT_READ < t - 60*60 || LAST_BAT_READ > t)) { //outside battery
+  if((stemp.indexOf("Outside")>-1 && S.snsType==61 ) && (LAST_BAT_READ==0 || LAST_BAT_READ < I.currentTime - 60*60 || LAST_BAT_READ > I.currentTime)) { //outside battery
     LAST_BAT_READ = S.timeRead;
     pushDoubleArray(batteryArray,48,S.snsValue);
   }

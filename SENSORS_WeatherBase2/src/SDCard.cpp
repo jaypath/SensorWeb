@@ -107,8 +107,7 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
 }
 
 bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN) { //read the last N sensor readings, stating from starttime. return new N if there were less than N reads
-    uint32_t tn=now();
-    if (starttime==0) starttime = tn;
+    if (starttime==0) starttime = I.currentTime;
     if (avgN==0) avgN=1;
 
     String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + "_v2.dat";
@@ -154,14 +153,14 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
         f.seek(sz-(n + j*avgN)*svsz); //go to jth set of entries relative to n. Note n so we are at the start of the nth block
         for (byte jj=0;jj<avgN;jj++) {
             f.read(D.bytes,svsz);
-            if (D.sensordata.timeLogged < tn && D.sensordata.timeLogged > 1577854800) { //possible that a value was registered at an incorrect time - for example if time clock failed and we started at 0. Disregard such values if older than 1/1/2020
+            if (D.sensordata.timeLogged < I.currentTime && D.sensordata.timeLogged > 1577854800) { //possible that a value was registered at an incorrect time - for example if time clock failed and we started at 0. Disregard such values if older than 1/1/2020
                 avgV += D.sensordata.snsValue;
-                avgT += tn-D.sensordata.timeLogged; //shift from now
+                avgT += I.currentTime-D.sensordata.timeLogged; //shift from now
                 goodcount++;
             }
         }
         if (goodcount>0) {
-            t[ind] = tn-(avgT/goodcount);
+            t[ind] = I.currentTime-(avgT/goodcount);
             v[ind++] = avgV/goodcount;
         }
     }

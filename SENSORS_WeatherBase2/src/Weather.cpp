@@ -7,7 +7,7 @@
 
 uint8_t WeatherInfo::getIndex(time_t dT)
 {
-    if (dT == 0) dT = now();
+    if (dT == 0) dT = I.currentTime;
     for (byte j=0;j<NUMWTHRDAYS*24;j++) {
         if  (this->dT[j] == dT) return j; //found the exact timestamp
         if (this->dT[j] > dT) { //found the index that is beyond this i value, so the correct index was teh one before
@@ -26,7 +26,7 @@ int8_t WeatherInfo::getTemperature(uint32_t dt, bool wetbulb,bool asindex)
 
         //if not wetbulb temp, then see if I should return local temp, which is index 0
         if (dt==0 && I.localWeather<255) {
-            if (now()-Sensors[I.localWeather].timeLogged<1800) { //localweather is only useful if <30 minutes old 
+            if (I.currentTime-Sensors[I.localWeather].timeLogged<1800) { //localweather is only useful if <30 minutes old 
                 return I.currentTemp;
             }
         }
@@ -34,7 +34,7 @@ int8_t WeatherInfo::getTemperature(uint32_t dt, bool wetbulb,bool asindex)
         return this->temperature[dt];
     }
     
-    if (dt==0) dt = now();
+    if (dt==0) dt = I.currentTime;
     //return hourly temperature, so long as request is within limits
     byte i = getIndex(dt);
     if (i==255) //did not find this index/time 
@@ -124,7 +124,7 @@ uint16_t WeatherInfo::getDailyRain(uint32_t starttime, uint32_t endtime)
 
 uint16_t WeatherInfo::getDailySnow(uint8_t daysfromnow)
 {
-    //use the hourly rain forecast to determine how much rain will fall for the specifed day (in days from now)
+    //use the hourly rain forecast to determine how much  will fall for the specifed day (in days from now)
     //what is midnight TONIGHT?
     uint32_t MN0 = makeUnixTime(year()-2000,month(),day(),0,0,0);
 
@@ -169,7 +169,7 @@ uint16_t WeatherInfo::getDailyIce(uint32_t starttime, uint32_t endtime)
 
 uint8_t WeatherInfo::getSnow(uint32_t dt)
 { //get snow in this hour
-        //special request... dt is zero, then get the total rain for next 24h
+        //special request... dt is zero, then get the total snow for next 24h
     if (dt==0) {
         uint8_t total = 0;
         for (byte j=0;j<24;j++) total+=this->snowmm[j]; 
@@ -381,9 +381,6 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
 
 bool WeatherInfo::initWeather() 
 {
-    this->lastUpdateT = 0;
-    this->lastUpdateStatus = false;
-    this->lastUpdateAttempt =0;
 
     for (byte i=0;i<NUMWTHRDAYS*24;i++) {        
         this->dT[i] = 0; //time for each element
@@ -470,25 +467,25 @@ void WeatherInfo::getDailyTemp(uint8_t daysfromnow, int8_t* temp){
 bool WeatherInfo::updateWeather(uint16_t synctime) 
 {
 
-    time_t tnow = now();
-    if (this->lastUpdateT+synctime > tnow && this->lastUpdateStatus==true) return false; //not time to update
-    if ((uint32_t) this->lastUpdateAttempt+30 > tnow) return false; //last update failed and was at least 30s ago
+    if (this->lastUpdateT+synctime > I.currentTime && (this->lastUpdateAttempt == this->lastUpdateT)) return false; //if the last update was recently (within synctime) AND last attempt == last success then not time to update
+    
+    if ((uint32_t) this->lastUpdateAttempt+10 > I.currentTime) return false; //last update failed but was so recent that we don't want to retry now
+
 
     #ifdef _DEBUG
-Serial.printf("Updateweather: init...");
+        Serial.printf("Updateweather: init...");
     #endif
 
     initWeather();
 
-    this->lastUpdateStatus=false;
-    this->lastUpdateAttempt = tnow;
+    this->lastUpdateAttempt = I.currentTime;
 
     String url;
     JsonDocument doc;
     int httpCode;
 
     #ifdef _DEBUG
-Serial.printf(" done at %s.\n",dateify(tnow));
+Serial.printf(" done at %s.\n",dateify(I.currentTime));
     #endif
 
 
@@ -833,8 +830,7 @@ Serial.printf(" done at %s.\n",dateify(tnow));
         } 
     }
 
-    this->lastUpdateT = tnow; //mark the last successful update
-    this->lastUpdateStatus = true;
+    this->lastUpdateT = I.currentTime; //mark the last successful update
     
     return true;
 }

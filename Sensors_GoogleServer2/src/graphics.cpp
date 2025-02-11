@@ -192,7 +192,6 @@ if (ScreenInfo.lastDrawClock==0) forcedraw=true;
 
 void fcnDrawCurrentCondition() {
 
-int8_t lt = -120;
   bool islocal=false;
 
     if (ScreenInfo.ForceRedraw==false && (ScreenInfo.t-ScreenInfo.lastDrawCurrentCondition < (ScreenInfo.intervalCurrentCondition*60) && ScreenInfo.lastDrawCurrentCondition>0)) return; //not time to update cc
@@ -200,7 +199,6 @@ int8_t lt = -120;
     if (ScreenInfo.localTempIndex>=SENSORNUM || isSensorInit(ScreenInfo.localTempIndex) || Sensors[ScreenInfo.localTempIndex].snsType!=4 || (Sensors[ScreenInfo.localTempIndex].Flags&0b100)==0 || (Sensors[ScreenInfo.localTempIndex].Flags&0b10)==0)     ScreenInfo.localTempIndex=find_sensor_name("Outside", 4);  //this is not the sensor we are looking for... find it
     if (ScreenInfo.localTempIndex<SENSORNUM   && ScreenInfo.t-ScreenInfo.localTempTime<600) islocal =true; //use local
 
-    if (ScreenInfo.lastTempDisplayed == lt && ScreenInfo.t-ScreenInfo.lastDrawCurrentCondition<3600)  return; //no change within an hour!
 
   ScreenInfo.lastDrawCurrentCondition = ScreenInfo.t;
 
@@ -376,6 +374,8 @@ byte section_spacer = 3;
 
 //draw icon for NOW
 int iconID = WeatherData.hourly_weatherID[0];
+if (iconID==0) iconID=999;
+
 if (ScreenInfo.t > WeatherData.sunrise  && ScreenInfo.t< WeatherData.sunset) snprintf(ScreenInfo.tempbuf,44,"/Icons/BMP180x180day/%d.bmp", iconID);
 else snprintf(ScreenInfo.tempbuf,44,"/Icons/BMP180x180night/%d.bmp",iconID);
 
@@ -408,6 +408,8 @@ tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
     iconID = WeatherData.hourly_weatherID[i*ScreenInfo.HourlyInterval];
+    if (iconID==0) iconID=999;
+
     if (ScreenInfo.t+i*ScreenInfo.HourlyInterval*3600 > WeatherData.sunrise  && ScreenInfo.t+i*ScreenInfo.HourlyInterval*3600< WeatherData.sunset) snprintf(ScreenInfo.tempbuf,29,"/Icons/BMP30x30day/%d.bmp",iconID);
     else snprintf(ScreenInfo.tempbuf,29,"/Icons/BMP30x30night/%d.bmp",iconID);
     
@@ -443,6 +445,8 @@ tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
     Z=0;
     X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
     iconID = WeatherData.daily_weatherID[i];
+    if (iconID==0) iconID=999;
+
     snprintf(ScreenInfo.tempbuf,29,"/Icons/BMP60x60day/%d.bmp",iconID); //alway print day icons for future days
 
     drawBmp(ScreenInfo.tempbuf,X,Y,-1);

@@ -16,6 +16,8 @@
 #include <MD_Parola.h>
 #include <MD_MAX72XX.h>
 
+#include "timesetup.hpp"
+
 //MAX7219 display parameters
 //#define HARDWARE_TYPE MD_MAX72XX::PAROLA_HW 
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
@@ -34,24 +36,15 @@ String DOW[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
 struct CLOCKVARTYPE{
   unsigned IsScrolling:1; 
-  unsigned CycleNum:3; 
-  unsigned ClockTime:3;
-  unsigned ShowClock:1;
+  unsigned CycleNum:4; 
+  unsigned ClockTimeLeft:5;
+  unsigned ClockTime:5;
+  unsigned ShowClockNext:1;
 
 } __attribute__((packed));
 
 
 
-//weather constants
-/*
- * Wynnewood, PA
-#define LAT 39.988095
-#define LON -75.279192
-*/
-
-
-#define LAT 42.301991979258844
-#define LON -71.29820890220166
 #define NUMWTHRDAYS 1
 #define NUMWTHRHRS 3
 
@@ -66,122 +59,20 @@ int8_t       daily_tempMin[NUMWTHRDAYS];
 uint16_t      daily_weatherID[NUMWTHRDAYS];
 uint8_t       daily_pop[NUMWTHRDAYS];
 double        daily_snow[NUMWTHRDAYS];
-uint8_t LASTMINUTEDRAWN=0;
 uint32_t sunrise,sunset;
 
 
-#define GLOBAL_TIMEZONE_OFFSET -18000 
-int16_t DSTOFFSET = 0; 
-#define TIMEUPDATEINT 600000
-//wifi
-WiFiUDP ntpUDP;
-//ESP8266WebServer server(80);
-NTPClient timeClient(ntpUDP,"time.nist.gov",GLOBAL_TIMEZONE_OFFSET,TIMEUPDATEINT); //utc time to start [have to spec the third param!]
-// By default 'pool.ntp.org' is used with 60 seconds update interval and
-// no offset
-// You can specify the time server pool and the offset, (in seconds)
-// additionaly you can specify the update interval (in milliseconds).
-// NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
-
 #define ESP_SSID "CoronaRadiata_Guest" // Your network name here
 #define ESP_PASS "snakesquirrel" // Your network password here
-#define TIMEOUTHTTP 2000
-//time zone offset is the number of seconds from Greenwich Mean Time. EST is 5 hours behind, but 4 hours in summer
 
 //four timers
-uint32_t TIMERS[4] = {0,0,0,0};
+uint8_t TIMERS[4] = {0,0,0,0};
 
-/*
-//this variable determines what is displaying...
-0 - time
-1 - max/min temp
-2 - POP, prob of precipitation
-3 - the weather ID code... change this later to the string name
-
-*/
+uint32_t ALIVESINCE = 0;
 
 //functions
 bool getWeather();
 void weatherIDLookup(uint16_t wid);
-bool TimerFcn(byte timerNum);
-bool updateTime(byte retries,uint16_t waittime);
-void checkDST(void);
-
-bool updateTime(byte retries,uint16_t waittime) {
-
-
-  bool isgood = timeClient.update();
-  byte i=1;
-
-
-  while (i<retries && isgood==false) {
-    i++; 
-    isgood = timeClient.update();
-    if (isgood==false) {
-      delay(waittime);
-
-      #ifdef _DEBUG
-        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
-      #endif
-    }
-  } 
-
-  if (isgood) {
-    checkDST();
-  }
-
-  return isgood;
-}
-
-void checkDST(void) {
-  timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
-  setTime(timeClient.getEpochTime());
-#ifdef _DEBUG
-  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
-#endif
-
-
-//check if time offset is EST (-5h) or EDT (-4h)
-int m = month();
-int d = day();
-int dow = weekday(); //1 is sunday
-
-  if (m > 3 && m < 11) DSTOFFSET = 3600;
-  else {
-    if (m == 3) {
-      //need to figure out if it is past the second sunday at 2 am
-      if (d<8) DSTOFFSET = 0;
-      else {
-        if (d>13)  DSTOFFSET = 3600; //must be past second sunday... though technically could be the second sunday and before 2 am... not a big error though
-        else {
-          if (d-dow+1>7) DSTOFFSET = 3600; //d-dow+1 is the date of the most recently passed sunday. if it is >7 then it is past the second sunday
-          else DSTOFFSET = 0;
-        }
-      }
-    }
-
-    if (m == 11) {
-      //need to figure out if it is past the first sunday at 2 am
-      if (d>7)  DSTOFFSET = 0; //must be past first sunday... though technically could be the second sunday and before 2 am... not a big error though
-      else {
-        if ((int) d-dow+1>1) DSTOFFSET = 0; //d-dow+1 is the date of the most recently passed sunday. if it is >1 then it is past the first sunday
-        else DSTOFFSET = 3600;
-      }
-    }
-  }
-
-    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-    setTime(timeClient.getEpochTime());
-
-    #ifdef _DEBUG
-      Serial.printf("checkDST: Ending time is: %s\n\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
-    #endif
-
-
-}
-
-    
-
 bool getWeather() {
   //get weather from local weather server
 
@@ -191,12 +82,11 @@ bool getWeather() {
   if(WiFi.status()== WL_CONNECTED){
     String payload;
     String tempstring;
-    int httpCode=404;
-
+    
     tempstring = "http://192.168.68.93/REQUESTWEATHER?hourly_temp=0&hourly_temp=1&hourly_temp=2&daily_tempMax=0&daily_tempMin=0&daily_weatherID=0&daily_pop=0&daily_snow=0&sunrise=0&sunset=0";
 
     http.begin(wfclient,tempstring.c_str());
-    httpCode = http.GET();
+    http.GET();
     payload = http.getString();
     http.end();
 
@@ -367,6 +257,11 @@ char temp[50] = "";
   case 622 :
     snprintf(temp,49,"heavy snow");
     break;
+  case 700:
+  {
+    snprintf(temp,49,"COLD");
+    break;
+  }
   case 701 :
     snprintf(temp,49,"mist");
     break;
@@ -424,16 +319,80 @@ char temp[50] = "";
 void displayTime() {
       //display the time
 
-    if (LASTMINUTEDRAWN == minute()) return ; //don't redraw if I'm already drawn
-    myDisplay.displayClear();
-    myDisplay.setTextAlignment(PA_CENTER);        
-    sprintf(displayBuffer,"%d:%02d",hour(),minute());
-    myDisplay.print(displayBuffer);
-    LASTMINUTEDRAWN = minute();
-
+    
     #ifdef DEBUG_
       Serial.println(displayBuffer);
     #endif
+
+
+
+
+
+  if (ClockDefs.IsScrolling==true) { 
+
+    if (myDisplay.displayAnimate()) { //myDisplay.displayAnimate() returns true if the animation is finished/not in progress 
+      myDisplay.displayReset(); //reset the display  
+      ClockDefs.IsScrolling = false;
+      
+      ClockDefs.ClockTimeLeft = 0; //reset the next scroll
+      #ifdef DEBUG_
+        Serial.println("Finished scroll");
+      #endif
+
+    }
+  } else {
+    if (ClockDefs.ClockTimeLeft > 0) return;
+
+
+    ClockDefs.ClockTimeLeft = ClockDefs.ClockTime;
+
+    if (ClockDefs.ShowClockNext == true) {
+      ClockDefs.IsScrolling = false; //we're not scrolling this stage
+      myDisplay.displayClear();
+      myDisplay.setTextAlignment(PA_CENTER);        
+      sprintf(displayBuffer,"%d:%02d",hour(),minute());
+
+      myDisplay.print(displayBuffer);
+  
+
+      ClockDefs.ShowClockNext = false; //next time do not show the clock!
+      
+    } else {      
+      ClockDefs.ShowClockNext = true; //show the clock next
+      
+
+      if (ClockDefs.CycleNum==0) {
+        snprintf(displayBuffer,349,"%s: Now: %dF (%d-%dF).",DOW[(weekday()-1)%7].c_str(),hourly_temp[0], daily_tempMin[0], daily_tempMax[0]);
+        ClockDefs.CycleNum=1;
+
+      } else {
+        char temp[350] = {0};
+
+        weatherIDLookup(daily_weatherID[0]);//fill display buffer
+
+        if (daily_snow[0]>0) {
+          snprintf(temp,349,"%s: %s, %.2f in.",DOW[(weekday()-1)%7].c_str(), displayBuffer,daily_snow[0]);
+        } else {
+          if (daily_pop[0]>0) {
+            snprintf(temp,349,"%s: %s, %d%% precip.",DOW[(weekday()-1)%7].c_str(), displayBuffer,daily_pop[0]);
+          } else {
+            snprintf(temp,349,"%s: %s.",DOW[(weekday()-1)%7].c_str(), displayBuffer);
+          }
+        }
+
+        snprintf(displayBuffer,349,"%s",temp);
+
+        ClockDefs.CycleNum=0;
+      }  
+
+      myDisplay.displayReset(); //reset the display
+      myDisplay.setTextAlignment(PA_LEFT);
+      myDisplay.setInvert(false);
+      myDisplay.displayScroll(displayBuffer, PA_CENTER, PA_SCROLL_LEFT, SCROLLSPEED);      
+      ClockDefs.IsScrolling = true; //we're in scrolling mode now
+
+    }
+  }
 }
 
 void setup() {
@@ -447,8 +406,9 @@ void setup() {
 
   ClockDefs.IsScrolling=false; 
   ClockDefs.CycleNum=0; 
-  ClockDefs.ClockTime=4; //seconds to show clock
-  ClockDefs.ShowClock = true;
+  ClockDefs.ClockTime=5; //seconds to show clock
+  ClockDefs.ClockTimeLeft=5; //seconds left to show clock
+  ClockDefs.ShowClockNext = true;
 /*
  *cycle numbers 
  *0 - today's hi/current/weathertype/low
@@ -534,26 +494,29 @@ void setup() {
     myDisplay.displayClear();
     myDisplay.print("Time");
 
-//    setSyncInterval(600); //set NTP interval for sync in sec
+    //set time
     timeClient.begin(); //time is in UTC
-    updateTime(10,250); //check if DST and set time to EST or EDT
+    updateTime(10,250); //check if DST and set time to EST
+
+    ALIVESINCE = now();
+    TIMERS[0] = 100;//some arbitrary seconds that will trigger a second update
+    TIMERS[1] = 61; //some arbitrary seconds that will trigger a second update
+    TIMERS[2] = hour();
+    TIMERS[3] = day();
 
 
     #ifdef DEBUG_
       Serial.println(GLOBAL_TIMEZONE_OFFSET);
     #endif
 
-  //set timers
-  TIMERS[0] = now()+1*(60*60); //1 hour from now
-  TIMERS[1] = now()+ClockDefs.ClockTime; //N second from now
   
     myDisplay.displayClear();
     myDisplay.print("Wthr");
 
-  getWeather();
-  ClockDefs.IsScrolling= false;
-  LASTMINUTEDRAWN = 61;
-  displayTime();
+    getWeather();
+    ClockDefs.IsScrolling= false;
+    
+    displayTime();
 
     myDisplay.displayClear();
     myDisplay.print("OK");
@@ -561,105 +524,40 @@ void setup() {
 }
 
 
-bool TimerFcn(byte timerNum) {
-//returns true if the desired timer has ended (there are four timers, 0-3)
-
-  uint32_t t = TIMERS[timerNum];
-  
-  if (now() >  t && t > 0) {
-
-      #ifdef DEBUG_
-        Serial.print("Timer ");
-        Serial.print(timerNum);
-        Serial.println(" done");
-      #endif
-    TIMERS[timerNum] = 0; //reset this timer
-    return true;
-    
-  } else { 
-    return false;
-  }
-}
-
 
 void loop() {
   ArduinoOTA.handle();
   updateTime(1,0); //just try once
   
-    // put your main code here, to run repeatedly
+  time_t t=now();
 
-    //update the time if 1 hour passed
-  if (TimerFcn(0)) {
-  
-  //sync/set time from internet
-    TIMERS[0] = now()+1*60*60;
-    TIMERS[1] = now()+ClockDefs.ClockTime; //N second from now
-    getWeather();
+  //on second
+  byte x = second();
+  if (TIMERS[0]!=x) {
+    TIMERS[0] = x;
+    if (ClockDefs.ClockTimeLeft>0) ClockDefs.ClockTimeLeft--;
+  }
+
+  x=minute(t);
+  if (TIMERS[1]!=x) {
+    TIMERS[1]=x;
+    ClockDefs.ClockTimeLeft =0; //force a clock draw
+  }
+
+  x=hour(t);
+  if (TIMERS[2]!=x) {
     
+    TIMERS[2]=x;
+    getWeather();
+
   }
 
-  if (ClockDefs.IsScrolling==true) {
+  x=day(t);
+  if (TIMERS[3]!=x) {
+    
+    TIMERS[3]=x;
 
-    if (myDisplay.displayAnimate()) { //myDisplay.displayAnimate() returns true if the animation is finished
-      myDisplay.displayReset(); //reset the display  
-      ClockDefs.IsScrolling = false;
-      LASTMINUTEDRAWN = 61; //force a clock redraw when I'm done
-      TIMERS[1] = now()+ClockDefs.ClockTime; //reset the next scroll
-      displayTime();
-      #ifdef DEBUG_
-        Serial.println("Finished scroll");
-      #endif
-
-    }
-  } else {
-    if (TimerFcn(1)) { //N second timer is done
-      TIMERS[1] = now()+ClockDefs.ClockTime;
-      if (ClockDefs.ShowClock == true) {
-        ClockDefs.IsScrolling = false;
-        displayTime();
-        ClockDefs.ShowClock = false;
-      } else {      
-        ClockDefs.ShowClock = true; //show the clock next
-        ClockDefs.IsScrolling = true;
-        LASTMINUTEDRAWN = 61; //force a clock redraw when I'm done
-        char temp[350] = "";        
-      
-
-        if (ClockDefs.CycleNum==0) {
-          snprintf(temp,349,"%s: Now: %dF (%d-%dF).",DOW[(weekday()-1)%7].c_str(),hourly_temp[0], daily_tempMin[0], daily_tempMax[0]);
-          ClockDefs.CycleNum=1;
-
-        } else {
-          
-          weatherIDLookup(daily_weatherID[0]);
-
-          if (daily_snow[0]>0) {
-           snprintf(temp,349,"%s: %s, %.2f in.",DOW[(weekday()-1)%7].c_str(), displayBuffer,daily_snow[0]);
-          } else {
-            if (daily_pop[0]>0) {
-              snprintf(temp,349,"%s: %s, %d%% precip.",DOW[(weekday()-1)%7].c_str(), displayBuffer,daily_pop[0]);
-            } else {
-              snprintf(temp,349,"%s: %s.",DOW[(weekday()-1)%7].c_str(), displayBuffer);
-            }
-          }
-
-          ClockDefs.CycleNum=0;
-        }  
-        snprintf(displayBuffer,349,"%s",temp);        
-
-                
-        myDisplay.displayReset(); //reset the display
-        myDisplay.setTextAlignment(PA_LEFT);
-        myDisplay.setInvert(false);
-        myDisplay.displayScroll(displayBuffer, PA_CENTER, PA_SCROLL_LEFT, SCROLLSPEED);      
-      }
-    } else {
-      if (second() == 0) {
-        displayTime();
-      }
-    }
   }
 
-  if (TIMERS[1]==0 || TIMERS[1]>now()+ClockDefs.ClockTime) TIMERS[1] = now()+ClockDefs.ClockTime;
-  
+  displayTime();  
 }

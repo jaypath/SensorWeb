@@ -54,21 +54,18 @@
   extern TFLI2C tflI2C;
   extern uint8_t tfAddr; // Default I2C address for Tfluna
   struct TFLunaType {
-    uint8_t MAX_NEGLIGIBLE_DIST_CHANGE = 2;
+    uint8_t MIN_DIST_CHANGE = 2; //this is how many cm must have changed to register movement
     uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
-    uint8_t ZONE_SHORTRANGE = 24; //cm from BASEOFFSET that is considered short range (show measures in inches now)
+    uint8_t ZONE_SHORTRANGE = 61; //cm from BASEOFFSET that is considered short range (show measures in inches now)
     uint8_t ZONE_GOLDILOCKS = 10; //cm from BASEOFFSET that are considered to have entered the perfect distance; 3 in ~ 8 cm
     uint8_t ZONE_CRITICAL = 4; //cm from BASEOFFSET at which you are too close
-    uint16_t TIME_FAST_REFRESH = 250; //in ms, wait between each screen draw
-    uint32_t TIME_CLOCK_REFRESH = 30000; //in ms, wait between each screen draw
     uint32_t LAST_DRAW = 0; //last time screen ws drawn, millis()!
-    uint16_t LAST_DISTANCE=0; //cm of last distance
-    uint16_t INVERT_TIME = 500; //in ms, time to show flashing when not critical
-    uint32_t LAST_INVERT_TIME = 0; //time of last invert
+    int32_t LAST_DISTANCE=0; //cm of last distance
     bool INVERTED = false; //sjhould  the screen be inverted now?
-    bool ALLOWFASTDRAW = false; //do not draw if this is false, even if Hz has passed!
+    uint32_t SCREENRATE = 500; //in ms
     bool ALLOWINVERT=false; //if true, do inversions
     uint16_t CHANGETOCLOCK = 30; //in seconds, time to change to clock if dist hasn't changed
+    bool CLOCKMODE = false; //show clock until distance change
     uint8_t TFLUNASNS=3; //sensor number of TFLUNA
     char MSG[20] = {0}; //screen message
   };

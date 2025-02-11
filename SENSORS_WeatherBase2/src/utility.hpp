@@ -1,12 +1,11 @@
 #ifndef UTILITY_HPP
 #define UTILITY_HPP
 
-#include "Arduino.h"
+#include <Arduino.h>
 #include <globals.hpp>
 #include <timesetup.hpp>
-#include "FS.h"
+//#include "FS.h"
 #include <SD.h>
-
 
 extern SensorVal Sensors[SENSORNUM];
 
@@ -26,7 +25,7 @@ bool isSensorInit(int i);
 int16_t findDev(struct SensorVal *S, bool oldest = false);
 int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest);
 int16_t findSns(byte snstype, bool newest = false);
-uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = B00000011, uint8_t flagsettings= B00000011, uint32_t MoreRecentThan=0);
+uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
 void checkHeat(void);
 uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);

@@ -1,96 +1,14 @@
-//#define _DEBUG
 #include "timesetup.hpp"
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <server.hpp>
 
-#define TIMEUPDATEINT 10800000
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP,"time.nist.gov",(long) GLOBAL_TIMEZONE_OFFSET,10800000); //3rd param is offset, 4th param is update frequency
 long DSTOFFSET = 0;
 
 char DATESTRING[25]="";
-
-
-time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
-{
-  //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
-
-    int m = month(), d=day(), h=0, n=0, s=0;
-    int yy = year()-2000;
-    String datesplit = "";
-
-  if (str.indexOf("/")>-1) datesplit = "/"; //date is included
-  if (str.indexOf("-")>-1) datesplit = "-";//date is included
-
-  if (datesplit!="")
-  {
-    m = breakString(&str,datesplit).toInt();
-    if (m>12) {
-      yy=m;
-      m = breakString(&str,datesplit).toInt();
-      if (str.indexOf(" ")<0) //time is not included
-      {
-        d = str.toInt();      
-      } else {
-        d = breakString(&str," ").toInt();
-      }
-    } else {
-      d = breakString(&str,"/").toInt();
-      if (str.indexOf(" ")<0) //time is not included
-      {
-        yy = str.toInt();      
-      } else {
-        yy = breakString(&str," ").toInt();
-      }
-    }
-    
-    if (yy>2000) yy = yy-2000;
-    else if (yy>1970) yy=yy-1900;
-
-    if (str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s);
-  }
-
-  byte hoffset = 0;
-  if (str.indexOf(" ")>-1) { //there is a " AM/PM" present
-    if (str.indexOf("PM")>-1)  hoffset=12;
-    str = breakString(&str," "); //remove the am/pm
-  }
-  h = breakString(&str,":").toInt() + hoffset;
-  n = breakString(&str,":").toInt();
-
-
-
-  if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data
-
-  s = str.toInt();
-  return makeUnixTime((byte) yy, m,d,h,n,s);
-
-}
-
-time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
-  //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
-
-  int16_t y = 2000;
-
-  if (yy>=70) y = 1900+yy;
-  else y=2000+yy;
-
-  tmElements_t unixTime;
-
-  unixTime.Year = y-1970; //years since 1970
-  unixTime.Month = m;
-  unixTime.Day = d;
-  unixTime.Hour = h;
-  unixTime.Minute = n;
-  unixTime.Second = s;
-
-  return makeTime(unixTime);
-}
-
-
 
 //Time fcn
 bool updateTime(byte retries,uint16_t waittime) {
@@ -105,15 +23,12 @@ bool updateTime(byte retries,uint16_t waittime) {
       delay(waittime);
 
       #ifdef _DEBUG
-        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
+        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(now(),"mm/dd/yyyy hh:mm:ss"));
       #endif
     }
   } 
 
-  if (isgood) {
-    I.currentTime=now();
-    checkDST();
-  }
+  if (isgood) checkDST();
   return isgood;
 }
 
@@ -122,15 +37,16 @@ void checkDST(void) {
   timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET);
   setTime(timeClient.getEpochTime());
   
+  time_t n=now();
 
 #ifdef _DEBUG
-  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
+  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(now(),"mm/dd/yyyy hh:mm:ss"));
 #endif
 
 
 
 //check if time offset is EST (-5h) or EDT (-4h)
-  int m=month(I.currentTime);
+  int m=month();
 
   if (m > 3 && m < 11) DSTOFFSET = 3600;
   else {
@@ -138,7 +54,7 @@ void checkDST(void) {
       //need to figure out if it is past the second sunday at 2 am
 
       time_t m1 = makeUnixTime(year(),month(),7,2,0,0); //this is the last day of the first week of March at 2 am. We want second sunday at 2 am
-      if (I.currentTime< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
+      if (n< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
       else DSTOFFSET = 3600;
 
       //7-weekday(m1)+1 is the next sunday 
@@ -157,9 +73,9 @@ void checkDST(void) {
 
     if (m == 11) {
       //need to figure out if it is past the first sunday at 2 am
-      time_t m1 = makeUnixTime(year(I.currentTime),month(I.currentTime),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
+      time_t m1 = makeUnixTime(year(),month(),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
       if (weekday(m1)>1) m1 += (7-(weekday(m1)-1))*86400; //this is the first sunday of the month.
-      if (I.currentTime< m1) DSTOFFSET = 3600; //still in the summer timezone
+      if (n< m1) DSTOFFSET = 3600; //still in the summer timezone
       else DSTOFFSET = 0;
 
     /*explanation...
@@ -182,9 +98,10 @@ void checkDST(void) {
   setTime(timeClient.getEpochTime());
 
   #ifdef _DEBUG
-    Serial.printf("checkDST: Ending time is: %s\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
+    Serial.printf("checkDST: Ending time is: %s\n\n",dateify(n,"mm/dd/yyyy hh:mm:ss"));
   #endif
 }
+
 
 
 String fcnDOW(time_t t, bool caps) {
@@ -210,8 +127,9 @@ String fcnDOW(time_t t, bool caps) {
 }
 
 
+
 char* dateify(time_t t, String dateformat) {
-  if (t==0) t = I.currentTime;
+  if (t==0) t = now();
 
   char holder[5] = "";
 
@@ -256,3 +174,22 @@ char* dateify(time_t t, String dateformat) {
 }
 
 
+time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
+  //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
+
+  int16_t y = 2000;
+
+  if (yy>=70) y = 1900+yy;
+  else y=2000+yy;
+
+  tmElements_t unixTime;
+
+  unixTime.Year = y-1970; //years since 1970
+  unixTime.Month = m;
+  unixTime.Day = d;
+  unixTime.Hour = h;
+  unixTime.Minute = n;
+  unixTime.Second = s;
+
+  return makeTime(unixTime);
+}

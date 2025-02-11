@@ -217,7 +217,10 @@ void handleTIMEUPDATE() {
 
 void handleRoot() {
 
-  String currentLine = "<!DOCTYPE html><html><head><title>Pleasant Sensor Server</title></head><body>";
+  String currentLine;
+  currentLine.reserve(5000);
+
+  currentLine = "<!DOCTYPE html><html><head><title>Pleasant Sensor Server</title></head><body>";
   
   currentLine = currentLine + "<h2>" + (String) dateify(0,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br><p>";
   currentLine += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";

@@ -7,7 +7,7 @@
 
 
 #include <Arduino.h>
-#include "esp32/spiram.h"
+//#include "esp32/spiram.h"
 #include <String.h>
 
 #include <WiFI.h>
@@ -15,7 +15,6 @@
 //#include <WebServer.h>
 //#include <HTTPClient.h>
 
-#include <String.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include "globals.hpp"
@@ -30,8 +29,13 @@
 
 #include <Wire.h>
 
-
-
+#include <esp_task_wdt.h> //watchdog timer libary
+#define WDT_TIMEOUT_MS 120000
+ esp_task_wdt_config_t WDT_CONFIG = {
+        .timeout_ms = WDT_TIMEOUT_MS,
+        .idle_core_mask = (1 << 2) - 1,    // Bitmask of all cores
+        .trigger_panic = true,
+    }; 
 
 
 extern byte OldTime[5];
@@ -55,6 +59,10 @@ extern byte OldTime[5];
 
 void setup()
 {
+  //watchdog reset
+  esp_task_wdt_deinit(); //wdt is enabled by default, so we need to deinit it first
+  esp_task_wdt_init(&WDT_CONFIG); //setup watchdog 
+  esp_task_wdt_add(NULL);                            //add the current thread
 
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
 
@@ -67,8 +75,6 @@ void setup()
   tft.setTextFont(2);
 
   tft.printf("Running setup\n");
-
-
 
   tft.printf("Mounting SD: ");
 
@@ -85,11 +91,12 @@ void setup()
 
   tft.printf("Specs:\n");
   // Get flash size and display
-  tft.printf("-FLASH size: %d bytes\n",ESP.getMinFreeHeap());
+  tft.printf("-HEAP size: %d KB\n",  ESP.getHeapSize()/1000);
+  tft.printf("-free HEAP size: %d KB\n",ESP.getMinFreeHeap()/1000);
   // Initialize PSRAM (if available) and show the total size
   if (psramFound()) {
      tft.setTextColor(TFT_GREEN);
-    tft.printf("-PSRAM size: %d bytes\n",heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+    tft.printf("-PSRAM size: %d MB\n",heap_caps_get_total_size(MALLOC_CAP_SPIRAM)/1000000);
   } else {
     tft.setTextColor(TFT_RED);
     tft.printf("-No PSRAM found.\n");
@@ -331,28 +338,31 @@ void setup()
   Serial.printf("2\n");
   #endif
 
-        tallyFlags();
+    tallyFlags();
     
     ScreenInfo.ALIVESINCE = ScreenInfo.t;
     
+
+    tft.printf("Get weather");
+
     //init weather
     WeatherData.WeatherFetchInterval=60; //get weather every 60 minutes;
     WeatherData.lastWeatherFetch=0;
-    getWeather();
 
+    byte wthrcnt = 0;
+    while (getWeather()==false && wthrcnt++<20) {
+      tft.setTextColor(TFT_RED);
+      tft.printf(".");
+      delay(500);
+    };
 
-#ifdef _DEBUG
-  Serial.printf("3\n");
-  #endif
-
-    tft.setTextColor(TFT_GREEN);
-    tft.printf("OK\n");
+    if (wthrcnt<20) {
+      tft.setTextColor(TFT_GREEN);
+      tft.printf(" OK\n");
+    } else {
+      tft.printf(" FAILED\n");
+    }
     tft.setTextColor(ScreenInfo.FG_COLOR);    
-
-
-#ifdef _DEBUG
-  Serial.printf("4\n");
-  #endif
 
     delay(5000);
 
@@ -363,8 +373,12 @@ void setup()
 
 void loop()
 {
-    //Call ready() repeatedly in loop for authentication checking and processing
 
+
+  esp_task_wdt_reset(); //reset the watchdog!
+
+
+    //Call ready() repeatedly in loop for authentication checking and processing
   ScreenInfo.t = now();
   updateTime(1,0); //just try once
   timeClient.update();

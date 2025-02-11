@@ -2,11 +2,6 @@
 
 //initialize variables
 
-
-
-time_t ALIVESINCE = 0;
-
-
 //server
 String WEBHTML;
 WiFi_type WIFI_INFO;

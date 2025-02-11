@@ -7,7 +7,7 @@
 
 //declared as global constants
 extern SensorVal Sensors[SENSORNUM];
-
+extern Screen I;
 
 bool writeSensorsSD(String filename = "/Data/SensorBackupv2.dat");
 bool readSensorsSD(String filename = "/Data/SensorBackupv2.dat");

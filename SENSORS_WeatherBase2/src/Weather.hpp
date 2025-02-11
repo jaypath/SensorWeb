@@ -16,9 +16,6 @@ class WeatherInfo
 {
 private:
     //keep hourly for next 24 hours, and daily (really day and night, so 12 hour interval)
-    uint32_t lastUpdateT = 0;
-    uint32_t lastUpdateAttempt =0;
-    bool lastUpdateStatus = false;
     uint32_t dT[NUMWTHRDAYS*24] = {0}; //time for each element
     int8_t temperature[NUMWTHRDAYS*24] = {0}; //degrees in F
     uint8_t humidity[NUMWTHRDAYS*24] = {0};
@@ -42,6 +39,9 @@ private:
 
     uint8_t getIndex(time_t dT = 0);
 public:
+    uint32_t lastUpdateT = 0; //last time an update succeeded
+    uint32_t lastUpdateAttempt =0; //last time an update was attempted
+    
     uint32_t sunrise; //next  sunrise for TODAY
     uint32_t sunset; //next  sunset for TODAY
     bool flag_rain;

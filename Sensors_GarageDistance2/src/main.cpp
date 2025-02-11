@@ -24,8 +24,8 @@
 #define CLK_PIN     18
 #define DATA_PIN    23
 
-//MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
-MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
+MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
+//MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
 
 
 extern TFLunaType LocalTF;
@@ -34,41 +34,22 @@ extern TFLunaType LocalTF;
 void MD_Draw() {
 
 uint32_t m = millis();
-bool drawnow = false;
-//is it time to redraw?
-if (LocalTF.ALLOWFASTDRAW && m-LocalTF.LAST_DRAW > LocalTF.TIME_FAST_REFRESH) {
-  //should we flip the inversion?
-  if (LocalTF.ALLOWINVERT) {
-    if (m-LocalTF.LAST_INVERT_TIME > LocalTF.INVERT_TIME) {
-      LocalTF.LAST_INVERT_TIME=m;
-      LocalTF.INVERTED = !LocalTF.INVERTED;      
-    }    
-  } else       LocalTF.INVERTED = false;
-    
-  drawnow=true;
-} else {
-  if (LocalTF.ALLOWFASTDRAW==false && m-LocalTF.LAST_DRAW > LocalTF.TIME_CLOCK_REFRESH) {
-    if (LocalTF.ALLOWINVERT) {
-      if (m-LocalTF.LAST_INVERT_TIME > LocalTF.INVERT_TIME) {
-        LocalTF.LAST_INVERT_TIME=m;
-        LocalTF.INVERTED = !LocalTF.INVERTED;      
-      }
-    } else {
-      LocalTF.INVERTED = false;
-    }
-    drawnow=true;
-  }
-}
+
+if (m-LocalTF.LAST_DRAW < LocalTF.SCREENRATE) return;
 
 
-if (drawnow) {
+//should we flip the inversion?
+if (LocalTF.ALLOWINVERT) LocalTF.INVERTED = !LocalTF.INVERTED;      
+else       LocalTF.INVERTED = false;    
 
-  screen.displayClear();
-  screen.setTextAlignment(PA_CENTER);       
-  screen.setInvert(LocalTF.INVERTED);
-  screen.print(LocalTF.MSG);
-  LocalTF.LAST_DRAW = m;    
-}
+
+
+screen.displayClear();
+screen.setTextAlignment(PA_CENTER);       
+screen.setInvert(LocalTF.INVERTED);
+//screen.print(LocalTF.MSG);
+screen.printf("%s",LocalTF.MSG);
+LocalTF.LAST_DRAW = m;    
 
   
 }
@@ -222,7 +203,7 @@ void setup()
  
   //LCOAL CODE
   screen.begin();
-  screen.setIntensity(7);
+  screen.setIntensity(15);
   screen.displayClear();
   screen.setTextAlignment(PA_CENTER);
   screen.setInvert(false);
@@ -629,32 +610,30 @@ void loop() {
 //LOCAL CODE ----------------------------------------------------------
   //check tfluna distance
   ReadData(&Sensors[LocalTF.TFLUNASNS]); //recheck TF luna distance all the time...
-  int32_t tempdist = Sensors[LocalTF.TFLUNASNS].snsValue;
+  int32_t tempdist = Sensors[LocalTF.TFLUNASNS].snsValue-LocalTF.BASEOFFSET;
   uint32_t m = millis();
   //what to draw?
-  LocalTF.ALLOWFASTDRAW=false;
   LocalTF.ALLOWINVERT=false;
-  LocalTF.INVERT_TIME=500;
-  //has dist changed by more than a real amount? If yes then allow high speed screen draws
-  if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-tempdist)> LocalTF.MAX_NEGLIGIBLE_DIST_CHANGE) {
-    LocalTF.ALLOWFASTDRAW=true;
 
-    //adjust dist to offset
-    tempdist-=LocalTF.BASEOFFSET;
+  //has dist changed by more than a real amount? If yes then allow high speed screen draws
+  if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-tempdist)> LocalTF.MIN_DIST_CHANGE) {
+    LocalTF.SCREENRATE=500;
+    LocalTF.CLOCKMODE = false; //leave clockmode
 
     //store last distance
     LocalTF.LAST_DISTANCE = tempdist;
 
     //is the distance unreadable (which means no car/garage door open)
-    if (tempdist<0) {
+    if (tempdist<-100) {
       snprintf(LocalTF.MSG,19,"OPEN");
     } else {
       //is the distance beyond the short range zone
       if (tempdist>LocalTF.ZONE_SHORTRANGE) {
-        snprintf(LocalTF.MSG,19,"%u ft",(uint16_t) (tempdist/2.54)/12);        
+        snprintf(LocalTF.MSG,19,"%d ft", (tempdist/2.54)/12);        
       } else {
+        LocalTF.SCREENRATE=250;
         if (tempdist>LocalTF.ZONE_GOLDILOCKS) {
-          snprintf(LocalTF.MSG,19,"%u in",(uint16_t) (tempdist/2.54));
+          snprintf(LocalTF.MSG,19,"%d in", (tempdist/2.54));
         } else {
           if (tempdist>LocalTF.ZONE_CRITICAL) {
             snprintf(LocalTF.MSG,19,"GOOD");
@@ -662,26 +641,24 @@ void loop() {
           } else {
             snprintf(LocalTF.MSG,19,"STOP!");
             LocalTF.ALLOWINVERT=true;
-            LocalTF.INVERT_TIME=250;
+            LocalTF.SCREENRATE=250;
           }    
         }    
       }
     }
   } else {
     //if it's been long enough, change to clock and redraw
-    if (m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK) {
-
+    if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
       snprintf(LocalTF.MSG,19,"%s",dateify(t,"hh:nn"));      
       LocalTF.ALLOWINVERT=false;
-
-
+      LocalTF.SCREENRATE=30000;
+      LocalTF.CLOCKMODE = true;
     } else {
+      LocalTF.SCREENRATE=500;
       //are we in a critical zone where we're flashing?
       if (tempdist<=LocalTF.ZONE_GOLDILOCKS) {
-        LocalTF.ALLOWFASTDRAW=true;
         LocalTF.ALLOWINVERT=true;
-        if (tempdist<=LocalTF.ZONE_CRITICAL)         LocalTF.INVERT_TIME=250;        
-
+        if (tempdist<=LocalTF.ZONE_CRITICAL)   LocalTF.SCREENRATE=250;
       }
     }
   }
