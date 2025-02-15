@@ -46,6 +46,8 @@ int8_t WeatherInfo::getTemperature(uint32_t dt, bool wetbulb,bool asindex)
 
 uint8_t WeatherInfo::getHumidity(uint32_t dt)
 {
+    if (dt==0) dt = I.currentTime;
+
     //return hourly temperature, so long as request is within limits
     byte i = getIndex(dt);
     if (i==255) //did not find this index/time 
@@ -56,6 +58,8 @@ uint8_t WeatherInfo::getHumidity(uint32_t dt)
 }
 int16_t WeatherInfo::getWeatherID(uint32_t dt)
 {
+
+    if (dt==0) dt = I.currentTime;
 
     //return hourly ID, so long as request is within limits
     byte i = getIndex(dt);
@@ -83,11 +87,11 @@ uint8_t WeatherInfo::getPoP(uint32_t dt)
      return this->PoP[i];
 
 }
-uint8_t WeatherInfo::getRain(uint32_t dt)
+uint16_t WeatherInfo::getRain(uint32_t dt)
 {
     //special request... dt is zero, then get the total rain for next 24h
     if (dt==0) {
-        uint8_t totalrain = 0;
+        uint16_t totalrain = 0;
         for (byte j=0;j<24;j++) totalrain+=this->rainmm[j]; 
         return totalrain;
     }
@@ -167,11 +171,11 @@ uint16_t WeatherInfo::getDailyIce(uint32_t starttime, uint32_t endtime)
 }
 
 
-uint8_t WeatherInfo::getSnow(uint32_t dt)
+uint16_t WeatherInfo::getSnow(uint32_t dt)
 { //get snow in this hour
         //special request... dt is zero, then get the total snow for next 24h
     if (dt==0) {
-        uint8_t total = 0;
+        uint16_t total = 0;
         for (byte j=0;j<24;j++) total+=this->snowmm[j]; 
         return total;
     }
@@ -184,11 +188,11 @@ uint8_t WeatherInfo::getSnow(uint32_t dt)
 
 }
 
-uint8_t WeatherInfo::getIce(uint32_t dt)
+uint16_t WeatherInfo::getIce(uint32_t dt)
 {
             //special request... dt is zero, then get the total ice for next 24h
     if (dt==0) {
-        uint8_t total = 0;
+        uint16_t total = 0;
         for (byte j=0;j<24;j++) total+=this->icemm[j]; 
         return total;
     }
@@ -233,7 +237,7 @@ uint32_t WeatherInfo::nextRain() {
 
 uint32_t WeatherInfo::nextSnow() {
     for (byte j=0;j<24;j++) {
-        if (this->snowmm[j]>10 || this->icemm[j]>2) return this->dT[j];
+        if (this->PoP[j]>25 && (this->snowmm[j]>10 || this->icemm[j]>2)) return this->dT[j];
     }
 
     //didn't find snow/ice in the next 24 hours
@@ -513,6 +517,8 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
 
         DeserializationError error = deserializeJson(doc, WEBHTML);
         if (error) {
+            storeError("json error with NOAA");
+
             #ifdef _DEBUG
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
@@ -561,11 +567,13 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
+            storeError("updateWeather1: json error with NOAA");
+
             #ifdef _DEBUG
-                Serial.printf("updateWeather: json error: %d\n",error.c_str());
+                Serial.printf("updateWeather1: json error: %d\n",error.c_str());
                 while(true);
             #endif
-            
+            http.end();
             return false;
         }
         JsonObject properties = doc["properties"];
@@ -636,11 +644,13 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
+            storeError("updateWeather2: json error with NOAA");
+
             #ifdef _DEBUG
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
-            
+            http.end();
             return false;
         }
 
@@ -752,11 +762,13 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
+            storeError("updateWeather3: json error with NOAA");
+
             #ifdef _DEBUG
                 Serial.printf("updateWeather: json error: %d\n",error.c_str());
                 while(true);
             #endif
-            
+            http.end();
             return false;
         }
 
@@ -812,6 +824,8 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
             DeserializationError error = deserializeJson(doc, WEBHTML);
             #ifdef _DEBUG
                 if (error) {
+                    storeError("updateWeather: json error with sunriseIO");
+
                     Serial.printf("updateWeather: sunriseio failed deserialize: %s\n",error.c_str());
                 }                
             #endif

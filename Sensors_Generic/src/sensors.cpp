@@ -34,6 +34,7 @@
 58 - leak yes/no
 60 -  battery power
 61 - battery %
+98 - clock
 99 = any numerical value
 
 */

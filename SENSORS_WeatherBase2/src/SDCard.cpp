@@ -11,6 +11,75 @@ union SensorValBytes {
 //    ~SensorValBytes(){};
 };
 
+
+union ScreenInfoBytes {
+    struct Screen screendata;
+    uint8_t bytes[sizeof(Screen)];
+
+    ScreenInfoBytes() {};
+};
+
+
+//storing variables
+bool storeScreenInfoSD() {
+    String filename = "/Data/ScreenFlags.dat";
+    File f = SD.open(filename, FILE_WRITE);
+    if (f==false) {
+        storeError("Failed to open file to write screen to SD");
+        f.close();
+        return false;
+    }
+    union ScreenInfoBytes D; 
+    D.screendata=I;
+
+    f.write(D.bytes,sizeof(Screen));
+
+    f.close();
+    return true;
+    
+}
+
+bool readScreenInfoSD() //read last screenInfo
+{
+    union ScreenInfoBytes D; 
+    String filename = "/Data/ScreenFlags.dat";
+
+    File f = SD.open(filename, FILE_READ);
+
+    if (f==false)  {
+        #ifdef _DEBUG
+        Serial.printf("Failed to open screenInfo file from SD\n");
+        #endif
+        storeError("Failed to open screenInfo file from SD");
+        
+        f.close();
+        return false;
+    }
+    if (f.size() != sizeof(Screen)) {
+              #ifdef _DEBUG
+        Serial.printf("file on SD was not the size of screenInfo!\n");
+        #endif
+
+        storeError("Screen flag file was the wrong size");
+
+        f.close();
+
+        deleteFiles("ScreenFlags.dat","/Data");
+
+        return false;
+    }
+
+    while (f.available()) {
+        f.read(D.bytes,sizeof(Screen));
+        I = D.screendata;
+    }
+
+    f.close();
+
+    return true;
+
+}
+
 bool writeSensorsSD(String filename)
 {
     union SensorValBytes D;
@@ -18,7 +87,11 @@ bool writeSensorsSD(String filename)
 
 
     File f = SD.open(filename, FILE_WRITE);
-    if (f==false) return false;
+    if (f==false) {
+        storeError("WritesensorsSD: Could not write sensorvals");
+        f.close();
+        return false;
+    }
 
     for (byte j=0;j<SENSORNUM;j++) {
         D.sensordata=Sensors[j];
@@ -37,7 +110,11 @@ bool storeSensorSD(struct SensorVal *S) {
 
     String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v2.dat";
     File f = SD.open(filename, FILE_APPEND);
-    if (f==false) return false;
+    if (f==false) {
+        storeError("storesensorSD: Could not write single sensorval");
+                f.close();
+        return false;
+    }
     union SensorValBytes D; 
     D.sensordata=*S;
 
@@ -54,7 +131,13 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
 
 
     File f = SD.open(filename, FILE_READ);
-    if (f==false) return false;
+    if (f==false) {
+        f.close();
+        storeError("readsensorsSD: Could not read sensorvals");
+
+        return false;
+    }
+
 
     byte cnt = 0;
     while (f.available()) {
@@ -76,7 +159,13 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     union SensorValBytes D;
     byte cnt = 0, deltacnt=0;
     double avgV = 0;
-    if (f==false) return false;
+    if (f==false) {
+        storeError("readSensorSD: Could not read single sensorval");
+
+                f.close();
+        return false;
+    }
+
 
     *samples = f.size()/sizeof(SensorVal);
     while (f.available()) {
@@ -118,7 +207,12 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     uint32_t avgT=0;
     byte goodcount=0;
 
-    if (f==false) return false;
+    if (f==false) {
+            storeError("readsensorsSD: Could not read sensorvals using alt method");
+
+                f.close();
+        return false;
+    }
 
     uint32_t sz = f.size(); //file size 
     *samples = sz/svsz; //total number of stored samples
@@ -187,3 +281,104 @@ uint32_t read32(File &f) {
 }
 
 
+void deleteFiles(const char* pattern,const char* directory) {
+  File dir = SD.open(directory); // Open the root directory
+
+    String filename ;;
+
+  if (!dir) {
+    storeError("deleteFiles: Could not open dir");
+
+    #ifdef _DEBUG 
+    Serial.println("Error opening root directory.");
+    #endif
+    return;
+  }
+
+
+  while (true) {
+    File entry = dir.openNextFile();
+    filename  = (String) directory + "/" + entry.name();
+    #ifdef _DEBUG
+        Serial.printf("Current file: %s\n",filename);
+    #endif
+    if (!entry) {
+      // no more files
+      break;
+    }
+
+    if (matchPattern(entry.name(), pattern)) {
+        #ifdef _DEBUG
+        Serial.print("Deleting: ");
+        Serial.println(filename);
+        #endif
+      if (!SD.remove(filename)) {
+        #ifdef _DEBUG
+        Serial.print("Error deleting: ");
+        Serial.println(filename);
+        #endif
+        
+      }
+    }
+    entry.close();
+  }
+  dir.close();
+}
+
+
+// Simple wildcard matching function (supports * only)
+bool matchPattern(const char* filename, const char* pattern) {
+  const char* fnPtr = filename;
+  const char* patPtr = pattern;
+
+  while (*fnPtr != '\0' || *patPtr != '\0') {
+    if (*patPtr == '*') {
+      patPtr++; // Skip the '*'
+      if (*patPtr == '\0') {
+        return true; // '*' at the end matches everything remaining
+      }
+      while (*fnPtr != '\0') {
+        if (matchPattern(fnPtr, patPtr)) {
+          return true;
+        }
+        fnPtr++;
+      }
+      return false; // No match found after '*'
+    } else if (*fnPtr == *patPtr) {
+      fnPtr++;
+      patPtr++;
+    } else {
+      return false; // Mismatch
+    }
+  }
+
+  return (*fnPtr == '\0' && *patPtr == '\0'); // Both strings must be at the end
+}
+
+void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
+  
+  File root = fs.open(dirname);
+  if(!root){
+    return;
+  }
+  if(!root.isDirectory()){
+    return;
+  }
+
+  File file = root.openNextFile();
+  while(file){
+    if(file.isDirectory()){
+  //    Serial.print("  DIR : ");
+    //  Serial.println(file.name());
+      if(levels){
+        listDir(fs, file.name(), levels -1);
+      }
+    } else {
+      // Serial.print("  FILE: ");
+      // Serial.print(file.name());
+      // Serial.print("  SIZE: ");
+      // Serial.println(file.size());
+    }
+    file = root.openNextFile();
+  }
+}

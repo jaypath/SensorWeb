@@ -1,7 +1,6 @@
 //#define _DEBUG
 #include <utility.hpp>
-#include <FS.h>
-
+//#include <FS.h>
 
 int inArray(int arr[], int N, int value) {
   //returns index to the integer array of length N holding value, or -1 if not found
@@ -56,36 +55,6 @@ char* strPad(char* str, char* pad, byte L)     // Simple C string function
 }
 
 
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
-  Serial.printf("Listing directory: %s\n", dirname);
-
-  File root = fs.open(dirname);
-  if(!root){
-    Serial.println("Failed to open directory");
-    return;
-  }
-  if(!root.isDirectory()){
-    Serial.println("Not a directory");
-    return;
-  }
-
-  File file = root.openNextFile();
-  while(file){
-    if(file.isDirectory()){
-      Serial.print("  DIR : ");
-      Serial.println(file.name());
-      if(levels){
-        listDir(fs, file.name(), levels -1);
-      }
-    } else {
-      Serial.print("  FILE: ");
-      Serial.print(file.name());
-      Serial.print("  SIZE: ");
-      Serial.println(file.size());
-    }
-    file = root.openNextFile();
-  }
-}
 
 
 bool stringToLong(String s, uint32_t* val) {
@@ -542,4 +511,61 @@ bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
     }
     
     return true;
+}
+
+
+bool storeError(const char* E) {
+  snprintf(I.lastError,75,"%s",E);
+ I.lastErrorTime = I.currentTime+1; 
+  return storeScreenInfoSD();
+
+}
+
+void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
+  
+  //reset info
+  I.resetInfo = R;
+  I.lastResetTime=I.currentTime+1; //avoid assigning zero here.
+
+  I.rebootsSinceLast=0;
+
+  //error message
+  storeError(E);
+
+  if (doreboot) {
+    //now restart
+    ESP.restart();
+  }
+  
+}
+
+String lastReset2String(bool addtime) {
+
+  String st = "";
+  if (addtime) st = " @" + (String) dateify(I.lastResetTime);
+
+  st = st + " [with " + (String) I.rebootsSinceLast + " uncontrolled reboots]";
+  switch (I.resetInfo) {
+    case RESETCAUSE::RESET_DEFAULT:
+        return "Default" + st;
+    case RESETCAUSE::RESET_SD:
+        return "SD Error" + st;
+    case RESETCAUSE::RESET_TIME:
+        return "Time error" + st;
+    case RESETCAUSE::RESET_USER:
+        return "User reset" + st;
+    case RESETCAUSE::RESET_WEATHER:
+      return "Weather error" + st;
+    case RESETCAUSE::RESET_WIFI:
+      return "WiFi error" + st;
+    case RESETCAUSE::RESET_OTA:
+      return "OTA reset" + st;
+    case RESETCAUSE::RESET_UNKNOWN:
+      return "Unknown reset" + st;
+    default:
+      return "???" + st;
+  }
+
+  return "?";
+
 }

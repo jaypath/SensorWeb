@@ -94,7 +94,9 @@ struct SensorVal {
   uint16_t SendingInt;
   uint32_t LastReadTime;
   uint32_t LastSendTime;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status, RMB7 = was not flagged, but now is flagged
+  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
+  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
+
 };
 
 extern SensorVal Sensors[SENSORNUM];

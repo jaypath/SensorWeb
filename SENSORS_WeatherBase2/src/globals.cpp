@@ -9,7 +9,8 @@ WiFi_type WIFI_INFO;
 
 
 //sensor
-SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
+//SensorVal *Sensors2 = (SensorVal *)ps_calloc(50,sizeof(SensorVal)); //up to SENSORNUM will be stored. 
+SensorVal Sensors[SENSORNUM];
 
 //screen
 Screen I; //here, I is of type Screen (struct)

@@ -56,13 +56,13 @@ public:
     
     int8_t getTemperature(uint32_t dt=0, bool wetbulb=false,bool asindex = false);    
     
-    uint8_t getHumidity(uint32_t dt);
-    int16_t getWeatherID(uint32_t dt);
+    uint8_t getHumidity(uint32_t dt=0);
+    int16_t getWeatherID(uint32_t dt=0);
     
     uint8_t getPoP(uint32_t dt=0);
-    uint8_t getRain(uint32_t dt=0);
-    uint8_t getSnow(uint32_t dt=0);
-    uint8_t getIce(uint32_t dt=0);
+    uint16_t getRain(uint32_t dt=0);
+    uint16_t getSnow(uint32_t dt=0);
+    uint16_t getIce(uint32_t dt=0);
     int8_t getDewPoint(uint32_t dt);
     uint8_t getWindSpeed(uint32_t dt);
 

@@ -27,6 +27,8 @@ bool storeScreenInfoSD() {
     File f = SD.open(filename, FILE_APPEND);
     if (f==false) {
         lastError = "Failed to write to SD";
+        f.close();
+
         return false;
     }
     union ScreenInfoBytes D; 
@@ -52,6 +54,8 @@ bool readScreenInfoSD() //read last screenInfo
         #endif
         lastError = "Failed to read screenInfo from SD";
         ScreenInfo.lastErrorTime = now();
+        f.close();
+
         return false;
     }
     if (f.size() != sizeof(ScreenFlags)) {
@@ -89,7 +93,10 @@ bool writeSensorsSD(String filename)
 
 
     File f = SD.open(filename, FILE_WRITE);
-    if (f==false) return false;
+    if (f==false) {
+      f.close();
+      return false;
+    }
 
     for (byte j=0;j<SENSORNUM;j++) {
         D.sensordata=Sensors[j];
@@ -108,7 +115,10 @@ bool storeSensorSD(struct SensorVal *S) {
     //write a specific sensor to file
     String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + ".dat";
     File f = SD.open(filename, FILE_APPEND);
-    if (f==false) return false;
+    if (f==false) {
+      f.close();
+      return false;
+    }
     union SensorValBytes D; 
     D.sensordata=*S;
 
@@ -132,6 +142,7 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
     if (f==false) {
         lastError = "Failed to open Sensor file";
         ScreenInfo.lastErrorTime = now();
+        f.close();
 
         return false;
     }
@@ -161,7 +172,11 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     union SensorValBytes D;
     byte cnt = 0, deltacnt=0;
     double avgV = 0;
-    if (f==false) return false;
+    if (f==false) {
+      f.close();
+ 
+      return false;
+    }
 
     *samples = f.size()/sizeof(SensorVal);
     while (f.available()) {
@@ -204,7 +219,10 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     uint32_t avgT=0;
     byte goodcount=0;
 
-    if (f==false) return false;
+    if (f==false) {
+      f.close();
+      return false;
+    }
 
     uint32_t sz = f.size(); //file size 
     *samples = sz/svsz; //total number of stored samples

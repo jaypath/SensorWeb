@@ -30,12 +30,30 @@
 #define LON -71.29822225979105 //only 4 decimal pts allowed with NOAA
 
 
+#define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
+
+//potential reset issues
+typedef enum {
+  RESET_DEFAULT, //reset due to some unknown fault, where the reset state could not be set (probably triggered by a hang and watchdog timer kicked)
+  RESET_SD, //reset because of SD card ... this can't be saved so it's actually pointless :)
+  RESET_WEATHER, //reset because couldn't get weather
+  RESET_USER, //user reset
+  RESET_OTA, //ota reset
+  RESET_WIFI, //no wifi so reset
+  RESET_TIME, //time based reset 
+  RESET_UNKNOWN //unknown cause
+  } RESETCAUSE;
+  
+
 struct Screen {
-    uint8_t wifi;
+    RESETCAUSE resetInfo;
+    time_t lastResetTime;
+    byte rebootsSinceLast=0;
     time_t ALIVESINCE;
+    uint8_t wifi;
     time_t currentTime;
-    const byte CLOCK_Y = 105;
-    const byte HEADER_Y = 30;
+    byte CLOCK_Y = 105;
+    byte HEADER_Y = 30;
 
     uint32_t lastHeader=0;
     uint32_t lastWeather=0;
@@ -70,6 +88,9 @@ struct Screen {
     int8_t currentTemp;
     int8_t Tmax;
     int8_t Tmin;
+
+    char lastError[76];
+    time_t lastErrorTime;
 };
 
 //#define _LIGHTMODE
@@ -118,6 +139,7 @@ struct WiFi_type {
   IPAddress SUBNET;
   IPAddress MYIP; //4 bytes
 };
+
 
 
 //

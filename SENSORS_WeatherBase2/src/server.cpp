@@ -162,6 +162,9 @@ uint8_t connectWiFi()
         
   }
 
+
+  storeError("connectWiFi: failed to connect");
+
   #ifdef _DEBUG
   SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
        #endif
@@ -314,17 +317,20 @@ void handlerForRoot(bool allsensors) {
   
   WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
   WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   #ifdef _USE8266
-  WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "</h2><br>";  
+  WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "<br>";  
   #endif
 
   #ifdef _USE32
-  WEBHTML = WEBHTML + "Free Stack Memory: " + esp_get_free_internal_heap_size() + "<br>";  
-  WEBHTML = WEBHTML + "Lowest Free Stack Memory: " + esp_get_minimum_free_heap_size() + "</h2><br>";  
+  WEBHTML = WEBHTML + "Free Internal Heap Memory: " + esp_get_free_internal_heap_size() + "<br>";  
+  WEBHTML = WEBHTML + "Free Total Heap Memory: " + esp_get_free_heap_size() + "<br>";  
+  WEBHTML = WEBHTML + "Minimum Free Heap: " + esp_get_minimum_free_heap_size() + "<br>";  
+  WEBHTML = WEBHTML + "PSRAM Size: " + (String) ESP.getFreePsram() + " / " + (String) ESP.getPsramSize() + "<br>"; 
+  
   #endif
-
+ 
 
 /*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   WEBHTML += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
@@ -332,19 +338,22 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</FORM><br>";
 */
 
+  WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
+  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) dateify(I.lastErrorTime) + "<br>";
+  WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + "<br>";
+  WEBHTML = WEBHTML + "---------------------<br>";      
+
+  WEBHTML += "Weather last retrieval attempted: " + (String) dateify(WeatherData.lastUpdateAttempt);
+  if (WeatherData.lastUpdateAttempt != WeatherData.lastUpdateT) WEBHTML += " [last successful @" + (String) dateify(WeatherData.lastUpdateT) + "]";
+  else WEBHTML += " [succeeded]";
+  WEBHTML += "<br>";
+  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+  WEBHTML += "Weather now: " + (String) WeatherData.getTemperature() + "F and code " +  (String) WeatherData.getWeatherID() + "<br>";
+  WEBHTML += "Weather in 1 hour: " + (String) WeatherData.getTemperature(I.currentTime+3600) + "F and code " +  (String) WeatherData.getWeatherID(I.currentTime+3600) + "<br>";
   WEBHTML = WEBHTML + "Sunrise " + dateify(WeatherData.sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
 
-  WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
-  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
-
-  #ifdef _DEBUG
-WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
-  WEBHTML += "Weather temp in 1 hour: " + (String) WeatherData.getTemperature(t+3600) + "<br>";
-  WEBHTML += "WeatherID in 1 hour: " + (String) WeatherData.getWeatherID(t+3600) + "<br>";
-  WEBHTML += "Weather FAILURE detected at: " + (String) dateify(WTHRFAIL) + "<br>";
-  #endif
   WEBHTML = WEBHTML + "---------------------<br>";      
 
   if (I.isFlagged || I.isHeat || I.isAC) {
@@ -361,6 +370,17 @@ WEBHTML = WEBHTML + "---------------------<br>";
 
     WEBHTML = WEBHTML + "</font>---------------------<br>";      
   }
+
+  WEBHTML += "<FORM action=\"/FLUSHSD\" method=\"get\">";
+  WEBHTML += "<p style=\"font-family:arial, sans-serif\">";
+  WEBHTML += "Type a number and Click FLUSH to download or delete SD card data and reboot. !!!WARNING!!! Cannot be undone! <br>";
+  WEBHTML += "<label for=\"FLUSHCONFIRM\">1=Delete screen data, 2=Delete sensor data, 3=Download variables to SD. (1 and 2 will result in reboot) </label>";
+  WEBHTML += "<input type=\"text\" id=\"FLUSHCONFIRM\" name=\"FLUSHCONFIRM\" value=\"0\" maxlength=\"5\"><br>";  
+  WEBHTML +=  "<br>";
+  WEBHTML += "<button type=\"submit\">FLUSH</button><br>";
+  WEBHTML += "</p></font></form>";
+
+      WEBHTML = WEBHTML + "---------------------<br>";      
 
 
   WEBHTML += "<FORM action=\"/UPDATEDEFAULTS\" method=\"get\">";
@@ -383,7 +403,7 @@ WEBHTML = WEBHTML + "---------------------<br>";
   #endif
 
   WEBHTML +=  "<br>";
-  WEBHTML += "<button type=\"submit\">Submit</button><br><br>";
+  WEBHTML += "<button type=\"submit\">Submit</button><br>";
 
   WEBHTML += "</p></font></form>";
 
@@ -506,6 +526,30 @@ WEBHTML = WEBHTML + "---------------------<br>";
 
     
   server.send(200, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+}
+
+void handleFLUSHSD() {
+  if (server.args()==0) return;
+  if (server.argName(0)=="FLUSHCONFIRM") {
+
+    if (server.arg(0).toInt()== 3) {
+      storeScreenInfoSD();
+      writeSensorsSD();
+    } else {    
+      if (server.arg(0).toInt()== 1) {
+        deleteFiles("ScreenFlags.dat","/Data");
+      }
+      if (server.arg(0).toInt()== 2) {
+        deleteFiles("SensorBackupv2.dat","/Data");
+      }
+      server.send(200, "text/plain","OK, about to reset");
+      controlledReboot("User Request",RESET_USER);
+    }
+  }
+
+  server.sendHeader("Location", "/");//This Line goes to root page
+  server.send(302, "text/plain", "Attempted.");  
 
 }
 
@@ -763,7 +807,7 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
     return;
   }
   Sensors[sn] = S;
-
+  
   server.send(200, "text/plain", "Received Data"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
 
 }

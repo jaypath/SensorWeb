@@ -30,6 +30,8 @@
 #endif
 
 //declared as global constants
+//extern SensorVal *Sensors;
+
 extern SensorVal Sensors[SENSORNUM];
 extern time_t ALIVESINCE;
 extern String WEBHTML;
@@ -69,7 +71,7 @@ void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
 void handleUPDATEDEFAULTS();
 void handleRETRIEVEDATA();
-void handleFILELIST();
+void handleFLUSHSD();
 bool SendData(struct SensorVal*);
 
 byte connectWiFi();

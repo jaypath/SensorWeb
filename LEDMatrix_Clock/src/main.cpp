@@ -10,7 +10,7 @@
 #include <WiFiClient.h>
 //#include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
-#include <ArduinoJson.h>
+//#include <ArduinoJson.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <MD_Parola.h>
@@ -73,6 +73,31 @@ uint32_t ALIVESINCE = 0;
 //functions
 bool getWeather();
 void weatherIDLookup(uint16_t wid);
+bool sendData() {
+  WiFiClient wfclient;
+  HTTPClient http;
+ 
+  if(WiFi.status()== WL_CONNECTED){
+
+    String payload;
+    String tempstring;
+    
+    tempstring = "http://192.168.68.93/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=CLOCK";
+    tempstring = tempstring + "&varValue=" + (String) now();
+    tempstring = tempstring + "&Flags=" + (String) 0b10000000;
+    tempstring = tempstring + "&logID=" + (String) WiFi.localIP()[4] + ".98.1" + "&timeLogged=" + String(now(), DEC) + "&isFlagged=0&SendingInt=300";
+
+    http.begin(wfclient,tempstring.c_str());
+    http.GET();
+    payload = http.getString();
+    http.end();
+
+    return true;  
+
+  }
+  return false;
+
+}
 bool getWeather() {
   //get weather from local weather server
 
@@ -113,7 +138,8 @@ bool getWeather() {
         daily_pop[0] = payload.substring(0, payload.indexOf(";",0)).toInt(); 
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
-        daily_snow[0] = payload.substring(0, payload.indexOf(";",0)).toDouble(); 
+        daily_snow[0] = ((double) payload.substring(0, payload.indexOf(";",0)).toDouble())*0.0393701; //convert to INCHES
+
       payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
 
         sunrise = payload.substring(0, payload.indexOf(";",0)).toDouble(); 

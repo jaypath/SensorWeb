@@ -121,7 +121,9 @@ extern Screen I;
 extern String WEBHTML;
 //extern uint8_t OldTime[4];
 extern WeatherInfo WeatherData;
+//extern SensorVal *Sensors; 
 extern SensorVal Sensors[SENSORNUM];
+
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
 extern double LAST_BAR;
@@ -138,12 +140,12 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 uint16_t set_color(byte r, byte g, byte b);
 uint32_t setFont(uint8_t FNTSZ);
 void drawBmp(const char*, int16_t, int16_t, uint16_t alpha = TRANSPARENT_COLOR);
-void fcnDrawHeader(time_t t);
-void fcnDrawClock(time_t t);
-void fcnDrawScreen(time_t t);
-void fcnDrawWeather(time_t t);
+void fcnDrawHeader();
+void fcnDrawClock();
+void fcnDrawScreen();
+void fcnDrawWeather();
 void fcnDrawSensors(int Y);
-void fncDrawCurrentCondition(time_t t);
+void fncDrawCurrentCondition();
 void fcnPrintTxtHeatingCooling(int x,int y);
 void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ,int x=-1,int y=-1,bool autocontrast = false);
 void fcnPrintTxtColor(int value,byte FNTSZ,int x=-1,int y=-1,bool autocontrast=false);
@@ -207,7 +209,10 @@ tft.init();
       Serial.println("SD mount failed... ");
     #endif
     delay(10000);
-    ESP.restart();
+    I.resetInfo = RESET_SD;
+    I.lastResetTime = I.currentTime;
+    //can't dump to SD... since it didn't mount :(
+    controlledReboot("SD Card failed",RESET_SD);
   } 
   else {
     #ifdef _DEBUG
@@ -217,7 +222,7 @@ tft.init();
     tft.println("OK.\n");
     tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
-     tft.print("Loading data from SD... ");
+     tft.print("Loading sensor data from SD... ");
      bool sdread = readSensorsSD();
      if (sdread) {
       tft.setTextColor(TFT_GREEN);
@@ -225,9 +230,9 @@ tft.init();
       tft.setTextColor(FG_COLOR);
      } else {
       tft.setTextColor(TFT_RED);
-      tft.println("FAIL - Reboot in 10s");
-      delay(10000);
-      ESP.restart();
+      tft.println("FAIL - could not read sensor data");
+      delay(5000);
+      tft.setTextColor(FG_COLOR);
      }
 
     #ifdef _DEBUG
@@ -235,6 +240,18 @@ tft.init();
       Serial.println((sdread==true)?"yes":"no");
     #endif
 
+     tft.print("Loading screen flags from SD... ");
+     sdread = readScreenInfoSD();
+     if (sdread) {
+      tft.setTextColor(TFT_GREEN);
+      tft.println("OK\n");
+      tft.setTextColor(FG_COLOR);
+     } else {
+      tft.setTextColor(TFT_RED);
+      tft.println("FAIL - could not read screen data");
+      delay(5000);
+      tft.setTextColor(FG_COLOR);
+     }
   }
     
 
@@ -265,8 +282,11 @@ tft.init();
   if (WiFi.status() != WL_CONNECTED)
   {
     tft.printf("Wifi FAILED %d attempts - reboot in 10s",retries);    
+    I.resetInfo = RESET_WIFI;
+    I.lastResetTime = I.currentTime;
     delay(10000);
-    ESP.restart();
+    controlledReboot("WiFi failed",RESET_WIFI);
+
   } else {
     tft.setTextColor(TFT_GREEN);    
     tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\n",retries,WiFi.localIP().toString().c_str());
@@ -293,12 +313,14 @@ tft.print("Connecting ArduinoOTA... ");
   ArduinoOTA.onStart([]() {
     tft.fillScreen(BG_COLOR);            // Clear screen
     tft.setTextFont(2);
-
     tft.setCursor(0,0);
     tft.println("OTA started, receiving data.");
   });
   ArduinoOTA.onEnd([]() {
-    tft.setTextFont(2);
+
+    controlledReboot("OTA triggering reboot",RESETCAUSE::RESET_OTA,false);
+    writeSensorsSD(); //store sensor data to SD before reboot
+
     tft.setTextSize(1);
     tft.println("OTA End. About to reboot!");
   });
@@ -347,6 +369,7 @@ tft.print("Connecting ArduinoOTA... ");
     server.on("/REBOOT",handleReboot);
     server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
     server.on("/RETRIEVEDATA",handleRETRIEVEDATA);
+    server.on("/FLUSHSD",handleFLUSHSD);
 
     server.onNotFound(handleNotFound);
     #ifdef _DEBUG
@@ -375,20 +398,31 @@ tft.print("Connecting ArduinoOTA... ");
       tft.setTextColor(TFT_RED);
       tft.printf("FAIL.\n");
       tft.setTextColor(FG_COLOR);
+
+      storeError("Time failed!");
+
+
     }
 
     I.currentTime = now();
     I.ALIVESINCE = I.currentTime;
+    if (I.ALIVESINCE>I.lastResetTime+300) I.rebootsSinceLast++;
+    else I.rebootsSinceLast=0;
 
     #ifdef _DEBUG    
       Serial.println("Setup done");
       delay(3000);
     #endif
     tft.setTextColor(TFT_GREEN);
-    tft.printf("Setup Done.\n");
+
+    tft.printf("Setup OK...");
     tft.setTextColor(FG_COLOR);
-
-
+    tft.printf("Waiting for weather to load...");
+    I.lastWeather=0; //force weather to reload
+    I.lastHeader=0;
+    I.lastCurrentCondition=0;
+    I.lastFlagView=0;
+    I.lastClock=0;
 }
 
 //weather FCNs
@@ -782,9 +816,9 @@ uint16_t temp2color(int temp,bool invertgray) {
   return tft.color565(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
 }
 
-void fcnDrawHeader(time_t t) {
+void fcnDrawHeader() {
   //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
-  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeader+3599<t)     I.lastHeader = t;
+  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeader+3599<I.currentTime)     I.lastHeader = I.currentTime;
   else return;
 
   tft.fillRect(0,0,tft.width(),I.HEADER_Y,BG_COLOR); //clear the header area
@@ -797,7 +831,7 @@ void fcnDrawHeader(time_t t) {
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   
   tft.setTextDatum(TL_DATUM);
-  st = dateify(t,"dow mm/dd");
+  st = dateify(I.currentTime,"dow mm/dd");
   tft.drawString(st,x,y);
   x += tft.textWidth(st)+10;
   
@@ -844,12 +878,12 @@ void fcnDrawHeader(time_t t) {
 
 }
 
-void fcnDrawScreen(time_t t) {
+void fcnDrawScreen() {
 
-  fcnDrawClock(t); 
-  fcnDrawHeader(t);
-  fncDrawCurrentCondition(t);
-  fcnDrawWeather(t);
+  fcnDrawClock(); 
+  fcnDrawHeader();
+  fncDrawCurrentCondition();
+  fcnDrawWeather();
     I.wasFlagged = I.isFlagged;
     I.wasAC = I.isAC;
     I.wasFan = I.isFan;
@@ -1195,18 +1229,18 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
   return;
 }
 
-void fcnDrawClock(time_t t) {
-  if (t == I.lastClock) return;
+void fcnDrawClock() {
+  if (I.currentTime == I.lastClock) return;
   bool forcedraw = false;
   int Y = tft.height() - I.CLOCK_Y;
   if (I.lastClock==0) forcedraw=true;
-  I.lastClock = t;
+  I.lastClock = I.currentTime;
 
   
   //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
   if (I.isFlagged) {
-    if (t>I.lastFlagView+I.flagViewTime) {
-      I.lastFlagView = t;
+    if (I.currentTime>I.lastFlagView+I.flagViewTime) {
+      I.lastFlagView = I.currentTime;
       if (I.ScreenNum==1) {
         I.ScreenNum = 0; //stop showing flags
         forcedraw=true;
@@ -1255,10 +1289,10 @@ void fcnDrawClock(time_t t) {
   snprintf(tempbuf,5,"%s",dateify(t,"ss"));
   fcnPrintTxtCenter((String) tempbuf,FNTSZ, X+X+X/2,Y+I.CLOCK_Y/2);
   #else
-    if (second(t)==0 || forcedraw) {
+    if (second(I.currentTime)==0 || forcedraw) {
       FH = setFont(8);
       tft.fillRect(0,Y,tft.width(),I.CLOCK_Y,BG_COLOR); //clear the "h:nn"" clock area
-      snprintf(tempbuf,19,"%s",dateify(t,"h1:nn"));
+      snprintf(tempbuf,19,"%s",dateify(I.currentTime,"h1:nn"));
       fcnPrintTxtCenter((String) tempbuf,8, tft.width()/2,Y+I.CLOCK_Y/2);
     }
   #endif
@@ -1268,15 +1302,15 @@ void fcnDrawClock(time_t t) {
 }
 
 
-void fncDrawCurrentCondition(time_t t) {
+void fncDrawCurrentCondition() {
   if (I.localWeather==255)     I.localWeather=find_sensor_name("Outside", 4);  
   if (I.localWeather<255 && (int8_t) Sensors[I.localWeather].snsValue!=I.currentTemp && I.currentTime-Sensors[I.localWeather].timeLogged<180) {
     I.currentTemp=(int8_t) Sensors[I.localWeather].snsValue;
   } else {
-      if (t<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
+      if (I.currentTime<I.lastCurrentCondition + (I.currentConditionTime)*60 && I.lastCurrentCondition>0) return; //not time to update cc
   }
 
-  I.lastCurrentCondition = t;
+  I.lastCurrentCondition = I.currentTime;
 
   int Y = I.HEADER_Y, Z = 10,   X=180+(tft.width()-180)/2; //middle of area on side of icon
   tft.fillRect(180,Y,tft.width()-180,180,BG_COLOR); //clear the cc area
@@ -1286,7 +1320,7 @@ void fncDrawCurrentCondition(time_t t) {
   String st = "Local";
 
   I.localWeather=find_sensor_name("Outside", 4); //reset periodically, in case there is a change
-  I.currentTemp = WeatherData.getTemperature(t);
+  I.currentTemp = WeatherData.getTemperature(I.currentTime);
   
   if (I.localWeather<255) {
     if (I.currentTime-Sensors[I.localWeather].timeLogged>60*30) {
@@ -1316,7 +1350,7 @@ void fncDrawCurrentCondition(time_t t) {
     FH = setFont(FNTSZ);
     int8_t tempMaxmin[2];
     WeatherData.getDailyTemp(0,tempMaxmin);
-    if (tempMaxmin[0] == -125) tempMaxmin[0] = WeatherData.getTemperature(t);
+    if (tempMaxmin[0] == -125) tempMaxmin[0] = WeatherData.getTemperature(I.currentTime);
     //does local max/min trump reported?
     if (tempMaxmin[0]<I.currentTemp) tempMaxmin[0]=I.currentTemp;
     if (tempMaxmin[1]>I.currentTemp) tempMaxmin[1]=I.currentTemp;
@@ -1374,10 +1408,10 @@ void fncDrawCurrentCondition(time_t t) {
 
 }
 
-void fcnDrawWeather(time_t t) {
+void fcnDrawWeather() {
 
-if ((uint32_t) (t<I.lastWeather+I.weatherTime*60) && I.lastWeather>0) return;
-I.lastWeather = t;
+if ((uint32_t) (I.currentTime<I.lastWeather+I.weatherTime*60) && I.lastWeather>0) return;
+I.lastWeather = I.currentTime;
 
 int X=0,Y = I.HEADER_Y,Z=0; //header ends at 30
 
@@ -1395,45 +1429,39 @@ byte section_spacer = 3;
 
 //draw icon for NOW
 int iconID = WeatherData.getWeatherID(0);
-if (t > WeatherData.sunrise  && t< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID);
+if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID);
 else snprintf(tempbuf,44,"/BMP180x180night/%d.bmp",iconID);
 
 drawBmp(tempbuf,0,Y);
 
 //add info atop icon
-FNTSZ=1;
-deltaY = setFont(FNTSZ);
 if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in next 24 h
   uint32_t Next_Precip = WeatherData.nextPrecip();
   uint32_t nextrain = WeatherData.nextRain();
-  uint8_t rain =  WeatherData.getRain();
+  double rain =  WeatherData.getRain() * 0.0393701; //to inches
   uint32_t nextsnow = WeatherData.nextSnow();
-  uint8_t snow =  WeatherData.getSnow() +   WeatherData.getIce();
-  if (nextsnow < t + 86400 && snow > 0) {
+  double snow =  (WeatherData.getSnow() +   WeatherData.getIce())*0.0393701;
+  if (nextsnow < I.currentTime + 86400 && snow > 0) {
       tft.setTextColor(tft.color565(255,0,0),tft.color565(255,0,0));
-      snprintf(tempbuf,30,"Snow@%s %.1f\"",dateify(nextsnow,"hh"),snow);
-      fcnPrintTxtCenter(tempbuf,FNTSZ,60,180-7);    
+      snprintf(tempbuf,30,"Snow %.1f\"",dateify(nextsnow,"hh"),snow);
+      FNTSZ=4;      
   } else {
-    if (rain>0 && nextrain< t + 86400 ) {
+    if (rain>0 && nextrain< I.currentTime + 86400 ) {
       tft.setTextColor(tft.color565(255,255,0),tft.color565(0,0,255));
       snprintf(tempbuf,30,"Rain@%s",dateify(Next_Precip,"hh:nn"));
-      if (FNTSZ==0) deltaY = 8;
-      else deltaY = setFont(FNTSZ);
+      FNTSZ=2;
     }
   }
-  fcnPrintTxtCenter(tempbuf,FNTSZ,60,180-deltaY);
-}
-tft.setTextColor(FG_COLOR,BG_COLOR);
-
-
-  Y = I.HEADER_Y+180+section_spacer;
-  tft.setCursor(0,Y);
-
-  FNTSZ = 4;
   deltaY = setFont(FNTSZ);
-  
-  tft.setTextColor(FG_COLOR,BG_COLOR);
+  fcnPrintTxtCenter(tempbuf,FNTSZ,5,Y+170-deltaY);
+}
 
+tft.setTextColor(FG_COLOR,BG_COLOR);
+Y = I.HEADER_Y+180+section_spacer;
+tft.setCursor(0,Y);
+FNTSZ = 4;
+deltaY = setFont(FNTSZ);
+  
   for (i=1;i<7;i++) { //draw 6 icons, with I.HourlyInterval hours between icons. Note that index 1 is  1 hour from now
     if (i*I.HourlyInterval>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
     
@@ -1460,7 +1488,7 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
     FNTSZ=4;
     deltaY = setFont(FNTSZ);
     tft.setTextFont(FNTSZ); //med font
-    fcnPrintTxtColor(WeatherData.getTemperature(t + i*I.HourlyInterval*3600),FNTSZ,X,Y+Z+deltaY/2);
+    fcnPrintTxtColor(WeatherData.getTemperature(I.currentTime + i*I.HourlyInterval*3600),FNTSZ,X,Y+Z+deltaY/2);
     tft.setTextColor(FG_COLOR,BG_COLOR);
     Z+=deltaY+section_spacer;
   }
@@ -1504,48 +1532,15 @@ tft.setTextColor(FG_COLOR,BG_COLOR);
 }
 
 
-#ifdef _DEBUG
-uint16_t TESTRUN = 120;
-uint32_t WTHRFAIL = 0;
-#endif
-
-
 
 void loop() {
   esp_task_wdt_reset(); //reset the watchdog!
 
   I.currentTime = now(); // store the current time in time variable t
-     #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-        Serial.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-        while(true);
-       }
-     #endif
 
 
   ArduinoOTA.handle();
-  #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop OTA.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-       while(true);
-       }
-     #endif
   server.handleClient();
-      #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-       tft.printf("Loop server.handle: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-       while(true);
-       }
-     #endif
   updateTime(1,0); //just try once
    
   
@@ -1559,7 +1554,13 @@ void loop() {
       setFont(2);
       tft.printf("Weather failed \nfor 5 minutes.\nRebooting 1 minute...");
       delay(60000);
-      ESP.restart();
+      I.resetInfo = RESET_WEATHER;
+      I.lastResetTime = I.currentTime;
+      
+      storeError("Weather failed too many times");
+
+      controlledReboot("Weather failed too many times",RESET_WEATHER);
+
     }
 
     #ifdef _DEBUG
@@ -1596,7 +1597,13 @@ void loop() {
 
     I.isExpired = checkExpiration(-1,I.currentTime,true); //this counts critical  expired sensors
     I.isFlagged+=I.isExpired; //add expired count, because expired sensors don't otherwiseget included
-    
+
+
+    if (minute()%5==0) {
+      //overwrite  sensors to the sd card
+      writeSensorsSD();
+      storeScreenInfoSD();
+    }
     
   }
 
@@ -1610,8 +1617,6 @@ void loop() {
     //expire any measurements that are too old, and delete noncritical ones
     checkExpiration(-1,I.currentTime,false);
 
-    //overwrite  sensors to the sd card
-    writeSensorsSD();
 
       
   }
@@ -1629,7 +1634,7 @@ void loop() {
     //do stuff every second    
 
     if (I.wifi>0) I.wifi--;
-    fcnDrawScreen(I.currentTime);
+    fcnDrawScreen();
         #ifdef _DEBUG
        if (I.flagViewTime==0) {
        Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
