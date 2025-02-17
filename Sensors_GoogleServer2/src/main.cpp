@@ -42,7 +42,7 @@ extern byte OldTime[5];
 
 extern String GsheetID; //file ID for this month's spreadsheet
 extern String GsheetName; //file name for this month's spreadsheet
-extern String lastError;
+
 extern weathertype WeatherData;
 
 extern LGFX tft;            // declare display variable
@@ -341,7 +341,9 @@ void setup()
     tallyFlags();
     
     ScreenInfo.ALIVESINCE = ScreenInfo.t;
-    
+    if (ScreenInfo.ALIVESINCE>ScreenInfo.lastResetTime+300) ScreenInfo.rebootsSinceLast++;
+    else ScreenInfo.rebootsSinceLast=0;
+
 
     tft.printf("Get weather");
 

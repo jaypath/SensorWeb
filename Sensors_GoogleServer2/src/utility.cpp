@@ -695,3 +695,60 @@ double minmax(double value, double minval, double maxval) {
   return value;
 
 }
+
+
+bool storeError(const char* E) {
+  snprintf(ScreenInfo.lastError,75,"%s",E);
+  ScreenInfo.lastErrorTime = ScreenInfo.t+1; 
+  return storeScreenInfoSD();
+
+}
+
+void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
+  
+  //reset info
+  ScreenInfo.resetInfo = R;
+  ScreenInfo.lastResetTime=ScreenInfo.t+1; //avoid assigning zero here.
+
+  ScreenInfo.rebootsSinceLast=0;
+
+  //error message
+  storeError(E);
+
+  if (doreboot) {
+    //now restart
+    ESP.restart();
+  }
+  
+}
+
+String lastReset2String(bool addtime) {
+
+  String st = "";
+  if (addtime) st = " @" + (String) dateify(ScreenInfo.lastResetTime);
+
+  st = st + " [with " + (String) ScreenInfo.rebootsSinceLast + " uncontrolled reboots]";
+  switch (ScreenInfo.resetInfo) {
+    case RESETCAUSE::RESET_DEFAULT:
+        return "Default" + st;
+    case RESETCAUSE::RESET_SD:
+        return "SD Error" + st;
+    case RESETCAUSE::RESET_TIME:
+        return "Time error" + st;
+    case RESETCAUSE::RESET_USER:
+        return "User reset" + st;
+    case RESETCAUSE::RESET_WEATHER:
+      return "Weather error" + st;
+    case RESETCAUSE::RESET_WIFI:
+      return "WiFi error" + st;
+    case RESETCAUSE::RESET_OTA:
+      return "OTA reset" + st;
+    case RESETCAUSE::RESET_UNKNOWN:
+      return "Unknown reset" + st;
+    default:
+      return "???" + st;
+  }
+
+  return "?";
+
+}

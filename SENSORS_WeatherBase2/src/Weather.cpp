@@ -558,7 +558,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         String ca_cert = getCert("/Certificates/NOAA.crt");
 
         wfclient.setCACert(ca_cert.c_str());
-        I.wifi=10;
+        
         http.useHTTP10(true); //downgrade http so that the below stream capture works. Otherwise must use StreamUtils library to chunk decode the stream
         http.begin(wfclient,url.c_str());
         
@@ -635,7 +635,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         String ca_cert = getCert("/Certificates/NOAA.crt");
 
         wfclient.setCACert(ca_cert.c_str());
-        I.wifi=10;
+        
         http.useHTTP10(true); //downgrade http so that the below stream capture works. Otherwise must use StreamUtils library to chunk decode the stream
         http.begin(wfclient,url.c_str());
         
@@ -753,7 +753,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         String ca_cert = getCert("/Certificates/NOAA.crt");
 
         wfclient.setCACert(ca_cert.c_str());
-        I.wifi=10;
+        
         http.useHTTP10(true); //downgrade http so that the below stream capture works. Otherwise must use StreamUtils library to chunk decode the stream
         http.begin(wfclient,url.c_str());
         

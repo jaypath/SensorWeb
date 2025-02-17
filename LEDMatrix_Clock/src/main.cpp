@@ -85,7 +85,7 @@ bool sendData() {
     tempstring = "http://192.168.68.93/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=CLOCK";
     tempstring = tempstring + "&varValue=" + (String) now();
     tempstring = tempstring + "&Flags=" + (String) 0b10000000;
-    tempstring = tempstring + "&logID=" + (String) WiFi.localIP()[4] + ".98.1" + "&timeLogged=" + String(now(), DEC) + "&isFlagged=0&SendingInt=300";
+    tempstring = tempstring + "&logID=" + (String) WiFi.localIP()[4] + ".98.1" + "&timeLogged=" + String(now(), DEC) + "&isFlagged=0&SendingInt=120";
 
     http.begin(wfclient,tempstring.c_str());
     http.GET();
@@ -568,6 +568,8 @@ void loop() {
   if (TIMERS[1]!=x) {
     TIMERS[1]=x;
     ClockDefs.ClockTimeLeft =0; //force a clock draw
+
+    if (minute(t)%2==0) sendData();
   }
 
   x=hour(t);

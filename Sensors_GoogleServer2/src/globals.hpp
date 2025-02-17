@@ -171,11 +171,25 @@ struct SensorVal {
   uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value  
 };
 
+
+    //potential reset issues
+    typedef enum {
+      RESET_DEFAULT, //reset due to some unknown fault, where the reset state could not be set (probably triggered by a hang and watchdog timer kicked)
+      RESET_SD, //reset because of SD card ... this can't be saved so it's actually pointless :)
+      RESET_WEATHER, //reset because couldn't get weather
+      RESET_USER, //user reset
+      RESET_OTA, //ota reset
+      RESET_WIFI, //no wifi so reset
+      RESET_TIME, //time based reset 
+      RESET_UNKNOWN //unknown cause
+      } RESETCAUSE;
+      
+
+      
 struct ScreenFlags {
     // So we can have initializers and thiscan still bein a union
     ScreenFlags();
 
-    uint32_t ALIVESINCE;
 
     char tempbuf[71];     //buffer for general purpose use
 
@@ -257,6 +271,12 @@ struct ScreenFlags {
     //String GsheetName= ""; //file name for this month's spreadsheet
     //String lastError;
     uint32_t lastErrorTime=0;
+    char lastError[76];
+    uint32_t ALIVESINCE;
+    RESETCAUSE resetInfo;
+    time_t lastResetTime;
+    byte rebootsSinceLast=0;
+
 
     uint16_t Ypos;
 
@@ -265,7 +285,8 @@ struct ScreenFlags {
 };
 
 
-    
+
+
 
 const     uint8_t temp_colors[104] = {
     20, 255, 0, 255, //20

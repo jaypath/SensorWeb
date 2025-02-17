@@ -3,7 +3,7 @@
 extern WebServer server;
 extern String GsheetID; //file ID for this month's spreadsheet
 extern String GsheetName; //file name for this month's spreadsheet
-extern String lastError;
+
 extern weathertype WeatherData;
 
 extern SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored - this is for isflagged sensors!
@@ -228,6 +228,19 @@ void handleRoot() {
   currentLine += "<button type=\"submit\">Update Time</button><br>";
   currentLine += "</FORM><br>";
 
+
+  currentLine += "Free Internal Heap Memory: " + (String) esp_get_free_internal_heap_size() + "<br>";  
+  currentLine += "Free Total Heap Memory: " + (String) esp_get_free_heap_size() + "<br>";  
+  currentLine += "Minimum Free Heap: " + (String) esp_get_minimum_free_heap_size() + "<br>";  
+  currentLine += "PSRAM Size: " + (String) ESP.getFreePsram() + " / " + (String) ESP.getPsramSize() + "<br>"; 
+  
+
+  currentLine += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
+  currentLine +=  "Alive since: " + (String) dateify(ScreenInfo.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+  currentLine +=  "Last error: " + (String) ScreenInfo.lastError + " @" + (String) dateify(ScreenInfo.lastErrorTime) + "<br>";
+  currentLine +=  "Last known reset: " + (String) lastReset2String()  + "<br>";
+  currentLine +=  "---------------------<br>";      
+
   
   currentLine += "<a href=\"/LIST\">List all sensors</a><br>";
   currentLine = currentLine + "isFlagged: " + (String) ScreenInfo.isFlagged + "<br>";
@@ -402,7 +415,7 @@ uint8_t tempIP[4] = {0,0,0,0};
 
 
     server.send(401, "text/plain", "Critical failure... I could not find the sensor or enter a new value. This should not be possible, so this error is undefined."); // Send HTTP status massive error
-    lastError = "Out of sensor space";
+    snprintf(ScreenInfo.lastError,75,"Out of sensor space");
     ScreenInfo.lastErrorTime = ScreenInfo.t;
 
     return;
@@ -572,7 +585,7 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
                   Serial.println("Did not find the file.");
                 #endif
 
-    lastError = resultstring;
+    snprintf(ScreenInfo.lastError,75,"%s",resultstring.c_str());
   
     if (createfile) {
                   #ifdef _DEBUG
@@ -604,7 +617,8 @@ String file_findSpreadsheetIDByName(String sheetname, bool createfile) {
         ScreenInfo.Ypos = ScreenInfo.Ypos + tft.fontHeight(SMALLFONT)+2;
       #endif
     resultstring = "ERROR: gsheet error";
-    lastError = resultstring;
+    snprintf(ScreenInfo.lastError,75,"%s",resultstring.c_str());
+
     ScreenInfo.lastErrorTime = ScreenInfo.t;
   }
 
@@ -621,7 +635,8 @@ String file_createSpreadsheet(String sheetname, bool checkFile=true) {
     file_findSpreadsheetIDByName(sheetname,false);
   
     if (fileID.substring(0,5)!="ERROR") {
-      lastError = "Tried to create a file that exists!";   
+      snprintf(ScreenInfo.lastError,75,"Tried to create a file that exists!");
+      
       ScreenInfo.lastErrorTime = ScreenInfo.t;
       return fileID;
     }
@@ -653,7 +668,7 @@ String file_createSpreadsheet(String sheetname, bool checkFile=true) {
       ScreenInfo.Ypos = ScreenInfo.Ypos + tft.fontHeight(SMALLFONT)+2;
     #endif
 
-    lastError = "ERROR: Gsheet failed to create";
+    snprintf(ScreenInfo.lastError,75,"ERROR: Gsheet failed to create");
     ScreenInfo.lastErrorTime = ScreenInfo.t;
     
   
@@ -671,7 +686,8 @@ bool file_createHeaders(String fileID,String Headers) {
   */
 
   if (fileID.substring(0,5)=="ERROR") {
-    lastError = fileID;
+    snprintf(ScreenInfo.lastError,75,"%s",fileID.c_str());
+
     ScreenInfo.lastErrorTime = ScreenInfo.t;
      return false;
   }
@@ -715,7 +731,7 @@ bool file_uploadSensorData(void) {
     GsheetName = "ArduinoLog" + (String) dateify(ScreenInfo.t,"yyyy-mm");
     GsheetID = file_findSpreadsheetIDByName(GsheetName,true);
     if (GsheetID=="" || GsheetID.substring(0,5)=="ERROR") {
-      lastError = GsheetID;
+      snprintf(ScreenInfo.lastError,75,"%s",GsheetID.c_str());
       ScreenInfo.lastErrorTime = ScreenInfo.t;
       return false;
     }
@@ -756,7 +772,8 @@ bool file_uploadSensorData(void) {
     }
     ScreenInfo.lastGsheetUploadTime = now(); 
   } else {
-    lastError = "ERROR Failed to update: " + GsheetID;
+    snprintf(ScreenInfo.lastError,75,"UPDATE ERROR: %s",GsheetID.c_str());
+    
     ScreenInfo.lastErrorTime = ScreenInfo.t;
     return false;
   }

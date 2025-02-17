@@ -1,12 +1,11 @@
 #ifndef UTILITY_HPP
 #define UTILITY_HPP
 
-#include "Arduino.h"
-#include <globals.hpp>
-#include <timesetup.hpp>
+#include <Arduino.h>
+#include "globals.hpp"
+#include "timesetup.hpp"
 #include <WiFI.h>
-#include "FS.h"
-#include <SD.h>
+#include "SDCard.hpp"
 
 
 extern SensorVal Sensors[SENSORNUM];
@@ -14,6 +13,11 @@ extern time_t t;
 extern ScreenFlags ScreenInfo;
 extern weathertype WeatherData;
 extern const uint8_t temp_colors[104];
+
+
+bool storeError(const char* E);
+String lastReset2String(bool addtime=true);
+void controlledReboot(const char* E, RESETCAUSE R,bool doreboot=true);
 
 int inArray(int arrind[], int N, int value);
 bool inIndex(byte lookfor,byte used[],byte arraysize);

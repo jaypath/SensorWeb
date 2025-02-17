@@ -1,6 +1,6 @@
 #include <SDCard.hpp>
 //#define _DEBUG
-extern String lastError;
+
 
 //this allows a sensorval struct to be written to file as a series of bytes
 union SensorValBytes {
@@ -26,10 +26,10 @@ bool storeScreenInfoSD() {
     String filename = "/Data/ScreenFlags.dat";
     File f = SD.open(filename, FILE_APPEND);
     if (f==false) {
-        lastError = "Failed to write to SD";
-        f.close();
+      snprintf(ScreenInfo.lastError,75,"Failed to write to SD");  
+      f.close();
 
-        return false;
+      return false;
     }
     union ScreenInfoBytes D; 
     D.screendata=ScreenInfo;
@@ -52,7 +52,7 @@ bool readScreenInfoSD() //read last screenInfo
         #ifdef _DEBUG
         Serial.printf("Failed to read screenInfo from SD\n");
         #endif
-        lastError = "Failed to read screenInfo from SD";
+        snprintf(ScreenInfo.lastError,75,"Failed to read screenInfo from SD");  
         ScreenInfo.lastErrorTime = now();
         f.close();
 
@@ -62,8 +62,7 @@ bool readScreenInfoSD() //read last screenInfo
               #ifdef _DEBUG
         Serial.printf("file on SD was not the size of screenInfo!\n");
         #endif
-
-        lastError = "Screeninfo was the wrong size on SD card!";
+        snprintf(ScreenInfo.lastError,75,"Screeninfo was the wrong size on SD card!");  
         ScreenInfo.lastErrorTime = now();
         f.close();
 
@@ -140,7 +139,7 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
 
     File f = SD.open(filename, FILE_READ);
     if (f==false) {
-        lastError = "Failed to open Sensor file";
+        snprintf(ScreenInfo.lastError,75,"Failed to open Sensor file");
         ScreenInfo.lastErrorTime = now();
         f.close();
 
@@ -157,7 +156,7 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
         Serial.printf("readsensor cnt: %u\n",cnt);
     #endif
     if (cnt==0) {
-        lastError = "Read ZERO sensors from SD";
+        snprintf(ScreenInfo.lastError,75,"Read ZERO sensors from SD");
         ScreenInfo.lastErrorTime = now();
     }
     f.close();

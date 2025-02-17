@@ -988,7 +988,8 @@ void drawScreen()
             writeSensorsSD("/Data/SensorBackup.dat");
             storeScreenInfoSD();
             SendData(); //update server about our status
-            ESP.restart();
+            controlledReboot("User selected reboot",RESET_USER,true);
+            
             break;
           }
           case 5:
@@ -1380,8 +1381,7 @@ void fcnDrawSettings() {
         ScreenInfo.snsLastDisplayed=0;
         uploadData(true);
         writeSensorsSD("/Data/SensorBackup.dat");
-        storeScreenInfoSD();
-        SendData(); //update server about our status
+        controlledReboot("User deleted sensor data",RESET_USER,true);
             
         break;
 
@@ -1392,6 +1392,8 @@ void fcnDrawSettings() {
 //line 6: delete settings - is selectable
         deleteFiles("SensorBackup.dat","/Data");
         deleteFiles("ScreenFlags.dat","/Data");
+        controlledReboot("User deleted sensor data",RESET_USER,true);
+
         break;
       }
 
@@ -1399,6 +1401,8 @@ void fcnDrawSettings() {
       {
 //line 7: delete SD data - is selectable
         deleteFiles("*.dat","/Data");
+        controlledReboot("User deleted sensor data",RESET_USER,true);
+
         break;
       }
 
@@ -1513,7 +1517,7 @@ tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
 //line not selectable
     if (isSelected==i++) tft.setTextColor(TFT_BLACK,TFT_LIGHTGRAY);
   else tft.setTextColor(ScreenInfo.FG_COLOR,ScreenInfo.BG_COLOR);
-  snprintf(ScreenInfo.tempbuf,70,"%s\n",lastError.c_str());
+  snprintf(ScreenInfo.tempbuf,70,"%s\n",ScreenInfo.lastError);
 tft.drawString(ScreenInfo.tempbuf,0,ScreenInfo.Ypos);
   ScreenInfo.Ypos += tft.fontHeight(2) + 2;
 

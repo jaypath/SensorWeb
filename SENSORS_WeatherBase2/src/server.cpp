@@ -52,7 +52,7 @@ bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& 
   wfclient.setCACert(cacert.c_str());
 
   if(WiFi.status()== WL_CONNECTED){
-    I.wifi=10;
+    
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();
@@ -74,7 +74,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
   
 
   if(WiFi.status()== WL_CONNECTED){
-    I.wifi=10;
+    
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();

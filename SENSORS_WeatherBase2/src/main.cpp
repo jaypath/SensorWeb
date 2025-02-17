@@ -277,6 +277,7 @@ tft.init();
     Serial.print("Connecting");
   #endif
 
+
   byte retries = connectWiFi();
   tft.println("Connecting  Wifi...\n");
   if (WiFi.status() != WL_CONNECTED)
@@ -1539,12 +1540,28 @@ void loop() {
   I.currentTime = now(); // store the current time in time variable t
 
 
-  ArduinoOTA.handle();
-  server.handleClient();
-  updateTime(1,0); //just try once
+  if (WiFi.status() != WL_CONNECTED) {
+    byte retries = connectWiFi();
+
+    //if still not connected then increment fail counter
+    if (WiFi.status() != WL_CONNECTED)     I.wifiFailCount++; //still not connected
+  } 
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    I.wifiFailCount=0;
+    ArduinoOTA.handle();
+    server.handleClient();
+    updateTime(1,0); //just try once  
+  }
    
   
   if (OldTime[1] != minute()) {
+
+    if (I.wifiFailCount>5) {
+
+      controlledReboot("Wifi failed so resetting",RESET_WIFI,true);
+    }
+
     WeatherData.updateWeather(3600);
 
     if (WeatherData.lastUpdateAttempt>WeatherData.lastUpdateT+300 && I.currentTime-I.ALIVESINCE > 300) { //weather has not updated for 300 seconds!
@@ -1633,27 +1650,26 @@ void loop() {
     OldTime[0] = second();
     //do stuff every second    
 
-    if (I.wifi>0) I.wifi--;
+
     fcnDrawScreen();
-        #ifdef _DEBUG
-       if (I.flagViewTime==0) {
-       Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-        tft.clear();
-        tft.setCursor(0,0);
-        tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
-       while(true);
-       }
-     #endif
+    #ifdef _DEBUG
+      if (I.flagViewTime==0) {
+      Serial.printf("Loop drawscreen: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
+      tft.clear();
+      tft.setCursor(0,0);
+      tft.printf("Loop start: Time is: %s and a critical failure occurred. This was %u seconds since start.\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"),I.currentTime-I.ALIVESINCE);
+      while(true);
+      }
+    #endif
+
+    #ifdef _DEBUG
+      if (WeatherData.getTemperature(I.currentTime+3600)<0 && TESTRUN<3600) {
+        Serial.printf("Loop %s: Weather data just failed\n",dateify(t));
+        WTHRFAIL = I.currentTime;
+        TESTRUN = 3600;
+      }
+
+    #endif
   }
-
-  #ifdef _DEBUG
-    if (WeatherData.getTemperature(I.currentTime+3600)<0 && TESTRUN<3600) {
-      Serial.printf("Loop %s: Weather data just failed\n",dateify(t));
-      WTHRFAIL = I.currentTime;
-      TESTRUN = 3600;
-    }
-
-  #endif
-
 }
 

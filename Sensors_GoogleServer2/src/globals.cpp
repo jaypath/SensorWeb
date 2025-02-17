@@ -9,7 +9,6 @@ int Ypos = 0;
 
 String GsheetID= ""; //file ID for this month's spreadsheet
 String GsheetName= ""; //file name for this month's spreadsheet
-String lastError;
 byte clockHeight = 0;
 
     

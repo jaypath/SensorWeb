@@ -111,7 +111,12 @@ bool updateTime(byte retries,uint16_t waittime) {
     }
   } 
 
+
   if (isgood) checkDST();
+  else {
+    ScreenInfo.lastErrorTime = ScreenInfo.t;
+    snprintf(ScreenInfo.lastError,75,"updateTime: Failed %u times",retries);
+  }
   return isgood;
 }
 

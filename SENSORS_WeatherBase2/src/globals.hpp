@@ -50,7 +50,7 @@ struct Screen {
     time_t lastResetTime;
     byte rebootsSinceLast=0;
     time_t ALIVESINCE;
-    uint8_t wifi;
+    uint8_t wifiFailCount;
     time_t currentTime;
     byte CLOCK_Y = 105;
     byte HEADER_Y = 30;

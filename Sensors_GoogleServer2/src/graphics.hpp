@@ -9,7 +9,7 @@
 
 extern String GsheetID; //file ID for this month's spreadsheet
 extern String GsheetName; //file name for this month's spreadsheet
-extern String lastError;
+
 extern const uint8_t temp_colors[104];
 
 extern LGFX tft;            // declare display variable
