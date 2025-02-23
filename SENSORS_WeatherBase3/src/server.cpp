@@ -3,8 +3,8 @@
 
 #include <utility.hpp>
 #include "server.hpp"
-#include <timesetup.hpp>
 #include <WiFiClient.h>
+#include <Preferences.h>
 
 
 
@@ -19,6 +19,9 @@
     WebServer server(80);
 #endif
 
+
+char SSID[33] = "";
+char PWD[65] = "";
 
 
 
@@ -52,7 +55,7 @@ bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& 
   wfclient.setCACert(cacert.c_str());
 
   if(WiFi.status()== WL_CONNECTED){
-    I.wifi=10;
+    
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();
@@ -74,7 +77,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
   
 
   if(WiFi.status()== WL_CONNECTED){
-    I.wifi=10;
+    
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
     httpCode = http.GET();
@@ -90,14 +93,19 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 
 
 bool WifiStatus(void) {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  return false;
+  if (WiFi.status() == WL_CONNECTED) {
+    WIFI_INFO.HAVECREDENTIALS = true;
+    return true;
+  }
+  WIFI_INFO.HAVECREDENTIALS = false;
+    return false;
   
 }
-uint8_t connectWiFi()
-{
+
+
+uint8_t connectWiFi() {
   //rerturn 0 if connected, else number of times I tried and failed
-  uint8_t retries = 100;
+  uint8_t retries = 100; //max retries
   byte connected = 0;
   IPAddress temp;
 
@@ -108,58 +116,78 @@ uint8_t connectWiFi()
     //WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
     return connected;
   } else {
-    if (WIFI_INFO.MYIP[0]==0 || WIFI_INFO.MYIP[4]==0) {
-      WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
-    } else {
 
-      WiFi.config(WIFI_INFO.MYIP,  WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET,WIFI_INFO.DNS);
-    }
-  }
-  
-  WiFi.mode(WIFI_STA);
-  #ifdef _DEBUG
-  SerialWrite((String) "wifi begin\n");
-       #endif
+    if (getWiFiCredentials()) {
 
-  
-  WiFi.begin(ESP_SSID, ESP_PASS);
+      #ifdef IGNORETHIS
+      if (WIFI_INFO.MYIP[0]==0 || WIFI_INFO.MYIP[4]==0) {
+        WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
+      } else {
 
-  if (WiFi.status() != WL_CONNECTED)  {
-  #ifdef _DEBUG
-    SerialWrite((String) "Connecting\n");
-       #endif
-    
-    #ifdef _USESSD1306
-      oled.print("Connecting");
-    #endif
-    for (byte j=0;j<retries;j++) {
-  #ifdef _DEBUG
-      SerialWrite((String) ".");
-       #endif
-      #ifdef _USESSD1306
-        oled.print(".");
+        WiFi.config(WIFI_INFO.MYIP,  WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET,WIFI_INFO.DNS);
+      }
+      #endif
+      
+      WiFi.mode(WIFI_STA);
+      #ifdef _DEBUG
+      SerialWrite((String) "wifi begin\n");
       #endif
 
-      delay(250);
-      if (WifiStatus()) {
-        WIFI_INFO.MYIP = WiFi.localIP();
-        
-  #ifdef _DEBUG
-        SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
-       #endif
+      
+      WiFi.begin(SSID, PWD);
 
+
+      if (WiFi.status() != WL_CONNECTED)  {
+        #ifdef _DEBUG
+          SerialWrite((String) "Connecting\n");
+             #endif
+          
         #ifdef _USESSD1306
-          oled.clear();
-          oled.setCursor(0,0);
-          oled.println("WiFi OK.");
-          oled.println("timesetup next.");      
+          oled.print("Connecting");
         #endif
+        for (byte j=0;j<retries;j++) {
+          #ifdef _DEBUG
+            SerialWrite((String) ".");
+          #endif
+          #ifdef _USESSD1306
+            oled.print(".");
+          #endif
+    
+          delay(250);
+          if (WifiStatus()) {
+            WIFI_INFO.MYIP = WiFi.localIP();
+                
+            #ifdef _DEBUG
+              SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
+            #endif
 
-        return 0;
+            #ifdef _USESSD1306
+              oled.clear();
+              oled.setCursor(0,0);
+              oled.println("WiFi OK.");
+              oled.println("timesetup next.");      
+            #endif
+    
+            return 0;
+          }
+          connected = j;
+        }
+              
       }
-      connected = j;
+
+    } else {
+      storeError("connectWiFi: no saved pwd/ssid");
+
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP("ESPSERVER","CENTRAL.SERVER1");
+
+      delay(100);
+      IPAddress Ip(192, 168, 10, 1);    //setto IP Access Point same as gateway
+      IPAddress NMask(255, 255, 255, 0);
+      WiFi.softAPConfig(Ip, Ip, NMask);
+
+      return 255; //255 indicates that we are in AP mode!      
     }
-        
   }
 
 
@@ -177,7 +205,8 @@ uint8_t connectWiFi()
 
 
 void handleReboot() {
-  server.send(200, "text/plain", "Rebooting in 10 sec");  //This returns to the main page
+  WEBHTML = "Rebooting in 10 sec";
+  serverTextClose(200, false);  //This returns to the main page
   delay(10000);
   ESP.restart();
 }
@@ -191,7 +220,9 @@ void handleCLEARSENSOR() {
   initSensor(j);
 
   server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "Updated-- Press Back Button");  //This returns to the main page
+  
+  WEBHTML= "Updated-- Press Back Button";  //This returns to the main page
+  serverTextClose(302,false);
 
   return;
 }
@@ -209,7 +240,8 @@ void handleREQUESTUPDATE() {
   Server_Message(URL, payload, httpCode);
 
   server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "Updated-- Press Back Button");  //This returns to the main page
+  WEBHTML= "Updated-- Press Back Button";  //This returns to the main page
+  serverTextClose(302,false);
 
   return;
 }
@@ -220,7 +252,8 @@ void handleGETSTATUS() {
   WEBHTML += "ALIVESINCE:" + (String) I.ALIVESINCE + ";";
   WEBHTML += "NUMDEVS:" + (String) countDev() + ";";
   
-  server.send(200, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+  serverTextClose(200,false);   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
   return;
 
@@ -274,7 +307,8 @@ void handleREQUESTWEATHER() {
     }
   }
   
-  server.send(200, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+  serverTextClose(200,false);
 
   return;
 }
@@ -285,30 +319,287 @@ void handleTIMEUPDATE() {
   timeClient.forceUpdate();
 
   server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "Updated-- Press Back Button");  //This returns to the main page
+
+
+  WEBHTML = "Updated-- Press Back Button";  //This returns to the main page
+  serverTextClose(302,false);
 
   return;
 }
 
 
+void handleSETWIFI() {
+  if (server.args()==0) return;
+  initCreds();
+
+  String creds = "";
+
+  for (uint8_t i = 0; i < server.args(); i++) {
+    if (server.argName(i)=="val") creds = server.arg(i);
+  }
+
+	const uint8_t plainTextSize = creds.length() / sizeof(char);
+  
+  char keyText[] = "WeatherBase12345"; // 16-byte key for AES-128
+  char ivText[] = "poiuytasdfmnbvcx"; // 16-byte IV
+
+//  char encodedText[plainTextSize];
+  //sniprintf(encodedText,plainTextSize,"%s",creds.c_str());
+  char decipheredTextOutput[plainTextSize];
+
+
+
+	decrypt((unsigned char*) creds.c_str(), keyText, (unsigned char*) decipheredTextOutput, (unsigned char*) ivText);
+
+  creds = (String) decipheredTextOutput;
+
+  int ind = creds.indexOf("||||");
+
+  if (ind>-1) {
+    snprintf(SSID,32,"%s",creds.substring(0,ind).c_str()); //end index is NOT inclusive
+    creds.remove(0,ind+4); //"||||" is 4 long
+    snprintf(PWD,64,"%s",creds.c_str()); //end index is NOT inclusive
+  }
+  
+  if (putWiFiCredentials()) {
+    WIFI_INFO.HAVECREDENTIALS = true;
+    getWiFiCredentials();
+    WEBHTML= "OK, stored new credentials.\nSSID:" + (String) SSID + "\nPWD: NOT_SHOWN";  
+    serverTextClose(200,false);
+
+  }   else {
+    WEBHTML= "Cleared credentials!";  
+    WIFI_INFO.HAVECREDENTIALS = false;
+    serverTextClose(302,false);
+  }
+
+
+//  server.sendHeader("Location", "/");//This Line goes to root page
+  
+
+}
+
+
 void handleRoot(void) {
-  handlerForRoot(false);
+    handlerForRoot(false);
 }
 
 void handleALL(void) {
   handlerForRoot(true);
 }
 
+
+void serverTextHeader() {
+  WEBHTML = R"===(<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>
+  <style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}
+  body {  font-family: arial, sans-serif; }
+  </style></head>
+)===";
+
+}
+
+void serverTextWiFiForm() {
+  /*
+  WEBHTML = WEBHTML + R"===(---------------------<br>
+  <FORM action="/SETWIFI" method="get">
+  <p style="font-family:arial, sans-serif">
+  To set or change WiFi, enter SSID and PWD.<br>
+  NOTE THE FOLLOWING!! 
+  1. THE RECOMMENDED METHOD TO SET WIFI CREDENTIALS IS TO USE THE TOUCH SCREEN (NOT THIS WEB FORM)! 
+  YOUR BROWSER HISTORY WILL CONTAIN YOUR WIFI PASSWORD IN PLAINTEXT!
+  2. IF YOU USE THIS FORM, CLEAR YOUR BROWSER HISTORY AFTER SUBMISSION! 
+  3. If SSID is blank, all stored credentials WILL BE DELETED!<br>
+  <label for="SSID">WiFi SSID: </label>
+  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
+  <label for="PWD">WiFi PWD: </label>
+  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>  
+  <br>
+  <button type="submit">STORE</button><br>
+  </p></font></form>
+  ---------------------<br>)===";
+  */
+
+  WEBHTML = WEBHTML + R"===(---------------------<br>
+  <FORM id="WiFiSetForm" action="/" method="get">
+  <p style="font-family:arial, sans-serif">
+  To set or change WiFi, enter SSID and PWD.<br>
+  Data will be encrypted and sent to your device. You can also use the device touch screen.
+  If SSID is blank, all stored credentials WILL BE DELETED!<br>
+  <label for="SSID">WiFi SSID: </label>
+  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
+  <label for="PWD">WiFi PWD: </label>
+  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>    
+  <br>
+  <button type="submit">STORE</button><br>
+  </p></font></form>
+  ---------------------<br>
+  <input type="text" id="submitresult">
+  <br>
+
+  <script>
+  const form = document.getElementById('WiFiSetForm');
+  form.addEventListener('submit', function(event) {
+    event.preventDefault(); // Prevent the default form submission
+    encryptAndSend();
+    console.log('Form submission handled by JavaScript');
+  });
+
+  async function encryptAndSend() {
+    const keyText = "WeatherBase12345"; // 16-byte key for AES-128
+    const ivText = "poiuytasdfmnbvcx"; // 16-byte IV
+
+    const form = document.getElementById('WiFiSetForm');
+    const ssid = document.getElementById('SSID').value;
+    const pwd  = document.getElementById('PWD').value;
+
+    const codedstr = encryptAES128(ssid + '||||' + pwd); //should check if ssid or  pwd contain ||||
+    console.log(data);
+    const encryptedData = await encryptAES128(key, iv, data);
+    console.log(encryptedData);
+
+    fetch('http://192.168.10.1/SETWIFI?val=' + codedstr)
+    .then(response => {
+      document.getElementById('submitresult').setAttribute('value',response.text());
+    })
+    .then(data => {
+      // Handle the data received from the API
+      console.log(data);
+    })
+    .catch(error => {
+      // Handle errors
+      console.error('There was a problem with the fetch operation:', error);
+    });
+    return false;
+  }
+
+
+
+
+
+async function encrypt(plainText, key) {
+  // Encode the key and plaintext as Uint8Arrays
+  const encodedKey = new TextEncoder().encode(key);
+  const encodedPlaintext = new TextEncoder().encode(plainText);
+
+  // Generate an AES-CBC key from the encoded key
+  const cryptoKey = await window.crypto.subtle.importKey(
+    "raw",
+    encodedKey,
+    { name: "AES-CBC", length: 128 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+
+  // Generate a random initialization vector (IV)
+  const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+  // Encrypt the plaintext using AES-CBC
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: "AES-CBC", iv: iv },
+    cryptoKey,
+    encodedPlaintext
+  );
+
+  // Return the IV and ciphertext as a single base64-encoded string
+  const encryptedData = new Uint8Array([...iv, ...new Uint8Array(ciphertext)]);
+  const base64Encoded = btoa(String.fromCharCode(...encryptedData));
+  return base64Encoded;
+}
+
+async function decrypt(base64Encoded, key) {
+    // Decode the base64-encoded data
+    const encryptedData = new Uint8Array(
+        [...atob(base64Encoded)].map(char => char.charCodeAt(0))
+    );
+    
+    // Extract the IV and ciphertext from the encoded data
+    const iv = encryptedData.slice(0, 16);
+    const ciphertext = encryptedData.slice(16);
+    
+    // Encode the key as a Uint8Array
+    const encodedKey = new TextEncoder().encode(key);
+
+    // Generate an AES-CBC key from the encoded key
+    const cryptoKey = await window.crypto.subtle.importKey(
+        "raw",
+        encodedKey,
+        { name: "AES-CBC", length: 128 },
+        false,
+        ["encrypt", "decrypt"]
+    );
+
+    // Decrypt the ciphertext using AES-CBC
+    const plaintext = await window.crypto.subtle.decrypt(
+        { name: "AES-CBC", iv: iv },
+        cryptoKey,
+        ciphertext
+    );
+
+    // Return the decrypted plaintext as a string
+    return new TextDecoder().decode(plaintext);
+}
+
+// Example usage:
+const key = "your-secret-key"; // Replace with a strong, secret key
+const plainText = "This is a secret message.";
+
+encrypt(plainText, key)
+  .then(encryptedText => {
+    console.log("Encrypted:", encryptedText);
+    return decrypt(encryptedText, key);
+  })
+  .then(decryptedText => {
+    console.log("Decrypted:", decryptedText);
+  })
+  .catch(error => {
+    console.error("Error:", error);
+  });
+
+
+
+
+
+  async function encryptAES128(key, iv, data) {
+  const encodedData = new TextEncoder().encode(data);
+  const cryptoKey = await window.crypto.subtle.importKey(
+    "raw",
+    key,
+    { name: "AES-CBC", },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  const encryptedData = await window.crypto.subtle.encrypt(
+    { name: "AES-CBC", iv: iv },
+    cryptoKey,
+    encodedData
+  );
+  return encryptedData;
+  }
+
+  
+  </script>
+  )===";
+}
+
+void serverTextClose(int htmlcode, bool asHTML) {
+  
+  if (asHTML)   {
+    WEBHTML += "</body></html>\n";   
+    server.send(htmlcode, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  }
+  else server.send(htmlcode, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+}
+
+
 void handlerForRoot(bool allsensors) {
   
-
   LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
-
   WEBHTML = "";
-  WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>";
-  WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
-  WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
-  WEBHTML =WEBHTML  + "</style></head>";
+  serverTextHeader();
+
+  if (WIFI_INFO.HAVECREDENTIALS==true) {
+
+
 
   #ifdef _USEROOTCHART
   WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
@@ -371,16 +662,16 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "</font>---------------------<br>";      
   }
 
-  WEBHTML += "<FORM action=\"/FLUSHSD\" method=\"get\">";
-  WEBHTML += "<p style=\"font-family:arial, sans-serif\">";
-  WEBHTML += "Type a number and Click FLUSH to download or delete SD card data and reboot. !!!WARNING!!! Cannot be undone! <br>";
-  WEBHTML += "<label for=\"FLUSHCONFIRM\">1=Delete screen data, 2=Delete sensor data, 3=Download variables to SD. (1 and 2 will result in reboot) </label>";
-  WEBHTML += "<input type=\"text\" id=\"FLUSHCONFIRM\" name=\"FLUSHCONFIRM\" value=\"0\" maxlength=\"5\"><br>";  
-  WEBHTML +=  "<br>";
-  WEBHTML += "<button type=\"submit\">FLUSH</button><br>";
-  WEBHTML += "</p></font></form>";
-
-      WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML += R"===(
+  <FORM action="/FLUSHSD" method="get">
+  <p style="font-family:arial, sans-serif">
+  Type a number and Click FLUSH to download or delete SD card data and reboot. !!!WARNING!!! Cannot be undone! <br>
+  <label for="FLUSHCONFIRM">1=Delete screen data, 2=Delete sensor data, 3=Download variables to SD. (1 and 2 will result in reboot) </label>
+  <input type="text" id="FLUSHCONFIRM" name="FLUSHCONFIRM" value="0" maxlength="5"><br>
+  <br>
+  <button type="submit">FLUSH</button><br>
+  </p></font></form>
+  ---------------------<br>)===";
 
 
   WEBHTML += "<FORM action=\"/UPDATEDEFAULTS\" method=\"get\">";
@@ -518,14 +809,17 @@ void handlerForRoot(bool allsensors) {
     WEBHTML += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
     WEBHTML += "chart.draw(data, options);\n"; 
     WEBHTML += "}\n";
-#endif
+  #endif
 
   WEBHTML += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
   WEBHTML += "</script> \n";
-  WEBHTML += "</body></html>\n";   
 
-    
-  server.send(200, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+}
+
+serverTextWiFiForm();
+
+
+serverTextClose(200);
 
 }
 
@@ -543,13 +837,18 @@ void handleFLUSHSD() {
       if (server.arg(0).toInt()== 2) {
         deleteFiles("SensorBackupv2.dat","/Data");
       }
-      server.send(200, "text/plain","OK, about to reset");
+      WEBHTML = "text/plain","OK, about to reset";
+      
+      serverTextClose(200,false);
+      
       controlledReboot("User Request",RESET_USER);
     }
   }
 
   server.sendHeader("Location", "/");//This Line goes to root page
-  server.send(302, "text/plain", "Attempted.");  
+
+  WEBHTML= "Attempted.";  
+  serverTextClose(302,false);
 
 }
 
@@ -587,12 +886,16 @@ void handleUPDATEDEFAULTS() {
 
 
   server.sendHeader("Location", "/");//This Line goes to root page
-  server.send(302, "text/plain", "Updated.");  
+  WEBHTML= "Updated defaults.";  
+  serverTextClose(302,false);
+
 
 }
 
 void handleNotFound(){
-  server.send(404, "text/plain", "404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
+  WEBHTML= "404: Not found"; // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
+  serverTextClose(404,false);
+
 }
 
 void handleRETRIEVEDATA() {
@@ -601,7 +904,11 @@ void handleRETRIEVEDATA() {
 
 
     if (server.args()==0) {
-      server.send(401, "text/plain", "Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=100&endtime=1731761847&delta=1 or RETRIEVEDATA?ID=1.1.1&N=100&starttime=1731700000&endtime=1731761847&delta=10");
+      
+
+      WEBHTML="Inappropriate call... use RETRIEVEDATA?ID=1.1.1&N=100&endtime=1731761847&delta=1 or RETRIEVEDATA?ID=1.1.1&N=100&starttime=1731700000&endtime=1731761847&delta=10";
+      serverTextClose(401,false);
+
       return;
     }
 
@@ -617,7 +924,9 @@ void handleRETRIEVEDATA() {
     }
 
     if (ardID==0 || snsType == 0 || snsID==0) {
-      server.send(401, "text/plain", "Inappropriate call... invalid arduino sensor ID");
+      WEBHTML="Inappropriate call... invalid arduino sensor ID";
+      serverTextClose(302,false);
+
       return;
     }
 
@@ -636,7 +945,9 @@ void handleRETRIEVEDATA() {
   else    success =   readSensorSD(ardID,snsType,snsID,t,v,&N,&sampn,endtime,delta); //this fills from tn backwards to N*delta samples
 
   if (success == false)  {
-    server.send(401, "text/plain", "Failed to read associated file.");
+    WEBHTML= "Failed to read associated file.";
+    serverTextClose(401,false);
+
     return;
   }
 
@@ -706,11 +1017,9 @@ void handleRETRIEVEDATA() {
     WEBHTML += "unixtime,value<br>\n";
   for (byte j=0;j<N;j++)     WEBHTML += (String) t[j] + "," + (String) v[j] + "<br>\n";
 
-  WEBHTML += "</body></html>\n";   
-
-
-
-  server.send(200, "text/html", WEBHTML.c_str());   //send the data requested
+  
+  
+  serverTextClose(200);
   
 
 }
@@ -753,7 +1062,9 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
       //already stored a bmp, so erase that
       initSensor(findSns(10,false));
     }
-    server.send(202, "text/plain", "Received, but rejected the data because this is BMP and you sent AHT"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    WEBHTML= "Received, but rejected the data because this is BMP and you sent AHT"; // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    serverTextClose(202,false);
+
     return;
   }
 
@@ -773,7 +1084,9 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
       initSensor(findSns(60,false));
     }
     
-    server.send(202, "text/plain", "Received, but rejected the data because this is voltage and you sent %"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    WEBHTML= "Received, but rejected the data because this is voltage and you sent %"; // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    serverTextClose(202,false);
+
     return;
   }
 
@@ -803,13 +1116,109 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
 
 
   if (sn<0) {
-    server.send(201, "text/plain", "Received, but rejected the data because I could not add another sensor"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    WEBHTML = "Received, but rejected the data because I could not add another sensor"; // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+    serverTextClose(201,false);
+
     return;
   }
   Sensors[sn] = S;
   
-  server.send(200, "text/plain", "Received Data"); // Send HTTP status 200 (OK) when there's no handler for the URI in the request
+  WEBHTML="Received Data";
+  serverTextClose(200,false);
+
+  
+}
+
+void initCreds() {
+  for (byte j=0;j<33;j++) SSID[j]=0;
+  for (byte j=0;j<65;j++) PWD[j]=0;
+}
+
+
+bool getWiFiCredentials() {
+
+  initCreds();
+  uint16_t sCRC =0;
+  uint16_t pCRC=0;
+
+  Preferences p;
+  p.begin("credentials",true);
+  
+  if (p.isKey("SSID") == true) {
+
+    p.getBytes("SSID",SSID,33);
+    sCRC = p.getUInt("SSIDCRC",0);
+
+
+    p.getBytes("PWD",PWD,65);
+    pCRC = p.getUInt("PWDCRC",0);
+  } 
+
+  p.end();
+
+  WIFI_INFO.HAVECREDENTIALS = false;
+
+  if (sCRC==0 && pCRC==0) return false; //cannot be 0 crc
+
+  if (sCRC!=CRCCalculator((uint8_t*) SSID,32)) return false;
+  if (pCRC!=CRCCalculator((uint8_t*) PWD,64)) return false;
+  
+  WIFI_INFO.HAVECREDENTIALS = true;
+  return true;
+
+}
+
+bool putWiFiCredentials() {
+
+  bool isGood = false;
+  uint16_t sCRC = CRCCalculator((uint8_t*) SSID,32);
+  uint16_t pCRC = CRCCalculator((uint8_t*) PWD,64);
+
+  Preferences p;
+  p.begin("credentials",false);
+  p.clear();
+
+
+  //if SSID is blank, delete credentials 
+  if (SSID[0]=='\0' || sCRC==0) {    
+    initCreds();
+    sCRC=0;
+    pCRC=0;    
+  } else isGood=true;
+
+
+  p.putBytes("SSID",SSID,33);
+  p.putUInt("SSIDCRC",sCRC);
+
+  p.putBytes("PWD",PWD,65);
+  p.putUInt("PWDCRC",pCRC);
+  
+  p.end();
+
+  return isGood;
+
 
 }
 
 
+
+void encrypt(char* input, char* key, unsigned char* output, unsigned char* iv)
+{
+
+	mbedtls_aes_context aes;
+	mbedtls_aes_init(&aes);
+	mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
+	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 16, iv, (const unsigned char*)input, output);
+	mbedtls_aes_free(&aes);
+
+}
+
+void decrypt(unsigned char* input, char* key, unsigned char* output, unsigned char* iv)
+{
+
+	mbedtls_aes_context aes;
+	mbedtls_aes_init(&aes);
+	mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
+	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, 16, iv, (const unsigned char*)input, output); //16 is input length
+	mbedtls_aes_free(&aes);
+}

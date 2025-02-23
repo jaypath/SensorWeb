@@ -70,6 +70,7 @@
 #include <esp_task_wdt.h> //watchdog timer libary
 #define WDT_TIMEOUT_MS 120000
 
+
 //most recent version of ESP IDE uses this config template... but older versions do not
 //  esp_task_wdt_config_t WDT_CONFIG = {
 //         .timeout_ms = WDT_TIMEOUT_MS,
@@ -124,6 +125,9 @@ extern WeatherInfo WeatherData;
 //extern SensorVal *Sensors; 
 extern SensorVal Sensors[SENSORNUM];
 
+extern char SSID[];
+extern char PWD[];
+
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
 extern double LAST_BAR;
@@ -154,7 +158,8 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
 void drawBox(byte sensorInd, int X, int Y, byte boxsize_x,byte boxsize_y);
 uint16_t temp2color(int temp, bool invertgray = false);
-
+void drawKeyPad4WiFi(uint32_t y,uint8_t keyPage,uint8_t WiFiSet);
+bool isTouchKey(int16_t* keyval, uint8_t* keypage);
 
 
 
@@ -192,7 +197,7 @@ tft.init();
   tft.setCursor(0,0);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   tft.setTextFont(2);
-  tft.setTextSize(1);
+//  tft.setTextSize(1);
   tft.setTextDatum(TL_DATUM); 
   
   tft.printf("Running setup\n");
@@ -261,16 +266,40 @@ tft.init();
 
   WeatherData.lat = LAT;
   WeatherData.lon = LON;
+
   
+
+
+  server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
+  server.on("/ALLSENSORS", handleALL);               // Call the 'handleall' function when a client requests URI "/"
+  server.on("/POST", handlePost);   
+  server.on("/REQUESTUPDATE",handleREQUESTUPDATE);
+  server.on("/CLEARSENSOR",handleCLEARSENSOR);
+  server.on("/TIMEUPDATE",handleTIMEUPDATE);
+  server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
+  server.on("/GETSTATUS",handleGETSTATUS);
+  server.on("/REBOOT",handleReboot);
+  server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
+  server.on("/RETRIEVEDATA",handleRETRIEVEDATA);
+  server.on("/FLUSHSD",handleFLUSHSD);
+  server.on("/SETWIFI",handleSETWIFI);
+  server.onNotFound(handleNotFound);
+  
+
+
+  tft.println("Connecting  Wifi...\n");
+
     
+  #ifdef IGNORETHIS
   WIFI_INFO.DHCP = IPAddress(192,168,68,1);
   WIFI_INFO.DNS = IPAddress(192,168,68,1);
   WIFI_INFO.GATEWAY = IPAddress(192,168,68,1);
   WIFI_INFO.SUBNET = IPAddress(255,255,252,0);
   WIFI_INFO.MYIP = IPAddress (192,168,68,0);
-
-
-
+  #endif
+  
+  WIFI_INFO.HAVECREDENTIALS = false;
+  
 
   #ifdef _DEBUG
     Serial.println();
@@ -278,11 +307,114 @@ tft.init();
   #endif
 
 
+
   byte retries = connectWiFi();
-  tft.println("Connecting  Wifi...\n");
+
+  if (retries==255) {
+    //I am in AP mode!
+    tft.clear();
+    tft.setCursor(0,0);
+    initCreds();
+
+    uint32_t y = setFont(4);
+    fcnPrintTxtCenter("HELLO!",4,TFT_WIDTH/2,y/2); //note that setFont() returns the font height
+
+    tft.setCursor(0,y+5);
+    setFont(1);
+    tft.printf("WiFi was not found. Enter here or connect to WiFi\nESPSERVER with pwd=CENTRAL.SERVER1 and go to \nweb address 192.168.10.1\n");
+    tft.printf("Touch anywhere above keypad to delete all entries.\n");
+    
+    y=tft.getCursorY()+2;
+    
+    server.begin(); //in case user wants to use browser
+
+    //for on screen keypad
+    uint8_t keyPage = 0;
+    uint8_t WiFiSet=0; //1 = SSID set, 2 = SSID and PWD set
+    uint8_t entryI = 0;
+    drawKeyPad4WiFi(y,keyPage,WiFiSet);
+
+    int16_t keyval = 0;
+
+    while (WIFI_INFO.HAVECREDENTIALS == false) {
+      server.handleClient();
+
+      if (tft.getTouch(&I.touchX, &I.touchY)) {
+        delay(250); //avoid multiple button presses!
+          
+        if (isTouchKey(&keyval,&keyPage)) {    
+          //<0 means submit
+          //300 means page down
+          //301 means page up
+          //257 means backspace
+          //256 means clear
+          //33-126 is an ascii value
+          
+          if (keyval<0) {
+            WiFiSet++;
+            entryI=0;            
+          } else {
+            if (keyval==301) keyPage=(keyPage+1)%3;
+            else {
+              if (keyval==300) {
+                if (keyPage==0) keyPage=2;
+                else keyPage--;
+              } else {
+                if (keyval==257) {
+                  if (entryI>0) entryI--;
+                  if (WiFiSet==0) SSID[entryI] = '\0';
+                  else PWD[entryI] = '\0';                                
+                } else {
+                  if (keyval==256) {
+                    initCreds();
+                    entryI=0;
+                    WiFiSet=0;
+                  } else {
+                    if (WiFiSet==0) {
+                      SSID[entryI++] = keyval;
+                      //tft.printf("%s",SSID);
+                    } else {
+                      PWD[entryI++] = keyval;
+                      //tft.printf("%s",PWD);      
+                    }  
+                  }
+                } 
+              }
+            }
+          }
+        }
+        drawKeyPad4WiFi(y,keyPage,WiFiSet);
+        if (WiFiSet>=2) {
+          if (putWiFiCredentials()) WIFI_INFO.HAVECREDENTIALS=true;
+          else {
+            WiFiSet=0;
+            entryI=0;
+            initCreds();
+          }
+        }
+
+        
+        keyval=0;
+  
+      }
+    }
+    server.stop();
+    server.close();
+
+    tft.clear();
+    tft.setCursor(0,0);
+    tft.setTextFont(2);
+    tft.println("WIFI credentials entered... rebooting in 10 seconds");
+    delay(10000);
+    controlledReboot("Credentials provided, restart.",RESET_WIFI,true);
+    
+  }
+
   if (WiFi.status() != WL_CONNECTED)
   {
-    tft.printf("Wifi FAILED %d attempts - reboot in 10s",retries);    
+    initCreds();
+    putWiFiCredentials();
+    tft.printf("Wifi FAILED %d attempts - delete wifi info and reboot in 10s",retries);    
     I.resetInfo = RESET_WIFI;
     I.lastResetTime = I.currentTime;
     delay(10000);
@@ -299,6 +431,22 @@ tft.init();
       Serial.println(WiFi.localIP());
     #endif
 
+  
+  
+    #ifdef _DEBUG
+    Serial.print("Starting server... ");
+    #endif
+
+    tft.printf("Init server... ");
+    server.begin();
+    tft.setTextColor(TFT_GREEN);
+    tft.printf(" OK.\n");
+    tft.setTextColor(FG_COLOR);
+  
+    #ifdef _DEBUG
+      Serial.println("Server connected!");
+    #endif
+  
 
 tft.print("Connecting ArduinoOTA... ");
 
@@ -359,34 +507,6 @@ tft.print("Connecting ArduinoOTA... ");
   
 
 
-    server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-    server.on("/ALLSENSORS", handleALL);               // Call the 'handleall' function when a client requests URI "/"
-    server.on("/POST", handlePost);   
-    server.on("/REQUESTUPDATE",handleREQUESTUPDATE);
-    server.on("/CLEARSENSOR",handleCLEARSENSOR);
-    server.on("/TIMEUPDATE",handleTIMEUPDATE);
-    server.on("/REQUESTWEATHER",handleREQUESTWEATHER);
-    server.on("/GETSTATUS",handleGETSTATUS);
-    server.on("/REBOOT",handleReboot);
-    server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
-    server.on("/RETRIEVEDATA",handleRETRIEVEDATA);
-    server.on("/FLUSHSD",handleFLUSHSD);
-
-    server.onNotFound(handleNotFound);
-    #ifdef _DEBUG
-      Serial.print("Starting server... ");
-    #endif
-    tft.printf("Starting server... ");
-
-    server.begin();
-    tft.setTextColor(TFT_GREEN);
-    tft.printf(" OK.\n");
-    tft.setTextColor(FG_COLOR);
-
-    #ifdef _DEBUG
-      Serial.println("Server connected!");
-    #endif
-
     tft.print("Set up time... ");
 
 //    setSyncInterval(600); //set NTP interval for sync in sec
@@ -425,6 +545,113 @@ tft.print("Connecting ArduinoOTA... ");
     I.lastFlagView=0;
     I.lastClock=0;
 }
+
+
+void drawKeyPad4WiFi(uint32_t y,uint8_t keyPage,uint8_t WiFiSet) {
+  
+  tft.fillRect(0,y,TFT_WIDTH,TFT_HEIGHT-y,BG_COLOR);
+  tft.setCursor(0,y);
+  uint16_t fh=setFont(2);
+  tft.fillRect(0,y,TFT_WIDTH,(fh+4)*2,TFT_DARKGRAY);
+  tft.setCursor(0,y+2);
+  tft.setTextColor(TFT_YELLOW,TFT_DARKGRAY);
+  if (WiFiSet==0)  tft.printf("SSID: %s",SSID);
+  else tft.printf("PWD: %s",PWD);
+  y+=2*(fh+4);
+  tft.setCursor(0,y);
+
+  I.line_clear=y;
+  
+  I.line_keyboard=y;  
+
+  byte boxL = TFT_WIDTH/6;
+  byte i,j;
+  //now draw keyboard
+  for (i=0;i<=6;i++) {
+    tft.drawFastHLine(0,y+boxL*i,TFT_WIDTH,TFT_WHITE);
+    tft.drawFastVLine(boxL*i,y,TFT_HEIGHT-y,TFT_WHITE);
+  }
+
+  tft.setTextColor(TFT_WHITE,TFT_BLACK);
+
+  for (i=0;i<6;i++) {
+    for (j=0;j<6;j++) {
+      //this is the ith, jth box
+      uint16_t boxCenterX = 0+boxL*i + boxL/2;
+      uint16_t boxCenterY = y+boxL*j + boxL/2;
+      byte keyval = i+j*6;
+
+      if (keyval < 32) fcnPrintTxtCenter((String) char(keyPage*32+33+keyval),2,boxCenterX,boxCenterY);
+      else if (keyval==32) fcnPrintTxtCenter("last",1,boxCenterX,boxCenterY);
+      else if (keyval==33) fcnPrintTxtCenter("next",1,boxCenterX,boxCenterY);
+      else if (keyval==34) fcnPrintTxtCenter("space",1,boxCenterX,boxCenterY);
+      else if (keyval==35) fcnPrintTxtCenter("del",1,boxCenterX,boxCenterY);
+    }
+  }
+
+  y+=boxL*6+1;
+  I.line_submit=y;
+
+  tft.setCursor(0,y);
+  tft.setTextColor(TFT_GREEN,TFT_DARKGRAY);
+  tft.fillRect(0,y,TFT_WIDTH,TFT_HEIGHT-y,TFT_DARKGRAY);
+  fh = setFont(4);
+  if (WiFiSet<2)   {
+  if (WiFiSet==0)  fcnPrintTxtCenter("SUBMIT SSID",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
+    else fcnPrintTxtCenter("SUBMIT PWD",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
+    
+  }
+  else fcnPrintTxtCenter("PLEASE WAIT!",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
+}
+
+bool isTouchKey(int16_t* keyval, uint8_t* keypage) {
+  //keyval
+          //<0 means submit
+          //300 means page down
+          //301 means page up
+          //257 means backspace
+          //256 means clear
+          //33-126 is an ascii value
+          
+  if (I.touchY<I.line_clear) {
+    *keyval = 256;
+    return true;
+  }
+
+  if (I.touchY>I.line_submit) {
+    *keyval = -1;
+    return true;
+  }
+
+  byte l = TFT_WIDTH/6;
+  byte i,j;
+  for (i=1;i<=6;i++) {
+    if (I.touchX < l*i) break;
+  }
+
+  for (j=1;j<=6;j++) {
+    if (I.touchY < I.line_keyboard+l*j) break;
+  }
+
+  if (i>6 || j>6) return false; //not sure how that could happen...
+
+  byte pos = (i-1)+(j-1)*6;
+
+  if (pos>=32) {
+    if (pos==32) *keyval = 300;
+    if (pos==33) *keyval = 301;
+    if (pos==34) *keyval = 32;
+    if (pos==35) *keyval = 257;
+    return true;
+  }
+
+  *keyval = *keypage*32+33 + pos;
+  
+  if (*keyval>=0  && *keyval<128)   return true;
+  return false;
+
+}
+
 
 //weather FCNs
 
@@ -542,12 +769,9 @@ if (x>=0 && y>=0) {
   if (X<0) X=0;
   Y = y-FH/2;
   if (Y<0) Y=0;
-} else {
-  X=x;
-  Y=y;
-}
+  tft.setCursor(X,Y);
+} 
 
-tft.setCursor(X,Y);
 tft.print(msg.c_str());
 tft.setTextDatum(TL_DATUM);
     

@@ -15,9 +15,6 @@
 #define LGFX_USE_V1         // set to use new version of library
 #include <LovyanGFX.hpp>    // main library
 
-//wifi
-#define ESP_SSID "CoronaRadiata_Guest" // Your network name here
-#define ESP_PASS "snakesquirrel" // Your network password here
 //------------------
 
 
@@ -50,7 +47,7 @@ struct Screen {
     time_t lastResetTime;
     byte rebootsSinceLast=0;
     time_t ALIVESINCE;
-    uint8_t wifi;
+    uint8_t wifiFailCount;
     time_t currentTime;
     byte CLOCK_Y = 105;
     byte HEADER_Y = 30;
@@ -67,6 +64,11 @@ struct Screen {
     uint8_t weatherTime = 60; //how many MINUTES to show weather values?
 
     uint8_t ScreenNum;
+    uint16_t touchX;
+    uint16_t touchY;
+    uint16_t line_clear;
+    uint16_t line_keyboard;
+    uint16_t line_submit;
     uint8_t alarmIndex;
     
     uint8_t isExpired = false; //are any critical sensors expired?
@@ -138,6 +140,7 @@ struct WiFi_type {
   IPAddress DNS; //4 bytes, 16 in total
   IPAddress SUBNET;
   IPAddress MYIP; //4 bytes
+  bool HAVECREDENTIALS;
 };
 
 
