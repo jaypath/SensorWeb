@@ -445,19 +445,26 @@ void serverTextWiFiForm() {
   });
 
   async function encryptAndSend() {
-    const keyText = "WeatherBase12345"; // 16-byte key for AES-128
+    const key = "WeatherBase12345"; // 16-byte key for AES-128
     const ivText = "poiuytasdfmnbvcx"; // 16-byte IV
 
     const form = document.getElementById('WiFiSetForm');
     const ssid = document.getElementById('SSID').value;
     const pwd  = document.getElementById('PWD').value;
 
-    const codedstr = encryptAES128(ssid + '||||' + pwd); //should check if ssid or  pwd contain ||||
-    console.log(data);
-    const encryptedData = await encryptAES128(key, iv, data);
-    console.log(encryptedData);
+    const plainText = ssid + '||||' + pwd; //should check if ssid or  pwd contain ||||
+    console.log(plainText);
 
-    fetch('http://192.168.10.1/SETWIFI?val=' + codedstr)
+    const encryptedText = encrypt(plainText, key)
+    .then(encryptedText => {
+      console.log("Encrypted:", encryptedText);
+      return encryptedText;
+    })
+    .catch(error => {
+      console.error("Error:", error);
+    });
+
+    fetch('http://192.168.10.1/SETWIFI?val=' + encryptedText)
     .then(response => {
       document.getElementById('submitresult').setAttribute('value',response.text());
     })
@@ -473,107 +480,36 @@ void serverTextWiFiForm() {
   }
 
 
-
-
-
-async function encrypt(plainText, key) {
-  // Encode the key and plaintext as Uint8Arrays
-  const encodedKey = new TextEncoder().encode(key);
-  const encodedPlaintext = new TextEncoder().encode(plainText);
-
-  // Generate an AES-CBC key from the encoded key
-  const cryptoKey = await window.crypto.subtle.importKey(
-    "raw",
-    encodedKey,
-    { name: "AES-CBC", length: 128 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-
-  // Generate a random initialization vector (IV)
-  const iv = window.crypto.getRandomValues(new Uint8Array(16));
-
-  // Encrypt the plaintext using AES-CBC
-  const ciphertext = await window.crypto.subtle.encrypt(
-    { name: "AES-CBC", iv: iv },
-    cryptoKey,
-    encodedPlaintext
-  );
-
-  // Return the IV and ciphertext as a single base64-encoded string
-  const encryptedData = new Uint8Array([...iv, ...new Uint8Array(ciphertext)]);
-  const base64Encoded = btoa(String.fromCharCode(...encryptedData));
-  return base64Encoded;
-}
-
-async function decrypt(base64Encoded, key) {
-    // Decode the base64-encoded data
-    const encryptedData = new Uint8Array(
-        [...atob(base64Encoded)].map(char => char.charCodeAt(0))
-    );
-    
-    // Extract the IV and ciphertext from the encoded data
-    const iv = encryptedData.slice(0, 16);
-    const ciphertext = encryptedData.slice(16);
-    
-    // Encode the key as a Uint8Array
+  async function encrypt(plainText, key) {
+    // Encode the key and plaintext as Uint8Arrays
     const encodedKey = new TextEncoder().encode(key);
+    const encodedPlaintext = new TextEncoder().encode(plainText);
 
     // Generate an AES-CBC key from the encoded key
     const cryptoKey = await window.crypto.subtle.importKey(
-        "raw",
-        encodedKey,
-        { name: "AES-CBC", length: 128 },
-        false,
-        ["encrypt", "decrypt"]
+      "raw",
+      encodedKey,
+      { name: "AES-CBC", length: 128 },
+      false,
+      ["encrypt", "decrypt"]
     );
 
-    // Decrypt the ciphertext using AES-CBC
-    const plaintext = await window.crypto.subtle.decrypt(
-        { name: "AES-CBC", iv: iv },
-        cryptoKey,
-        ciphertext
+    // Generate a random initialization vector (IV)
+    const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+    // Encrypt the plaintext using AES-CBC
+    const ciphertext = await window.crypto.subtle.encrypt(
+      { name: "AES-CBC", iv: iv },
+      cryptoKey,
+      encodedPlaintext
     );
 
-    // Return the decrypted plaintext as a string
-    return new TextDecoder().decode(plaintext);
-}
-
-// Example usage:
-const key = "your-secret-key"; // Replace with a strong, secret key
-const plainText = "This is a secret message.";
-
-encrypt(plainText, key)
-  .then(encryptedText => {
-    console.log("Encrypted:", encryptedText);
-    return decrypt(encryptedText, key);
-  })
-  .then(decryptedText => {
-    console.log("Decrypted:", decryptedText);
-  })
-  .catch(error => {
-    console.error("Error:", error);
-  });
-
-
-
-
-
-  async function encryptAES128(key, iv, data) {
-  const encodedData = new TextEncoder().encode(data);
-  const cryptoKey = await window.crypto.subtle.importKey(
-    "raw",
-    key,
-    { name: "AES-CBC", },
-    false,
-    ["encrypt", "decrypt"]
-  );
-  const encryptedData = await window.crypto.subtle.encrypt(
-    { name: "AES-CBC", iv: iv },
-    cryptoKey,
-    encodedData
-  );
-  return encryptedData;
+    const encryptedData = new Uint8Array([...iv, ...new Uint8Array(ciphertext)]);
+    return encryptedData;
+  
+    // Return the IV and ciphertext as a single base64-encoded string
+    //const base64Encoded = btoa(String.fromCharCode(...encryptedData));
+    //return base64Encoded;
   }
 
   
