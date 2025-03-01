@@ -2,13 +2,41 @@
 #include <utility.hpp>
 //#include <FS.h>
 
-int inArray(int arr[], int N, int value) {
+int inArray(int arr[], int N, int value,bool returncount) {
   //returns index to the integer array of length N holding value, or -1 if not found
+  //if returncount == true then returns number of occurrences
 
-for (int i = 0; i < N-1 ; i++)   if (arr[i]==value) return i;
+byte cnt=0;
+
+for (int i = 0; i < N-1 ; i++)   {
+  if (arr[i]==value) {
+    if (returncount) cnt++;
+    else return i;
+  }
+}
+
 return -1;
 
 }
+
+int inArrayBytes(byte arr[], int N, byte value,bool returncount) {
+  //returns index to the integer array of length N holding value, or -1 if not found
+  //if returncount == true then returns number of occurrences
+
+byte cnt=0;
+
+for (int i = 0; i < N-1 ; i++)   {
+  if (arr[i]==value) {
+    if (returncount) cnt++;
+    else return i;
+  }
+}
+
+return -1;
+
+}
+
+
 void pushDoubleArray(double arr[], byte N, double value) { //array variable, size of array, value to push
   for (byte i = N-1; i > 0 ; i--) {
     arr[i] = arr[i-1];
@@ -450,22 +478,23 @@ String breakString(String *inputstr,String token) //take a pointer to input stri
 
 
 // IP fcns
-String IPbytes2String(byte* IP) {
-//reconstruct a string from 4 bytes. If the first or second element is 0 then use 192 or 168
+String IPbytes2String(byte* IP,byte len) {
+//reconstruct a string from 4 or 6 bytes. If the first or second element of a 4 byte array is 0 then use 192 and 168
   String IPs = "";
 
-  for (byte j=0;j<3;j++){
-    if (IP[j] ==0) {
-      if (j==0) IPs = IPs + String(192,DEC) + ".";
+  for (byte j=0;j<len;j++){
+    if (IP[j] ==0 && len==4) {
+      if (j==0) IPs = IPs + String(192,DEC);
       else {
-        if (j==1)         IPs = IPs + String(168,DEC) + ".";
-        else IPs = IPs + String(0,DEC) + ".";
+        if (j==1)         IPs = IPs + String(168,DEC);
+        else IPs = IPs + String(0,DEC);
       }
     } 
-    else     IPs = IPs + String(IP[j],DEC) + ".";
+    else     IPs += String(IP[j],DEC);
+
+    if (j<len-1) IPs += ".";
   }
 
-  IPs = IPs + String(IP[3],DEC);
   return IPs;
 }
 
@@ -490,28 +519,99 @@ bool IPString2ByteArray(String IPstr,byte* IP) {
 }
 
 
-bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
+bool breakLOGID(String logID,struct SensorVal *S) {
     
-    String temp;
-    
-    int strOffset = logID.indexOf(".", 0);
+
+  String temp;
+
+  int strOffset=0;
+
+  byte i=0;
+  while (logID.indexOf(",",strOffset)!=-1) {
+    i++;
+    strOffset = logID.indexOf(".", strOffset);
+  }
+
+
+  if (i>3) {
+    //v2 logID with MAC address, ardID, snsID, snstype
+    strOffset = logID.indexOf(".", 0);
+    if (strOffset == -1) { //did not find the . , logID not correct. abort.
+      return false;
+    } else {
+      //mac
+      for (byte k=0;k<6;k++) {
+        temp = logID.substring(0, strOffset);
+        S->MAC[k] = temp.toInt();
+        logID.remove(0, strOffset + 1);
+        strOffset = logID.indexOf(".", 0);  
+      }
+
+      //ardID
+      temp = logID.substring(0, strOffset);
+      S->ardID = temp.toInt();
+      logID.remove(0, strOffset + 1);
+      strOffset = logID.indexOf(".", 0);
+
+      //snsType
+      temp = logID.substring(0, strOffset);
+      S->snsType = temp.toInt();
+      logID.remove(0, strOffset + 1);
+      strOffset = logID.indexOf(".", 0);
+
+      //snsID
+      S->snsID = logID.toInt();
+    }
+  } else {
+    strOffset = logID.indexOf(".", 0);
     if (strOffset == -1) { //did not find the . , logID not correct. abort.
       return false;
     } else {
       temp = logID.substring(0, strOffset);
-      *ardID = temp.toInt();
+      S->ardID = temp.toInt();
       logID.remove(0, strOffset + 1);
 
       strOffset = logID.indexOf(".", 0);
       temp = logID.substring(0, strOffset);
-      *snsID = temp.toInt();
+      S->snsType = temp.toInt();
       logID.remove(0, strOffset + 1);
-
-      *snsNum = logID.toInt();
+      S->snsID = logID.toInt();
     }
+
+  }
+
+
     
-    return true;
+  return true;
 }
+
+
+bool breakMAC(String mac,struct SensorVal *S) {
+    
+
+  String temp;
+
+  int strOffset;
+  byte i=0;
+  while (mac.indexOf(",",strOffset)!=-1) {
+    i++;
+    strOffset = mac.indexOf(".", strOffset);
+  }
+
+  if (i!=5) return false;
+  
+  strOffset = mac.indexOf(".", 0);
+
+  for (byte k=0;k<6;k++) {
+    temp = mac.substring(0, strOffset);
+    S->MAC[k] = temp.toInt();
+    mac.remove(0, strOffset + 1);
+    strOffset = mac.indexOf(".", 0);  
+  }
+   
+  return true;
+}
+
 
 
 bool storeError(const char* E) {
@@ -568,18 +668,4 @@ String lastReset2String(bool addtime) {
 
   return "?";
 
-}
-
-uint16_t CRCCalculator(uint8_t * data, uint16_t length)
-{
-   uint16_t curr_crc = 0x0000;
-   uint8_t sum1 = (uint8_t) curr_crc;
-   uint8_t sum2 = (uint8_t) (curr_crc >> 8);
-   int index;
-   for(index = 0; index < length; index = index+1)
-   {
-      sum1 = (sum1 + data[index]) % 255;
-      sum2 = (sum2 + sum1) % 255;
-   }
-   return (sum2 << 8) | sum1;
 }

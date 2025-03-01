@@ -93,6 +93,8 @@ struct Screen {
 
     char lastError[76];
     time_t lastErrorTime;
+
+    time_t lastESPNOW;
 };
 
 //#define _LIGHTMODE
@@ -111,8 +113,9 @@ struct Screen {
 #define OLDESTSENSORHR 24 //hours before a sensor is removed
 
 struct SensorVal {
+  uint8_t MAC[6]; //mac address [v3 ID]
   uint8_t IP[4];
-  uint8_t ardID;
+  uint8_t ardID; //legacy use from V1 and V2
   uint8_t  snsType ;
   uint8_t snsID;
   char snsName[32];
@@ -135,13 +138,17 @@ struct IP_TYPE {
 
 
 struct WiFi_type {
-  IPAddress DHCP;  // 4 byte,   4 in total
-  IPAddress GATEWAY;// 4 bytes, 8 in total
-  IPAddress DNS; //4 bytes, 16 in total
-  IPAddress SUBNET;
+  //IPAddress DHCP;  // 4 byte,   4 in total
+  //IPAddress GATEWAY;// 4 bytes, 8 in total
+  //IPAddress DNS; //4 bytes, 16 in total
+  //IPAddress SUBNET;
   IPAddress MYIP; //4 bytes
+  byte MAC[6];
+  byte SSID[33];
+  byte PWD[65];
   bool HAVECREDENTIALS;
 };
+
 
 
 

@@ -473,7 +473,10 @@ bool WeatherInfo::updateWeather(uint16_t synctime)
 
     if (this->lastUpdateT+synctime > I.currentTime && (this->lastUpdateAttempt == this->lastUpdateT)) return false; //if the last update was recently (within synctime) AND last attempt == last success then not time to update
     
-    if ((uint32_t) this->lastUpdateAttempt+10 > I.currentTime) return false; //last update failed but was so recent that we don't want to retry now
+    
+    if ((uint32_t) this->lastUpdateAttempt+600 > I.currentTime) return false; //last update failed but was so recent (within 10 minutes) that we don't want to retry now
+
+    this->lastUpdateAttempt = I.currentTime;
 
 
     #ifdef _DEBUG
@@ -482,7 +485,7 @@ bool WeatherInfo::updateWeather(uint16_t synctime)
 
     initWeather();
 
-    this->lastUpdateAttempt = I.currentTime;
+    
 
     String url;
     JsonDocument doc;

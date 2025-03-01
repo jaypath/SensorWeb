@@ -1,5 +1,3 @@
-
-
 //Version 12 - 
 /*
  * v11.1
@@ -56,17 +54,17 @@
 #include <Arduino.h>
 #include <String.h>
 
-#include <globals.hpp>
-#include <TimeLib.h>
-#include <timesetup.hpp>
-#include <utility.hpp>
-#include <server.hpp>
-#include <weather.hpp>
-
+#include "globals.hpp"
+#include "timesetup.hpp"
+#include "utility.hpp"
+#include "server.hpp"
+#include "weather.hpp"
+#include "SDCard.hpp"
+#include "BootSecure.hpp"
 
 #include "ArduinoJson.h"
-#include <SD.h>
 #include "ArduinoOTA.h"
+
 #include <esp_task_wdt.h> //watchdog timer libary
 #define WDT_TIMEOUT_MS 120000
 
@@ -82,8 +80,6 @@
 //#define BG_COLOR 0xD69A
 
 
-//#define ESP_SSID "kandy-hispeed" // Your network name here
-//#define ESP_PASS "manath77" // Your network password here
 
 #ifdef _WEBDEBUG
   String WEBDEBUG = "";
@@ -125,8 +121,6 @@ extern WeatherInfo WeatherData;
 //extern SensorVal *Sensors; 
 extern SensorVal Sensors[SENSORNUM];
 
-extern char SSID[];
-extern char PWD[];
 
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
@@ -184,7 +178,7 @@ void setup()
   #endif
 
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
-tft.init();
+  tft.init();
 
   #ifdef _DEBUG
     Serial.println("ok ");
@@ -282,7 +276,7 @@ tft.init();
   server.on("/UPDATEDEFAULTS",handleUPDATEDEFAULTS);
   server.on("/RETRIEVEDATA",handleRETRIEVEDATA);
   server.on("/FLUSHSD",handleFLUSHSD);
-  server.on("/SETWIFI",handleSETWIFI);
+  server.on("/SETWIFI", HTTP_POST, handleSETWIFI);
   server.onNotFound(handleNotFound);
   
 
@@ -298,6 +292,8 @@ tft.init();
   WIFI_INFO.MYIP = IPAddress (192,168,68,0);
   #endif
   
+  
+
   WIFI_INFO.HAVECREDENTIALS = false;
   
 
@@ -321,8 +317,8 @@ tft.init();
 
     tft.setCursor(0,y+5);
     setFont(1);
-    tft.printf("WiFi was not found. Enter here or connect to WiFi\nESPSERVER with pwd=CENTRAL.SERVER1 and go to \nweb address 192.168.10.1\n");
-    tft.printf("Touch anywhere above keypad to delete all entries.\n");
+    tft.printf("Or connect to wifi ESPSERVER pwd=CENTRAL.server1\nand go to web site http://192.168.10.1\n");
+    tft.printf("Touch anywhere above keypad to restart entry.\n");
     
     y=tft.getCursorY()+2;
     
@@ -362,8 +358,8 @@ tft.init();
               } else {
                 if (keyval==257) {
                   if (entryI>0) entryI--;
-                  if (WiFiSet==0) SSID[entryI] = '\0';
-                  else PWD[entryI] = '\0';                                
+                  if (WiFiSet==0) WIFI_INFO.SSID[entryI] = '\0';
+                  else WIFI_INFO.PWD[entryI] = '\0';                                
                 } else {
                   if (keyval==256) {
                     initCreds();
@@ -371,10 +367,10 @@ tft.init();
                     WiFiSet=0;
                   } else {
                     if (WiFiSet==0) {
-                      SSID[entryI++] = keyval;
+                      WIFI_INFO.SSID[entryI++] = keyval;
                       //tft.printf("%s",SSID);
                     } else {
-                      PWD[entryI++] = keyval;
+                      WIFI_INFO.PWD[entryI++] = keyval;
                       //tft.printf("%s",PWD);      
                     }  
                   }
@@ -421,11 +417,29 @@ tft.init();
     controlledReboot("WiFi failed",RESET_WIFI);
 
   } else {
+    esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, WIFI_INFO.MAC);
     tft.setTextColor(TFT_GREEN);    
-    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\n",retries,WiFi.localIP().toString().c_str());
+    WIFI_INFO.MYIP = WiFi.localIP();
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %u.%u.%u.%u.%u.%u\n",retries,WIFI_INFO.MYIP.toString().c_str(),WIFI_INFO.MAC[0],WIFI_INFO.MAC[1],WIFI_INFO.MAC[2],WIFI_INFO.MAC[3],WIFI_INFO.MAC[4],WIFI_INFO.MAC[5]);
+    
+
     tft.setTextColor(FG_COLOR);
   }
 
+  tft.printf("Internal network ");
+  if (initESPNOW()==false) {
+    tft.setTextColor(TFT_RED);    
+    tft.printf("FAIL\n");
+
+  } else {
+    tft.setTextColor(TFT_GREEN);    
+    tft.printf("OK\n");    
+  }
+
+  tft.setTextColor(FG_COLOR);
+
+    
+ 
     #ifdef _DEBUG
       Serial.println("Connected!");
       Serial.println(WiFi.localIP());
@@ -555,8 +569,8 @@ void drawKeyPad4WiFi(uint32_t y,uint8_t keyPage,uint8_t WiFiSet) {
   tft.fillRect(0,y,TFT_WIDTH,(fh+4)*2,TFT_DARKGRAY);
   tft.setCursor(0,y+2);
   tft.setTextColor(TFT_YELLOW,TFT_DARKGRAY);
-  if (WiFiSet==0)  tft.printf("SSID: %s",SSID);
-  else tft.printf("PWD: %s",PWD);
+  if (WiFiSet==0)  tft.printf("SSID: %s",WIFI_INFO.SSID);
+  else tft.printf("PWD: %s",WIFI_INFO.PWD);
   y+=2*(fh+4);
   tft.setCursor(0,y);
 
@@ -1788,13 +1802,13 @@ void loop() {
 
     WeatherData.updateWeather(3600);
 
-    if (WeatherData.lastUpdateAttempt>WeatherData.lastUpdateT+300 && I.currentTime-I.ALIVESINCE > 3600) { //weather has not updated for 3600 seconds!
+    if (WeatherData.lastUpdateAttempt>WeatherData.lastUpdateT+300 && I.currentTime-I.ALIVESINCE > 10800) { //weather has not updated for 3 hrs
       tft.clear();
       tft.setCursor(0,0);
       tft.setTextColor(TFT_RED);
       setFont(2);
-      tft.printf("Weather failed \nfor 60 minutes.\nRebooting 10 seconds...");
-      delay(10000);
+      tft.printf("Weather failed \nfor 60 minutes.\nRebooting in 3 seconds...");
+      delay(3000);
       I.resetInfo = RESET_WEATHER;
       I.lastResetTime = I.currentTime;
       

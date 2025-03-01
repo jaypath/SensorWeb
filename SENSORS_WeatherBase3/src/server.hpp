@@ -9,8 +9,7 @@
 #include "globals.hpp"
 #include "Weather.hpp"
 #include "SDCard.hpp"
-#include <mbedtls/aes.h>
-#include <mbedtls/cipher.h>
+
 
 //Server requests time out after 2 seconds
 #define TIMEOUT_TIME 2000
@@ -25,6 +24,7 @@
 #endif
 #ifdef _USE32
   #include <WiFi.h> //esp32
+  #include <esp_wifi.h>
   #include <WebServer.h>
   #include <HTTPClient.h>
   extern WebServer server;
@@ -57,8 +57,10 @@ extern uint32_t WTHRFAIL;
 
 extern WiFi_type WIFI_INFO;
 
-void encrypt(char* input, char* key, unsigned char* output, unsigned char* iv);
-void decrypt(unsigned char* input, char* key, unsigned char* output, unsigned char* iv);
+
+
+
+
 
 void SerialWrite(String);
 bool WifiStatus(void);
@@ -88,7 +90,5 @@ void serverTextClose(int htmlcode=200, bool asHTML=true);
 bool SendData(struct SensorVal*);
 
 byte connectWiFi();
-bool getWiFiCredentials();
-bool putWiFiCredentials();
-void initCreds();
+
 #endif

@@ -104,27 +104,6 @@ bool writeSensorsSD(String filename)
 
 }
 
-
-
-bool storeSensorSD(struct SensorVal *S) {
-
-    String filename = "/Data/Sensor" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v2.dat";
-    File f = SD.open(filename, FILE_APPEND);
-    if (f==false) {
-        storeError("storesensorSD: Could not write single sensorval");
-                f.close();
-        return false;
-    }
-    union SensorValBytes D; 
-    D.sensordata=*S;
-
-    f.write(D.bytes,sizeof(SensorVal));
-
-    f.close();
-    return true;
-    
-}
-
 bool readSensorsSD(String filename) //read last available sensorvals back from disk
 {
     union SensorValBytes D;
@@ -151,10 +130,39 @@ bool readSensorsSD(String filename) //read last available sensorvals back from d
 
 }
 
-//overloaded version to read multiple values and average them together
-bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN ) {
 
-    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + "_v2.dat";
+bool storeSensorSD(struct SensorVal *S) {
+
+  String filename;
+    
+  if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
+  else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
+  
+  File f = SD.open(filename, FILE_APPEND);
+    if (f==false) {
+        storeError("storesensorSD: Could not write single sensorval");
+                f.close();
+        return false;
+    }
+    union SensorValBytes D; 
+    D.sensordata=*S;
+
+    f.write(D.bytes,sizeof(SensorVal));
+
+    f.close();
+    return true;
+    
+}
+
+
+//overloaded version to read multiple values and average them together
+bool readSensorSD(SensorVal *S, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN ) {
+
+    String filename;
+    
+    if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
+    else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
+
     File f = SD.open(filename, FILE_READ);
     union SensorValBytes D;
     byte cnt = 0, deltacnt=0;
@@ -195,11 +203,15 @@ bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[]
     return true;
 }
 
-bool readSensorSD(byte ardID, byte snsType, byte snsID, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN) { //read the last N sensor readings, stating from starttime. return new N if there were less than N reads
+bool readSensorSD(SensorVal *S, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN) { //read the last N sensor readings, stating from starttime. return new N if there were less than N reads
     if (starttime==0) starttime = I.currentTime;
     if (avgN==0) avgN=1;
 
-    String filename = "/Data/Sensor" + (String) ardID + + "." + (String) snsType + "." + (String) snsID + "_v2.dat";
+    String filename;
+    
+    if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
+    else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
+
     File f = SD.open(filename, FILE_READ);
     union SensorValBytes D;
     double avgV = 0;

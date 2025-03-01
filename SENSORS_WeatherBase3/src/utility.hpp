@@ -13,8 +13,8 @@ extern SensorVal Sensors[SENSORNUM];
 bool storeError(const char* E);
 String lastReset2String(bool addtime=true);
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot=true);
-
-int inArray(int arrind[], int N, int value);
+int inArrayBytes(byte arr[], int N, byte value,bool returncount=false);
+int inArray(int arr[], int N, int value,bool returncount=false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 void pushDoubleArray(double arr[], byte N, double value);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
@@ -36,9 +36,10 @@ uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
 void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
 byte checkExpiration(int i, time_t t=0,bool onlycritical=true);
-String IPbytes2String(byte* IP);
+String IPbytes2String(byte* IP,byte len=4);
 bool IPString2ByteArray(String IPstr,byte* IP) ;
-bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
+bool breakLOGID(String logID,struct SensorVal *S);
+bool breakMAC(String mac,struct SensorVal *S);
 
-uint16_t CRCCalculator(uint8_t * data, uint16_t length);
+
 #endif

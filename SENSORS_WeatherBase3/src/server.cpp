@@ -4,7 +4,6 @@
 #include <utility.hpp>
 #include "server.hpp"
 #include <WiFiClient.h>
-#include <Preferences.h>
 
 
 
@@ -19,9 +18,6 @@
     WebServer server(80);
 #endif
 
-
-char SSID[33] = "";
-char PWD[65] = "";
 
 
 
@@ -134,7 +130,7 @@ uint8_t connectWiFi() {
       #endif
 
       
-      WiFi.begin(SSID, PWD);
+      WiFi.begin((char *) WIFI_INFO.SSID, (char *) WIFI_INFO.PWD);
 
 
       if (WiFi.status() != WL_CONNECTED)  {
@@ -179,7 +175,7 @@ uint8_t connectWiFi() {
       storeError("connectWiFi: no saved pwd/ssid");
 
       WiFi.mode(WIFI_AP);
-      WiFi.softAP("ESPSERVER","CENTRAL.SERVER1");
+      WiFi.softAP("ESPSERVER","CENTRAL.server1");
 
       delay(100);
       IPAddress Ip(192, 168, 10, 1);    //setto IP Access Point same as gateway
@@ -329,48 +325,30 @@ void handleTIMEUPDATE() {
 
 
 void handleSETWIFI() {
-  if (server.args()==0) return;
+  if (server.uri() != "/SETWIFI") return;
+
+
   initCreds();
 
   String creds = "";
 
   for (uint8_t i = 0; i < server.args(); i++) {
-    if (server.argName(i)=="val") creds = server.arg(i);
+    if (server.argName(i)=="SSID") snprintf((char *) WIFI_INFO.SSID,64,"%s",server.arg(i).c_str());
+    if (server.argName(i)=="PWD") snprintf((char *) WIFI_INFO.PWD,64,"%s",server.arg(i).c_str());
   }
 
-	const uint8_t plainTextSize = creds.length() / sizeof(char);
-  
-  char keyText[] = "WeatherBase12345"; // 16-byte key for AES-128
-  char ivText[] = "poiuytasdfmnbvcx"; // 16-byte IV
-
-//  char encodedText[plainTextSize];
-  //sniprintf(encodedText,plainTextSize,"%s",creds.c_str());
-  char decipheredTextOutput[plainTextSize];
-
-
-
-	decrypt((unsigned char*) creds.c_str(), keyText, (unsigned char*) decipheredTextOutput, (unsigned char*) ivText);
-
-  creds = (String) decipheredTextOutput;
-
-  int ind = creds.indexOf("||||");
-
-  if (ind>-1) {
-    snprintf(SSID,32,"%s",creds.substring(0,ind).c_str()); //end index is NOT inclusive
-    creds.remove(0,ind+4); //"||||" is 4 long
-    snprintf(PWD,64,"%s",creds.c_str()); //end index is NOT inclusive
-  }
-  
+	
   if (putWiFiCredentials()) {
     WIFI_INFO.HAVECREDENTIALS = true;
     getWiFiCredentials();
-    WEBHTML= "OK, stored new credentials.\nSSID:" + (String) SSID + "\nPWD: NOT_SHOWN";  
-    serverTextClose(200,false);
+    WEBHTML= "OK, stored new credentials.\nSSID:" + (String) (char *) WIFI_INFO.SSID + "\nPWD: NOT_SHOWN";  
+    serverTextClose(201,false);
 
   }   else {
-    WEBHTML= "Cleared credentials!";  
+    WEBHTML= "OK, Cleared credentials!";  
     WIFI_INFO.HAVECREDENTIALS = false;
-    serverTextClose(302,false);
+    serverTextClose(201,false);
+    controlledReboot("User cleared credentials",RESET_USER);
   }
 
 
@@ -399,32 +377,12 @@ void serverTextHeader() {
 }
 
 void serverTextWiFiForm() {
-  /*
-  WEBHTML = WEBHTML + R"===(---------------------<br>
-  <FORM action="/SETWIFI" method="get">
-  <p style="font-family:arial, sans-serif">
-  To set or change WiFi, enter SSID and PWD.<br>
-  NOTE THE FOLLOWING!! 
-  1. THE RECOMMENDED METHOD TO SET WIFI CREDENTIALS IS TO USE THE TOUCH SCREEN (NOT THIS WEB FORM)! 
-  YOUR BROWSER HISTORY WILL CONTAIN YOUR WIFI PASSWORD IN PLAINTEXT!
-  2. IF YOU USE THIS FORM, CLEAR YOUR BROWSER HISTORY AFTER SUBMISSION! 
-  3. If SSID is blank, all stored credentials WILL BE DELETED!<br>
-  <label for="SSID">WiFi SSID: </label>
-  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
-  <label for="PWD">WiFi PWD: </label>
-  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>  
-  <br>
-  <button type="submit">STORE</button><br>
-  </p></font></form>
-  ---------------------<br>)===";
-  */
+
 
   WEBHTML = WEBHTML + R"===(---------------------<br>
-  <FORM id="WiFiSetForm" action="/" method="get">
+  <FORM action="/SETWIFI" method="post" target="_blank" id="WiFiSetForm">
   <p style="font-family:arial, sans-serif">
   To set or change WiFi, enter SSID and PWD.<br>
-  Data will be encrypted and sent to your device. You can also use the device touch screen.
-  If SSID is blank, all stored credentials WILL BE DELETED!<br>
   <label for="SSID">WiFi SSID: </label>
   <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
   <label for="PWD">WiFi PWD: </label>
@@ -433,87 +391,8 @@ void serverTextWiFiForm() {
   <button type="submit">STORE</button><br>
   </p></font></form>
   ---------------------<br>
-  <input type="text" id="submitresult">
   <br>
 
-  <script>
-  const form = document.getElementById('WiFiSetForm');
-  form.addEventListener('submit', function(event) {
-    event.preventDefault(); // Prevent the default form submission
-    encryptAndSend();
-    console.log('Form submission handled by JavaScript');
-  });
-
-  async function encryptAndSend() {
-    const key = "WeatherBase12345"; // 16-byte key for AES-128
-    const ivText = "poiuytasdfmnbvcx"; // 16-byte IV
-
-    const form = document.getElementById('WiFiSetForm');
-    const ssid = document.getElementById('SSID').value;
-    const pwd  = document.getElementById('PWD').value;
-
-    const plainText = ssid + '||||' + pwd; //should check if ssid or  pwd contain ||||
-    console.log(plainText);
-
-    const encryptedText = encrypt(plainText, key)
-    .then(encryptedText => {
-      console.log("Encrypted:", encryptedText);
-      return encryptedText;
-    })
-    .catch(error => {
-      console.error("Error:", error);
-    });
-
-    fetch('http://192.168.10.1/SETWIFI?val=' + encryptedText)
-    .then(response => {
-      document.getElementById('submitresult').setAttribute('value',response.text());
-    })
-    .then(data => {
-      // Handle the data received from the API
-      console.log(data);
-    })
-    .catch(error => {
-      // Handle errors
-      console.error('There was a problem with the fetch operation:', error);
-    });
-    return false;
-  }
-
-
-  async function encrypt(plainText, key) {
-    // Encode the key and plaintext as Uint8Arrays
-    const encodedKey = new TextEncoder().encode(key);
-    const encodedPlaintext = new TextEncoder().encode(plainText);
-
-    // Generate an AES-CBC key from the encoded key
-    const cryptoKey = await window.crypto.subtle.importKey(
-      "raw",
-      encodedKey,
-      { name: "AES-CBC", length: 128 },
-      false,
-      ["encrypt", "decrypt"]
-    );
-
-    // Generate a random initialization vector (IV)
-    const iv = window.crypto.getRandomValues(new Uint8Array(16));
-
-    // Encrypt the plaintext using AES-CBC
-    const ciphertext = await window.crypto.subtle.encrypt(
-      { name: "AES-CBC", iv: iv },
-      cryptoKey,
-      encodedPlaintext
-    );
-
-    const encryptedData = new Uint8Array([...iv, ...new Uint8Array(ciphertext)]);
-    return encryptedData;
-  
-    // Return the IV and ciphertext as a single base64-encoded string
-    //const base64Encoded = btoa(String.fromCharCode(...encryptedData));
-    //return base64Encoded;
-  }
-
-  
-  </script>
   )===";
 }
 
@@ -526,6 +405,28 @@ void serverTextClose(int htmlcode, bool asHTML) {
   else server.send(htmlcode, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
 
+
+void rootTableFill(byte j) {
+  WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?((bitRead(Sensors[j].Flags,7))?"N*":"n"):((bitRead(Sensors[j].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
+  
+  byte delta=2;
+  if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
+  if (Sensors[j].snsType==3) delta = 1;
+  if (Sensors[j].snsType==9) delta = 3; //bmp
+  if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
+  if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
+  
+  WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+  WEBHTML = WEBHTML + "<td>" + (String) IPbytes2String(Sensors[j].MAC,6) + "</td>";
+  WEBHTML = WEBHTML + "</tr>";
+}
 
 void handlerForRoot(bool allsensors) {
   
@@ -645,57 +546,21 @@ void handlerForRoot(bool allsensors) {
     }
 
     byte usedINDEX = 0;  
-    byte delta=2;
 
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot</th><th style=\"width:100px\">MAC</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
     if (allsensors && bitRead(Sensors[j].Flags,1)==0) continue;
     if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
       used[usedINDEX++] = j;
-
-      WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
-      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?((bitRead(Sensors[j].Flags,7))?"N*":"n"):((bitRead(Sensors[j].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-      
-      delta=2;
-      if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
-      if (Sensors[j].snsType==3) delta = 1;
-      if (Sensors[j].snsType==9) delta = 3; //bmp
-      if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
-      if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
-      
-      WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-      WEBHTML = WEBHTML + "</tr>";
+      rootTableFill(j);
       
       for (byte jj=j+1;jj<SENSORNUM;jj++) {
         if (allsensors && bitRead(Sensors[jj].Flags,1)==0) continue;
         if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].ardID==Sensors[j].ardID) {
           used[usedINDEX++] = jj;
-          WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[jj].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[jj].IP) + "</a></td>";
-          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].ardID + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsName + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsValue + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) Sensors[jj].snsType+"."+ (String) Sensors[jj].snsID + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
-          WEBHTML = WEBHTML + "<td>"  + (String) dateify(Sensors[jj].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-          WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[jj].expired==0)?((bitRead(Sensors[jj].Flags,7))?"N*":"n"):((bitRead(Sensors[jj].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-          
-          delta=2;
-          if (Sensors[jj].snsType==4 || Sensors[jj].snsType==1 || Sensors[jj].snsType==10) delta = 4;
-          if (Sensors[jj].snsType==3) delta = 1;
-          if (Sensors[jj].snsType==9) delta = 3; //bmp
-          if (Sensors[jj].snsType==60 || Sensors[jj].snsType==61) delta = 3; //batery
-          if (Sensors[jj].snsType>=50 && Sensors[jj].snsType<60) delta = 15; //HVAC reads ~q2 min
-
-          WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[jj].ardID + "." + (String) Sensors[jj].snsType + "." +(String) Sensors[jj].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-          WEBHTML = WEBHTML + "</tr>";
+          rootTableFill(jj);
         }
       }
     }
@@ -835,7 +700,8 @@ void handleNotFound(){
 }
 
 void handleRETRIEVEDATA() {
-  byte ardID=0,  snsType=0,  snsID=0, N=0,delta=1;
+  byte  N=0,delta=1;
+  struct SensorVal S;
   uint32_t starttime=0, endtime=0;
 
 
@@ -849,17 +715,18 @@ void handleRETRIEVEDATA() {
     }
 
     for (byte k=0;k<server.args();k++) {
-        if ((String)server.argName(k) == (String)"ID")  breakLOGID(server.arg(k),&ardID,&snsType,&snsID);
-        if ((String)server.argName(k) == (String)"ardID")  ardID=server.arg(k).toInt(); 
-        if ((String)server.argName(k) == (String)"snsType")  snsType=server.arg(k).toInt(); 
-        if ((String)server.argName(k) == (String)"snsID")  snsID=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"ID")  breakLOGID(server.arg(k),&S);
+        if ((String)server.argName(k) == (String)"MAC")  breakMAC(server.arg(k),&S);
+        if ((String)server.argName(k) == (String)"ardID")  S.ardID=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"snsType")  S.snsType=server.arg(k).toInt(); 
+        if ((String)server.argName(k) == (String)"snsID")  S.snsID=server.arg(k).toInt(); 
         if ((String)server.argName(k) == (String)"N")  N=server.arg(k).toInt(); 
         if ((String)server.argName(k) == (String)"starttime")  starttime=server.arg(k).toInt(); 
         if ((String)server.argName(k) == (String)"endtime")  endtime=server.arg(k).toInt(); 
         if ((String)server.argName(k) == (String)"delta")  delta=server.arg(k).toInt(); //read only every Nth value
     }
 
-    if (ardID==0 || snsType == 0 || snsID==0) {
+    if (S.ardID==0 || S.snsType == 0 || S.snsID==0) {
       WEBHTML="Inappropriate call... invalid arduino sensor ID";
       serverTextClose(302,false);
 
@@ -877,8 +744,8 @@ void handleRETRIEVEDATA() {
   uint32_t sampn=0; //sample number
   
   bool success=false;
-  if (starttime>0)  success =   readSensorSD(ardID,snsType,snsID,t,v,&N,&sampn,starttime,endtime,delta);
-  else    success =   readSensorSD(ardID,snsType,snsID,t,v,&N,&sampn,endtime,delta); //this fills from tn backwards to N*delta samples
+  if (starttime>0)  success =   readSensorSD(&S,t,v,&N,&sampn,starttime,endtime,delta);
+  else    success =   readSensorSD(&S,t,v,&N,&sampn,endtime,delta); //this fills from tn backwards to N*delta samples
 
   if (success == false)  {
     WEBHTML= "Failed to read associated file.";
@@ -888,7 +755,7 @@ void handleRETRIEVEDATA() {
   }
 
 
-  int sn = findDev(ardID,snsType,snsID,false);
+  int sn = findDev(&S,false);
 
 
   WEBHTML = "<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>\n";
@@ -904,7 +771,7 @@ void handleRETRIEVEDATA() {
 
   WEBHTML = WEBHTML + "<p>";
 
-  if (sn<0 || sn>=SENSORNUM)   WEBHTML += "WARNING!! Arduino: " + (String) ardID + "." + (String) snsType + "." + (String) snsID + " was NOT found in the active list, though I did find an associated file. <br>";
+  if (sn<0 || sn>=SENSORNUM)   WEBHTML += "WARNING!! Arduino: " + (String) S.ardID + "." + (String) S.snsType + "." + (String) S.snsID + " was NOT found in the active list, though I did find an associated file. <br>";
   else {
       WEBHTML += "Request for Arduino: " + (String) Sensors[sn].snsName + " " + (String) Sensors[sn].ardID + "." + (String) (String) Sensors[sn].snsType + "." + (String) Sensors[sn].snsID + "<br>";
   }
@@ -970,10 +837,11 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
   if (server.args()==0) return;
 
   for (byte k=0;k<server.args();k++) {
-      if ((String)server.argName(k) == (String)"logID")  breakLOGID(server.arg(k),&S.ardID,&S.snsType,&S.snsID);
+      if ((String)server.argName(k) == (String)"logID")  breakLOGID(server.arg(k),&S);
       if ((String)server.argName(k) == (String)"IP") {
         IPString2ByteArray(String(server.arg(k)),S.IP);
       }
+      if ((String)server.argName(k) == (String)"MAC")  breakMAC(server.arg(k),&S);
       if ((String)server.argName(k) == (String)"varName") snprintf(S.snsName,29,"%s", server.arg(k).c_str());
       if ((String)server.argName(k) == (String)"varValue") S.snsValue = server.arg(k).toDouble();
       if ((String)server.argName(k) == (String)"timeLogged") S.timeRead = server.arg(k).toDouble();      //time logged at sensor is time read by me
@@ -1065,96 +933,3 @@ S.SendingInt = 86400; //default is 1 day for expiration (note that if flag bit 7
   
 }
 
-void initCreds() {
-  for (byte j=0;j<33;j++) SSID[j]=0;
-  for (byte j=0;j<65;j++) PWD[j]=0;
-}
-
-
-bool getWiFiCredentials() {
-
-  initCreds();
-  uint16_t sCRC =0;
-  uint16_t pCRC=0;
-
-  Preferences p;
-  p.begin("credentials",true);
-  
-  if (p.isKey("SSID") == true) {
-
-    p.getBytes("SSID",SSID,33);
-    sCRC = p.getUInt("SSIDCRC",0);
-
-
-    p.getBytes("PWD",PWD,65);
-    pCRC = p.getUInt("PWDCRC",0);
-  } 
-
-  p.end();
-
-  WIFI_INFO.HAVECREDENTIALS = false;
-
-  if (sCRC==0 && pCRC==0) return false; //cannot be 0 crc
-
-  if (sCRC!=CRCCalculator((uint8_t*) SSID,32)) return false;
-  if (pCRC!=CRCCalculator((uint8_t*) PWD,64)) return false;
-  
-  WIFI_INFO.HAVECREDENTIALS = true;
-  return true;
-
-}
-
-bool putWiFiCredentials() {
-
-  bool isGood = false;
-  uint16_t sCRC = CRCCalculator((uint8_t*) SSID,32);
-  uint16_t pCRC = CRCCalculator((uint8_t*) PWD,64);
-
-  Preferences p;
-  p.begin("credentials",false);
-  p.clear();
-
-
-  //if SSID is blank, delete credentials 
-  if (SSID[0]=='\0' || sCRC==0) {    
-    initCreds();
-    sCRC=0;
-    pCRC=0;    
-  } else isGood=true;
-
-
-  p.putBytes("SSID",SSID,33);
-  p.putUInt("SSIDCRC",sCRC);
-
-  p.putBytes("PWD",PWD,65);
-  p.putUInt("PWDCRC",pCRC);
-  
-  p.end();
-
-  return isGood;
-
-
-}
-
-
-
-void encrypt(char* input, char* key, unsigned char* output, unsigned char* iv)
-{
-
-	mbedtls_aes_context aes;
-	mbedtls_aes_init(&aes);
-	mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
-	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 16, iv, (const unsigned char*)input, output);
-	mbedtls_aes_free(&aes);
-
-}
-
-void decrypt(unsigned char* input, char* key, unsigned char* output, unsigned char* iv)
-{
-
-	mbedtls_aes_context aes;
-	mbedtls_aes_init(&aes);
-	mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
-	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, 16, iv, (const unsigned char*)input, output); //16 is input length
-	mbedtls_aes_free(&aes);
-}
