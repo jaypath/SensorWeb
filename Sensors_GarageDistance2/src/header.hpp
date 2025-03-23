@@ -8,7 +8,7 @@
 
 //#define REBOOTDAILY 1 //if set, then will reboot at midnight daily 
 
-#define _WEBCHART 2
+//#define _WEBCHART 2
 #ifdef _WEBCHART
   #define _NUMWEBCHARTPNTS 50
   const uint8_t SENSORS_TO_CHART[_WEBCHART] = {4,9}; //which sensors should be stored for charting?

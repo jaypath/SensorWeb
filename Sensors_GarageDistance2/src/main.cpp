@@ -605,67 +605,75 @@ void loop() {
   
   
   time_t t = now(); // store the current time in time variable t
-
+  uint32_t m = millis();
 
 //LOCAL CODE ----------------------------------------------------------
-  //check tfluna distance
-  ReadData(&Sensors[LocalTF.TFLUNASNS]); //recheck TF luna distance all the time...
-  int32_t tempdist = Sensors[LocalTF.TFLUNASNS].snsValue-LocalTF.BASEOFFSET;
-  uint32_t m = millis();
-  //what to draw?
-  LocalTF.ALLOWINVERT=false;
-
-  //has dist changed by more than a real amount? If yes then allow high speed screen draws
-  if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-tempdist)> LocalTF.MIN_DIST_CHANGE) {
-    LocalTF.SCREENRATE=500;
-    LocalTF.CLOCKMODE = false; //leave clockmode
-
-    //store last distance
-    LocalTF.LAST_DISTANCE = tempdist;
-
-    //is the distance unreadable (which means no car/garage door open)
-    if (tempdist<-100) {
-      snprintf(LocalTF.MSG,19,"OPEN");
+  //check tfluna distance if it is time
+  if (m>LocalTF.LAST_DISTANCE+LocalTF.REFRESH_RATE) {
+    LocalTF.LAST_DISTANCE = m;
+    ReadData(&Sensors[LocalTF.TFLUNASNS]); //recheck TF luna distance at apr rate...    
+    int32_t tempdist = Sensors[LocalTF.TFLUNASNS].snsValue-LocalTF.BASEOFFSET;
+    if (tempdist<-3000) {
+      snprintf(LocalTF.MSG,19,"FAIL");
+      LocalTF.ALLOWINVERT=true;
+      LocalTF.SCREENRATE=250;
+      LocalTF.CLOCKMODE = false; //leave clockmode
     } else {
-      //is the distance beyond the short range zone
-      if (tempdist>LocalTF.ZONE_SHORTRANGE) {
-        snprintf(LocalTF.MSG,19,"%d ft", (tempdist/2.54)/12);        
-      } else {
-        LocalTF.SCREENRATE=250;
-        if (tempdist>LocalTF.ZONE_GOLDILOCKS) {
-          snprintf(LocalTF.MSG,19,"%d in", (tempdist/2.54));
-        } else {
-          if (tempdist>LocalTF.ZONE_CRITICAL) {
-            snprintf(LocalTF.MSG,19,"GOOD");
-            LocalTF.ALLOWINVERT=true;
-          } else {
-            snprintf(LocalTF.MSG,19,"STOP!");
-            LocalTF.ALLOWINVERT=true;
-            LocalTF.SCREENRATE=250;
-          }    
-        }    
-      }
-    }
-  } else {
-    //if it's been long enough, change to clock and redraw
-    if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
-      snprintf(LocalTF.MSG,19,"%s",dateify(t,"hh:nn"));      
+      
+      //what to draw?
       LocalTF.ALLOWINVERT=false;
-      LocalTF.SCREENRATE=30000;
-      LocalTF.CLOCKMODE = true;
+
+      //has dist changed by more than a real amount? If yes then allow high speed screen draws
+      if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-tempdist)> LocalTF.MIN_DIST_CHANGE) {
+        LocalTF.SCREENRATE=333;
+        LocalTF.CLOCKMODE = false; //leave clockmode
+
+        //store last distance
+        LocalTF.LAST_DISTANCE = tempdist;
+
+      //is the distance unreadable (which means no car/garage door open)
+      if (tempdist<-100) {
+        snprintf(LocalTF.MSG,19,"OPEN");
+      } else {
+        //is the distance beyond the short range zone
+        if (tempdist>LocalTF.ZONE_SHORTRANGE) {
+          snprintf(LocalTF.MSG,19,"%d ft", (tempdist/2.54)/12);        
+        } else {
+          LocalTF.SCREENRATE=250;
+          if (tempdist>LocalTF.ZONE_GOLDILOCKS) {
+            snprintf(LocalTF.MSG,19,"%d in", (tempdist/2.54));
+          } else {
+            if (tempdist>LocalTF.ZONE_CRITICAL) {
+              snprintf(LocalTF.MSG,19,"GOOD");
+              LocalTF.ALLOWINVERT=true;
+            } else {
+              snprintf(LocalTF.MSG,19,"STOP!");
+              LocalTF.ALLOWINVERT=true;
+            }    
+          }    
+        }
+      }
     } else {
-      LocalTF.SCREENRATE=500;
-      //are we in a critical zone where we're flashing?
-      if (tempdist<=LocalTF.ZONE_GOLDILOCKS) {
-        LocalTF.ALLOWINVERT=true;
-        if (tempdist<=LocalTF.ZONE_CRITICAL)   LocalTF.SCREENRATE=250;
+      //if it's been long enough, change to clock and redraw
+      if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
+        snprintf(LocalTF.MSG,19,"%s",dateify(t,"hh:nn"));      
+        LocalTF.ALLOWINVERT=false;
+        LocalTF.SCREENRATE=30000;
+        LocalTF.CLOCKMODE = true;
+      } else {
+        LocalTF.SCREENRATE=500;
+        //are we in a critical zone where we're flashing?
+        if (tempdist<=LocalTF.ZONE_GOLDILOCKS) {
+          LocalTF.ALLOWINVERT=true;
+          if (tempdist<=LocalTF.ZONE_CRITICAL)   LocalTF.SCREENRATE=250;
+        }
       }
     }
   }
 
   MD_Draw();
-
-
+}
+  
 //END LOCAL CODE ----------------------------------------------------------
 
   #ifdef _USELOWPOWER

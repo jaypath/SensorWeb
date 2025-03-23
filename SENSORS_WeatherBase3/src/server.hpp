@@ -4,8 +4,11 @@
 //#define _DEBUG 0
 
 #include <Arduino.h>
+#include <WiFiClient.h>
+
 #include "timesetup.hpp"
 #include "utility.hpp"
+#include "BootSecure.hpp"
 #include "globals.hpp"
 #include "Weather.hpp"
 #include "SDCard.hpp"

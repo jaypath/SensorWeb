@@ -9,7 +9,7 @@
 
 #include <Arduino.h>
 #include <String.h>
-#include "SPI.h"
+#include <SPI.h>
 #include <Weather.hpp>
 
 #define LGFX_USE_V1         // set to use new version of library
@@ -43,6 +43,8 @@ typedef enum {
   
 
 struct Screen {
+    char SERVERNAME[30];
+
     RESETCAUSE resetInfo;
     time_t lastResetTime;
     byte rebootsSinceLast=0;
@@ -115,7 +117,7 @@ struct Screen {
 struct SensorVal {
   uint8_t MAC[6]; //mac address [v3 ID]
   uint8_t IP[4];
-  uint8_t ardID; //legacy use from V1 and V2
+  uint8_t ardID; //legacy from V1 and V2 used this to define ID. Now MAC is the ID. ArdID can still be some value, but can also be zero.
   uint8_t  snsType ;
   uint8_t snsID;
   char snsName[32];
@@ -146,7 +148,9 @@ struct WiFi_type {
   byte MAC[6];
   byte SSID[33];
   byte PWD[65];
-  bool HAVECREDENTIALS;
+  bool HAVECREDENTIALS; 
+  uint8_t otherServers[6];  //add all other servers IP[4] here. these are devices that report their snsType as a server type
+  uint8_t statusCode; //0 = ping, no sensitive info required/sent; 1= sensitive info included/requested
 };
 
 

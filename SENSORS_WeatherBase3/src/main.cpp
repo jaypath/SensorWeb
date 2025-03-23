@@ -62,8 +62,8 @@
 #include "SDCard.hpp"
 #include "BootSecure.hpp"
 
-#include "ArduinoJson.h"
-#include "ArduinoOTA.h"
+#include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 
 #include <esp_task_wdt.h> //watchdog timer libary
 #define WDT_TIMEOUT_MS 120000
@@ -253,7 +253,7 @@ void setup()
      }
   }
     
-
+  if (I.SERVERNAME[0] = 0) snprintf(I.SERVERNAME,30,"Pleasant Weather Server");
   I.ScreenNum = 0;
   I.isFlagged = false;
   I.wasFlagged = false;

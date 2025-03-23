@@ -1,6 +1,7 @@
 //#define _DEBUG
 #include <utility.hpp>
-//#include <FS.h>
+#include "timesetup.hpp"
+#include "SDCard.hpp"
 
 int inArray(int arr[], int N, int value,bool returncount) {
   //returns index to the integer array of length N holding value, or -1 if not found
@@ -229,8 +230,11 @@ void initSensor(int k) {
 
   if (k<0) return; //index was invalid
 
+
+
   Sensors[k].snsName[0]=0;
   for (byte ii=0;ii<4;ii++) Sensors[k].IP[ii]=0;
+  isMACSet(Sensors[k].MAC,true); //reset mac
   Sensors[k].ardID=0;
   Sensors[k].snsType=0;
   Sensors[k].snsID=0;
@@ -242,11 +246,33 @@ void initSensor(int k) {
   
 }
 
+bool compareMAC(byte *MAC1,byte *MAC2) {
+  
+  for (byte j=0;j<6;j++) {
+    if (MAC1[j]!=MAC2[j]) return false;
+  }
+
+  return true;
+  
+}
+
+bool isMACSet(byte *m, bool doReset) {
+
+  for (byte j=0;j<6;j++) {
+    if (doReset) m[j] = 0;
+    else {
+      if (m[j]!=0) return true;
+    }
+  }
+
+  return false;
+}
+
 bool isSensorInit(int i) {
   //check if sensor is initialized
-
+  //note that either mac is set or ardID is set
   if (i<0 || i>=SENSORNUM) return false;
-  if (Sensors[i].ardID>0 && Sensors[i].snsID > 0 && Sensors[i].snsType >0) return true;
+  if ((isMACSet(Sensors[i].MAC)==true || Sensors[i].ardID>0) && Sensors[i].snsID > 0 && Sensors[i].snsType >0) return true;
   return false;  
 }
 
@@ -296,9 +322,9 @@ uint8_t countDev() {
   return c;
 }
 
-int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest) {
+int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest) {
   //overloaded, simpler version
-  //provide the desired devID and snsname, and will return the index to sensors array that represents that node
+  //provide the desired macID devID and snsname, and will return the index to sensors array that represents that node
   //special cases:
   //  if snsID = 0 then just find the first blank entry
   //if no finddev identified and oldest = true, will return first empty or oldest
@@ -309,7 +335,7 @@ int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest) {
   }
 
   for (int j=0;j<SENSORNUM;j++)  {
-      if (Sensors[j].ardID == ardID && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) {
+    if (compareMAC(Sensors[j].MAC,macID) && Sensors[j].ardID == ardID && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) {
         return j;
       }
     }
@@ -335,12 +361,11 @@ int16_t findDev(struct SensorVal *S, bool findBlank) {
     return -1;  //can't find a 0 id sensor!
   }
   for (int j=0;j<SENSORNUM;j++)  {
-      if (Sensors[j].ardID == S->ardID && Sensors[j].snsType == S->snsType && Sensors[j].snsID == S->snsID) {
-                
-        return j;
-      }
+  if (compareMAC(Sensors[j].MAC,S->MAC) && Sensors[j].ardID == S->ardID && Sensors[j].snsType == S->snsType && Sensors[j].snsID == S->snsID) {
+      return j;
     }
-    
+  }
+  
 //if I got here, then nothing found.
   if (findBlank) {
   
@@ -458,20 +483,24 @@ snsArr[9] = -1;
 
 
 
-String breakString(String *inputstr,String token) //take a pointer to input string and break it to the token, and shorten the input string at the same time. Remove token used.
+String breakString(String *inputstr,String token,bool reduceOriginal) 
+//take a pointer to input string and break it to the token.
+//if reduceOriginal=true, then will decimate string - otherwise will leave original string as is
+
 {
   String outputstr = "";
-  String orig = *inputstr;
+  String tempstr = *inputstr;
 
-  int strOffset = orig.indexOf(token,0);
+  int strOffset = tempstr.indexOf(token,0);
   if (strOffset == -1) { //did not find the comma, we may have cut the last one. abort.
-    return outputstr; //did not find the token, just return nothing and do not touch inputstr
+    return tempstr; //did not find the token, just return original and do not touch inputstr
   } else {
-    outputstr= orig.substring(0,strOffset); //end index is NOT inclusive
-    orig.remove(0,strOffset+1);
+    outputstr= tempstr.substring(0,strOffset); //end index is NOT inclusive
+    tempstr.remove(0,strOffset+1);
   }
 
-  *inputstr = orig;
+  if (reduceOriginal==true)   *inputstr = tempstr; //reduce the input str
+
   return outputstr;
 
 }
@@ -520,93 +549,97 @@ bool IPString2ByteArray(String IPstr,byte* IP) {
 
 
 bool breakLOGID(String logID,struct SensorVal *S) {
+ //V2 and V3 logid will be one of:
+  // MAC,mac,mac,mac,mac,mac,ardID.snstype.snsid [6 commas, 2 periods]
+  // MAC.mac.mac.mac.mac.mac,ardID.snstype.snsid [1 comma, 7 periods]
+  // MAC.mac.mac.mac.mac.mac.ardID.snstype.snsid [0 comma, 8 periods]
+  
+  //a v1 logID has 2 periods
     
+  
+  byte commas=0;
+  byte periods=0;
 
-  String temp;
+  //count commas and periods
+  commas = countSubstr(logID,",");
+  periods = countSubstr(logID,".");
 
-  int strOffset=0;
-
-  byte i=0;
-  while (logID.indexOf(",",strOffset)!=-1) {
-    i++;
-    strOffset = logID.indexOf(".", strOffset);
-  }
-
-
-  if (i>3) {
-    //v2 logID with MAC address, ardID, snsID, snstype
-    strOffset = logID.indexOf(".", 0);
-    if (strOffset == -1) { //did not find the . , logID not correct. abort.
-      return false;
-    } else {
-      //mac
+  if (commas!=0 || periods!=2)  { //this is not a v1 logID
+    if (commas==6 && periods==2) {
       for (byte k=0;k<6;k++) {
-        temp = logID.substring(0, strOffset);
-        S->MAC[k] = temp.toInt();
-        logID.remove(0, strOffset + 1);
-        strOffset = logID.indexOf(".", 0);  
+        S->MAC[k] = breakString(&logID,",",true).toInt();
       }
-
-      //ardID
-      temp = logID.substring(0, strOffset);
-      S->ardID = temp.toInt();
-      logID.remove(0, strOffset + 1);
-      strOffset = logID.indexOf(".", 0);
-
-      //snsType
-      temp = logID.substring(0, strOffset);
-      S->snsType = temp.toInt();
-      logID.remove(0, strOffset + 1);
-      strOffset = logID.indexOf(".", 0);
-
-      //snsID
-      S->snsID = logID.toInt();
-    }
-  } else {
-    strOffset = logID.indexOf(".", 0);
-    if (strOffset == -1) { //did not find the . , logID not correct. abort.
-      return false;
+      
     } else {
-      temp = logID.substring(0, strOffset);
-      S->ardID = temp.toInt();
-      logID.remove(0, strOffset + 1);
-
-      strOffset = logID.indexOf(".", 0);
-      temp = logID.substring(0, strOffset);
-      S->snsType = temp.toInt();
-      logID.remove(0, strOffset + 1);
-      S->snsID = logID.toInt();
+      if (commas==1 && periods==7) {
+        for (byte k=0;k<5;k++) {
+          S->MAC[k] = breakString(&logID,".",true).toInt();
+        }
+        S->MAC[5] = breakString(&logID,",",true).toInt();
+      } else {
+        if (commas==0 && periods==8) {
+          for (byte k=0;k<6;k++) {
+            S->MAC[k] = breakString(&logID,".",true).toInt();
+          }
+        } else         {
+          storeError("breakLOGID: misformed input.");
+          return false; //string is misformed
+        } //not a recognized logID! (v1 has 0 commas and 2 periods)
+      }      
     }
-
   }
 
+  S->ardID = breakString(&logID,".",true).toInt();
+  S->snsType = breakString(&logID,".",true).toInt();
+  S->snsID = logID.toInt();
 
-    
+   
   return true;
 }
 
 
-bool breakMAC(String mac,struct SensorVal *S) {
-    
+uint16_t countSubstr(String orig, String token) {
+  int i=0;
+  int strOffset=0;
 
-  String temp;
-
-  int strOffset;
-  byte i=0;
-  while (mac.indexOf(",",strOffset)!=-1) {
+  while (orig.indexOf(token,strOffset)!=-1) {
     i++;
-    strOffset = mac.indexOf(".", strOffset);
+    strOffset = orig.indexOf(token, strOffset);
   }
 
-  if (i!=5) return false;
-  
-  strOffset = mac.indexOf(".", 0);
+  return i;
 
+}
+
+bool breakMAC(String mac,struct SensorVal *S) {
+    //mac should be of type mac.mac.mac.mac.mac.mac
+    //instead of . can use ,
+    //note that there should be 6 bytes and same separator, nothing else!
+
+  String temp = ".";
+
+
+  int strOffset=0;
+  byte i=0;
+
+
+  i = countSubstr(mac,temp);
+
+  if (i!=5) {    
+    if (i>0) {
+      storeError("breakMAC: misformed input.");
+      return false; //string is misformed
+    }
+    temp = ",";
+    i = countSubstr(mac,temp);
+    if (i!=5) {
+      storeError("breakMAC: misformed input.");
+      return false; //string is misformed
+    } //either . or , must be 5!
+  }
+   
   for (byte k=0;k<6;k++) {
-    temp = mac.substring(0, strOffset);
-    S->MAC[k] = temp.toInt();
-    mac.remove(0, strOffset + 1);
-    strOffset = mac.indexOf(".", 0);  
+    S->MAC[k] = breakString(&mac,temp,true).toInt();
   }
    
   return true;

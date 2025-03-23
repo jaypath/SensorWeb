@@ -1,6 +1,7 @@
 #include <SDCard.hpp>
 #include <globals.hpp>
 #include <SD.h>
+#include <utility.hpp>
 
 
 //this allows a sensorval struct to be written to file as a series of bytes

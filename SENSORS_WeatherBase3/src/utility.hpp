@@ -2,10 +2,7 @@
 #define UTILITY_HPP
 
 #include <Arduino.h>
-#include <globals.hpp>
-#include <timesetup.hpp>
-//#include "FS.h"
-#include "SDCard.hpp"
+#include "globals.hpp"
 
 //extern SensorVal *Sensors;
 extern SensorVal Sensors[SENSORNUM];
@@ -22,11 +19,16 @@ bool inIndex(byte lookfor,byte used[],byte arraysize);
 char* strPad(char* str, char* pad, byte L);
 bool stringToLong(String s, uint32_t* val);
 int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
-String breakString(String *inputstr,String token);
+String breakString(String *inputstr,String token,bool reduceOriginal=false);
+uint16_t countSubstr(String orig, String token);
+
 bool isSensorInit(int i);
+bool isMACSet(byte *m, bool doReset=false);
+bool compareMAC(byte *MAC1,byte *MAC2);
+
 
 int16_t findDev(struct SensorVal *S, bool oldest = false);
-int16_t findDev(byte ardID, byte snsType, byte snsID,  bool oldest);
+int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest);
 int16_t findSns(byte snstype, bool newest = false);
 uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();

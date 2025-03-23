@@ -52,8 +52,8 @@
 #ifdef _USETFLUNA
   #include <TFLI2C.h> // TFLuna-I2C Library v.0.1.0
   extern TFLI2C tflI2C;
-  extern uint8_t tfAddr; // Default I2C address for Tfluna
   struct TFLunaType {
+    uint16_t REFRESH_RATE = 25; //ms between refreshes. I believe TFluna in i2c is max 250hz
     uint8_t MIN_DIST_CHANGE = 2; //this is how many cm must have changed to register movement
     uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
     uint8_t ZONE_SHORTRANGE = 61; //cm from BASEOFFSET that is considered short range (show measures in inches now)
@@ -61,12 +61,13 @@
     uint8_t ZONE_CRITICAL = 4; //cm from BASEOFFSET at which you are too close
     uint32_t LAST_DRAW = 0; //last time screen ws drawn, millis()!
     int32_t LAST_DISTANCE=0; //cm of last distance
+    int32_t LAST_DISTANCE_TIME=0; //time of last distance measure in ms
     bool INVERTED = false; //sjhould  the screen be inverted now?
     uint32_t SCREENRATE = 500; //in ms
     bool ALLOWINVERT=false; //if true, do inversions
     uint16_t CHANGETOCLOCK = 30; //in seconds, time to change to clock if dist hasn't changed
     bool CLOCKMODE = false; //show clock until distance change
-    uint8_t TFLUNASNS=3; //sensor number of TFLUNA
+    uint8_t TFLUNASNS; //sensor number of TFLUNA
     char MSG[20] = {0}; //screen message
   };
 

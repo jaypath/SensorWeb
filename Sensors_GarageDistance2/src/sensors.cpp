@@ -47,7 +47,6 @@ SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
 
 #ifdef _USETFLUNA
 TFLunaType LocalTF;
-uint8_t tfAddr = _USETFLUNA;
 TFLI2C tflI2C;
 #endif
 
@@ -1087,9 +1086,12 @@ bool ReadData(struct SensorVal *P) {
         #endif
         #ifdef _USETFLUNA
           int16_t tempval;
-          tflI2C.getData(tempval, tfAddr);
-          if (tempval <= 0)           P->snsValue = -1000;
-          else           P->snsValue = tempval; //in cm
+          if (tflI2C.getData(tempval, _USETFLUNA)) {
+            if (tempval <= 0)           P->snsValue = -1000;
+            else           P->snsValue = tempval; //in cm
+          } else {
+            P->snsValue = -5000; //failed
+          }
 
 
         #endif

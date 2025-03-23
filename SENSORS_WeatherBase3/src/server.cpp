@@ -1,9 +1,4 @@
-#include <Arduino.h>
-#include <SD.h>
-
-#include <utility.hpp>
 #include "server.hpp"
-#include <WiFiClient.h>
 
 
 
@@ -93,7 +88,9 @@ bool WifiStatus(void) {
     WIFI_INFO.HAVECREDENTIALS = true;
     return true;
   }
-  WIFI_INFO.HAVECREDENTIALS = false;
+  //just because I don't have wifi doesn't mean I don't have creds
+//    WIFI_INFO.HAVECREDENTIALS = false;
+
     return false;
   
 }
@@ -328,7 +325,7 @@ void handleSETWIFI() {
   if (server.uri() != "/SETWIFI") return;
 
 
-  initCreds();
+  initCreds(&WIFI_INFO);
 
   String creds = "";
 
@@ -358,93 +355,14 @@ void handleSETWIFI() {
 }
 
 
-void handleRoot(void) {
-    handlerForRoot(false);
-}
 
-void handleALL(void) {
-  handlerForRoot(true);
-}
-
-
-void serverTextHeader() {
-  WEBHTML = R"===(<!DOCTYPE html><html><head><title>Pleasant Weather Server</title>
-  <style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}
-  body {  font-family: arial, sans-serif; }
-  </style></head>
-)===";
-
-}
-
-void serverTextWiFiForm() {
-
-
-  WEBHTML = WEBHTML + R"===(---------------------<br>
-  <FORM action="/SETWIFI" method="post" target="_blank" id="WiFiSetForm">
-  <p style="font-family:arial, sans-serif">
-  To set or change WiFi, enter SSID and PWD.<br>
-  <label for="SSID">WiFi SSID: </label>
-  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
-  <label for="PWD">WiFi PWD: </label>
-  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>    
-  <br>
-  <button type="submit">STORE</button><br>
-  </p></font></form>
-  ---------------------<br>
-  <br>
-
-  )===";
-}
-
-void serverTextClose(int htmlcode, bool asHTML) {
-  
-  if (asHTML)   {
-    WEBHTML += "</body></html>\n";   
-    server.send(htmlcode, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
-  }
-  else server.send(htmlcode, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
-}
-
-
-void rootTableFill(byte j) {
-  WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
-  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?((bitRead(Sensors[j].Flags,7))?"N*":"n"):((bitRead(Sensors[j].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-  
-  byte delta=2;
-  if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
-  if (Sensors[j].snsType==3) delta = 1;
-  if (Sensors[j].snsType==9) delta = 3; //bmp
-  if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
-  if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
-  
-  WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-  WEBHTML = WEBHTML + "<td>" + (String) IPbytes2String(Sensors[j].MAC,6) + "</td>";
-  WEBHTML = WEBHTML + "</tr>";
-}
-
-void handlerForRoot(bool allsensors) {
+void handleSETTINGS() {
   
   LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
   WEBHTML = "";
   serverTextHeader();
 
-  if (WIFI_INFO.HAVECREDENTIALS==true) {
-
-
-
-  #ifdef _USEROOTCHART
-  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
-  #endif
-  WEBHTML = WEBHTML + "<body>";
-  
-  WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
-  WEBHTML = WEBHTML + "<br>";
+  WEBHTML = WEBHTML + "<body>";  
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   #ifdef _USE8266
@@ -458,46 +376,31 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "PSRAM Size: " + (String) ESP.getFreePsram() + " / " + (String) ESP.getPsramSize() + "<br>"; 
   
   #endif
- 
 
-/*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
+
+  /*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
   WEBHTML += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
   WEBHTML += "<button type=\"submit\">Update Time</button><br>";
   WEBHTML += "</FORM><br>";
 */
 
-  WEBHTML += "Number of sensors" + (String) (allsensors==false ? " (showing monitored sensors only)" : "") + ": " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
-  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
-  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) dateify(I.lastErrorTime) + "<br>";
-  WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + "<br>";
-  WEBHTML = WEBHTML + "---------------------<br>";      
+WEBHTML += "Number of sensors: " + (String) countDev() + " / " + (String) SENSORNUM + "<br>";
+WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) dateify(I.lastErrorTime) + "<br>";
+WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + "<br>";
+WEBHTML = WEBHTML + "---------------------<br>";      
 
-  WEBHTML += "Weather last retrieval attempted: " + (String) dateify(WeatherData.lastUpdateAttempt);
-  if (WeatherData.lastUpdateAttempt != WeatherData.lastUpdateT) WEBHTML += " [last successful @" + (String) dateify(WeatherData.lastUpdateT) + "]";
-  else WEBHTML += " [succeeded]";
-  WEBHTML += "<br>";
-  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
-  WEBHTML += "Weather now: " + (String) WeatherData.getTemperature() + "F and code " +  (String) WeatherData.getWeatherID() + "<br>";
-  WEBHTML += "Weather in 1 hour: " + (String) WeatherData.getTemperature(I.currentTime+3600) + "F and code " +  (String) WeatherData.getWeatherID(I.currentTime+3600) + "<br>";
-  WEBHTML = WEBHTML + "Sunrise " + dateify(WeatherData.sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
-  WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+WEBHTML += "Weather last retrieval attempted: " + (String) dateify(WeatherData.lastUpdateAttempt);
+if (WeatherData.lastUpdateAttempt != WeatherData.lastUpdateT) WEBHTML += " [last successful @" + (String) dateify(WeatherData.lastUpdateT) + "]";
+else WEBHTML += " [succeeded]";
+WEBHTML += "<br>";
+WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+WEBHTML += "Weather now: " + (String) WeatherData.getTemperature() + "F and code " +  (String) WeatherData.getWeatherID() + "<br>";
+WEBHTML += "Weather in 1 hour: " + (String) WeatherData.getTemperature(I.currentTime+3600) + "F and code " +  (String) WeatherData.getWeatherID(I.currentTime+3600) + "<br>";
+WEBHTML = WEBHTML + "Sunrise " + dateify(WeatherData.sunrise,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+WEBHTML = WEBHTML + "Sunset " + dateify(WeatherData.sunset,"DOW mm/dd/yyyy hh:nn:ss") + "<br>";
+WEBHTML = WEBHTML + "</font>---------------------<br>";      
 
-  WEBHTML = WEBHTML + "---------------------<br>";      
-
-  if (I.isFlagged || I.isHeat || I.isAC) {
-    WEBHTML = WEBHTML + "<font color=\"#EE4B2B\">";      
-    
-    if (I.isHeat) WEBHTML = WEBHTML + "Heat is on<br>";
-    if (I.isAC) WEBHTML = WEBHTML + "AC is on<br>";
-    if (I.isFlagged) WEBHTML = WEBHTML + "Critical flags  (" + (String) I.isFlagged + "):<br>";
-    if (I.isLeak) WEBHTML = WEBHTML + "     Leak has been detected (" + (String) I.isLeak + ")!!!<br>";
-    if (I.isHot) WEBHTML = WEBHTML + "     Interior room(s) over max temp (" + (String) I.isHot + ")<br>";
-    if (I.isCold) WEBHTML = WEBHTML + "     Interior room(s) below min temp (" + (String) I.isCold + ")<br>";
-    if (I.isSoilDry) WEBHTML = WEBHTML + "     Plant(s) dry (" + (String) I.isSoilDry + ")<br>";
-    if (I.isExpired) WEBHTML = WEBHTML + "     Critical Sensors Expired (" + (String) I.isExpired + ")<br>";
-
-    WEBHTML = WEBHTML + "</font>---------------------<br>";      
-  }
 
   WEBHTML += R"===(
   <FORM action="/FLUSHSD" method="get">
@@ -535,9 +438,122 @@ void handlerForRoot(bool allsensors) {
 
   WEBHTML += "</p></font></form>";
 
-    WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "---------------------<br>";      
         
+  serverTextWiFiForm();
+  serverTextClose(200);
 
+
+}
+
+
+void handleRoot(void) {
+    handlerForRoot(false);
+}
+
+void handleALL(void) {
+  handlerForRoot(true);
+}
+
+
+void serverTextHeader() {
+  WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) I.SERVERNAME + "</title>";
+  WEBHTML = R"===(<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}
+  body {  font-family: arial, sans-serif; }
+  </style></head>
+)===";
+
+}
+
+void serverTextWiFiForm() {
+
+
+  WEBHTML = WEBHTML + R"===(---------------------<br>
+  <FORM action="/SETWIFI" method="post" target="_blank" id="WiFiSetForm">
+  <p style="font-family:arial, sans-serif">
+  To set or change WiFi, enter SSID and PWD.<br>
+  <label for="SSID">WiFi SSID: </label>
+  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
+  <label for="PWD">WiFi PWD: </label>
+  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>    
+  <br>
+  <button type="submit">STORE</button><br>
+  </p></font></form>
+  ---------------------<br>
+  <br>
+
+  )===";
+}
+
+
+
+void serverTextClose(int htmlcode, bool asHTML) {
+  
+  if (asHTML)   {
+    WEBHTML += "</body></html>\n";   
+    server.send(htmlcode, "text/html", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  }
+  else server.send(htmlcode, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
+}
+
+
+void rootTableFill(byte j) {
+  WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsType+"."+ (String) Sensors[j].snsID + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) bitRead(Sensors[j].Flags,0) + (String) (bitRead(Sensors[j].Flags,6) ? "*" : "" ) + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) dateify(Sensors[j].timeLogged,"mm/dd hh:nn:ss") + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) ((Sensors[j].expired==0)?((bitRead(Sensors[j].Flags,7))?"N*":"n"):((bitRead(Sensors[j].Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
+  
+  byte delta=2;
+  if (Sensors[j].snsType==4 || Sensors[j].snsType==1 || Sensors[j].snsType==10) delta = 10;
+  if (Sensors[j].snsType==3) delta = 1;
+  if (Sensors[j].snsType==9) delta = 3; //bmp
+  if (Sensors[j].snsType==60 || Sensors[j].snsType==61) delta = 3; //batery
+  if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
+  
+  WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+  WEBHTML = WEBHTML + "<td>" + (String) IPbytes2String(Sensors[j].MAC,6) + "</td>";
+  WEBHTML = WEBHTML + "</tr>";
+}
+
+
+
+void handlerForRoot(bool allsensors) {
+  
+  LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
+  WEBHTML = "";
+  serverTextHeader();
+
+  if (WIFI_INFO.HAVECREDENTIALS==true) {
+
+
+
+  #ifdef _USEROOTCHART
+  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
+  #endif
+  WEBHTML = WEBHTML + "<body>";  
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+ 
+  WEBHTML = WEBHTML + "---------------------<br>";      
+
+  if (I.isFlagged || I.isHeat || I.isAC) {
+    WEBHTML = WEBHTML + "<font color=\"#EE4B2B\">";      
+    
+    if (I.isHeat) WEBHTML = WEBHTML + "Heat is on<br>";
+    if (I.isAC) WEBHTML = WEBHTML + "AC is on<br>";
+    if (I.isFlagged) WEBHTML = WEBHTML + "Critical flags  (" + (String) I.isFlagged + "):<br>";
+    if (I.isLeak) WEBHTML = WEBHTML + "     Leak has been detected (" + (String) I.isLeak + ")!!!<br>";
+    if (I.isHot) WEBHTML = WEBHTML + "     Interior room(s) over max temp (" + (String) I.isHot + ")<br>";
+    if (I.isCold) WEBHTML = WEBHTML + "     Interior room(s) below min temp (" + (String) I.isCold + ")<br>";
+    if (I.isSoilDry) WEBHTML = WEBHTML + "     Plant(s) dry (" + (String) I.isSoilDry + ")<br>";
+    if (I.isExpired) WEBHTML = WEBHTML + "     Critical Sensors Expired (" + (String) I.isExpired + ")<br>";
+
+    WEBHTML = WEBHTML + "</font>---------------------<br>";      
+  }
 
 
     byte used[SENSORNUM];
