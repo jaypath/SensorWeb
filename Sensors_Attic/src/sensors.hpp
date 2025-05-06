@@ -36,7 +36,6 @@
 #endif
 
 #ifdef _USEBME
-  #include <Wire.h>
   #include <Adafruit_BME280.h>
 
 #endif

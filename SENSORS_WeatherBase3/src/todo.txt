@@ -1,0 +1,13 @@
+things left to do:
+
+-fix espnow
+    -should broadcast all server IP addresses (is there a maximum?) - could make this 25 bytes... IP0 IP1 IP2 IP3 then IP4 for next 21 servers (starting with master server IP)?
+    -should it broadcast wifi credentials???
+    -should multiple master servers be allowed?
+
+-create firmware to store MAC address, wifi to preferences.h on initial start
+    -this is separate firmware from this one
+    
+-fix preferences.h to read MAC address
+
+-encrypt preferences.h

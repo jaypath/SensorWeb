@@ -20,11 +20,11 @@ const byte ASSIGNEDIP[4] = {0,168,68,95}; //assign here if this sensor has a ded
 
 
 #define ARDNAME "Garage" //unique name
-#define SENSORNUM 4 //be sure this matches SENSORTYPES //max is 8
+#define SENSORNUM 3 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,7,9}; //max is 8
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,7}; //max is 8
 
-const uint8_t MONITORED_SNS = 255; //from R to L each bit represents a sensor, 255 means all sensors are monitored
+const uint8_t MONITORED_SNS = B00000011;; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 
@@ -32,10 +32,10 @@ const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 m
 
 //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
 //#define _USEDHT D6 //specify DHT pin
-//#define _USEAHT 1
-#define _USEAHTADA 0x38 //required for aht with bmp combined
-#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
-//#define _USEBME 1
+#define _USEAHT 0x38
+//#define _USEAHTADA 0x38 //required for aht with bmp combined
+#define _USEBMP  0x76 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
+//#define _USEBME 0x76
 //#define _USEBME680_BSEC 1
 //#define _USEBME680 1
 //#define _USESOILCAP 1

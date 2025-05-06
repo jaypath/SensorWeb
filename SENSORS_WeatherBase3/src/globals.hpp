@@ -150,7 +150,7 @@ struct WiFi_type {
   byte PWD[65];
   bool HAVECREDENTIALS; 
   uint8_t otherServers[6];  //add all other servers IP[4] here. these are devices that report their snsType as a server type
-  uint8_t statusCode; //0 = ping, no sensitive info required/sent; 1= sensitive info included/requested
+  uint8_t statusCode; //from R to L... bit 0  = sensitive info required/sent if 1; bit 1 response required if 1; bit 2 request for sensitive info
 };
 
 

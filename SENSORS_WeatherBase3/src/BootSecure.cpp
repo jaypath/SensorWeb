@@ -3,9 +3,17 @@
 
 
 
-static const char* PMK_KEY_STR = "KiKa.yaas1anni!~";
-static const char* LMK_KEY_STR = "REPLACE_WITH_LMK_KEY";
+union PrefstoBytes {
+  STRUCT_PrefsH prefs;
+  uint8_t bytes[sizeof(STRUCT_PrefsH)];
 
+  PrefstoBytes() {};
+};
+
+union IV_b {
+  uint8_t b[16];
+  uint32_t l[4];    
+};
 
 
 uint16_t CRCCalculator(uint8_t * data, uint16_t length)
@@ -29,27 +37,33 @@ void initCreds(WiFi_type *w) {
   for (byte j=0;j<65;j++) w->PWD[j]=0;
 }
   
+
+bool getPrefs() {
+
+  Preferences p;
+  p.begin("ORIGIN",true);
   
+  if (p.isKey("CHAIN") == true) {
+    union PrefstoBytes P; 
+    p.getBytes("BLOB",P.bytes,sizeof(STRUCT_PrefsH));
+    sCRC = p.getUInt("SSIDCRC",0);
+
+
+    p.getBytes("PWD",WIFI_INFO.PWD,65);
+    pCRC = p.getUInt("PWDCRC",0);
+  } 
+
+  p.end();
+
+
+}
+
 bool getWiFiCredentials() {
   
     initCreds(&WIFI_INFO);
     uint16_t sCRC =0;
     uint16_t pCRC=0;
   
-    Preferences p;
-    p.begin("credentials",true);
-    
-    if (p.isKey("SSID") == true) {
-  
-      p.getBytes("SSID",WIFI_INFO.SSID,33);
-      sCRC = p.getUInt("SSIDCRC",0);
-  
-  
-      p.getBytes("PWD",WIFI_INFO.PWD,65);
-      pCRC = p.getUInt("PWDCRC",0);
-    } 
-  
-    p.end();
   
     WIFI_INFO.HAVECREDENTIALS = false;
   
@@ -114,9 +128,9 @@ esp_err_t addESPNOWPeer(byte* macad,bool doEncrypt) {
     peerInfo.channel = 0;  
     peerInfo.encrypt = false;
     
-    if (doEncrypt) {
+    if (doEncrypt && ESPNOWkeys.LMK_isSet) { //if LMK is not null
         peerInfo.channel = 3;  
-        memcpy(peerInfo.lmk, LMK_KEY_STR, 16);
+        memcpy(peerInfo.lmk, ESPNOWkeys.LMK_KEY_STR, 16);
         peerInfo.encrypt = true;
     } else {
         peerInfo.channel = 0;  
@@ -152,7 +166,13 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     //received a message from the unit listed...
     if (t.statusCode==0) { //ping, no sensitive info requested... broadcast insecure WIFI_INFO
 
-      sendESPNOW(nullptr,&WIFI_INFO); //broadcast my public info
+      WiFi_type w;
+      memcpy(&w,&WIFI_INFO,sizeof(w));
+      w.HAVECREDENTIALS = false;
+      snprintf((char*) w.PWD,65,"");
+      w.statusCode = 0; //no sensitive info and no response required
+
+      sendESPNOW(nullptr,&w); //broadcast my public info
 
     } else {
     //add that unit as a peer
@@ -206,25 +226,52 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
   #ifdef _USEENCRYPTION
   
-  void encrypt(char* input, char* key, unsigned char* output, unsigned char* iv)
+  bool encrypt(char* input, uint16_t* inputlength, unsigned char* output,  uint16_t* outputlength, char* key)
   {
-  
-      mbedtls_aes_context aes;
-      mbedtls_aes_init(&aes);
-      mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
-      mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 16, iv, (const unsigned char*)input, output);
-      mbedtls_aes_free(&aes);
-  
+    //input text and length, output vector and length. output length should be 16+1+2 greater than input length:
+    //returns the encrypted value within the IV state (initialization vector: a random 16 byte array that prevents the output from being the same everytime) and additional info as follows:
+    //first 8 bytes of IV, then the input data, then the last 8 bytes of the IV, then isodd (1 if original input was of odd length), and finally a 0 byte
+    //therefore note that output must be a buffer of size input + 16 + 1 + 2 to accept any output (and datalength will be adjusted for the new output). Note that actual output data legnth may be shorter than this
+    //key must be 128, 192 or 256 bits long
+    //take an input vector, determine if it is a multiple of 16 bytes, and if not add an extra byte
+    
+    byte localinput[datalength+1] = {0}; //original datalength, plus 1 in case datalength is odd
+    bool isodd = false;
+    memcpy(localinput, input, datalength);
+
+    if (datalength % 2 != 0) {
+      isodd = true;
+    }
+
+    byte localoutput[datalength+1+16+2] = {0}; //original datalength, IV state,  1 in case datalength is odd, isodd state, and a tailing 0
+    
+    if (isodd) datalength+=1;
+    
+
+    union IV_b iv;
+      
+
+    esp_fill_random(*iv.l,4);
+
+
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, datalength, iv.b, (const unsigned char*)input, output);
+    mbedtls_aes_free(&aes);
+    return true;
   }
   
-  void decrypt(unsigned char* input, char* key, unsigned char* output, unsigned char* iv)
+  bool decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength)
   {
-  
-      mbedtls_aes_context aes;
-      mbedtls_aes_init(&aes);
-      mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
-      mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, 16, iv, (const unsigned char*)input, output); //16 is input length
-      mbedtls_aes_free(&aes);
+
+    byte iv[16] = {0};
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, strlen(key) * 8);
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, datalength, iv, (const unsigned char*)input, output); 
+    mbedtls_aes_free(&aes);
+    return true;
   }
   #endif
   

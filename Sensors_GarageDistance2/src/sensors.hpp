@@ -36,7 +36,6 @@
 #endif
 
 #ifdef _USEBME
-  #include <Wire.h>
   #include <Adafruit_BME280.h>
 
 #endif
@@ -53,9 +52,9 @@
   #include <TFLI2C.h> // TFLuna-I2C Library v.0.1.0
   extern TFLI2C tflI2C;
   struct TFLunaType {
-    uint16_t REFRESH_RATE = 25; //ms between refreshes. I believe TFluna in i2c is max 250hz
-    uint8_t MIN_DIST_CHANGE = 2; //this is how many cm must have changed to register movement
-    uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
+    uint16_t REFRESH_RATE = 20; //ms between refreshes. I believe TFluna in i2c is max 100hz, so lowest is 10
+    uint8_t MIN_DIST_CHANGE = 1; //this is how many cm must have changed to register movement
+    uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna), in cm
     uint8_t ZONE_SHORTRANGE = 61; //cm from BASEOFFSET that is considered short range (show measures in inches now)
     uint8_t ZONE_GOLDILOCKS = 10; //cm from BASEOFFSET that are considered to have entered the perfect distance; 3 in ~ 8 cm
     uint8_t ZONE_CRITICAL = 4; //cm from BASEOFFSET at which you are too close

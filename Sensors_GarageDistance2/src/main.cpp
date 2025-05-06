@@ -513,70 +513,86 @@ OldTime[3] = day();
   #endif
 
 
+  byte trydev;
   #ifdef _USEBMP
-
+    retry = 0;
+    trydev= _USEBMP;
     #ifdef _DEBUG
         Serial.println("bmp begin");
     #endif
-    retry = 0;
 
-    byte trybmp = _USEBMP;
     while (bmp.begin() != true && retry<20) {
       #ifdef _DEBUG
-      Serial.printf( "BMP fail at 0x%d.\nRetry number %d\n" , trybmp, retry ); //(F()) save string to flash & keeps dynamic memory free
+      Serial.printf( "BMP fail at 0x%d.\nRetry number %d\n" , trydev, retry ); //(F()) save string to flash & keeps dynamic memory free
       #endif
 
       #ifdef _USESSD1306  
         oled.clear();
         oled.setCursor(0,0);  
-        oled.printf("BMP fail at 0x%d.\nRetry number %d\n" , trybmp, retry);          
+        oled.printf("BMP fail at 0x%d.\nRetry number %d\n" , trydev, retry);          
       #endif
 
       if (retry==10) { //try swapping address
-        if (trybmp == 0x76) trybmp = 0x77;
-        else trybmp = 0x76;
+        if (trydev == 0x76) trydev = 0x77;
+        else trydev = 0x76;
+      }
+
+      delay(100);
+      retry++;
+    }
+  
+ 
+    /* Default settings from datasheet. 
+    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     // Operating Mode. 
+                  Adafruit_BMP280::SAMPLING_X2,     // Temp. oversampling
+                  Adafruit_BMP280::SAMPLING_X16,    // Pressure oversampling 
+                  Adafruit_BMP280::FILTER_X16,      // Filtering. 
+                  Adafruit_BMP280::STANDBY_MS_500); // Standby time. 
+                  */
+
+
+  #endif
+  #ifdef _USEBME
+    #ifdef _DEBUG
+      Serial.printf( "bme begin\n");
+    #endif
+    retry=0;
+    trydev= _USEBME;
+    #ifdef _DEBUG
+        Serial.println("bme begin");
+    #endif
+
+    while (bme.begin() != true && retry<20) {
+      #ifdef _DEBUG
+      Serial.printf( "BME fail at 0x%d.\nRetry number %d\n" , trydev, retry ); //(F()) save string to flash & keeps dynamic memory free
+      #endif
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("BME fail at 0x%d.\nRetry number %d\n" , trydev, retry);          
+      #endif
+
+      if (retry==10) { //try swapping address
+        if (trydev == 0x76) trydev = 0x77;
+        else trydev = 0x76;
       }
 
       delay(250);
       retry++;
     }
   
+    
  
-    /* Default settings from datasheet. */
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-
-
-  #endif
-  #ifdef _USEBME
-         #ifdef _DEBUG
-    Serial.printf( "bme begin\n");
-       #endif
-    while (!bme.begin()) {
-      #ifdef _USESSD1306
-        oled.println("BME failed.");
-        delay(500);
-        oled.clear();
-        oled.setCursor(0,0);
-        delay(500);
-      #else
-        digitalWrite(LED,HIGH);
-        delay(500);
-        digitalWrite(LED,LOW);
-        delay(500);
-      #endif
-    }
- 
-    /* Default settings from datasheet. */
-    bme.setSampling(Adafruit_BME280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BME280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BME280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BME280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BME280::STANDBY_MS_500); /* Standby time. */
-
+    /* 
+    Default settings from datasheet. 
+    bme.setSampling(Adafruit_BME280::MODE_NORMAL,     // Operating Mode. 
+                  Adafruit_BME280::SAMPLING_X2,     // Temp. oversampling 
+                  Adafruit_BME280::SAMPLING_X2,     // hum. oversampling 
+                  Adafruit_BME280::SAMPLING_X16,    // Pressure oversampling 
+                  Adafruit_BME280::FILTER_X16,      // Filtering. 
+                  Adafruit_BME280::STANDBY_MS_500); // Standby time. 
+  */
 
   #endif
 
@@ -591,6 +607,8 @@ OldTime[3] = day();
 
 //LOCAL CODE
   LocalTF.TFLUNASNS = findSensor(7,1);
+  snprintf(LocalTF.MSG,19,"Hi!");
+  MD_Draw();
 //END LOCAL
 
 }
@@ -609,12 +627,12 @@ void loop() {
 
 //LOCAL CODE ----------------------------------------------------------
   //check tfluna distance if it is time
-  if (m>LocalTF.LAST_DISTANCE+LocalTF.REFRESH_RATE) {
-    LocalTF.LAST_DISTANCE = m;
+  if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_RATE) {
+    LocalTF.LAST_DISTANCE_TIME = m;
     ReadData(&Sensors[LocalTF.TFLUNASNS]); //recheck TF luna distance at apr rate...    
-    int32_t tempdist = Sensors[LocalTF.TFLUNASNS].snsValue-LocalTF.BASEOFFSET;
+    float tempdist = Sensors[LocalTF.TFLUNASNS].snsValue-LocalTF.BASEOFFSET;
     if (tempdist<-3000) {
-      snprintf(LocalTF.MSG,19,"FAIL");
+      snprintf(LocalTF.MSG,19,"SLOW");
       LocalTF.ALLOWINVERT=true;
       LocalTF.SCREENRATE=250;
       LocalTF.CLOCKMODE = false; //leave clockmode
@@ -625,7 +643,7 @@ void loop() {
 
       //has dist changed by more than a real amount? If yes then allow high speed screen draws
       if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-tempdist)> LocalTF.MIN_DIST_CHANGE) {
-        LocalTF.SCREENRATE=333;
+        LocalTF.SCREENRATE=250;
         LocalTF.CLOCKMODE = false; //leave clockmode
 
         //store last distance
@@ -633,15 +651,15 @@ void loop() {
 
       //is the distance unreadable (which means no car/garage door open)
       if (tempdist<-100) {
-        snprintf(LocalTF.MSG,19,"OPEN");
+        snprintf(LocalTF.MSG,19,"SLOW");
       } else {
         //is the distance beyond the short range zone
         if (tempdist>LocalTF.ZONE_SHORTRANGE) {
-          snprintf(LocalTF.MSG,19,"%d ft", (tempdist/2.54)/12);        
+          snprintf(LocalTF.MSG,19,"%.1f ft", (tempdist/2.54)/12);        
         } else {
           LocalTF.SCREENRATE=250;
           if (tempdist>LocalTF.ZONE_GOLDILOCKS) {
-            snprintf(LocalTF.MSG,19,"%d in", (tempdist/2.54));
+            snprintf(LocalTF.MSG,19,"%d in", (int) (tempdist/2.54));
           } else {
             if (tempdist>LocalTF.ZONE_CRITICAL) {
               snprintf(LocalTF.MSG,19,"GOOD");
@@ -784,8 +802,9 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
   
     checkDST();
 
+    //don't do this!! the sensors here are permanent!!
     //expire 24 hour old readings
-    initSensor(24*60);
+//    initSensor(24*60);
 
     OldTime[2] = hour();
 
