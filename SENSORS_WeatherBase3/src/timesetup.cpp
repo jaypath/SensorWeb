@@ -127,54 +127,41 @@ void checkDST(void) {
   Serial.printf("checkDST: Starting time EST is: %s\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
 #endif
 
-
-
-//check if time offset is EST (-5h) or EDT (-4h)
+  //check if time offset is EST (-5h) or EDT (-4h)
   int m=month(I.currentTime);
+  int y=year(I.currentTime);
 
-  if (m > 3 && m < 11) DSTOFFSET = 3600;
-  else {
-    if (m == 3) {
-      //need to figure out if it is past the second sunday at 2 am
-
-      time_t m1 = makeUnixTime(year(),month(),7,2,0,0); //this is the last day of the first week of March at 2 am. We want second sunday at 2 am
-      if (I.currentTime< m1 + ((7-weekday(m1)+1)*24*60*60)) DSTOFFSET = 0; 
-      else DSTOFFSET = 3600;
-
-      //7-weekday(m1)+1 is the next sunday 
-      /*explanation:
-        weekday(m1) //is the weekday of m1, the last day of the first week. If it is Sunday (1), then add 7 to get to the second sunday...
-        if it is 1, then add 7 = 7-weekday(m1)+1
-        if it is 2, then add 6 = 7-weekday(m1)+1
-        if it is 3 then add 5 = 7-weekday(m1)+1
-        if it is 4 then add 4 = 7-weekday(m1)+1
-        if it is 5 then add 3 = 7-weekday(m1)+1
-        if it is 6 then add 2 = 7-weekday(m1)+1
-        if it is 7 then add 1 = 7-weekday(m1)+1
-      */
-
+  if (m > 3 && m < 11) {
+    // Summer months (April through October) - DST is in effect
+    DSTOFFSET = 3600;
+  } else if (m == 3) {
+    // March - DST starts on second Sunday at 2 AM
+    // Find the second Sunday of March
+    time_t march1 = makeUnixTime(y-2000, 3, 1, 2, 0, 0); // March 1st at 2 AM
+    int firstSunday = 1 + (8 - weekday(march1)) % 7; // Days to add to get to first Sunday
+    if (firstSunday == 8) firstSunday = 1; // If March 1st is already Sunday
+    
+    time_t secondSunday = makeUnixTime(y-2000, 3, firstSunday + 7, 2, 0, 0); // Second Sunday at 2 AM
+    
+    if (I.currentTime >= secondSunday) {
+      DSTOFFSET = 3600; // DST is in effect
+    } else {
+      DSTOFFSET = 0; // Still in standard time
     }
-
-    if (m == 11) {
-      //need to figure out if it is past the first sunday at 2 am
-      time_t m1 = makeUnixTime(year(I.currentTime),month(I.currentTime),1,2,0,0); //this is the first day of the first week of Nov at 2 am. We want first sunday at 2 am
-      if (weekday(m1)>1) m1 += (7-(weekday(m1)-1))*86400; //this is the first sunday of the month.
-      if (I.currentTime< m1) DSTOFFSET = 3600; //still in the summer timezone
-      else DSTOFFSET = 0;
-
-    /*explanation...
-      if weekday(m1) is 1 then it is sunday, add 0
-      if 2 then Monday, add 6
-      if 3 then Tue, add 5
-      ... +4
-      +3
-      +2
-      +1
-
-      so that is 7 - (weekday(m1)-1)
-
-    */
-      
+    
+  } else if (m == 11) {
+    // November - DST ends on first Sunday at 2 AM
+    // Find the first Sunday of November
+    time_t nov1 = makeUnixTime(y-2000, 11, 1, 2, 0, 0); // November 1st at 2 AM
+    int firstSunday = 1 + (8 - weekday(nov1)) % 7; // Days to add to get to first Sunday
+    if (firstSunday == 8) firstSunday = 1; // If November 1st is already Sunday
+    
+    time_t firstSundayTime = makeUnixTime(y-2000, 11, firstSunday, 2, 0, 0); // First Sunday at 2 AM
+    
+    if (I.currentTime < firstSundayTime) {
+      DSTOFFSET = 3600; // Still in DST
+    } else {
+      DSTOFFSET = 0; // Back to standard time
     }
   }
 
@@ -182,7 +169,7 @@ void checkDST(void) {
   setTime(timeClient.getEpochTime());
 
   #ifdef _DEBUG
-    Serial.printf("checkDST: Ending time is: %s\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
+    Serial.printf("checkDST: Ending time is: %s (DST offset: %ld seconds)\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"), DSTOFFSET);
   #endif
 }
 

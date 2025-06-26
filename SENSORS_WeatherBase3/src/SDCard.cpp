@@ -2,16 +2,7 @@
 #include <globals.hpp>
 #include <SD.h>
 #include <utility.hpp>
-
-
-//this allows a sensorval struct to be written to file as a series of bytes
-union SensorValBytes {
-    struct SensorVal sensordata;
-    uint8_t bytes[sizeof(SensorVal)];
-//    SensorValBytes(){};
-//    ~SensorValBytes(){};
-};
-
+#include "Devices.hpp"
 
 union ScreenInfoBytes {
     struct Screen screendata;
@@ -20,6 +11,42 @@ union ScreenInfoBytes {
     ScreenInfoBytes() {};
 };
 
+// New functions for Devices_Sensors class
+bool storeSensorsSD() {
+    String filename = "/Data/DevicesSensors.dat";
+    File f = SD.open(filename, FILE_WRITE);
+    if (f==false) {
+        storeError("storeSensorsSD: Could not write Devices_Sensors data");
+        f.close();
+        return false;
+    }
+
+    // Write the entire Devices_Sensors object
+    f.write((uint8_t*)&Sensors, sizeof(Devices_Sensors));
+    f.close();
+    return true;
+}
+
+bool readSensorsSD() {
+    String filename = "/Data/DevicesSensors.dat";
+    File f = SD.open(filename, FILE_READ);
+    if (f==false) {
+        storeError("readSensorsSD: Could not read Devices_Sensors data");
+        f.close();
+        return false;
+    }
+
+    if (f.size() != sizeof(Devices_Sensors)) {
+        storeError("readSensorsSD: File size mismatch");
+        f.close();
+        return false;
+    }
+
+    // Read the entire Devices_Sensors object
+    f.read((uint8_t*)&Sensors, sizeof(Devices_Sensors));
+    f.close();
+    return true;
+}
 
 //storing variables
 bool storeScreenInfoSD() {
@@ -81,218 +108,155 @@ bool readScreenInfoSD() //read last screenInfo
 
 }
 
-bool writeSensorsSD(String filename)
-{
-    union SensorValBytes D;
-
-
-
-    File f = SD.open(filename, FILE_WRITE);
-    if (f==false) {
-        storeError("WritesensorsSD: Could not write sensorvals");
-        f.close();
+// New functions for individual sensor data storage using Devices_Sensors class
+bool storeSensorDataSD(int16_t sensorIndex) {
+    if (sensorIndex < 0 || sensorIndex >= NUMSENSORS) {
         return false;
     }
-
-    for (byte j=0;j<SENSORNUM;j++) {
-        D.sensordata=Sensors[j];
-        f.write(D.bytes, sizeof(SensorVal));
+    
+    SnsType* sensor = Sensors.getSensorByIndex(sensorIndex);
+    if (!sensor) {
+        return false;
     }
-
-    f.close();
-
+    
+    // Create filename based on sensor type and ID
+    char filename[32];
+    snprintf(filename, sizeof(filename), "/sensor_%02d_%02d.dat", sensor->snsType, sensor->snsID);
+    
+    // Open file for writing
+    File file = SD.open(filename, FILE_WRITE);
+    if (!file) {
+        Serial.printf("Failed to open file: %s\n", filename);
+        return false;
+    }
+    
+    // Write sensor data in optimized format
+    // Format: deviceIndex(2) + snsType(1) + snsID(1) + snsValue(8) + timeRead(4) + timeLogged(4) + Flags(1) + SendingInt(4) + name(30) = 51 bytes
+    file.write((uint8_t*)&sensor->deviceIndex, 2);
+    file.write((uint8_t*)&sensor->snsType, 1);
+    file.write((uint8_t*)&sensor->snsID, 1);
+    file.write((uint8_t*)&sensor->snsValue, 8);
+    file.write((uint8_t*)&sensor->timeRead, 4);
+    file.write((uint8_t*)&sensor->timeLogged, 4);
+    file.write((uint8_t*)&sensor->Flags, 1);
+    file.write((uint8_t*)&sensor->SendingInt, 4);
+    file.write((uint8_t*)sensor->snsName, 30);
+    
+    file.close();
+    Serial.printf("Stored sensor data to %s\n", filename);
     return true;
-
 }
 
-bool readSensorsSD(String filename) //read last available sensorvals back from disk
-{
-    union SensorValBytes D;
+bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
+    // Find the device and sensor indices
+    int16_t deviceIndex = Sensors.findDev(deviceMAC, false);
+    if (deviceIndex < 0) {
+        storeError("storeSensorDataSD: Device not found");
+        return false;
+    }
+    
+    int16_t sensorIndex = Sensors.findSns(deviceIndex, sensorType, sensorID);
+    if (sensorIndex < 0) {
+        storeError("storeSensorDataSD: Sensor not found");
+        return false;
+    }
+    
+    return storeSensorDataSD(sensorIndex);
+}
 
-
+bool readSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
+                     uint32_t t[], double v[], byte *N, uint32_t *samples, 
+                     uint32_t starttime, uint32_t endtime, byte avgN) {
+    
+    // Create filename
+    String filename = "/Data/Sensor_" + String(deviceMAC, HEX) + "_" + 
+                     String(sensorType) + "_" + String(sensorID) + "_v4.dat";
+    
     File f = SD.open(filename, FILE_READ);
-    if (f==false) {
-        f.close();
-        storeError("readsensorsSD: Could not read sensorvals");
-
+    if (!f) {
+        storeError("readSensorDataSD: Could not open file for reading");
         return false;
     }
-
-
-    byte cnt = 0;
-    while (f.available()) {
-        f.read(D.bytes,sizeof(SensorVal));
-        Sensors[cnt++] = D.sensordata;
-    }
-
-    f.close();
-
-    return true;
-
-}
-
-
-bool storeSensorSD(struct SensorVal *S) {
-
-  String filename;
     
-  if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
-  else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
-  
-  File f = SD.open(filename, FILE_APPEND);
-    if (f==false) {
-        storeError("storesensorSD: Could not write single sensorval");
-                f.close();
-        return false;
-    }
-    union SensorValBytes D; 
-    D.sensordata=*S;
-
-    f.write(D.bytes,sizeof(SensorVal));
-
-    f.close();
-    return true;
+    struct SensorDataRecord {
+        uint64_t deviceMAC;
+        uint8_t sensorType;
+        uint8_t sensorID;
+        double sensorValue;
+        uint32_t timeRead;
+        uint32_t timeLogged;
+        uint8_t flags;
+        uint32_t sendingInt;
+    } record;
     
-}
-
-
-//overloaded version to read multiple values and average them together
-bool readSensorSD(SensorVal *S, uint32_t t[], double v[], byte *N,uint32_t *samples, uint32_t starttime, uint32_t endtime,byte avgN ) {
-
-    String filename;
-    
-    if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
-    else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
-
-    File f = SD.open(filename, FILE_READ);
-    union SensorValBytes D;
-    byte cnt = 0, deltacnt=0;
+    byte cnt = 0, deltacnt = 0;
     double avgV = 0;
-    if (f==false) {
-        storeError("readSensorSD: Could not read single sensorval");
-
-                f.close();
-        return false;
-    }
-
-
-    *samples = f.size()/sizeof(SensorVal);
-    while (f.available()) {
-        f.read(D.bytes,sizeof(SensorVal));
-
-        if (D.sensordata.timeLogged < starttime) continue; //ignore values that aren't in the time range
-
-        if (D.sensordata.timeLogged>endtime) break;
-
-        if (cnt<*N) {
-            avgV += D.sensordata.snsValue;
+    *samples = f.size() / sizeof(record);
+    
+    while (f.available() >= sizeof(record)) {
+        f.read((uint8_t*)&record, sizeof(record));
+        
+        // Check if this is the correct sensor
+        if (record.deviceMAC != deviceMAC || record.sensorType != sensorType || record.sensorID != sensorID) {
+            continue;
+        }
+        
+        // Check time range
+        if (record.timeLogged < starttime) continue;
+        if (endtime != 0xFFFFFFFF && record.timeLogged > endtime) break;
+        
+        if (cnt < *N) {
+            avgV += record.sensorValue;
             deltacnt++;
-
-            if (deltacnt>=avgN) {
-                t[cnt] = D.sensordata.timeLogged;
-                v[cnt] = avgV/deltacnt;
-                deltacnt=0;
-                avgV=0;
+            
+            if (deltacnt >= avgN) {
+                t[cnt] = record.timeLogged;
+                v[cnt] = avgV / deltacnt;
+                deltacnt = 0;
+                avgV = 0;
                 cnt++;
-            } 
-        } 
-    }
-
-    *N=cnt;
-    f.close();
-
-    return true;
-}
-
-bool readSensorSD(SensorVal *S, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN) { //read the last N sensor readings, stating from starttime. return new N if there were less than N reads
-    if (starttime==0) starttime = I.currentTime;
-    if (avgN==0) avgN=1;
-
-    String filename;
-    
-    if (S->MAC[0]!=0 && S->MAC[4]!=0)     filename = "/Data/Sensor_" + (String) IPbytes2String(S->MAC,6) + "_v3.dat";
-    else filename = "/Data/Sensor_" + (String) S->ardID + + "." + (String) S->snsType + "." + (String) S->snsID + "_v3.dat";
-
-    File f = SD.open(filename, FILE_READ);
-    union SensorValBytes D;
-    double avgV = 0;
-    byte svsz = sizeof(SensorVal);
-    uint32_t avgT=0;
-    byte goodcount=0;
-
-    if (f==false) {
-            storeError("readsensorsSD: Could not read sensorvals using alt method");
-
-                f.close();
-        return false;
-    }
-
-    uint32_t sz = f.size(); //file size 
-    *samples = sz/svsz; //total number of stored samples
-
-
-    
-    //find the entry that is older than/equal to starttime
-
-    uint16_t n=1;
-
-    while (sz >= n*svsz) {
-        f.seek(sz-n*svsz); //go to nth  entry from the end
-        f.read(D.bytes,svsz); //read this block
-        if ((uint32_t) D.sensordata.timeLogged <= starttime) {            
-            break;
-        } 
-        else  n++;
-    } 
-
-
-    //the current position is the start of the block after sz-n, so current position contains all the blocks we can have. how many N can we return?
-    if (f.position()<((*N) * avgN*svsz))  *N = (byte) ((double) f.position()/(avgN*svsz)); //This is how many N we can return with averaging.
-    
-   
-
-    byte ind = 0;
-    //now fill the vectors
-    for (byte j=1;j<=*N;j++) {
-        goodcount = 0;
-        avgT = 0;
-        avgV = 0;
-        f.seek(sz-(n + j*avgN)*svsz); //go to jth set of entries relative to n. Note n so we are at the start of the nth block
-        for (byte jj=0;jj<avgN;jj++) {
-            f.read(D.bytes,svsz);
-            if (D.sensordata.timeLogged < I.currentTime && D.sensordata.timeLogged > 1577854800) { //possible that a value was registered at an incorrect time - for example if time clock failed and we started at 0. Disregard such values if older than 1/1/2020
-                avgV += D.sensordata.snsValue;
-                avgT += I.currentTime-D.sensordata.timeLogged; //shift from now
-                goodcount++;
             }
         }
-        if (goodcount>0) {
-            t[ind] = I.currentTime-(avgT/goodcount);
-            v[ind++] = avgV/goodcount;
-        }
     }
-    *N=ind;
+    
+    *N = cnt;
     f.close();
-
     return true;
 }
 
-uint16_t read16(File &f) {
-  uint16_t result;
-  ((uint8_t *)&result)[0] = f.read(); // LSB
-  ((uint8_t *)&result)[1] = f.read(); // MSB
-  return result;
+bool readSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
+                     uint32_t t[], double v[], byte *N, uint32_t *samples, 
+                     uint32_t starttime, byte avgN) {
+    return readSensorDataSD(deviceMAC, sensorType, sensorID, t, v, N, samples, starttime, 0xFFFFFFFF, avgN);
 }
 
-uint32_t read32(File &f) {
-  uint32_t result;
-  ((uint8_t *)&result)[0] = f.read(); // LSB
-  ((uint8_t *)&result)[1] = f.read();
-  ((uint8_t *)&result)[2] = f.read();
-  ((uint8_t *)&result)[3] = f.read(); // MSB
-  return result;
+bool storeAllSensorsSD() {
+    bool success = true;
+    
+    for (int16_t i = 0; i < NUMSENSORS && i < Sensors.getNumSensors(); i++) {
+        if (Sensors.isSensorInit(i)) {
+            if (!storeSensorDataSD(i)) {
+                success = false;
+            }
+        }
+    }
+    
+    return success;
 }
 
+bool readAllSensorsSD() {
+    bool success = true;
+    
+    for (int16_t i = 0; i < NUMSENSORS && i < Sensors.getNumSensors(); i++) {
+        if (Sensors.isSensorInit(i)) {
+            if (!readSensorDataSD(i)) {
+                success = false;
+            }
+        }
+    }
+    
+    return success;
+}
 
 void deleteFiles(const char* pattern,const char* directory) {
   File dir = SD.open(directory); // Open the root directory

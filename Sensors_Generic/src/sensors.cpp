@@ -36,6 +36,13 @@
 61 - battery %
 98 - clock
 99 = any numerical value
+100+ is a server type sensor, to which other sensors will send their data
+100 = any server (receives data), disregarding subtype
+101 - weather display server with local persistent storage (ie SD card)
+102 = any weather server that has no persistent storage
+103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
+104 = any server without local persistent storage that uploads data cloud storage
+ 
 
 */
 

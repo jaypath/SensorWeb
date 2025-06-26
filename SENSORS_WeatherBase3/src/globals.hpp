@@ -6,11 +6,13 @@
 
 
 #define SENSORNUM 60
+#define MYTYPE 100
 
 #include <Arduino.h>
 #include <String.h>
 #include <SPI.h>
 #include <Weather.hpp>
+#include <Devices.hpp>
 
 #define LGFX_USE_V1         // set to use new version of library
 #include <LovyanGFX.hpp>    // main library
@@ -41,6 +43,23 @@ typedef enum {
   RESET_UNKNOWN //unknown cause
   } RESETCAUSE;
   
+
+
+struct STRUCT_PrefsH {        
+  char LMK[16];
+  uint8_t LMK_isSet;
+  uint32_t lastESPNOW;
+  byte WIFISSID[33];
+  byte WIFIPWD[65];
+  uint32_t SSIDCRC;
+  uint32_t PWDCRC;
+  uint64_t PROCID; //processor ID, might be MACID
+  uint32_t LASTBOOTTIME;
+  uint8_t MyType; //see end of this file for types
+};
+
+STRUCT_PrefsH Prefs;
+
 
 struct Screen {
     char SERVERNAME[30];
@@ -114,45 +133,20 @@ struct Screen {
 //sensors
 #define OLDESTSENSORHR 24 //hours before a sensor is removed
 
-struct SensorVal {
-  uint8_t MAC[6]; //mac address [v3 ID]
-  uint8_t IP[4];
-  uint8_t ardID; //legacy from V1 and V2 used this to define ID. Now MAC is the ID. ArdID can still be some value, but can also be zero.
-  uint8_t  snsType ;
-  uint8_t snsID;
-  char snsName[32];
-  double snsValue;
-  uint32_t timeRead;
-  uint32_t timeLogged;  
-  uint32_t SendingInt;  
-  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this is a critically monitored sensor, so alarm if I don't get a read on time!
-  uint8_t expired; //set to 1 if this sensor is  expired by time
+/*
+At some point, streamline with device database and sensor database. This way a device could change name without altering sensors
+struct DeviceVal {
+  uint64_t MAC;
+  uint32_t IP;
+  uint8_t ardID;//legacy from V1 and V2 used this to define ID. Now MAC is the ID. ArdID can still be some value, but can also be zero.
 };
+*/
 
 
-//server
 
-struct IP_TYPE {
-  IPAddress IP;
-  int server_status;
-};
-
-
-struct WiFi_type {
-  //IPAddress DHCP;  // 4 byte,   4 in total
-  //IPAddress GATEWAY;// 4 bytes, 8 in total
-  //IPAddress DNS; //4 bytes, 16 in total
-  //IPAddress SUBNET;
-  IPAddress MYIP; //4 bytes
-  byte MAC[6];
-  byte SSID[33];
-  byte PWD[65];
-  bool HAVECREDENTIALS; 
-  uint8_t otherServers[6];  //add all other servers IP[4] here. these are devices that report their snsType as a server type
-  uint8_t statusCode; //from R to L... bit 0  = sensitive info required/sent if 1; bit 1 response required if 1; bit 2 request for sensitive info
-};
-
+//from server
+extern String WEBHTML;
+extern WiFi_type WIFI_INFO;
 
 
 
@@ -274,3 +268,49 @@ public:
 
 
 #endif
+
+/*sens types
+//0 - not defined
+//1 - temp, DHT
+//2 - RH, DHT
+//3 - soil moisture, capacitative or Resistive
+//4 -  temp, AHT21
+//5 - RH, AHT21
+//6 - 
+//7 - distance, HC-SR04
+//8 - human presence (mm wave)
+//9 - BMP pressure
+//10 - BMP temp
+//11 - BMP altitude
+//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
+//13 - BMe pressure
+//14 - BMe temp
+//15 - BMe humidity
+//16 - BMe altitude
+//17 - BME680 temp
+18 - BME680 rh
+19 - BME680 air press
+20  - BME680 gas sensor
+21 - human present (mmwave)
+50 - any binary, 1=yes/true/on
+51 = any on/off switch
+52 = any yes/no switch
+53 = any 3 way switch
+54 = 
+55 - heat on/off {requires N DIO Pins}
+56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
+57 - a/c fan on/off
+58 - leak yes/no
+60 -  battery power
+61 - battery %
+98 - clock
+99 = any numerical value
+100+ is a server type sensor, to which other sensors will send their data
+100 = any server (receives data), disregarding subtype
+101 - weather display server with local persistent storage (ie SD card)
+102 = any weather server that has no persistent storage
+103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
+104 = any server without local persistent storage that uploads data cloud storage
+ 
+
+*/

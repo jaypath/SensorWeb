@@ -1,13 +1,23 @@
 things left to do:
 
+-why is the time off by 1 hr???
+
+-store mac address and device ID separately from sensors
+
+-convert ip addresses to uint32_t
+
 -fix espnow
-    -should broadcast all server IP addresses (is there a maximum?) - could make this 25 bytes... IP0 IP1 IP2 IP3 then IP4 for next 21 servers (starting with master server IP)?
-    -should it broadcast wifi credentials???
-    -should multiple master servers be allowed?
+    .should broadcast all server IP addresses (is there a maximum?) - could make this 25 bytes... IP0 IP1 IP2 IP3 then IP4 for next 21 servers (starting with master server IP)? YES
+    .should it broadcast wifi credentials??? NO!
+    .should multiple master servers be allowed? YES!
 
--create firmware to store MAC address, wifi to preferences.h on initial start
-    -this is separate firmware from this one
     
--fix preferences.h to read MAC address
 
--encrypt preferences.h
+-BOOTSECURE 
+  -should be a call to setup only.
+  -should be a class that returns true or false only
+  -if true, then this device and firmware match
+  -if false, enter infinite loop
+
+
+  implement server is type 100 (MYTYPE)

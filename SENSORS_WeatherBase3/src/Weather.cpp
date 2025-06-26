@@ -8,7 +8,7 @@
 uint8_t WeatherInfo::getIndex(time_t dT)
 {
     if (dT == 0) dT = I.currentTime;
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) {
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
         if  (this->dT[j] == dT) return j; //found the exact timestamp
         if (this->dT[j] > dT) { //found the index that is beyond this i value, so the correct index was teh one before
             if (j>0 ) j--;
@@ -36,7 +36,7 @@ int8_t WeatherInfo::getTemperature(uint32_t dt, bool wetbulb,bool asindex)
     
     if (dt==0) dt = I.currentTime;
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return -120;
 
@@ -49,7 +49,7 @@ uint8_t WeatherInfo::getHumidity(uint32_t dt)
     if (dt==0) dt = I.currentTime;
 
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -62,7 +62,7 @@ int16_t WeatherInfo::getWeatherID(uint32_t dt)
     if (dt==0) dt = I.currentTime;
 
     //return hourly ID, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -76,11 +76,11 @@ uint8_t WeatherInfo::getPoP(uint32_t dt)
     //special request... dt is zero, then get the total pop for next 24h
     if (dt==0) {
         double totalPOP=1;
-        for (byte j=0;j<24;j++) totalPOP *= (1 - (this->PoP[j]/100)); //this is the probability of NO precip
+        for (uint16_t j=0;j<24;j++) totalPOP *= (1 - (this->PoP[j]/100)); //this is the probability of NO precip
         return  (uint8_t) ((1- totalPOP)*100);
     }
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -92,11 +92,11 @@ uint16_t WeatherInfo::getRain(uint32_t dt)
     //special request... dt is zero, then get the total rain for next 24h
     if (dt==0) {
         uint16_t totalrain = 0;
-        for (byte j=0;j<24;j++) totalrain+=this->rainmm[j]; 
+        for (uint16_t j=0;j<24;j++) totalrain+=this->rainmm[j]; 
         return totalrain;
     }
     //return hourly , so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -111,7 +111,7 @@ uint16_t WeatherInfo::getDailyRain(uint8_t daysfromnow)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t totalrain = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) totalrain+=this->rainmm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) totalrain+=this->rainmm[j]; 
     
     return totalrain;
 }
@@ -120,7 +120,7 @@ uint16_t WeatherInfo::getDailyRain(uint32_t starttime, uint32_t endtime)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t total = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->rainmm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->rainmm[j]; 
     
     return total;
 }
@@ -134,7 +134,7 @@ uint16_t WeatherInfo::getDailySnow(uint8_t daysfromnow)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t total = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) total+=this->snowmm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) total+=this->snowmm[j]; 
     
     return total;
 }
@@ -143,7 +143,7 @@ uint16_t WeatherInfo::getDailySnow(uint32_t starttime, uint32_t endtime)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t total = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->snowmm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->snowmm[j]; 
     
     return total;
 }
@@ -156,7 +156,7 @@ uint16_t WeatherInfo::getDailyIce(uint8_t daysfromnow)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t total = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) total+=this->icemm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) total+=this->icemm[j]; 
     
     return total;
 }
@@ -165,7 +165,7 @@ uint16_t WeatherInfo::getDailyIce(uint32_t starttime, uint32_t endtime)
 
     //calculate the rainfall for the time that is within dT: [MN0+ daysfromnow*86400] to [MN0 + daysfromnow*86400 + 86400]
     uint16_t total = 0; //this number is generally <100, but could be as high as 400+
-    for (byte j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->icemm[j]; 
+    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) if (this->dT[j] >= starttime && this->dT[j] < endtime) total+=this->icemm[j]; 
     
     return total;
 }
@@ -176,11 +176,11 @@ uint16_t WeatherInfo::getSnow(uint32_t dt)
         //special request... dt is zero, then get the total snow for next 24h
     if (dt==0) {
         uint16_t total = 0;
-        for (byte j=0;j<24;j++) total+=this->snowmm[j]; 
+        for (uint16_t j=0;j<24;j++) total+=this->snowmm[j]; 
         return total;
     }
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -193,11 +193,11 @@ uint16_t WeatherInfo::getIce(uint32_t dt)
             //special request... dt is zero, then get the total ice for next 24h
     if (dt==0) {
         uint16_t total = 0;
-        for (byte j=0;j<24;j++) total+=this->icemm[j]; 
+        for (uint16_t j=0;j<24;j++) total+=this->icemm[j]; 
         return total;
     }
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -207,12 +207,12 @@ uint16_t WeatherInfo::getIce(uint32_t dt)
 
 
 uint32_t WeatherInfo::nextPrecip() {
-    for (byte j=0;j<24;j++) {
+    for (uint16_t j=0;j<24;j++) {
         if (this->PoP[j]>50) return this->dT[j];
     }
 
     //didn't find rain in the next 24 hours, check the next week
-    for (byte j=0;j<14;j++) {
+    for (uint16_t j=0;j<14;j++) {
         if (this->daily_PoP[j]>50) return this->daily_dT[j];
     }
 
@@ -222,12 +222,12 @@ uint32_t WeatherInfo::nextPrecip() {
 
 
 uint32_t WeatherInfo::nextRain() {
-    for (byte j=0;j<24;j++) {
+    for (uint16_t j=0;j<24;j++) {
         if (this->rainmm[j]>4) return this->dT[j];
     }
 
     //didn't find rain in the next 24 hours
-    for (byte j=0;j<14;j++) {
+    for (uint16_t j=0;j<14;j++) {
         if (this->daily_weatherID[j]>=500 && this->daily_weatherID[j]<600 ) return this->daily_dT[j];
     }
 
@@ -236,12 +236,12 @@ uint32_t WeatherInfo::nextRain() {
 }
 
 uint32_t WeatherInfo::nextSnow() {
-    for (byte j=0;j<24;j++) {
+    for (uint16_t j=0;j<24;j++) {
         if (this->PoP[j]>25 && (this->snowmm[j]>10 || this->icemm[j]>2)) return this->dT[j];
     }
 
     //didn't find snow/ice in the next 24 hours
-    for (byte j=0;j<14;j++) {
+    for (uint16_t j=0;j<14;j++) {
         if ((this->daily_weatherID[j]>=600 && this->daily_weatherID[j]<700 ) || (this->daily_weatherID[j]>=300 && this->daily_weatherID[j]<400 )) return this->daily_dT[j];
     }
 
@@ -253,7 +253,7 @@ uint32_t WeatherInfo::nextSnow() {
 int8_t WeatherInfo::getDewPoint(uint32_t dt)
 {
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -263,7 +263,7 @@ int8_t WeatherInfo::getDewPoint(uint32_t dt)
 uint8_t WeatherInfo::getWindSpeed(uint32_t dt)
 {
     //return hourly temperature, so long as request is within limits
-    byte i = getIndex(dt);
+    uint16_t i = getIndex(dt);
     if (i==255) //did not find this index/time 
         return 255; //failed
 
@@ -386,7 +386,7 @@ int16_t WeatherInfo::breakIconLink(String icon,uint32_t starttime, uint32_t endt
 bool WeatherInfo::initWeather() 
 {
 
-    for (byte i=0;i<NUMWTHRDAYS*24;i++) {        
+    for (uint16_t i=0;i<NUMWTHRDAYS*24;i++) {        
         this->dT[i] = 0; //time for each element
         this->temperature[i] = 0; //degrees in F
         this->humidity[i] = 0;
@@ -400,7 +400,7 @@ bool WeatherInfo::initWeather()
         this->snowmm[i] = 0;
     }
 
-    for (byte i=0;i<14;i++) {        
+    for (uint16_t i=0;i<14;i++) {        
         this->daily_dT[i] = 0; //time for daily elements
         this->daily_tempMax[i] = 0;
         this->daily_tempMin[i] = 0;
@@ -470,14 +470,17 @@ void WeatherInfo::getDailyTemp(uint8_t daysfromnow, int8_t* temp){
 
 bool WeatherInfo::updateWeather(uint16_t synctime) 
 {
-
-    if (this->lastUpdateT+synctime > I.currentTime && (this->lastUpdateAttempt == this->lastUpdateT)) return false; //if the last update was recently (within synctime) AND last attempt == last success then not time to update
+    // Check if we should update based on last successful update
+    if (this->lastUpdateT + synctime > I.currentTime) {
+        return false; // Too early to update based on last successful update
+    }
     
-    
-    if ((uint32_t) this->lastUpdateAttempt+600 > I.currentTime) return false; //last update failed but was so recent (within 10 minutes) that we don't want to retry now
+    // Check if we should retry after a failed attempt (wait 10 minutes)
+    if ((uint32_t) this->lastUpdateAttempt + 600 > I.currentTime) {
+        return false; // Too soon to retry after failed attempt
+    }
 
     this->lastUpdateAttempt = I.currentTime;
-
 
     #ifdef _DEBUG
         Serial.printf("Updateweather: init...");
@@ -485,16 +488,13 @@ bool WeatherInfo::updateWeather(uint16_t synctime)
 
     initWeather();
 
-    
-
     String url;
     JsonDocument doc;
     int httpCode;
 
     #ifdef _DEBUG
-Serial.printf(" done at %s.\n",dateify(I.currentTime));
+        Serial.printf(" done at %s.\n",dateify(I.currentTime));
     #endif
-
 
     if (this->Grid_x == 0 && this->Grid_y == 0) {
         #ifdef _DEBUG
@@ -509,32 +509,35 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         String ca_cert = getCert("/Certificates/NOAA.crt");
 
         if (Server_SecureMessage(url, WEBHTML, httpCode, ca_cert)==false) {
-
             #ifdef _DEBUG
-                    Serial.printf("updateweather: failed to update grid points\n");                
+                Serial.printf("updateweather: failed to update grid points\n");                
             #endif
-            
             return false; //failed
+        }
 
+        // Check HTTP status code
+        if (httpCode != 200) {
+            #ifdef _DEBUG
+                Serial.printf("updateweather: grid points HTTP error: %d\n", httpCode);
+            #endif
+            return false;
         }
 
         DeserializationError error = deserializeJson(doc, WEBHTML);
         if (error) {
-            storeError("json error with NOAA");
-
+            storeError("json error with NOAA grid points");
             #ifdef _DEBUG
-                Serial.printf("updateWeather: json error: %d\n",error.c_str());
-                while(true);
+                Serial.printf("updateWeather: json error: %s\n",error.c_str());
             #endif
-            
             return false;
         }
 
-        strcpy(this->Grid_id, doc["properties"]["gridId"]);
+        if (doc.containsKey("properties") && doc["properties"].containsKey("gridId")) {
+            strncpy(this->Grid_id, doc["properties"]["gridId"], sizeof(this->Grid_id) - 1);
+            this->Grid_id[sizeof(this->Grid_id) - 1] = '\0';
+        }
         this->Grid_x = doc["properties"]["gridX"];
         this->Grid_y = doc["properties"]["gridY"];
-            
-
     }
     
 
@@ -566,15 +569,23 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         http.begin(wfclient,url.c_str());
         
         httpCode = http.GET();
+        
+        // Check HTTP status code
+        if (httpCode != 200) {
+            #ifdef _DEBUG
+                Serial.printf("updateweather: hourly forecast HTTP error: %d\n", httpCode);
+            #endif
+            http.end();
+            return false;
+        }
+        
         //see https://arduinojson.org/v6/how-to/use-arduinojson-with-httpclient/
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
-            storeError("updateWeather1: json error with NOAA");
-
+            storeError("updateWeather1: json error with NOAA hourly forecast");
             #ifdef _DEBUG
-                Serial.printf("updateWeather1: json error: %d\n",error.c_str());
-                while(true);
+                Serial.printf("updateWeather1: json error: %s\n",error.c_str());
             #endif
             http.end();
             return false;
@@ -590,7 +601,11 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
 
             const char* tu =  properties_period["temperatureUnit"]; // "F", "F", "F", ...
             tmp = (String) tu;
-            if (tmp=="C") this->temperature[cnt] = (9*this->temperature[cnt]/5) +32;
+            if (tmp=="C") {
+                // Convert Celsius to Fahrenheit properly
+                double tempC = (double)properties_period["temperature"];
+                this->temperature[cnt] = (int8_t)((tempC * 9.0 / 5.0) + 32.0);
+            }
 
             this->PoP[cnt] = (uint8_t) properties_period["probabilityOfPrecipitation"]["value"];
             
@@ -643,15 +658,23 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         http.begin(wfclient,url.c_str());
         
         httpCode = http.GET();
+        
+        // Check HTTP status code
+        if (httpCode != 200) {
+            #ifdef _DEBUG
+                Serial.printf("updateweather: grid forecast HTTP error: %d\n", httpCode);
+            #endif
+            http.end();
+            return false;
+        }
+        
         //see https://arduinojson.org/v6/how-to/use-arduinojson-with-httpclient/
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
-            storeError("updateWeather2: json error with NOAA");
-
+            storeError("updateWeather2: json error with NOAA grid forecast");
             #ifdef _DEBUG
-                Serial.printf("updateWeather: json error: %d\n",error.c_str());
-                while(true);
+                Serial.printf("updateWeather2: json error: %s\n",error.c_str());
             #endif
             http.end();
             return false;
@@ -659,19 +682,19 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
 
         JsonObject properties = doc["properties"];
 
-        byte cnt=0; 
+        uint16_t cnt=0; 
         for (JsonObject properties_temperature_value : properties["wetBulbGlobeTemperature"]["values"].as<JsonArray>()) {
             const char* value_validTime = properties_temperature_value["validTime"];
             String tmp = value_validTime;
             uint32_t dt = breakNOAATimestamp(tmp);
     
-            byte i = getIndex(dt); //note that this may be in the future, and may have gaps
-//            this->wetBulbTemperature[i] = int8_t ((double) (9*properties_temperature_value["value"])/5+32); // in C, convert to F
-
+            uint16_t i = getIndex(dt); //note that this may be in the future, and may have gaps
             while (cnt<=i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
-                this->wetBulbTemperature[cnt] = int8_t ((double) (properties_temperature_value["value"])*9/5+32);
+                // Convert Celsius to Fahrenheit properly
+                double tempC = (double)properties_temperature_value["value"];
+                this->wetBulbTemperature[cnt] = (int8_t)((tempC * 9.0 / 5.0) + 32.0);
                 cnt++;
             }
 
@@ -685,7 +708,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
             String tmp = value_validTime;
             uint32_t dt = breakNOAATimestamp(tmp);
     
-            byte i = getIndex(dt);
+            uint16_t i = getIndex(dt);
             while (cnt<=i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
 
@@ -704,7 +727,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
             String tmp = value_validTime;
             uint32_t dt = breakNOAATimestamp(tmp);
     
-            byte i = getIndex(dt);
+            uint16_t i = getIndex(dt);
 
             while (cnt<=i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
@@ -725,7 +748,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
             String tmp = value_validTime;
             uint32_t dt = breakNOAATimestamp(tmp);
     
-            byte i = getIndex(dt);
+            uint16_t i = getIndex(dt);
             while (cnt<i) { //do this because there may be gaps in the table... elements may only be listed when there is a change, or step may not be static
                 if (cnt>=NUMWTHRDAYS*24) break; //the loop will go on for the number of elements, but we can only hold this many!
                 this->snowmm[cnt] = uint8_t ((double) properties_value["value"]); 
@@ -761,15 +784,23 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         http.begin(wfclient,url.c_str());
         
         httpCode = http.GET();
+        
+        // Check HTTP status code
+        if (httpCode != 200) {
+            #ifdef _DEBUG
+                Serial.printf("updateweather: daily forecast HTTP error: %d\n", httpCode);
+            #endif
+            http.end();
+            return false;
+        }
+        
         //see https://arduinojson.org/v6/how-to/use-arduinojson-with-httpclient/
         DeserializationError error = deserializeJson(doc, http.getStream()); //process the stream in place
 
         if (error) {
-            storeError("updateWeather3: json error with NOAA");
-
+            storeError("updateWeather3: json error with NOAA daily forecast");
             #ifdef _DEBUG
-                Serial.printf("updateWeather: json error: %d\n",error.c_str());
-                while(true);
+                Serial.printf("updateWeather3: json error: %s\n",error.c_str());
             #endif
             http.end();
             return false;
@@ -777,7 +808,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
 
         JsonObject properties = doc["properties"];
 
-        byte cnt=0; 
+        uint16_t cnt=0; 
 
         for (JsonObject properties_value : properties["periods"].as<JsonArray>()) {
             const char* value_validTime = properties_value["startTime"];
@@ -789,11 +820,23 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
         //    uint32_t et = breakNOAATimestamp(tmp);
 
             if (properties_value["isDaytime"]) {
-                this->daily_tempMax[cnt] = int8_t ((double) properties_value["temperature"]);
+                double temp = (double) properties_value["temperature"];
+                const char* tu = properties_value["temperatureUnit"];
+                String tempUnit = (String) tu;
+                if (tempUnit == "C") {
+                    temp = (temp * 9.0 / 5.0) + 32.0;
+                }
+                this->daily_tempMax[cnt] = (int8_t) temp;
                 this->daily_tempMin[cnt] = -125; //some arbitary place holder
             } else {
                 this->daily_tempMax[cnt] = -125;
-                this->daily_tempMin[cnt] = int8_t ((double) properties_value["temperature"]);
+                double temp = (double) properties_value["temperature"];
+                const char* tu = properties_value["temperatureUnit"];
+                String tempUnit = (String) tu;
+                if (tempUnit == "C") {
+                    temp = (temp * 9.0 / 5.0) + 32.0;
+                }
+                this->daily_tempMin[cnt] = (int8_t) temp;
             }
 
             this->daily_PoP[cnt] = (uint8_t) ((double) properties_value["probabilityOfPrecipitation"]["value"]);
@@ -828,7 +871,6 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
             #ifdef _DEBUG
                 if (error) {
                     storeError("updateWeather: json error with sunriseIO");
-
                     Serial.printf("updateWeather: sunriseio failed deserialize: %s\n",error.c_str());
                 }                
             #endif
@@ -844,7 +886,7 @@ Serial.printf(" done at %s.\n",dateify(I.currentTime));
                 sun = (String) sdat + " " + (String) sset;
                 this->sunset = convertStrTime(sun);
             }
-        } 
+        }
     }
 
     this->lastUpdateT = I.currentTime; //mark the last successful update

@@ -5,15 +5,13 @@
 
 
     #include <Preferences.h>
-    #include <esp_now.h>
     #include "globals.hpp"
     #include "utility.hpp"
+    #include "server.hpp"
+    #include <mbedtls/aes.h>
+    #include <mbedtls/cipher.h>
 
-    #ifdef _USEENCRYPTION
-        #include <mbedtls/aes.h>
-        #include <mbedtls/cipher.h>
-
-        #define AESKEY "YfMVDR2qtzxJdD9yNhN6IDGPwgpyMjk2"
+    #define AESKEY "YfMVDR2qtzxJdD9yNhN6IDGPwgpyMjk2" //must be 128, 192, or 256 bits long
         
         /**
  * \brief  This function performs an AES-CBC encryption or decryption operation
@@ -56,48 +54,31 @@
  * \return         #MBEDTLS_ERR_AES_INVALID_INPUT_LENGTH
  *                 on failure.
  */
-    #endif
-
-
-    extern WiFi_type WIFI_INFO;
-    extern Screen I;
 
 
     char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
-
+    
     byte prefs_set = 0;
 
-    struct STRUCT_PrefsH {
-        char LMK_KEY_STR[17];
-        byte LMK_isSet = 0;
-        byte WIFISSID[33];
-        byte WIFIPWD[65];
-        uint32_t SSIDCRC;
-        uint32_t PWDCRC;
-        uint8_t PROCID[6];
-    };
+
+    extern WiFi_type WIFI_INFO;
 
 
-    STRUCT_PrefsH PrefsH;
+    extern STRUCT_PrefsH Prefs;
+    int8_t initBootSecure();
+    bool getPrefs() ;
+    bool setPrefs();
 
-    bool initESPNOW();
-    esp_err_t addESPNOWPeer(byte* macad,bool doEncrypt);
-    esp_err_t delESPNOWPeer(byte* macad);
+    
+    uint16_t CRCCalculator(uint8_t * data, uint16_t length);
 
-    bool sendESPNOW(byte* MAC = nullptr, struct WiFi_type *w = nullptr);
-    void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
-    void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
 
+    int8_t decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength);
+
+    int8_t encrypt(const unsigned char* input, uint16_t inputlength, char* key, unsigned char* output,  uint16_t* outputlength);
     bool getWiFiCredentials();
     bool putWiFiCredentials();
     void initCreds(struct WiFi_type *w);
-    uint16_t CRCCalculator(uint8_t * data, uint16_t length);
-
-    //#define _USEENCRYPTION
-
-    #ifdef _USEENCRYPTION
-        byte encrypt(char* input, char* key, unsigned char* output, uint16_t datalength);
-        byte decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength);
-    #endif
-
+    
+  
 #endif

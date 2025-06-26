@@ -33,12 +33,29 @@
   extern WebServer server;
 #endif
 
-//declared as global constants
-//extern SensorVal *Sensors;
 
-extern SensorVal Sensors[SENSORNUM];
+struct IP_TYPE {
+  IPAddress IP;
+  int server_status;
+};
+
+
+struct WiFi_type {
+  //IPAddress DHCP;  // 4 byte,   4 in total
+  //IPAddress GATEWAY;// 4 bytes, 8 in total
+  //IPAddress DNS; //4 bytes, 16 in total
+  //IPAddress SUBNET;
+  byte MYIP[4]; //4 bytes
+  byte MAC[6];
+  byte SSID[33];
+  byte PWD[65];
+  bool HAVECREDENTIALS;   
+  uint8_t statusCode; //from R to L... bit 0  = sensitive info required/sent if 1; bit 1 response required if 1; bit 2 request for sensitive info
+};
+
+
+//declared as global constants
 extern time_t ALIVESINCE;
-extern String WEBHTML;
 extern Screen I;
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfo WeatherData;
@@ -58,7 +75,6 @@ extern uint32_t WTHRFAIL;
 #endif
 
 
-extern WiFi_type WIFI_INFO;
 
 
 
