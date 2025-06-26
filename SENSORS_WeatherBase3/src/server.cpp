@@ -2,6 +2,7 @@
 #include "globals.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
+#include <esp_system.h>
 
 
 
@@ -31,7 +32,10 @@ void SerialWrite(String msg) {
 String WEBHTML;
 WiFi_type WIFI_INFO;
 
-
+extern uint32_t I_currentTime;
+extern uint32_t lastPwdRequestMinute;
+extern STRUCT_PrefsH Prefs;
+extern bool requestWiFiPassword(const uint8_t* serverMAC);
 
 String getCert(String filename) 
 {
@@ -106,102 +110,99 @@ bool WifiStatus(void) {
 
 
 uint8_t connectWiFi() {
-  //rerturn 0 if connected, else number of times I tried and failed
-  uint8_t retries = 100; //max retries
-  byte connected = 0;
-  IPAddress temp;
+  static uint32_t lastRequestTime = 0;
+  static uint32_t lastCycleTime = 0;
+  static uint8_t backoff = 1;
+  static uint32_t lastBackoffTime = 0;
+  uint32_t nowt = now();
+  bool hasServer = false;
+  for (int i = 0; i < 6; ++i) if (Prefs.LAST_SERVER[i] != 0) hasServer = true;
+  bool hasSSID = false;
+  for (int i = 0; i < 33; ++i) if (Prefs.WIFISSID[i] != 0) hasSSID = true;
 
-
+  // Exponential backoff for WiFi reconnects
   if (WifiStatus()) {
     WIFI_INFO.MYIP = WiFi.localIP();
-
-    //WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.DNS, WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET);
-    return connected;
+    backoff = 1;
+    Prefs.WIFI_RECOVERY_STAGE = 0;
+    Prefs.WIFI_RECOVERY_SERVER_INDEX = 0;
+    return 0;
   } else {
-
-    if (getWiFiCredentials()) {
-
-      #ifdef IGNORETHIS
-      if (WIFI_INFO.MYIP[0]==0 || WIFI_INFO.MYIP[4]==0) {
-        WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
-      } else {
-
-        WiFi.config(WIFI_INFO.MYIP,  WIFI_INFO.GATEWAY, WIFI_INFO.SUBNET,WIFI_INFO.DNS);
-      }
-      #endif
-      
-      WiFi.mode(WIFI_STA);
-      #ifdef _DEBUG
-      SerialWrite((String) "wifi begin\n");
-      #endif
-
-      
-      WiFi.begin((char *) WIFI_INFO.SSID, (char *) WIFI_INFO.PWD);
-
-
-      if (WiFi.status() != WL_CONNECTED)  {
-        #ifdef _DEBUG
-          SerialWrite((String) "Connecting\n");
-             #endif
-          
-        #ifdef _USESSD1306
-          oled.print("Connecting");
-        #endif
-        for (byte j=0;j<retries;j++) {
-          #ifdef _DEBUG
-            SerialWrite((String) ".");
-          #endif
-          #ifdef _USESSD1306
-            oled.print(".");
-          #endif
-    
-          delay(250);
-          if (WifiStatus()) {
-            WIFI_INFO.MYIP = WiFi.localIP();
-                
-            #ifdef _DEBUG
-              SerialWrite((String) "\nWifi OK. IP is " + (String) WIFI_INFO.MYIP.toString() + ".\n");
-            #endif
-
-            #ifdef _USESSD1306
-              oled.clear();
-              oled.setCursor(0,0);
-              oled.println("WiFi OK.");
-              oled.println("timesetup next.");      
-            #endif
-    
-            return 0;
-          }
-          connected = j;
+    if (hasServer && hasSSID) {
+      // Stage 0: Try Prefs.LAST_SERVER for 3 minutes
+      if (Prefs.WIFI_RECOVERY_STAGE == 0) {
+        if (nowt - lastRequestTime >= 60) {
+          uint8_t nonce[8]; esp_fill_random(nonce, 8);
+          requestWiFiPassword(Prefs.LAST_SERVER, nonce);
+          lastRequestTime = nowt;
         }
-              
+        if (nowt - lastRequestTime >= 180) {
+          Prefs.WIFI_RECOVERY_STAGE = 1;
+          Prefs.WIFI_RECOVERY_SERVER_INDEX = 0;
+          lastCycleTime = nowt;
+        }
       }
-
-    } else {
-      storeError("connectWiFi: no saved pwd/ssid");
-
-      WiFi.mode(WIFI_AP);
-      WiFi.softAP("ESPSERVER","CENTRAL.server1");
-
-      delay(100);
-      IPAddress Ip(192, 168, 10, 1);    //setto IP Access Point same as gateway
-      IPAddress NMask(255, 255, 255, 0);
-      WiFi.softAPConfig(Ip, Ip, NMask);
-
-      return 255; //255 indicates that we are in AP mode!      
+      // Stage 1: Cycle through all known servers every minute
+      if (Prefs.WIFI_RECOVERY_STAGE == 1) {
+        if (nowt - lastCycleTime >= 60) {
+          // Find all servers
+          int numServers = 0;
+          uint8_t serverMACs[10][6] = {};
+          for (int16_t i = 0; i < Sensors.getNumDevices() && numServers < 10; ++i) {
+            DevType* dev = Sensors.getDeviceByIndex(i);
+            if (dev && dev->IsSet && dev->devType >= 100) {
+              for (int j = 0; j < 6; ++j)
+                serverMACs[numServers][5-j] = (dev->MAC >> (8*j)) & 0xFF;
+              numServers++;
+            }
+          }
+          if (numServers > 0) {
+            uint8_t idx = Prefs.WIFI_RECOVERY_SERVER_INDEX % numServers;
+            uint8_t nonce[8]; esp_fill_random(nonce, 8);
+            requestWiFiPassword(serverMACs[idx], nonce);
+            Prefs.WIFI_RECOVERY_SERVER_INDEX = (idx + 1) % numServers;
+            lastCycleTime = nowt;
+          }
+        }
+      }
     }
+    // Fallback to AP mode at 5 minutes
+    if (nowt - lastRequestTime >= 300) {
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP(generateAPSSID().c_str(), "S3nsor.N3t!");
+      delay(100);
+      WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
+      #ifdef HAS_TFT
+      tft.clear();
+      tft.setCursor(0, 0);
+      tft.setTextColor(TFT_RED);
+      tft.printf("WiFi failed.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1", WiFi.softAPSSID().c_str());
+      #endif
+    }
+    // Force reboot at 30 minutes
+    if (nowt - lastRequestTime >= 1800) {
+      controlledReboot("WiFi/ESPNow failed for 30 min, rebooting", RESET_WIFI, true);
+    }
+    // Exponential backoff for WiFi reconnects
+    if (nowt - lastBackoffTime >= backoff) {
+      if (getWiFiCredentials()) {
+        WiFi.mode(WIFI_STA);
+        WiFi.begin((char *) WIFI_INFO.SSID, (char *) WIFI_INFO.PWD);
+        delay(250);
+        if (WifiStatus()) {
+          WIFI_INFO.MYIP = WiFi.localIP();
+          backoff = 1;
+          Prefs.WIFI_RECOVERY_STAGE = 0;
+          Prefs.WIFI_RECOVERY_SERVER_INDEX = 0;
+          return 0;
+        }
+      }
+      lastBackoffTime = nowt;
+      if (backoff < 60) backoff *= 2;
+      if (backoff > 60) backoff = 60;
+    }
+    return 255;
   }
-
-
-  storeError("connectWiFi: failed to connect");
-
-  #ifdef _DEBUG
-  SerialWrite((String) "Failed to connect after " + (String) connected + " trials.\n");
-       #endif
-          
-
-  return connected;
-
 }
 
 
@@ -238,7 +239,7 @@ void handleREQUESTUPDATE() {
 
   String payload;
   int httpCode;
-  String URL = IPbytes2String(Sensors[j].IP) + "/UPDATEALLSENSORREADS";
+  String URL = IPToString(Sensors[j].IP) + "/UPDATEALLSENSORREADS";
   Server_Message(URL, payload, httpCode);
 
   server.sendHeader("Location", "/");
@@ -466,7 +467,7 @@ void handleALL(void) {
 
 
 void serverTextHeader() {
-  WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) I.SERVERNAME + "</title>";
+  WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>";
   WEBHTML = R"===(<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}
   body {  font-family: arial, sans-serif; }
   </style></head>
@@ -507,7 +508,7 @@ void serverTextClose(int htmlcode, bool asHTML) {
 
 
 void rootTableFill(byte j) {
-  WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPbytes2String(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPbytes2String(Sensors[j].IP) + "</a></td>";
+  WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPToString(Sensors[j].IP) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPToString(Sensors[j].IP) + "</a></td>";
   WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].ardID + "</td>";
   WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsName + "</td>";
   WEBHTML = WEBHTML + "<td>" + (String) Sensors[j].snsValue + "</td>";
@@ -524,7 +525,7 @@ void rootTableFill(byte j) {
   if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) delta = 15; //HVAC
   
   WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?ID=" + (String) Sensors[j].ardID + "." + (String) Sensors[j].snsType + "." +(String) Sensors[j].snsID + "&endtime=" + (String) (I.currentTime) + "&N=100&delta=" + (String) delta + "\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-  WEBHTML = WEBHTML + "<td>" + (String) IPbytes2String(Sensors[j].MAC,6) + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) IPToString(Sensors[j].MAC,6) + "</td>";
   WEBHTML = WEBHTML + "</tr>";
 }
 
@@ -1050,6 +1051,15 @@ void handlePost() {
     }
     
     server.send(400, "text/plain", "No data received");
+}
+
+// Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
+String generateAPSSID() {
+    char ssid[20];
+    // Format: "SensorNet-" + last 3 bytes of MAC in hex (6 characters)
+    snprintf(ssid, sizeof(ssid), "SensorNet-%02X%02X%02X", 
+             WIFI_INFO.MAC[3], WIFI_INFO.MAC[4], WIFI_INFO.MAC[5]);
+    return String(ssid);
 }
 
 

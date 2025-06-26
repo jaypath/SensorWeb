@@ -35,19 +35,19 @@ extern struct SensorVal Sensors[SENSORNUM];
 extern time_t ALIVESINCE;
 
 struct IP_TYPE {
-  byte IP[4];
+  uint32_t IP;
   int server_status;
 };
 
 extern IP_TYPE SERVERIP[NUMSERVERS];
 
 struct WiFi_type {
-  uint8_t DHCP[4];  // 4 byte,   4 in total
-  uint8_t GATEWAY[4];// 4 bytes, 8 in total
-  uint8_t DNS[4]; //4 bytes, 16 in total
-  uint8_t DNS2[4]; //4 bytes, 16 in total
-  uint8_t SUBNET[4];
-  uint8_t MYIP[4]; //4 bytes
+  uint32_t DHCP;  // 4 bytes
+  uint32_t GATEWAY; // 4 bytes
+  uint32_t DNS; // 4 bytes
+  uint32_t DNS2; // 4 bytes
+  uint32_t SUBNET; // 4 bytes
+  uint32_t MYIP; // 4 bytes
   uint8_t status;
 };
 

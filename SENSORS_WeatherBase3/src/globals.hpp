@@ -1,10 +1,11 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
+#define HAS_TFT
 //#define _DEBUG 0
 //#define _WEBDEBUG 0
 
 
-
+#define MYNAME "Pleasant Weather Server"
 #define SENSORNUM 60
 #define MYTYPE 100
 
@@ -46,8 +47,6 @@ typedef enum {
 
 
 struct STRUCT_PrefsH {        
-  char LMK[16];
-  uint8_t LMK_isSet;
   uint32_t lastESPNOW;
   byte WIFISSID[33];
   byte WIFIPWD[65];
@@ -56,14 +55,21 @@ struct STRUCT_PrefsH {
   uint64_t PROCID; //processor ID, might be MACID
   uint32_t LASTBOOTTIME;
   uint8_t MyType; //see end of this file for types
+  char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
+  // --- ESPNow WiFi password request ephemeral key/IV and timestamp ---
+  uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
+  uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
+  uint8_t TEMP_AES_MAC[6]; // expected server MAC for WiFi PW response
+  uint8_t LAST_SERVER[6]; // MAC of last server (type 100) seen in broadcast
+  uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
+  uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
+  uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
 };
 
 STRUCT_PrefsH Prefs;
 
 
 struct Screen {
-    char SERVERNAME[30];
-
     RESETCAUSE resetInfo;
     time_t lastResetTime;
     byte rebootsSinceLast=0;

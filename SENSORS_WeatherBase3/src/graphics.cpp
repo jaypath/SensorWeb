@@ -1066,7 +1066,7 @@ void displaySetupProgress(const char* message, bool success) {
 void displayWiFiStatus(byte retries, bool success) {
   if (success) {
     tft.setTextColor(TFT_GREEN);
-    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %u.%u.%u.%u.%u.%u\n",retries,WIFI_INFO.MYIP.toString().c_str(),WIFI_INFO.MAC[0],WIFI_INFO.MAC[1],WIFI_INFO.MAC[2],WIFI_INFO.MAC[3],WIFI_INFO.MAC[4],WIFI_INFO.MAC[5]);
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %u.%u.%u.%u.%u.%u\n",retries,IPToString(WIFI_INFO.MYIP).c_str(),WIFI_INFO.MAC[0],WIFI_INFO.MAC[1],WIFI_INFO.MAC[2],WIFI_INFO.MAC[3],WIFI_INFO.MAC[4],WIFI_INFO.MAC[5]);
     tft.setTextColor(FG_COLOR);
   } else {
     tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);

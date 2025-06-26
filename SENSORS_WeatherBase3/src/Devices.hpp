@@ -13,6 +13,7 @@
 struct DevType {
     uint64_t MAC;           // Device MAC address
     uint32_t IP;            // Device IP address
+    uint8_t devType;        // Device type (server, sensor, etc.)
     uint32_t timeLogged;    // Last time device was seen
     uint32_t timeRead;      // Last time device sent data
     uint8_t IsSet;          // Whether this device is initialized
@@ -94,5 +95,7 @@ public:
 
 // Global instance
 extern Devices_Sensors Sensors;
+
+// All device IP addresses are now stored as uint32_t.
 
 #endif

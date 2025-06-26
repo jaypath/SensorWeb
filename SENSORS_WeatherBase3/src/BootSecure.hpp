@@ -56,7 +56,6 @@
  */
 
 
-    char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
     
     byte prefs_set = 0;
 
@@ -65,9 +64,6 @@
 
 
     extern STRUCT_PrefsH Prefs;
-    int8_t initBootSecure();
-    bool getPrefs() ;
-    bool setPrefs();
 
     
     uint16_t CRCCalculator(uint8_t * data, uint16_t length);
@@ -80,5 +76,26 @@
     bool putWiFiCredentials();
     void initCreds(struct WiFi_type *w);
     
-  
+class BootSecure {
+public:
+    BootSecure();
+    bool setup(); // Call once at boot. Returns true if secure, false if not.
+    bool isSecure() const { return secure; }
+    bool setPrefs(); // Save Prefs to encrypted storage
+
+    // Optionally expose CRC and encryption helpers if needed elsewhere
+    static uint16_t CRCCalculator(uint8_t * data, uint16_t length);
+    static int8_t encrypt(const unsigned char* input, uint16_t inputlength, char* key, unsigned char* output,  uint16_t* outputlength);
+    static int8_t decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength);
+    // --- New: AES-CBC with provided IV (does not prepend IV to output) ---
+    static int8_t encryptWithIV(const unsigned char* input, uint16_t inputlength, char* key, uint8_t* iv, unsigned char* output, uint16_t* outputlength);
+    static int8_t decryptWithIV(unsigned char* input, char* key, uint8_t* iv, unsigned char* output, uint16_t datalength);
+
+private:
+    bool secure = false;
+    bool getPrefs();
+    bool checkDeviceID();
+    void zeroize(void* buf, size_t len);
+};
+
 #endif

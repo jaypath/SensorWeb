@@ -35,22 +35,19 @@
 
 
 struct IP_TYPE {
-  IPAddress IP;
+  uint32_t IP;
   int server_status;
 };
 
 
 struct WiFi_type {
-  //IPAddress DHCP;  // 4 byte,   4 in total
-  //IPAddress GATEWAY;// 4 bytes, 8 in total
-  //IPAddress DNS; //4 bytes, 16 in total
-  //IPAddress SUBNET;
-  byte MYIP[4]; //4 bytes
-  byte MAC[6];
-  byte SSID[33];
-  byte PWD[65];
-  bool HAVECREDENTIALS;   
-  uint8_t statusCode; //from R to L... bit 0  = sensitive info required/sent if 1; bit 1 response required if 1; bit 2 request for sensitive info
+  uint32_t DHCP;  // 4 bytes
+  uint32_t GATEWAY; // 4 bytes
+  uint32_t DNS; // 4 bytes
+  uint32_t DNS2; // 4 bytes
+  uint32_t SUBNET; // 4 bytes
+  uint32_t MYIP; // 4 bytes
+  uint8_t status;
 };
 
 
@@ -109,5 +106,8 @@ void serverTextClose(int htmlcode=200, bool asHTML=true);
 bool SendData(struct SensorVal*);
 
 byte connectWiFi();
+
+// Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
+String generateAPSSID();
 
 #endif
