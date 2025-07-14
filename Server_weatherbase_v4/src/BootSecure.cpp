@@ -1,5 +1,7 @@
 #include "BootSecure.hpp"
-#include "esp_random.h"
+
+byte prefs_set = 0;
+
 
 BootSecure::BootSecure() {}
 
@@ -9,7 +11,14 @@ bool BootSecure::setup() {
 #ifdef SETSECURE
         return false;
 #else
+    if (Prefs.PROCID != ESP.getEfuseMac()) {
         Prefs.PROCID = ESP.getEfuseMac();
+        Prefs.isUpToDate=false;
+    }
+
+    // PROCID is now the single source of truth for MAC address
+    // No need to sync with separate MAC array
+
 #endif
     }
     if (!getPrefs()) {
@@ -52,6 +61,8 @@ bool BootSecure::getPrefs() {
         memcpy(&Prefs, decodedPrefs, sizeof(STRUCT_PrefsH));
         zeroize(decodedPrefs, p_length);
         p.end();
+        // Initialize isUpToDate to true since we just loaded from memory
+        Prefs.isUpToDate = true;
     } else {
         p.end();
         return false;
@@ -65,10 +76,11 @@ bool BootSecure::setPrefs() {
         return false;
 #else
         Prefs.PROCID = ESP.getEfuseMac();
+        Prefs.isUpToDate = false;
 #endif
     }
     Preferences p;
-    if (!p.begin("ORIGIN", false)) return false;
+    if (!p.begin("STARTUP", false)) return false;
     uint16_t p_length = sizeof(STRUCT_PrefsH) + (16 - (sizeof(STRUCT_PrefsH) % 16)) + 16; // padding + iv
     uint8_t tempPrefs[p_length];
     memset(tempPrefs, 0, p_length);
@@ -79,7 +91,8 @@ bool BootSecure::setPrefs() {
     }
     p.putBytes("Boot", tempPrefs, outlen);
     p.end();
-    zeroize(tempPrefs, p_length);
+    BootSecure::zeroize(tempPrefs, p_length);
+    Prefs.isUpToDate = true;
     return true;
 }
 
@@ -104,7 +117,7 @@ int8_t BootSecure::encrypt(const unsigned char* input, uint16_t inputlength, cha
     }
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLen, iv, localinput, output + 16);
     mbedtls_aes_free(&aes);
-    zeroize(localinput, paddedLen);
+    BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
     return 0;
 }
@@ -146,7 +159,7 @@ int8_t BootSecure::encryptWithIV(const unsigned char* input, uint16_t inputlengt
     memcpy(iv_copy, iv, 16); // mbedtls_aes_crypt_cbc updates IV
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLen, iv_copy, localinput, output);
     mbedtls_aes_free(&aes);
-    zeroize(localinput, paddedLen);
+    BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
     return 0;
 }
@@ -172,23 +185,24 @@ void BootSecure::zeroize(void* buf, size_t len) {
     while (len--) *p++ = 0;
 }
 
-void initCreds(WiFi_type *w) {
-    for (byte j=0;j<33;j++) w->SSID[j]=0;
-    for (byte j=0;j<65;j++) w->PWD[j]=0;
+void initCreds(STRUCT_PrefsH *w) {
+    for (byte j=0;j<33;j++) w->WIFISSID[j]=0;
+    for (byte j=0;j<65;j++) w->WIFIPWD[j]=0;
 }
 
 // --- Secure WiFi Credentials Storage ---
 bool putWiFiCredentials() {
     bool isGood = false;
-    uint16_t sCRC = BootSecure::CRCCalculator((uint8_t*) WIFI_INFO.SSID, 32);
-    uint16_t pCRC = BootSecure::CRCCalculator((uint8_t*) WIFI_INFO.PWD, 64);
+    uint16_t sCRC = BootSecure::CRCCalculator((uint8_t*) Prefs.WIFISSID, 32);
+    uint16_t pCRC = BootSecure::CRCCalculator((uint8_t*) Prefs.WIFIPWD, 64);
     Preferences p;
     p.begin("credentials", false);
     p.clear();
 
     // If SSID is blank, delete credentials
-    if (WIFI_INFO.SSID[0] == '\0' || sCRC == 0) {
-        initCreds(&WIFI_INFO);
+    if (Prefs.WIFISSID[0] == '\0' || sCRC == 0) {
+        initCreds(&Prefs);
+        Prefs.isUpToDate = false;
         sCRC = 0;
         pCRC = 0;
         p.end();
@@ -205,7 +219,7 @@ bool putWiFiCredentials() {
     // Encrypt SSID
     uint8_t encryptedSSID[48] = {0};
     uint16_t ssidLen = 0;
-    BootSecure::encrypt((const unsigned char*)WIFI_INFO.SSID, 33, key, encryptedSSID, &ssidLen);
+    BootSecure::encrypt((const unsigned char*)Prefs.WIFISSID, 33, key, encryptedSSID, &ssidLen);
     p.putBytes("SSID", encryptedSSID, ssidLen);
     p.putUInt("SSIDCRC", sCRC);
     BootSecure::zeroize(encryptedSSID, sizeof(encryptedSSID));
@@ -213,7 +227,7 @@ bool putWiFiCredentials() {
     // Encrypt PWD
     uint8_t encryptedPWD[80] = {0};
     uint16_t pwdLen = 0;
-    BootSecure::encrypt((const unsigned char*)WIFI_INFO.PWD, 65, key, encryptedPWD, &pwdLen);
+    BootSecure::encrypt((const unsigned char*)Prefs.WIFIPWD, 65, key, encryptedPWD, &pwdLen);
     p.putBytes("PWD", encryptedPWD, pwdLen);
     p.putUInt("PWDCRC", pCRC);
     BootSecure::zeroize(encryptedPWD, sizeof(encryptedPWD));
@@ -224,12 +238,13 @@ bool putWiFiCredentials() {
 }
 
 bool getWiFiCredentials() {
-    initCreds(&WIFI_INFO);
+    initCreds(&Prefs);
     Preferences p;
     p.begin("credentials", true);
     uint16_t sCRC = p.getUInt("SSIDCRC", 0);
     uint16_t pCRC = p.getUInt("PWDCRC", 0);
-    WIFI_INFO.HAVECREDENTIALS = false;
+    Prefs.HAVECREDENTIALS = false;
+    Prefs.isUpToDate = false;
     if (sCRC == 0 && pCRC == 0) {
         p.end();
         return false;
@@ -244,7 +259,7 @@ bool getWiFiCredentials() {
     size_t ssidLen = p.getBytesLength("SSID");
     if (ssidLen > 0 && ssidLen <= sizeof(encryptedSSID)) {
         p.getBytes("SSID", encryptedSSID, ssidLen);
-        BootSecure::decrypt(encryptedSSID, key, (unsigned char*)WIFI_INFO.SSID, ssidLen);
+        BootSecure::decrypt(encryptedSSID, key, (unsigned char*)Prefs.WIFISSID, ssidLen);
     }
     BootSecure::zeroize(encryptedSSID, sizeof(encryptedSSID));
 
@@ -253,15 +268,16 @@ bool getWiFiCredentials() {
     size_t pwdLen = p.getBytesLength("PWD");
     if (pwdLen > 0 && pwdLen <= sizeof(encryptedPWD)) {
         p.getBytes("PWD", encryptedPWD, pwdLen);
-        BootSecure::decrypt(encryptedPWD, key, (unsigned char*)WIFI_INFO.PWD, pwdLen);
+        BootSecure::decrypt(encryptedPWD, key, (unsigned char*)Prefs.WIFIPWD, pwdLen);
     }
     BootSecure::zeroize(encryptedPWD, sizeof(encryptedPWD));
     BootSecure::zeroize(key, sizeof(key));
     p.end();
     // CRC check
-    if (sCRC != BootSecure::CRCCalculator((uint8_t*)WIFI_INFO.SSID, 32)) return false;
-    if (pCRC != BootSecure::CRCCalculator((uint8_t*)WIFI_INFO.PWD, 64)) return false;
-    WIFI_INFO.HAVECREDENTIALS = true;
+    if (sCRC != BootSecure::CRCCalculator((uint8_t*)Prefs.WIFISSID, 32)) return false;
+    if (pCRC != BootSecure::CRCCalculator((uint8_t*)Prefs.WIFIPWD, 64)) return false;
+    Prefs.HAVECREDENTIALS = true;
+    Prefs.isUpToDate = false;
     return true;
 }
   

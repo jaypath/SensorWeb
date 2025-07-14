@@ -71,11 +71,17 @@
 #include "Devices.hpp"
 #include "server.hpp"
 #include "SDCard.hpp"
-#include "Weather.hpp"
+#include "Weather_Optimized.hpp"
 #include "timesetup.hpp"
 #include "graphics.hpp"
 #include "AddESPNOW.hpp"
 #include "BootSecure.hpp"
+
+// --- WiFi Down Timer ---
+static uint32_t wifiDownSince = 0;
+static uint32_t lastPwdRequestMinute = 0;
+
+#define WDT_TIMEOUT_MS 120000
 
 #ifdef _WEBDEBUG
   String WEBDEBUG = "";
@@ -103,15 +109,13 @@ union convertBYTE {
 //globals
 
 extern LGFX tft;
-extern uint8_t SECSCREEN;
-extern WiFi_type WIFI_INFO;
+// SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
 extern Screen I;
 extern String WEBHTML;
 //extern uint8_t OldTime[4];
-extern WeatherInfo WeatherData;
+extern WeatherInfoOptimized WeatherData;
 
 extern uint32_t LAST_WEB_REQUEST;
-extern WeatherInfo WeatherData;
 extern double LAST_BAR;
 
 uint32_t FONTHEIGHT = 0;
@@ -121,20 +125,86 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
 //fuction declarations
 
-void checkHeat();
 
 // --- Helper Function Declarations ---
 void initDisplay();
+void initScreenFlags(bool completeInit = false);
 bool initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
 bool initWiFi();
 void initServerRoutes();
 void initOTA();
-void printSetupStatus();
-void handleESPNOWPeriodicBroadcast(uint8_t interval = 5);
+void handleESPNOWPeriodicBroadcast(uint8_t interval);
 
 // --- Setup Helper Implementations ---
+
+/**
+ * @brief Initialize the TFT display and SPI.
+ */
+void initScreenFlags(bool completeInit) {
+    if (completeInit) {
+    I.rebootsSinceLast=0;
+    I.wifiFailCount=0;
+    I.currentTime=0;
+    I.CLOCK_Y = 105;
+    I.HEADER_Y = 30;
+
+    I.lastHeader=0;
+    I.lastWeather=0;
+    I.lastCurrentCondition=0;
+    I.lastClock=0; //last time clock was updated, whether flag or not
+    I.lastFlagView=0; //last time clock was updated, whether flag or not
+
+    I.HourlyInterval = 2; //hours between daily weather display
+    I.currentConditionTime = 10; //how many minutes to show current condition?
+    I.flagViewTime = 10; //how many seconds to show flag values?
+    I.weatherTime = 60; //how many MINUTES to show weather values?
+
+    I.SECSCREEN = 3; //seconds before alarm redraw
+
+    
+    I.isExpired = false; //are any critical sensors expired?
+    I.wasFlagged=false;
+    I.isHeat=false; //first bit is heat on, bits 1-6 are zones
+    I.isAC=false; //first bit is compressor on, bits 1-6 are zones
+    I.isFan=false; //first bit is fan on, bits 1-6 are zones
+    I.wasHeat=false; //first bit is heat on, bits 1-6 are zones
+    I.wasAC=false; //first bit is compressor on, bits 1-6 are zones
+    I.wasFan=false; //first bit is fan on, bits 1-6 are zones
+
+    I.isHot=0;
+    I.isCold=0;
+    I.isSoilDry=0;
+    I.isLeak=0;
+    I.localWeather=255; //index of outside sensor
+
+    I.currentTemp-127;
+    I.Tmax=-127;
+    I.Tmin=127;
+    I.lastErrorTime=0;
+    }
+
+    I.DSTOFFSET = 0;
+    I.GLOBAL_TIMEZONE_OFFSET = -60*5*1000;
+    
+    I.lastESPNOW=0;
+    I.lastResetTime=I.currentTime;
+    I.ALIVESINCE=I.currentTime;
+    I.wifiFailCount=0;
+    I.ScreenNum = 0;
+    I.isFlagged = false;
+
+    I.lastHeader=0;
+    I.lastWeather=0;
+    I.lastCurrentCondition=0;
+    I.lastClock=0; //last time clock was updated, whether flag or not
+    I.lastFlagView=0; //last time clock was updated, whether flag or not
+
+    I.ScreenNum=0;
+
+}
+
 
 /**
  * @brief Initialize the TFT display and SPI.
@@ -157,7 +227,7 @@ void initDisplay() {
 bool initSDCard() {
     tft.print("SD Card mounting...");
     if (!SD.begin(41)) {
-        displaySetupProgress("SD Card mounting", false);
+        displaySetupProgress(false);
         #ifdef _DEBUG
         Serial.println("SD mount failed... ");
         #endif
@@ -170,7 +240,7 @@ bool initSDCard() {
     #ifdef _DEBUG
     Serial.println("SD mounted... ");
     #endif
-    displaySetupProgress("SD Card mounting", true);
+    displaySetupProgress(true);
     return true;
 }
 
@@ -180,8 +250,8 @@ bool initSDCard() {
  */
 bool loadSensorData() {
     tft.print("Loading sensor data from SD... ");
-    bool sdread = readSensorsSD();
-    displaySetupProgress("Loading sensor data from SD", sdread);
+    bool sdread = readDevicesSensorsSD();
+    displaySetupProgress( sdread);
     if (!sdread) delay(5000);
     #ifdef _DEBUG
     Serial.print("Sensor data loaded? ");
@@ -197,8 +267,12 @@ bool loadSensorData() {
 bool loadScreenFlags() {
     tft.print("Loading screen flags from SD... ");
     bool sdread = readScreenInfoSD();
-    displaySetupProgress("Loading screen flags from SD", sdread);
-    if (!sdread) delay(5000);
+    displaySetupProgress( sdread);
+    if (!sdread) {
+        delay(5000);
+        initScreenFlags(true);
+    }
+    initScreenFlags(false);
     return sdread;
 }
 
@@ -208,12 +282,26 @@ bool loadScreenFlags() {
  */
 bool initWiFi() {
     tft.println("Connecting  Wifi...\n");
-    WIFI_INFO.HAVECREDENTIALS = false;
+    if (Prefs.HAVECREDENTIALS) {
+        //I have credentials, try to connect to wifi
+        WiFi.mode(WIFI_STA);
+        WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+        delay(250);
+        if (WifiStatus()) {
+            Prefs.MYIP = WiFi.localIP();
+            Prefs.isUpToDate = false;
+        }
+    } else {
+        //I don't have credentials, try to get them
+
+    }
+
+    Prefs.isUpToDate = false;
     #ifdef _DEBUG
     Serial.println();
     Serial.print("Connecting");
     #endif
-    byte retries = connectWiFi();
+    int16_t retries = connectWiFi();
     if (WiFi.status() != WL_CONNECTED) {
         displayWiFiStatus(retries, false);
         delay(120000);
@@ -224,7 +312,7 @@ bool initWiFi() {
     }
     displayWiFiStatus(retries, true);
     tft.printf("Internal network ");
-    if (((WIFI_INFO.MYIP >> 24) & 0xFF) == 192 && ((WIFI_INFO.MYIP >> 16) & 0xFF) == 168) {
+    if (((Prefs.MYIP >> 24) & 0xFF) == 192 && ((Prefs.MYIP >> 16) & 0xFF) == 168) {
         tft.setTextColor(TFT_GREEN);
         tft.printf("OK\n");
     } else {
@@ -250,6 +338,7 @@ void initServerRoutes() {
     server.on("/REBOOT", handleReboot);
     server.on("/UPDATEDEFAULTS", handleUPDATEDEFAULTS);
     server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
+    server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
     server.on("/FLUSHSD", handleFLUSHSD);
     server.on("/SETWIFI", HTTP_POST, handleSETWIFI);
     server.onNotFound(handleNotFound);
@@ -272,15 +361,7 @@ void initOTA() {
     tft.setTextColor(FG_COLOR);
 }
 
-/**
- * @brief Print setup status and wait for weather to load.
- */
-void printSetupStatus() {
-    tft.setTextColor(TFT_GREEN);
-    tft.printf("Setup OK...");
-    tft.setTextColor(FG_COLOR);
-    tft.printf("Waiting for weather to load...");
-}
+
 
 BootSecure bootSecure;
 
@@ -303,23 +384,36 @@ void setup() {
 
     initDisplay();
     initSensor(-256);
-    if (!initSDCard()) return;
-    loadSensorData();
-    loadScreenFlags();
 
+    tft.printf("Init Wifi... ");
+    initServerRoutes();
+    if (connectWiFi()<0) {
+        displaySetupProgress( false);
+    } else {
+        displaySetupProgress( true);
+    }
+
+    tft.print("Set up time... ");
+    if (setupTime()) {
+        displaySetupProgress( true);
+    } else {
+        displaySetupProgress( false);
+    }
+    I.ALIVESINCE = I.currentTime;
+    
+    if (!initSDCard()) return;
+    loadScreenFlags();
+    loadSensorData();
+    
     if (Prefs.DEVICENAME[0] == 0) {
         snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
+        Prefs.isUpToDate = false;
         // Save Prefs with the new device name
         bootSecure.setPrefs();
     }
-    I.ScreenNum = 0;
-    I.isFlagged = false;
-    I.wasFlagged = false;
     WeatherData.lat = LAT;
     WeatherData.lon = LON;
 
-    initServerRoutes();
-    if (!initWiFi()) return;
 
     tft.printf("Init server... ");
     server.begin();
@@ -341,56 +435,21 @@ void setup() {
     }
 
     initOTA();
-    tft.print("Set up time... ");
-    if (setupTime()) {
-        displaySetupProgress("Set up time", true);
-    } else {
-        displaySetupProgress("Set up time", false);
-    }
-    I.ALIVESINCE = I.currentTime;
-    printSetupStatus();
+
+    tft.printf("Waiting for weather to load...\n");
+    WeatherData.updateWeatherOptimized(3600);
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("Setup OK...");
+    tft.setTextColor(FG_COLOR);
+    
 }
 
 // Non-graphical functions
-void checkHeat() {
-  // Check if any HVAC sensors are active
-  I.isHeat = 0;
-  I.isAC = 0;
-  I.isFan = 0;
-  
-  // Iterate through all devices and sensors with bounds checking
-  for (int16_t deviceIndex = 0; deviceIndex < NUMDEVICES && deviceIndex < Sensors.getNumDevices(); deviceIndex++) {
-    DevType* device = Sensors.getDeviceByIndex(deviceIndex);
-    if (!device || !device->IsSet) continue;
-    
-    for (int16_t sensorIndex = 0; sensorIndex < NUMSENSORS && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
-      SnsType* sensor = Sensors.getSensorByIndex(sensorIndex);
-      if (!sensor || !sensor->IsSet) continue;
-      
-      // Check HVAC sensors (types 50-59)
-      if (sensor->snsType >= 50 && sensor->snsType < 60) {
-        if (sensor->snsValue > 0) {
-          switch (sensor->snsType) {
-            case 50: // Heat
-              I.isHeat = 1;
-              break;
-            case 51: // AC
-              I.isAC = 1;
-              break;
-            case 52: // Fan
-              I.isFan = 1;
-              break;
-          }
-        }
-      }
-    }
-  }
-}
 
 /**
  * @brief Handle periodic ESPNow server presence broadcast (every 5 minutes).
  */
-void handleESPNOWPeriodicBroadcast(uint8_t interval = 5) {
+void handleESPNOWPeriodicBroadcast(uint8_t interval) {
     static int lastBroadcastMinute = -1;
     int currentMinute = minute();
     if (currentMinute % interval == 0 && currentMinute != lastBroadcastMinute) {
@@ -406,7 +465,7 @@ void loop() {
     I.currentTime = now();
     if (WiFi.status() != WL_CONNECTED) {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
-        byte retries = connectWiFi();
+        int16_t retries = connectWiFi();
         if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
         // If WiFi has been down for 15 minutes, reboot
         if (wifiDownSince && (I.currentTime - wifiDownSince >= 900)) {
@@ -422,7 +481,19 @@ void loop() {
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
         if (I.wifiFailCount > 5) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
-        WeatherData.updateWeather(3600);
+
+        if (I.localWeather==255)     I.localWeather=findSensorByName("Outside", 4);  //if no local weather sensor, use outside
+        if (I.localWeather != 255) {
+            SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeather);
+            if (sensor && (I.currentTime - sensor->timeLogged > 1800)) { // 1800 seconds = 30 minutes
+                I.localWeather = 255;
+            }
+        }
+
+
+        // WEATHER OPTIMIZATION - Use optimized weather update method
+        WeatherData.updateWeatherOptimized(3600);  // Optimized weather update
+        
         if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 300 && I.currentTime - I.ALIVESINCE > 10800) {
             tft.clear();
             tft.setCursor(0, 0);
@@ -460,7 +531,7 @@ void loop() {
         I.isExpired = checkExpiration(-1, I.currentTime, true);
         I.isFlagged += I.isExpired;
         if (minute() % 5 == 0) {
-            writeSensorsSD();
+            storeDevicesSensorsSD();
             storeScreenInfoSD();
         }
     }
@@ -473,6 +544,12 @@ void loop() {
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
+        
+        // Check if Prefs needs to be saved
+        if (!Prefs.isUpToDate) {
+            bootSecure.setPrefs();
+        }
+        
         fcnDrawScreen();
         #ifdef _DEBUG
         if (I.flagViewTime == 0) {
@@ -485,7 +562,7 @@ void loop() {
         #endif
         #ifdef _DEBUG
         if (WeatherData.getTemperature(I.currentTime + 3600) < 0 && TESTRUN < 3600) {
-            Serial.printf("Loop %s: Weather data just failed\n", dateify(t));
+            Serial.printf("Loop %s: Weather data just failed\n", dateify(I.currentTime));
             WTHRFAIL = I.currentTime;
             TESTRUN = 3600;
         }
@@ -494,7 +571,5 @@ void loop() {
     handleESPNOWPeriodicBroadcast(5);
 }
 
-// --- WiFi Down Timer ---
-static uint32_t wifiDownSince = 0;
-static uint32_t lastPwdRequestMinute = 0;
+
 

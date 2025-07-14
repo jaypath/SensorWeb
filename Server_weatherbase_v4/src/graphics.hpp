@@ -4,6 +4,17 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include "globals.hpp"
+#include "utility.hpp"
+#include "Devices.hpp"
+#include "Weather_Optimized.hpp"
+#include "timesetup.hpp"
+#include <SDCard.hpp>
+
+
+extern WeatherInfoOptimized WeatherData;
+extern LGFX tft;
+extern double LAST_BAR;
+extern STRUCT_PrefsH Prefs;
 
 // Graphics utility functions
 uint16_t set_color(byte r, byte g, byte b);
@@ -37,9 +48,9 @@ void drawKeyPad4WiFi(uint32_t y, uint8_t keyPage, uint8_t WiFiSet);
 bool isTouchKey(int16_t* keyval, uint8_t* keypage);
 
 // Setup display functions
-void displaySetupProgress(const char* message, bool success = true);
+void displaySetupProgress(bool success = true);
 void displayWiFiStatus(byte retries, bool success);
 void displayOTAProgress(unsigned int progress, unsigned int total);
-void displayOTAError(ota_error_t error);
+void displayOTAError(int error);
 
 #endif 

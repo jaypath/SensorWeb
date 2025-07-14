@@ -9,14 +9,17 @@
     #include "utility.hpp"
     #include "server.hpp"
     #include "BootSecure.hpp"
+    #include "graphics.hpp"
+    #include <string.h>
+    #include <esp_system.h>
+    #include "timesetup.hpp"
 
 
 extern STRUCT_PrefsH Prefs;
 extern Screen I;
 
-char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
 
-extern DeviceType Devices;
+extern DevType Devices;
 
 // --- ESPNow Message Types ---
 constexpr uint8_t ESPNOW_MSG_BROADCAST_ALIVE      = 0;   // Broadcast: device is alive (all devices, periodic)
@@ -49,6 +52,7 @@ esp_err_t addESPNOWPeer(uint8_t* macad, bool doEncrypt);
 esp_err_t delESPNOWPeer(uint8_t* macad);
 bool sendESPNOW(const ESPNOW_type& msg);
 bool broadcastServerPresence();
+bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
 

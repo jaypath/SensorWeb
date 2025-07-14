@@ -123,8 +123,12 @@ uint8_t find_sensor_count(String snsname,uint8_t snsType) {
   return Sensors.find_sensor_count(snsname, snsType);
 }
 
-uint8_t find_sensor_name(String snsname,uint8_t snsType,uint8_t snsID) {
-  return Sensors.find_sensor_name(snsname, snsType, snsID);
+uint8_t findSensorByName(String snsname,uint8_t snsType,uint8_t snsID) {
+  return Sensors.findSensorByName(snsname, snsType, snsID);
+}
+
+uint8_t findSensorByName(String snsname,uint8_t snsType) {
+  return Sensors.findSensorByName(snsname, snsType, 0);
 }
 
 //sensor fcns
@@ -138,7 +142,7 @@ int16_t findOldestDev() {
     if (!Sensors.isSensorInit(i)) return i;
 
     //find an expired noncritical slot
-    SnsType* sensor = Sensors.getSensorByIndex(i);
+    SnsType* sensor = Sensors.getSensorBySnsIndex(i);
     if (sensor && sensor->expired == 1 && !bitRead(sensor->Flags,7)) {
       return i;
     }
@@ -184,22 +188,52 @@ uint8_t countDev() {
 
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest) {
   // Legacy function - convert to new format
-  uint64_t mac = getMACIDfromBytes(macID);
-  return Sensors.findSns(mac, snsType, snsID);
+  uint64_t mac=0;
+  memcpy(&mac, macID, 6);
+  return Sensors.findDevice(mac);
 }
 
-int16_t findSns(byte snstype, bool newest) {
-  return Sensors.findSns(snstype, newest);
+int16_t findSnsOfType(byte snstype, bool newest) {
+  return Sensors.findSnsOfType(snstype, newest);
 }
 
 uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
   return Sensors.countFlagged(snsType, flagsthatmatter, flagsettings, MoreRecentThan);
 }
 
-void checkHeat(void) {
-  // This function checks HVAC status
-  // Implementation would depend on specific HVAC logic
-  // For now, this is a placeholder
+void checkHeat() {
+  // Check if any HVAC sensors are active
+  I.isHeat = 0;
+  I.isAC = 0;
+  I.isFan = 0;
+  
+  // Iterate through all devices and sensors with bounds checking
+  for (int16_t deviceIndex = 0; deviceIndex < NUMDEVICES && deviceIndex < Sensors.getNumDevices(); deviceIndex++) {
+    DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
+    if (!device || !device->IsSet) continue;
+    
+    for (int16_t sensorIndex = 0; sensorIndex < NUMSENSORS && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
+      SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+      if (!sensor || !sensor->IsSet) continue;
+      
+      // Check HVAC sensors (types 50-59)
+      if (sensor->snsType >= 50 && sensor->snsType < 60) {
+        if (sensor->snsValue > 0) {
+          switch (sensor->snsType) {
+            case 50: // Heat
+              I.isHeat = 1;
+              break;
+            case 51: // AC
+              I.isAC = 1;
+              break;
+            case 52: // Fan
+              I.isFan = 1;
+              break;
+          }
+        }
+      }
+    }
+  }
 }
 
 String breakString(String *inputstr,String token,bool reduceOriginal) 
@@ -278,6 +312,13 @@ void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   I.rebootsSinceLast++;
   
   if (doreboot) {
+    #ifdef HAS_TFT
+    tft.clear();
+    tft.setCursor(0,0);
+    tft.setTextColor(TFT_RED);
+    tft.println("Controlled reboot in 1 second");
+    #endif 
+    
     delay(1000);
     ESP.restart();
   }
@@ -327,3 +368,26 @@ bool StringToIP(const String& str, uint32_t& ip) {
     return true;
 }
 
+// Convert uint64_t MAC to 6-byte array
+void uint64ToMAC(uint64_t mac64, byte* macArray) {
+    memcpy(macArray, &mac64, 6); //note that arduino is little endian, so this is correct
+}
+
+// Convert 6-byte array to uint64_t MAC
+uint64_t MACToUint64(byte* macArray) {
+    uint64_t mac64 = 0;
+    memcpy(&mac64, macArray, 6);
+    return mac64;
+}
+
+String MACToString(uint64_t mac64) {
+  byte macArray[6];
+  uint64ToMAC(mac64, macArray);
+  return IPbytes2String(macArray, 6);
+}
+
+// Get a specific byte (zero indexed) from PROCID (MAC address).
+uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
+    if (byteIndex >= 6) return 0;
+    return (procid >> (8 * (byteIndex))) & 0xFF;
+}

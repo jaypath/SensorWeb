@@ -10,8 +10,9 @@
 #include "utility.hpp"
 #include "BootSecure.hpp"
 #include "globals.hpp"
-#include "Weather.hpp"
+#include "Weather_Optimized.hpp"
 #include "SDCard.hpp"
+#include "AddESPNOW.hpp"
 
 
 //Server requests time out after 2 seconds
@@ -40,28 +41,15 @@ struct IP_TYPE {
 };
 
 
-struct WiFi_type {
-  uint32_t DHCP;  // 4 bytes
-  uint32_t GATEWAY; // 4 bytes
-  uint32_t DNS; // 4 bytes
-  uint32_t DNS2; // 4 bytes
-  uint32_t SUBNET; // 4 bytes
-  uint32_t MYIP; // 4 bytes
-  uint8_t status;
-};
-
-
 //declared as global constants
-extern time_t ALIVESINCE;
 extern Screen I;
 extern uint32_t LAST_WEB_REQUEST;
-extern WeatherInfo WeatherData;
+extern WeatherInfoOptimized WeatherData;
 extern uint32_t LAST_BAR_READ;
 extern uint32_t LAST_BAT_READ;
 extern double batteryArray[48];
 extern double LAST_BAR;
-extern uint8_t SECSCREEN;
-extern uint8_t HourlyInterval;
+// SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
 
 
 
@@ -80,6 +68,9 @@ extern uint32_t WTHRFAIL;
 
 void SerialWrite(String);
 bool WifiStatus(void);
+int16_t connectWiFi();
+int16_t tryWifi(uint16_t delayms = 250);
+
 String getCert(String filename);
 bool Server_Message(String &URL, String &payload, int &httpCode);
 bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert);
@@ -96,16 +87,17 @@ void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
 void handleUPDATEDEFAULTS();
 void handleRETRIEVEDATA();
+void handleRETRIEVEDATA_MOVINGAVERAGE();
 void handleFLUSHSD();
 void handleSETWIFI();
-
+void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
 void serverTextHeader();
 void serverTextWiFiForm();
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 
 bool SendData(struct SensorVal*);
 
-byte connectWiFi();
+void connectSoftAP();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();

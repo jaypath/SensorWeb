@@ -16,8 +16,6 @@ extern Screen I;
 
 char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
 
-extern DeviceType Devices;
-
 // --- ESPNow Message Types ---
 constexpr uint8_t ESPNOW_MSG_BROADCAST_ALIVE      = 0;   // Broadcast: device is alive (all devices, periodic)
 constexpr uint8_t ESPNOW_MSG_SERVER_LIST          = 1;   // Broadcast: payload contains up to 6 server addresses (MAC+IP)

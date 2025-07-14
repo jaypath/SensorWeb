@@ -30,10 +30,9 @@ Messages will use the ESPNOW_type struct for their transmission
 */
 
 #include "AddESPNOW.hpp"
-#include "BootSecure.hpp"
-#include <string.h>
-#include <esp_system.h>
-#include <time.h>
+
+char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
+
 
 namespace {
     constexpr uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -144,15 +143,15 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         case ESPNOW_MSG_WIFI_PW_REQUEST: {
             // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV)
             ESPNOW_type resp = {};
-            memcpy(resp.senderMAC, WIFI_INFO.MAC, 6);
-            resp.senderIP = WIFI_INFO.MYIP;
+            uint64ToMAC(Prefs.PROCID, resp.senderMAC);
+            resp.senderIP = Prefs.MYIP;
             resp.senderType = MYTYPE;
             memcpy(resp.targetMAC, msg.senderMAC, 6);
             resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
             // Encrypt password using provided key and IV
             uint8_t encrypted[48] = {0};
             uint16_t outlen = 0;
-            BootSecure::encryptWithIV(WIFI_INFO.PWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
+                         BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
             memcpy(resp.payload, encrypted, (outlen < 48) ? outlen : 48);
             sendESPNOW(resp);
             break;
@@ -196,9 +195,11 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
                 break;
             }
             // Store WiFi password
-            bool pwdMatch = (memcmp(WIFI_INFO.PWD, decrypted, 64) == 0);
-            memcpy(WIFI_INFO.PWD, decrypted, 64);
-            WIFI_INFO.PWD[64] = 0;
+            bool pwdMatch = (memcmp(Prefs.WIFIPWD, decrypted, 64) == 0);
+            memcpy(Prefs.WIFIPWD, decrypted, 64);
+            Prefs.WIFIPWD[64] = 0;
+            Prefs.HAVECREDENTIALS = true;
+            Prefs.isUpToDate = false;
             memset(Prefs.TEMP_AES, 0, 32);
             Prefs.TEMP_AES_TIME = 0;
             memset(Prefs.TEMP_AES_MAC, 0, 6);
@@ -229,7 +230,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             // Check MAC and time (2 minutes)
             uint32_t nowt = (uint32_t)time(nullptr);
             bool valid = false;
-            if (Prefs.TEMP_AES_TIME != 0 && (nowt - Prefs.TEMP_AES_TIME) <= 120) {
+            if (Prefs.TEMP_AES_TIME != 0 && (nowt - Prefs.TEMP_AES_TIME) <= 300) {
                 valid = true;
             }
             bool macMatch = true;
@@ -241,11 +242,13 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
                 memset(Prefs.TEMP_AES, 0, 32);
                 Prefs.TEMP_AES_TIME = 0;
                 memset(Prefs.TEMP_AES_MAC, 0, 6);
+                Prefs.isUpToDate = false;
                 break;
             }
             // Zero out old TEMP_AES and TEMP_AES_TIME
             memset(Prefs.TEMP_AES, 0, 32);
             Prefs.TEMP_AES_TIME = 0;
+            Prefs.isUpToDate = false;
             // Send a new type 2 message to the same MAC
             requestWiFiPassword(Prefs.TEMP_AES_MAC);
             break;
@@ -256,6 +259,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             // Zero TEMP_AES and TEMP_AES_TIME for security
             memset(Prefs.TEMP_AES, 0, 32);
             Prefs.TEMP_AES_TIME = 0;
+            Prefs.isUpToDate = false;
+
             memset(Prefs.TEMP_AES_MAC, 0, 6);
             break;
         default:
@@ -267,8 +272,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 // --- Broadcast Server Presence (Type 0) ---
 bool broadcastServerPresence() {
     ESPNOW_type msg = {};
-    memcpy(msg.senderMAC, WIFI_INFO.MAC, 6);
-    msg.senderIP = WIFI_INFO.MYIP;
+    uint64ToMAC(Prefs.PROCID, msg.senderMAC);
+    msg.senderIP = Prefs.MYIP;
     msg.senderType = MYTYPE;
     memset(msg.targetMAC, 0xFF, 6);
     msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE;
@@ -281,8 +286,8 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     // If user provided a list, use it
     if (serverMACs && serverIPs && count > 0) {
         ESPNOW_type msg = {};
-        memcpy(msg.senderMAC, WIFI_INFO.MAC, 6);
-        msg.senderIP = WIFI_INFO.MYIP;
+        uint64ToMAC(Prefs.PROCID, msg.senderMAC);
+        msg.senderIP = Prefs.MYIP;
         msg.senderType = MYTYPE;
         memset(msg.targetMAC, 0xFF, 6);
         msg.msgType = ESPNOW_MSG_SERVER_LIST;
@@ -295,7 +300,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     uint8_t macs[6][6] = {};
     uint32_t ips[6] = {};
     for (int16_t i = 0; i < Sensors.getNumDevices() && found < 6; ++i) {
-        DevType* dev = Sensors.getDeviceByIndex(i);
+        DevType* dev = Sensors.getDeviceByDevIndex(i);
         if (dev && dev->IsSet && dev->devType >= 100) {
             // Convert uint64_t MAC to 6 bytes
             for (int j = 0; j < 6; ++j)
@@ -305,8 +310,8 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
         }
     }
     ESPNOW_type msg = {};
-    memcpy(msg.senderMAC, WIFI_INFO.MAC, 6);
-    msg.senderIP = WIFI_INFO.MYIP;
+    uint64ToMAC(Prefs.PROCID, msg.senderMAC);
+    msg.senderIP = Prefs.MYIP;
     msg.senderType = MYTYPE;
     memset(msg.targetMAC, 0xFF, 6);
     msg.msgType = ESPNOW_MSG_SERVER_LIST;
@@ -315,7 +320,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
 }
 
 // --- Request WiFi Password via ESPNow (with nonce) ---
-bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce = nullptr) {
+bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
     // Generate random 16-byte key and 16-byte IV
     uint8_t key[16], iv[16];
     esp_fill_random(key, 16);
@@ -326,8 +331,8 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce = nullpt
     Prefs.TEMP_AES_TIME = (uint32_t)time(nullptr);
     // Prepare ESPNow message
     ESPNOW_type msg = {};
-    memcpy(msg.senderMAC, WIFI_INFO.MAC, 6);
-    msg.senderIP = WIFI_INFO.MYIP;
+    uint64ToMAC(Prefs.PROCID, msg.senderMAC);
+    msg.senderIP = Prefs.MYIP;
     msg.senderType = MYTYPE;
     msg.msgType = ESPNOW_MSG_WIFI_PW_REQUEST;
     memcpy(msg.payload, Prefs.TEMP_AES, 32); // key+IV
@@ -347,7 +352,7 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce = nullpt
     } else {
         bool found = false;
         for (int16_t i = 0; i < Sensors.getNumDevices(); ++i) {
-            DevType* dev = Sensors.getDeviceByIndex(i);
+            DevType* dev = Sensors.getDeviceByDevIndex(i);
             if (dev && dev->IsSet && dev->devType >= 100) {
                 for (int j = 0; j < 6; ++j)
                     destMAC[5-j] = (dev->MAC >> (8*j)) & 0xFF;
@@ -365,12 +370,14 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce = nullpt
     }
     memcpy(msg.targetMAC, destMAC, 6);
     memcpy(Prefs.TEMP_AES_MAC, destMAC, 6); // Store expected server MAC
+
     bool ok = sendESPNOW(msg);
     if (!ok) {
         storeError("Failed to send WiFi PW request");
         memset(Prefs.TEMP_AES, 0, 32);
         Prefs.TEMP_AES_TIME = 0;
         memset(Prefs.TEMP_AES_MAC, 0, 6);
+
     }
     // Log attempt
     #ifdef _DEBUG

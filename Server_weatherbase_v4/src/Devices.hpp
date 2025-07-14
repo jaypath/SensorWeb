@@ -3,10 +3,9 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <globals.hpp>
 
 // Constants
-#define NUMDEVICES 50
-#define NUMSENSORS 100
 #define SENSORNUM NUMSENSORS
 
 // Device structure
@@ -53,10 +52,16 @@ public:
     int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(uint32_t IP);
-    DevType* getDeviceByIndex(int16_t index);
+    DevType* getDeviceByDevIndex(int16_t devindex);
+    DevType* getDeviceBySnsIndex(int16_t snsindex);
+    uint64_t getDeviceMACByDevIndex(int16_t devindex);
+    uint64_t getDeviceMACBySnsIndex(int16_t snsindex);
+    uint32_t getDeviceIPByDevIndex(int16_t devindex);
+    uint32_t getDeviceIPBySnsIndex(int16_t snsindex);
     uint8_t getNumDevices();
-    bool isDeviceInit(int16_t index);
-    void initDevice(int16_t index);
+    uint8_t countDev(); // Legacy compatibility function
+    bool isDeviceInit(int16_t devindex);
+    void initDevice(int16_t devindex);
     
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
@@ -64,7 +69,7 @@ public:
                      uint32_t sendingInt, uint8_t flags);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t snsID);
-    SnsType* getSensorByIndex(int16_t index);
+    SnsType* getSensorBySnsIndex(int16_t snsindex);
     uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
     void initSensor(int16_t index);
@@ -78,8 +83,8 @@ public:
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
     uint8_t find_sensor_count(String snsname, uint8_t snsType);
-    uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 0);
-    int16_t findSns(uint8_t snstype, bool newest = false);
+    uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
+    int16_t findSnsOfType(uint8_t snstype, bool newest = false);
     
     // Data storage
     bool storeAllSensors();
@@ -95,6 +100,8 @@ public:
 
 // Global instance
 extern Devices_Sensors Sensors;
+extern struct Screen I;
+
 
 // All device IP addresses are now stored as uint32_t.
 

@@ -1,5 +1,6 @@
 #include "Devices.hpp"
 #include "globals.hpp"
+#include <TimeLib.h>
 
 // Global instance
 Devices_Sensors Sensors;
@@ -30,7 +31,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devNam
         // Update existing device
         DevType* device = &devices[existingIndex];
         device->IP = IP;
-        device->timeLogged = I.currentTime;
+        device->timeLogged = now();
         device->timeRead = I.currentTime;
         if (devName) {
             strncpy(device->devName, devName, sizeof(device->devName) - 1);
@@ -47,7 +48,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devNam
         if (!devices[i].IsSet) {
             devices[i].MAC = MAC;
             devices[i].IP = IP;
-            devices[i].timeLogged = I.currentTime;
+            devices[i].timeLogged = now();
             devices[i].timeRead = I.currentTime;
             devices[i].IsSet = 1;
             if (devName) {
@@ -88,15 +89,54 @@ int16_t Devices_Sensors::findDevice(uint32_t IP) {
     return -1;
 }
 
-DevType* Devices_Sensors::getDeviceByIndex(int16_t index) {
-    if (index >= 0 && index < NUMDEVICES && index < numDevices && devices[index].IsSet) {
-        return &devices[index];
+DevType* Devices_Sensors::getDeviceBySnsIndex(int16_t snsindex) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+        return getDeviceByDevIndex(sensors[snsindex].deviceIndex);
     }
     return nullptr;
 }
 
+DevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
+    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+        return &devices[devindex];
+    }
+    return nullptr;
+}
+
+uint64_t Devices_Sensors::getDeviceMACBySnsIndex(int16_t snsindex) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+        return getDeviceMACByDevIndex(sensors[snsindex].deviceIndex);
+    }
+    return 0;
+}
+
+uint64_t Devices_Sensors::getDeviceMACByDevIndex(int16_t devindex) {
+    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+        return devices[devindex].MAC;
+    }
+    return 0;
+}
+
+uint32_t Devices_Sensors::getDeviceIPBySnsIndex(int16_t snsindex) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+        return getDeviceIPByDevIndex(sensors[snsindex].deviceIndex);
+    }
+    return 0;
+}
+
+uint32_t Devices_Sensors::getDeviceIPByDevIndex(int16_t devindex) {
+    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+        return devices[devindex].IP;
+    }
+    return 0;
+}
+
 uint8_t Devices_Sensors::getNumDevices() {
     return numDevices;
+}
+
+uint8_t Devices_Sensors::countDev() {
+    return numSensors; // Return number of sensors for legacy compatibility
 }
 
 bool Devices_Sensors::isDeviceInit(int16_t index) {
@@ -197,7 +237,7 @@ int16_t Devices_Sensors::findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t 
     return -1;
 }
 
-SnsType* Devices_Sensors::getSensorByIndex(int16_t index) {
+SnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
     if (index >= 0 && index < NUMSENSORS && index < numSensors && sensors[index].IsSet) {
         return &sensors[index];
     }
@@ -334,18 +374,21 @@ uint8_t Devices_Sensors::find_sensor_count(String snsname, uint8_t snsType) {
     return count;
 }
 
-uint8_t Devices_Sensors::find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID) {
+uint8_t Devices_Sensors::findSensorByName(String snsname, uint8_t snsType, uint8_t snsID) {
     for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
         if (!sensors[i].IsSet) continue;
-        if (sensors[i].snsType != snsType) continue;
-        if (snsname == sensors[i].snsName && sensors[i].snsID == snsID) {
-            return i;
-        }
+        // Only compare snsType if snsType > 0
+        if (snsType > 0 && sensors[i].snsType != snsType) continue;
+        // Only compare snsID if both snsID > 0 and snsType > 0
+        if (snsType > 0 && snsID > 0 && sensors[i].snsID != snsID) continue;
+        // Partial match: snsname is a substring of sensors[i].snsName
+        if (snsname.length() > 0 && String(sensors[i].snsName).indexOf(snsname) == -1) continue;
+        return i;
     }
     return 255;
 }
 
-int16_t Devices_Sensors::findSns(uint8_t snstype, bool newest) {
+int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
     

@@ -32,7 +32,6 @@ void SerialWrite(String msg) {
 String WEBHTML;
 WiFi_type WIFI_INFO;
 
-extern uint32_t I_currentTime;
 extern uint32_t lastPwdRequestMinute;
 extern STRUCT_PrefsH Prefs;
 extern bool requestWiFiPassword(const uint8_t* serverMAC);

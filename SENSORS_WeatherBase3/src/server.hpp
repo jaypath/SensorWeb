@@ -48,6 +48,10 @@ struct WiFi_type {
   uint32_t SUBNET; // 4 bytes
   uint32_t MYIP; // 4 bytes
   uint8_t status;
+  uint8_t MAC[6]; // MAC address
+  bool HAVECREDENTIALS; // Whether WiFi credentials are available
+  char SSID[33]; // WiFi SSID
+  char PWD[65]; // WiFi password
 };
 
 

@@ -182,6 +182,15 @@ uint8_t countDev() {
   return Sensors.countDev();
 }
 
+// Helper function to convert byte array to uint64_t MAC
+uint64_t getMACIDfromBytes(byte* macID) {
+  uint64_t mac = 0;
+  for (int i = 0; i < 6; i++) {
+    mac = (mac << 8) | macID[i];
+  }
+  return mac;
+}
+
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest) {
   // Legacy function - convert to new format
   uint64_t mac = getMACIDfromBytes(macID);
@@ -197,9 +206,38 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 }
 
 void checkHeat(void) {
-  // This function checks HVAC status
-  // Implementation would depend on specific HVAC logic
-  // For now, this is a placeholder
+  // Check if any HVAC sensors are active
+  I.isHeat = 0;
+  I.isAC = 0;
+  I.isFan = 0;
+  
+  // Iterate through all devices and sensors with bounds checking
+  for (int16_t deviceIndex = 0; deviceIndex < NUMDEVICES && deviceIndex < Sensors.getNumDevices(); deviceIndex++) {
+    DevType* device = Sensors.getDeviceByIndex(deviceIndex);
+    if (!device || !device->IsSet) continue;
+    
+    for (int16_t sensorIndex = 0; sensorIndex < NUMSENSORS && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
+      SnsType* sensor = Sensors.getSensorByIndex(sensorIndex);
+      if (!sensor || !sensor->IsSet) continue;
+      
+      // Check HVAC sensors (types 50-59)
+      if (sensor->snsType >= 50 && sensor->snsType < 60) {
+        if (sensor->snsValue > 0) {
+          switch (sensor->snsType) {
+            case 50: // Heat
+              I.isHeat = 1;
+              break;
+            case 51: // AC
+              I.isAC = 1;
+              break;
+            case 52: // Fan
+              I.isFan = 1;
+              break;
+          }
+        }
+      }
+    }
+  }
 }
 
 String breakString(String *inputstr,String token,bool reduceOriginal) 

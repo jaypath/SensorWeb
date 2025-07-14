@@ -8,8 +8,7 @@
 #define TIMEUPDATEINT 10800000
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov",(long) GLOBAL_TIMEZONE_OFFSET,10800000); //3rd param is offset, 4th param is update frequency
-long DSTOFFSET = 0;
+NTPClient timeClient(ntpUDP,"time.nist.gov",I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET,TIMEUPDATEINT); //3rd param is offset, 4th param is update frequency
 
 char DATESTRING[25]="";
 
@@ -111,16 +110,15 @@ bool updateTime(byte retries,uint16_t waittime) {
   } 
 
   if (isgood) {
-    I.currentTime=now();
     checkDST();
+    I.currentTime=now();    
   }
   return isgood;
 }
 
 void checkDST(void) {
-   DSTOFFSET = 0; //starting default
-  timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET);
-  setTime(timeClient.getEpochTime());
+  
+  timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET + I.DSTOFFSET);
   
 
 #ifdef _DEBUG
@@ -133,7 +131,7 @@ void checkDST(void) {
 
   if (m > 3 && m < 11) {
     // Summer months (April through October) - DST is in effect
-    DSTOFFSET = 3600;
+    I.DSTOFFSET = 3600;
   } else if (m == 3) {
     // March - DST starts on second Sunday at 2 AM
     // Find the second Sunday of March
@@ -144,9 +142,9 @@ void checkDST(void) {
     time_t secondSunday = makeUnixTime(y-2000, 3, firstSunday + 7, 2, 0, 0); // Second Sunday at 2 AM
     
     if (I.currentTime >= secondSunday) {
-      DSTOFFSET = 3600; // DST is in effect
+      I.DSTOFFSET = 3600; // DST is in effect
     } else {
-      DSTOFFSET = 0; // Still in standard time
+      I.DSTOFFSET = 0; // Still in standard time
     }
     
   } else if (m == 11) {
@@ -159,15 +157,14 @@ void checkDST(void) {
     time_t firstSundayTime = makeUnixTime(y-2000, 11, firstSunday, 2, 0, 0); // First Sunday at 2 AM
     
     if (I.currentTime < firstSundayTime) {
-      DSTOFFSET = 3600; // Still in DST
+      I.DSTOFFSET = 3600; // Still in DST
     } else {
-      DSTOFFSET = 0; // Back to standard time
+      I.DSTOFFSET = 0; // Back to standard time
     }
   }
 
-  timeClient.setTimeOffset((long) GLOBAL_TIMEZONE_OFFSET+DSTOFFSET);
-  setTime(timeClient.getEpochTime());
-
+  timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET);
+  
   #ifdef _DEBUG
     Serial.printf("checkDST: Ending time is: %s (DST offset: %ld seconds)\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"), DSTOFFSET);
   #endif
@@ -240,6 +237,25 @@ char* dateify(time_t t, String dateformat) {
   snprintf(DATESTRING,25,"%s",dateformat.c_str());
   
   return DATESTRING;  
+}
+
+bool setupTime(void) {
+    timeClient.begin();
+    byte i=0;
+    
+    while (timeClient.forceUpdate()==false && i<25) {
+      i++;
+    }
+    if (i>=25) return false;
+
+    checkDST();
+
+    tft.clear();
+    tft.setCursor(0,0);
+tft.println(dateify(now(),"mm/dd/yyyy hh:nn:ss"));
+delay(10000);
+
+    return true;
 }
 
 

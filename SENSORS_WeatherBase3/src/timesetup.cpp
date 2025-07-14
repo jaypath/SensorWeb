@@ -242,4 +242,17 @@ char* dateify(time_t t, String dateformat) {
   return DATESTRING;  
 }
 
+bool setupTime(void) {
+    timeClient.begin();
+    timeClient.setTimeOffset(GLOBAL_TIMEZONE_OFFSET);
+    timeClient.setUpdateInterval(10800000); // 3 hours
+    
+    // Try to update time
+    if (updateTime(5, 1000)) {
+        checkDST();
+        return true;
+    }
+    return false;
+}
+
 

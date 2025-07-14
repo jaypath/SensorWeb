@@ -10,6 +10,8 @@
     #include "server.hpp"
     #include <mbedtls/aes.h>
     #include <mbedtls/cipher.h>
+    #include "esp_random.h"
+
 
     #define AESKEY "YfMVDR2qtzxJdD9yNhN6IDGPwgpyMjk2" //must be 128, 192, or 256 bits long
         
@@ -57,10 +59,6 @@
 
 
     
-    byte prefs_set = 0;
-
-
-    extern WiFi_type WIFI_INFO;
 
 
     extern STRUCT_PrefsH Prefs;
@@ -74,7 +72,7 @@
     int8_t encrypt(const unsigned char* input, uint16_t inputlength, char* key, unsigned char* output,  uint16_t* outputlength);
     bool getWiFiCredentials();
     bool putWiFiCredentials();
-    void initCreds(struct WiFi_type *w);
+    void initCreds(struct STRUCT_PrefsH *w);
     
 class BootSecure {
 public:
@@ -90,12 +88,13 @@ public:
     // --- New: AES-CBC with provided IV (does not prepend IV to output) ---
     static int8_t encryptWithIV(const unsigned char* input, uint16_t inputlength, char* key, uint8_t* iv, unsigned char* output, uint16_t* outputlength);
     static int8_t decryptWithIV(unsigned char* input, char* key, uint8_t* iv, unsigned char* output, uint16_t datalength);
+    static void zeroize(void* buf, size_t len);
 
 private:
     bool secure = false;
     bool getPrefs();
     bool checkDeviceID();
-    void zeroize(void* buf, size_t len);
+
 };
 
 #endif

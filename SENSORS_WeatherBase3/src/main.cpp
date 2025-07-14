@@ -77,6 +77,8 @@
 #include "AddESPNOW.hpp"
 #include "BootSecure.hpp"
 
+#define WDT_TIMEOUT_MS 120000
+
 #ifdef _WEBDEBUG
   String WEBDEBUG = "";
 #endif
@@ -352,40 +354,6 @@ void setup() {
 }
 
 // Non-graphical functions
-void checkHeat() {
-  // Check if any HVAC sensors are active
-  I.isHeat = 0;
-  I.isAC = 0;
-  I.isFan = 0;
-  
-  // Iterate through all devices and sensors with bounds checking
-  for (int16_t deviceIndex = 0; deviceIndex < NUMDEVICES && deviceIndex < Sensors.getNumDevices(); deviceIndex++) {
-    DevType* device = Sensors.getDeviceByIndex(deviceIndex);
-    if (!device || !device->IsSet) continue;
-    
-    for (int16_t sensorIndex = 0; sensorIndex < NUMSENSORS && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
-      SnsType* sensor = Sensors.getSensorByIndex(sensorIndex);
-      if (!sensor || !sensor->IsSet) continue;
-      
-      // Check HVAC sensors (types 50-59)
-      if (sensor->snsType >= 50 && sensor->snsType < 60) {
-        if (sensor->snsValue > 0) {
-          switch (sensor->snsType) {
-            case 50: // Heat
-              I.isHeat = 1;
-              break;
-            case 51: // AC
-              I.isAC = 1;
-              break;
-            case 52: // Fan
-              I.isFan = 1;
-              break;
-          }
-        }
-      }
-    }
-  }
-}
 
 /**
  * @brief Handle periodic ESPNow server presence broadcast (every 5 minutes).
@@ -460,7 +428,7 @@ void loop() {
         I.isExpired = checkExpiration(-1, I.currentTime, true);
         I.isFlagged += I.isExpired;
         if (minute() % 5 == 0) {
-            writeSensorsSD();
+            storeSensorsSD();
             storeScreenInfoSD();
         }
     }

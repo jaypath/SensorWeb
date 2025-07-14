@@ -3,21 +3,59 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include <vector>
+#include <algorithm>
 #include "globals.hpp"
 
 // New functions for Devices_Sensors class
-bool storeSensorsSD();
-bool readSensorsSD();
+bool storeDevicesSensorsSD();
+bool readDevicesSensorsSD();
+
 
 // New functions for individual sensor data storage using Devices_Sensors class
 bool storeSensorDataSD(int16_t sensorIndex);
 bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID);
+bool readSensorDataSD(int16_t sensorIndex);
 bool readSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, uint32_t endtime, byte avgN);
 bool readSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t t[], double v[], byte *N, uint32_t *samples, uint32_t starttime, byte avgN);
 
+// Common data structure for sensor data points
+struct SensorDataPoint {
+    uint64_t deviceMAC;
+    uint16_t deviceIndex;
+    uint8_t snsType;
+    uint8_t snsID;
+    double snsValue;
+    uint32_t timeRead;
+    uint32_t timeLogged;
+    uint8_t Flags;
+    uint32_t SendingInt;
+    char snsName[30];
+};
+
+// Helper functions for data retrieval
+bool loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
+                           std::vector<SensorDataPoint>& dataPoints, uint32_t timeStart = 0, uint32_t timeEnd = 0xFFFFFFFF);
+String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID);
+double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t targetTime);
+
+// Data retrieval functions
+bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
+                            byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd);
+bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
+                            byte *N, uint32_t t[], double v[], uint32_t timeEnd);
+
+// Advanced data processing functions
+bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
+                                         uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize,
+                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes);
+bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
+                                         uint32_t timeEnd, uint32_t windowSize,
+                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes);
+
 // Functions for storing/reading all sensors
-bool storeAllSensorsSD();
-bool readAllSensorsSD();
+bool storeAllSensorSD();
+bool readAllSensorSD();
 
 // Screen and utility functions
 bool storeScreenInfoSD();

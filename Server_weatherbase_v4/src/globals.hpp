@@ -6,14 +6,21 @@
 
 
 #define MYNAME "Pleasant Weather Server"
-#define SENSORNUM 60
+#define NUMDEVICES 50
+#define NUMSENSORS 100
 #define MYTYPE 100
+
 
 #include <Arduino.h>
 #include <String.h>
 #include <SPI.h>
-#include <Weather.hpp>
+//#include <Weather.hpp>
 #include <Devices.hpp>
+
+// WEATHER OPTIMIZATION - Comment out the next line to disable optimizations
+#ifdef WEATHER_OPTIMIZATION_ENABLED
+    #include <Weather_Optimized.hpp>
+#endif
 
 #define LGFX_USE_V1         // set to use new version of library
 #include <LovyanGFX.hpp>    // main library
@@ -41,7 +48,8 @@ typedef enum {
   RESET_OTA, //ota reset
   RESET_WIFI, //no wifi so reset
   RESET_TIME, //time based reset 
-  RESET_UNKNOWN //unknown cause
+  RESET_UNKNOWN, //unknown cause
+  RESET_NEWWIFI //new wifi credentials
   } RESETCAUSE;
   
 
@@ -64,9 +72,20 @@ struct STRUCT_PrefsH {
   uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
   uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
   uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
+  // --- Network configuration (merged from WiFi_type) ---
+  uint32_t DHCP;  // 4 bytes
+  uint32_t GATEWAY; // 4 bytes
+  uint32_t DNS; // 4 bytes
+  uint32_t DNS2; // 4 bytes
+  uint32_t SUBNET; // 4 bytes
+  uint32_t MYIP; // 4 bytes
+  uint8_t status;
+  bool HAVECREDENTIALS; // Whether WiFi credentials are available
+  bool isUpToDate; // Whether Prefs has been saved to memory
+  uint8_t WiFiMode; // 0=STA, 1=AP, 2=AP-STA
 };
 
-STRUCT_PrefsH Prefs;
+
 
 
 struct Screen {
@@ -91,6 +110,8 @@ struct Screen {
     uint8_t weatherTime = 60; //how many MINUTES to show weather values?
 
     uint8_t ScreenNum;
+    uint8_t SECSCREEN = 3; //seconds before alarm redraw
+
     uint16_t touchX;
     uint16_t touchY;
     uint16_t line_clear;
@@ -122,6 +143,8 @@ struct Screen {
     time_t lastErrorTime;
 
     time_t lastESPNOW;
+    int32_t GLOBAL_TIMEZONE_OFFSET;
+    int32_t DSTOFFSET;
 };
 
 //#define _LIGHTMODE
@@ -152,7 +175,6 @@ struct DeviceVal {
 
 //from server
 extern String WEBHTML;
-extern WiFi_type WIFI_INFO;
 
 
 
@@ -271,6 +293,7 @@ public:
 #else
   #error Arduino architecture unrecognized by this code.
 #endif
+
 
 
 #endif

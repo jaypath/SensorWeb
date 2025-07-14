@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "globals.hpp"
 
+
 // Legacy compatibility functions - these are now methods of the Devices_Sensors class
 // but we keep them as standalone functions for backward compatibility
 
@@ -27,11 +28,11 @@ bool isMACSet(byte *m, bool doReset=false);
 bool compareMAC(byte *MAC1,byte *MAC2);
 
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest);
-int16_t findSns(byte snstype, bool newest = false);
+int16_t findSnsOfType(byte snstype, bool newest = false);
 uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
 void checkHeat(void);
-uint8_t find_sensor_name(String snsname, uint8_t snsType, uint8_t snsID = 255);
+uint8_t findSensorByName(String snsname, uint8_t snsType=0, uint8_t snsID = 0);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
 void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
@@ -42,5 +43,15 @@ bool IPString2ByteArray(String IPstr,byte* IP);
 // --- IP address conversion utilities ---
 String IPToString(uint32_t ip);
 bool StringToIP(const String& str, uint32_t& ip);
+
+// --- MAC address conversion utilities ---
+void uint64ToMAC(uint64_t mac64, byte* macArray);
+uint64_t MACToUint64(byte* macArray);
+String MACToString(uint64_t mac64);
+
+// --- PROCID byte access utility ---
+uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
+
+extern LGFX tft;  
 
 #endif
