@@ -1,5 +1,5 @@
 #include "Devices.hpp"
-#include "globals.hpp"
+#include "utility.hpp"
 #include <TimeLib.h>
 
 // Global instance
@@ -40,6 +40,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devNam
         device->Flags = flags;
         device->SendingInt = sendingInt;
         device->expired = false;
+        device->IsSet = 1;
         return existingIndex;
     }
     
@@ -155,12 +156,10 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                                   uint32_t sendingInt, uint8_t flags) {
     // Find or create device
-    int16_t deviceIndex = findDevice(deviceMAC);
+    int16_t deviceIndex = addDevice(deviceMAC, deviceIP);
     if (deviceIndex < 0) {
-        deviceIndex = addDevice(deviceMAC, deviceIP);
-        if (deviceIndex < 0) {
-            return -1; // Could not create device
-        }
+        storeError("Addsensor: Could not create device", ERROR_DEVICE_ADD);
+        return -2; // Could not create device
     }
     
     // Check if sensor already exists
@@ -174,6 +173,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
         sensor->Flags = flags;
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
+        sensor->IsSet=1;
         return existingIndex;
     }
     
@@ -204,6 +204,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
         }
     }
     
+    storeError("No space for sensor",ERROR_SENSOR_ADD);
     return -1; // No space available
 }
 
@@ -219,6 +220,7 @@ int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t
             return i;
         }
     }
+
     return -1;
 }
 
@@ -234,6 +236,7 @@ int16_t Devices_Sensors::findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t 
             return i;
         }
     }
+    
     return -1;
 }
 

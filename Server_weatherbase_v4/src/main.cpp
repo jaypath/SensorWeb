@@ -1,3 +1,4 @@
+
 //Version 12 - 
 /*
  * v11.1
@@ -152,18 +153,21 @@ void initScreenFlags(bool completeInit) {
 
     I.lastHeader=0;
     I.lastWeather=0;
-    I.lastCurrentCondition=0;
     I.lastClock=0; //last time clock was updated, whether flag or not
     I.lastFlagView=0; //last time clock was updated, whether flag or not
 
+
+    I.lastCurrentConditionTime=0; //last time current condition was updated
+    I.lastCurrentTemp=0; //last current temperature
+
+    
     I.HourlyInterval = 2; //hours between daily weather display
-    I.currentConditionTime = 10; //how many minutes to show current condition?
+    I.currentConditionInterval = 10; //how many minutes to show current condition?
     I.flagViewTime = 10; //how many seconds to show flag values?
     I.weatherTime = 60; //how many MINUTES to show weather values?
 
     I.SECSCREEN = 3; //seconds before alarm redraw
-
-    
+       
     I.isExpired = false; //are any critical sensors expired?
     I.wasFlagged=false;
     I.isHeat=false; //first bit is heat on, bits 1-6 are zones
@@ -177,7 +181,8 @@ void initScreenFlags(bool completeInit) {
     I.isCold=0;
     I.isSoilDry=0;
     I.isLeak=0;
-    I.localWeather=255; //index of outside sensor
+    I.localWeatherIndex=255; //index of outside sensor
+    I.localBatteryIndex=255;
 
     I.currentTemp-127;
     I.Tmax=-127;
@@ -186,8 +191,12 @@ void initScreenFlags(bool completeInit) {
     }
 
     I.DSTOFFSET = 0;
-    I.GLOBAL_TIMEZONE_OFFSET = -60*5*1000;
+    I.GLOBAL_TIMEZONE_OFFSET = -18000;
     
+    I.lastCurrentConditionTime=0; //last time current condition was updated
+    I.lastCurrentTemp=0; //last current temperature
+    I.localBatteryLevel=-1;
+
     I.lastESPNOW=0;
     I.lastResetTime=I.currentTime;
     I.ALIVESINCE=I.currentTime;
@@ -197,7 +206,7 @@ void initScreenFlags(bool completeInit) {
 
     I.lastHeader=0;
     I.lastWeather=0;
-    I.lastCurrentCondition=0;
+
     I.lastClock=0; //last time clock was updated, whether flag or not
     I.lastFlagView=0; //last time clock was updated, whether flag or not
 
@@ -377,13 +386,23 @@ void setup() {
     esp_task_wdt_init(WDT_TIMEOUT_MS, true);
     esp_task_wdt_add(NULL);
 
-    WEBHTML.reserve(7000);
+
+    #ifdef _USESERIAL
+    Serial.begin(115200);
+    #endif
     #ifdef _DEBUG
     Serial.begin(115200);
     #endif
 
+    WEBHTML.reserve(7000);
+
     initDisplay();
     initSensor(-256);
+
+    if (!initSDCard()) return;
+    loadScreenFlags();
+    loadSensorData();
+
 
     tft.printf("Init Wifi... ");
     initServerRoutes();
@@ -401,9 +420,6 @@ void setup() {
     }
     I.ALIVESINCE = I.currentTime;
     
-    if (!initSDCard()) return;
-    loadScreenFlags();
-    loadSensorData();
     
     if (Prefs.DEVICENAME[0] == 0) {
         snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
@@ -462,7 +478,9 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 // --- Main Loop ---
 void loop() {
     esp_task_wdt_reset();
-    I.currentTime = now();
+    
+    updateTime(); //sets I.currenttime
+        
     if (WiFi.status() != WL_CONNECTED) {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
         int16_t retries = connectWiFi();
@@ -476,24 +494,49 @@ void loop() {
         I.wifiFailCount = 0;
         ArduinoOTA.handle();
         server.handleClient();
-        updateTime(1, 0);
     }
+
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
         if (I.wifiFailCount > 5) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
-        if (I.localWeather==255)     I.localWeather=findSensorByName("Outside", 4);  //if no local weather sensor, use outside
-        if (I.localWeather != 255) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeather);
-            if (sensor && (I.currentTime - sensor->timeLogged > 1800)) { // 1800 seconds = 30 minutes
-                I.localWeather = 255;
+        // WEATHER OPTIMIZATION - Use optimized weather update method
+        WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
+
+        //see if we have local weather
+        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 4);  //if no local weather sensor, use outside
+        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 1);  //if no local weather sensor, use outside dht
+        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 10);  //if no local weather sensor, use outside bmp
+        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 14);  //if no local weather sensor, use outside bme
+        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 17);  //if no local weather sensor, use outside bme680
+
+        if (I.localWeatherIndex!=255) {
+            SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
+            
+            if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
+            else {
+                I.currentTemp = sensor->snsValue;
+                SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
+            }
+        }
+        if (I.localWeatherIndex==255) I.currentTemp = WeatherData.getTemperature(I.currentTime);
+
+        //see if we have local battery power
+        if (I.localBatteryIndex == 255) I.localBatteryIndex = findSensorByName("Outside",61);
+    
+        if (I.localBatteryIndex<255 && I.localBatteryIndex >= 0 && I.localBatteryIndex < NUMDEVICES * SENSORNUM) {
+            // Find the battery sensor
+            DevType* batDevice = Sensors.getDeviceBySnsIndex(I.localBatteryIndex);
+            SnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
+            if (batDevice && batSensor && batDevice->IsSet && batSensor->IsSet && batSensor->timeLogged + 3600 > I.currentTime) {
+                I.localBatteryLevel = batSensor->snsValue;
+                SerialPrint((String) "Local battery device found, snsindex" + I.localBatteryIndex, true + ", snsValue=" + I.localBatteryLevel);
+            }             else {
+                I.localBatteryIndex = 255;
+                I.localBatteryLevel = -1;
             }
         }
 
-
-        // WEATHER OPTIMIZATION - Use optimized weather update method
-        WeatherData.updateWeatherOptimized(3600);  // Optimized weather update
-        
         if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 300 && I.currentTime - I.ALIVESINCE > 10800) {
             tft.clear();
             tft.setCursor(0, 0);
@@ -538,6 +581,10 @@ void loop() {
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         checkExpiration(-1, I.currentTime, false);
+        if (OldTime[2] == 4) {
+            //check if DST has changed every day at 4 am
+            checkDST();
+        }
     }
     if (OldTime[3] != weekday()) {
         OldTime[3] = weekday();
@@ -568,7 +615,7 @@ void loop() {
         }
         #endif
     }
-    handleESPNOWPeriodicBroadcast(5);
+    handleESPNOWPeriodicBroadcast(1);
 }
 
 

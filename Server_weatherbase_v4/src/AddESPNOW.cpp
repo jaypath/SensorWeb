@@ -69,8 +69,13 @@ bool initESPNOW() {
         storeError("ESPNow: Failed to initialize");
         return false;
     }
+    uint8_t MACB[6] = {0};
+    memset(MACB,255,6);
+    addESPNOWPeer(MACB, false); //register the broadcast address
+
     esp_now_register_send_cb(OnESPNOWDataSent);
     esp_now_register_recv_cb(OnDataRecv);
+    
     return true;
 }
 
@@ -87,22 +92,47 @@ esp_err_t delESPNOWPeer(uint8_t* macad) {
 }
 
 // --- Send ESPNow Message ---
-bool sendESPNOW(const ESPNOW_type& msg) {
-    const uint8_t* destMAC = msg.targetMAC;
+bool sendESPNOW(ESPNOW_type& msg) {
     bool isBroadcast = true;
-    for (int i = 0; i < 6; ++i) if (destMAC[i] != 0xFF) isBroadcast = false;
+
+    for (int i = 0; i < 6; ++i) if (msg.targetMAC[i] != 0xFF) isBroadcast = false;
     if (!isBroadcast) {
-        addESPNOWPeer(const_cast<uint8_t*>(destMAC), false);
+        addESPNOWPeer(msg.targetMAC, false);
     }
-    esp_err_t result = esp_now_send(destMAC, reinterpret_cast<const uint8_t*>(&msg), sizeof(ESPNOW_type));
+    esp_err_t result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
+
     if (!isBroadcast) {
-        delESPNOWPeer(const_cast<uint8_t*>(destMAC));
+        delESPNOWPeer(msg.targetMAC);
     }
     if (result != ESP_OK) {
-        storeError("ESPNow: Failed to send data");
+        SerialPrint((String) "ESPNow tried sending to " + MACToString(msg.targetMAC) + " and failed with code: " + result,true);
+        storeError(ESPNowError(result).c_str(),ERROR_ESPNOW_SEND);
         return false;
     }
+
+    SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
+
     return true;
+}
+
+String ESPNowError(esp_err_t result) {
+    if (result == ESP_OK) return "OK";
+    
+    switch (result) {
+        case ESP_ERR_NO_MEM: return "ESPNow out of memory";
+        case ESP_ERR_INVALID_ARG: return "ESPNow: Invalid argument";
+        case ESP_ERR_INVALID_STATE: return "ESPNow: Invalid state";
+        case ESP_ERR_INVALID_SIZE: return "ESPNow: Invalid size";
+        case ESP_ERR_NOT_FOUND: return "ESPNow: Resource not found";
+        case ESP_ERR_TIMEOUT: return "ESPNow: timeout";
+        case ESP_ERR_INVALID_RESPONSE: return "ESPNow: invalid response";
+        case ESP_ERR_INVALID_CRC: return "ESPNow: invalid CRC";
+        case ESP_ERR_INVALID_MAC: return "ESPNow: invalid MAC";
+        case ESP_ERR_ESPNOW_NOT_FOUND: return "ESPNow: MAC recipient not found";
+        default: return "ESPNow: Error undefined";
+        break;
+    }
+
 }
 
 // --- ESPNow Send Callback ---
@@ -134,7 +164,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     switch (msg.msgType) {
         case ESPNOW_MSG_BROADCAST_ALIVE:
             // Device is alive; update presence table if needed
-            // (User can implement presence logic here)
+            // JSPXX to do 
+            
             break;
         case ESPNOW_MSG_SERVER_LIST:
             // Received server list; update local list
@@ -271,13 +302,16 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
 // --- Broadcast Server Presence (Type 0) ---
 bool broadcastServerPresence() {
+
     ESPNOW_type msg = {};
     uint64ToMAC(Prefs.PROCID, msg.senderMAC);
     msg.senderIP = Prefs.MYIP;
     msg.senderType = MYTYPE;
-    memset(msg.targetMAC, 0xFF, 6);
+
+    memset(msg.targetMAC, 0xFF, sizeof(msg.targetMAC));
     msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE;
     memset(msg.payload, 0, 60);
+
     return sendESPNOW(msg);
 }
 

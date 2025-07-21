@@ -3,10 +3,13 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <globals.hpp>
+#include "globals.hpp"
 
 // Constants
 #define SENSORNUM NUMSENSORS
+
+//sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+
 
 // Device structure
 struct DevType {
@@ -31,7 +34,7 @@ struct SnsType {
     double snsValue;        // Current sensor value
     uint32_t timeRead;      // Time sensor was read
     uint32_t timeLogged;    // Time sensor data was logged
-    uint8_t Flags;          // Sensor flags
+    uint8_t Flags;          // Sensor flags... 
     uint32_t SendingInt;    // Sending interval
     uint8_t IsSet;          // Whether this sensor is initialized
     bool expired;           // Whether sensor has expired

@@ -45,6 +45,7 @@ struct ESPNOW_type {
 };
 
 extern ESPNOW_type ESPNOWmsg;
+String ESPNowError(esp_err_t result) ;
 
 // --- ESPNow Core Functions ---
 bool initESPNOW();

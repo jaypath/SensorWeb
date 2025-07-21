@@ -26,7 +26,8 @@ void drawBmp(const char* filename, int16_t x, int16_t y, uint16_t alpha = TRANSP
 void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x, byte boxsize_y);
 
 // Text drawing functions
-void fcnPrintTxtCenter(String msg, byte FNTSZ, int x = -1, int y = -1);
+void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR);
+void fcnPrintTxtCenter(int msg,byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR);
 void fcnPrintTxtColor(int value, byte FNTSZ, int x = -1, int y = -1, bool autocontrast = false);
 void fcnPrintTxtColor2(int value1, int value2, byte FNTSZ, int x = -1, int y = -1, bool autocontrast = false);
 void fcnPrintTxtHeatingCooling(int x, int y);

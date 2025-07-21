@@ -1,9 +1,29 @@
 //#define _DEBUG
 #include "utility.hpp"
-#include "globals.hpp"
-#include "Devices.hpp"
-#include "timesetup.hpp"
-#include "SDCard.hpp"
+
+
+//flags for sensors:
+////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+
+
+bool SerialPrint(String S,bool newline) {
+  return SerialPrint(S.c_str(),newline);
+}
+
+bool SerialPrint(const char* S,bool newline) {
+  bool printed =false;
+
+  
+  #ifdef _USESERIAL
+    Serial.printf("%s",S);
+    if (newline) Serial.println();
+    printed=true;
+  #endif
+
+  return printed;
+
+
+}
 
 int inArray(int arr[], int N, int value,bool returncount) {
   //returns index to the integer array of length N holding value, or -1 if not found
@@ -155,24 +175,6 @@ void initSensor(int k) {
   Sensors.initSensor(k);
 }
 
-bool compareMAC(byte *MAC1,byte *MAC2) {
-  for (byte i=0;i<6;i++) {
-    if (MAC1[i]!=MAC2[i]) return false;
-  }
-  return true;
-}
-
-bool isMACSet(byte *m, bool doReset) {
-  for (byte i=0;i<6;i++) {
-    if (m[i]!=0) return true;
-  }
-  if (doReset) {
-    for (byte i=0;i<6;i++) {
-      m[i]=0;
-    }
-  }
-  return false;
-}
 
 bool isSensorInit(int i) {
   return Sensors.isSensorInit(i);
@@ -257,31 +259,6 @@ String breakString(String *inputstr,String token,bool reduceOriginal)
   return output;
 }
 
-String IPbytes2String(byte* IP,byte len) {
-  String output = "";
-  for (byte i=0;i<len;i++) {
-    if (i>0) output += ".";
-    output += (String) IP[i];
-  }
-  return output;
-}
-
-bool IPString2ByteArray(String IPstr,byte* IP) {
-  //parse IP string like "192.168.1.1" into byte array
-  String temp = IPstr;
-  String token;
-  byte i=0;
-  
-  while (temp.length()>0 && i<4) {
-    token = breakString(&temp,".",true);
-    if (token.length()>0) {
-      IP[i] = token.toInt();
-      i++;
-    }
-  }
-  
-  return (i==4);
-}
 
 uint16_t countSubstr(String orig, String token) {
   uint16_t count = 0;
@@ -293,7 +270,28 @@ uint16_t countSubstr(String orig, String token) {
   return count;
 }
 
-void storeError(const char* E) {
+String enumErrorToName(ERRORCODES E) {
+  switch (E) {
+    case ERROR_HTTPFAIL_BOX: return "HTTP failed for NOAA grid location";
+    case ERROR_HTTPFAIL_DAILY: return "HTTP failed for NOAA daily weather";
+    case ERROR_HTTPFAIL_GRID: return "HTTP failed for NOAA weather grid";
+    case ERROR_HTTPFAIL_HOURLY: return "HTTP failed for NOAA hourly weather";
+    case ERROR_HTTPFAIL_SUNRISE: return "HTTP failed for sunrise.io";
+    case ERROR_JSON_BOX: return "Json parsing failed for NOAA grid location";
+    case ERROR_JSON_DAILY: return "Json parsing failed for NOAA daily weather";
+    case ERROR_JSON_GRID: return "Json parsing failed for NOAA weather grid";
+    case ERROR_JSON_HOURLY: return "Json parsing failed for NOAA hourly weather";
+    case ERROR_JSON_SUNRISE: return "Json parsing failed for sunrise.io";
+    case ERROR_SD_LOGOPEN: return "Could not open log on SD";
+    
+
+    default: return "Error code is indeterminate";
+  }
+
+}
+
+void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
+    
     if (E && strlen(E) < 75) {
         strncpy(I.lastError, E, 74);
         I.lastError[74] = '\0';
@@ -303,6 +301,12 @@ void storeError(const char* E) {
     } else {
         I.lastError[0] = '\0';
     }
+
+    I.lastErrorCode = CODE;
+    I.lastErrorTime = I.currentTime;
+
+
+    if (writeToSD) writeErrorToSD();
 }
 
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
@@ -353,20 +357,51 @@ String IPToString(uint32_t ip) {
            String(ip & 0xFF);
 }
 
-bool StringToIP(const String& str, uint32_t& ip) {
+ uint32_t StringToIP(String str) {
     int parts[4] = {0};
-    int lastPos = 0, pos = 0;
-    for (int i = 0; i < 4; ++i) {
-        pos = str.indexOf('.', lastPos);
-        if (pos == -1 && i < 3) return false;
-        String part = (i < 3) ? str.substring(lastPos, pos) : str.substring(lastPos);
-        parts[i] = part.toInt();
-        if (parts[i] < 0 || parts[i] > 255) return false;
-        lastPos = pos + 1;
+    uint32_t ip = 0;
+
+    for (int i = 3; i >=0; i--)  {
+      parts[i] = breakString(&str,".",true).toInt();
+      ip += parts[i]<<(i*8);
     }
-    ip = ((uint32_t)parts[0] << 24) | ((uint32_t)parts[1] << 16) | ((uint32_t)parts[2] << 8) | (uint32_t)parts[3];
-    return true;
+
+    return ip;
 }
+
+
+uint32_t IPToUint32(byte* ip) {
+  return (ip[3]<<24) + (ip[2]<<16) + (ip[1]<<8) + ip[0];
+}
+
+void Uint32toIPbytes(uint32_t ip32, byte* ip) {
+  ip[3] = (ip32>>24) & 0xFF;
+  ip[2] = (ip32>>16) & 0xFF;
+  ip[1] = (ip32>>8) & 0xFF;
+  ip[0] = (ip32) & 0xFF;
+}
+
+String IPbytes2String(byte* IP,byte len) {
+  return ArrayToString(IP,len);
+}
+
+bool IPString2ByteArray(String IPstr,byte* IP) {
+  //parse IP string like "192.168.1.1" into byte array
+  String temp = IPstr;
+  String token;
+  byte i=0;
+  
+  while (temp.length()>0 && i<4) {
+    token = breakString(&temp,".",true);
+    if (token.length()>0) {
+      IP[i] = token.toInt();
+      i++;
+    }
+  }
+  
+  return (i==4);
+}
+
 
 // Convert uint64_t MAC to 6-byte array
 void uint64ToMAC(uint64_t mac64, byte* macArray) {
@@ -383,11 +418,63 @@ uint64_t MACToUint64(byte* macArray) {
 String MACToString(uint64_t mac64) {
   byte macArray[6];
   uint64ToMAC(mac64, macArray);
-  return IPbytes2String(macArray, 6);
+  return ArrayToString(macArray, 6,':',true);
 }
+
+String MACToString(uint8_t* mac) {
+  
+  return ArrayToString(mac, 6,':',true);
+}
+
+
+bool compareMAC(byte *MAC1,byte *MAC2) {
+  for (byte i=0;i<6;i++) {
+    if (MAC1[i]!=MAC2[i]) return false;
+  }
+  return true;
+}
+
+bool isMACSet(byte *m, bool doReset) {
+  for (byte i=0;i<6;i++) {
+    if (m[i]!=0) return true;
+  }
+  if (doReset) {
+    memset(m,0,6);
+  }
+  return false;
+}
+
+
+String ArrayToString(uint8_t* Arr, byte len, char separator, bool asHex) {
+
+  String output = "";
+  char holder[10] = "";
+  for (int i=len-1; i>=0; i--) {
+    if (i!=len-1) output += (String) separator;
+    if (asHex)    snprintf(holder,9,"%x",Arr[i]);
+    else    snprintf(holder,9,"%d",Arr[i]);
+    output += (String) holder;
+  }
+  return output;
+
+}
+
 
 // Get a specific byte (zero indexed) from PROCID (MAC address).
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
     if (byteIndex >= 6) return 0;
     return (procid >> (8 * (byteIndex))) & 0xFF;
+}
+
+
+void cycleIndex(int16_t* start, uint16_t arraysize, uint16_t origin) {
+  //cycles through a vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
+  //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
+  //returns -1 if cycle is complete
+
+  if (*start == arraysize-1) *start=0;
+  else *start = *start + 1;
+
+  if (*start==origin)     *start = -1; //we have cycled through
+  
 }

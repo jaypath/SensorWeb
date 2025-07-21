@@ -263,7 +263,12 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
 } 
 
 // Text drawing functions
-void fcnPrintTxtCenter(String msg,byte FNTSZ, int x, int y) {
+void fcnPrintTxtCenter(int msg,byte FNTSZ, int x, int y, uint16_t color1, uint16_t color2, uint16_t bgcolor) {
+  String t = (String) msg + "";
+  fcnPrintTxtCenter(t, FNTSZ,  x,  y, color1,  color2, bgcolor);
+}
+void fcnPrintTxtCenter(String msg,byte FNTSZ, int x, int y, uint16_t color1, uint16_t color2, uint16_t bgcolor) {
+  //if color1 and color2 are specified, then colorize the numbers before and after the slash
 int X,Y;
 uint32_t FH = setFont(FNTSZ);
 
@@ -276,9 +281,19 @@ if (x>=0 && y>=0) {
   X=x;
   Y=y;
 }
-
 tft.setCursor(X,Y);
-tft.print(msg.c_str());
+if (color1==color2) {
+  tft.print(msg.c_str());
+} else {
+  tft.setTextColor(color1,bgcolor);
+  tft.print(msg.substring(0,msg.indexOf("/")).c_str());
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.print("/");
+  tft.setTextColor(color2,bgcolor);
+  tft.print(msg.substring(msg.indexOf("/")+1).c_str());
+}
+
+
 tft.setTextDatum(TL_DATUM);
     
 return;
@@ -372,24 +387,35 @@ void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y,bool autoco
   uint16_t fg_color = TFT_WHITE;
   uint16_t bg_color = TFT_BLACK;
   
-  if (autocontrast) {
-    if (value1 > 0) {
-      fg_color = TFT_GREEN;
-    } else if (value1 < 0) {
-      fg_color = TFT_RED;
-    } else {
-      fg_color = TFT_YELLOW;
-    }
-  }
   
   if (x == -1) x = 0;
   if (y == -1) y = 0;
   
   tft.setCursor(x,y);
-  tft.setTextColor(fg_color,bg_color);
+  
+  
+  if (autocontrast) {
+    bg_color = temp2color(value1,true);  
+  }
+  
+
+  tft.setTextColor(temp2color(value1),bg_color);
   tft.print(value1);
+
+   fg_color = TFT_WHITE;
+   bg_color = TFT_BLACK;
   tft.print("/");
+  if (autocontrast) {
+    bg_color = temp2color(value2,true);  
+  }
+  
+  tft.setTextColor(temp2color(value2),bg_color);
   tft.print(value2);
+
+   fg_color = TFT_WHITE;
+   bg_color = TFT_BLACK;
+  
+  
 }
 
 void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
@@ -397,29 +423,37 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
   uint16_t fg_color = TFT_WHITE;
   uint16_t bg_color = TFT_BLACK;
   
-  if (autocontrast) {
-    if (value > 0) {
-      fg_color = TFT_GREEN;
-    } else if (value < 0) {
-      fg_color = TFT_RED;
-    } else {
-      fg_color = TFT_YELLOW;
-    }
-  }
   
   if (x == -1) x = 0;
   if (y == -1) y = 0;
   
   tft.setCursor(x,y);
-  tft.setTextColor(fg_color,bg_color);
+
+
+  if (autocontrast) {
+    bg_color = temp2color(value,true);  
+  }
+  
+
+  tft.setTextColor(temp2color(value),bg_color);
   tft.print(value);
+
+   fg_color = TFT_WHITE;
+   bg_color = TFT_BLACK;
+
 } 
 
 // Screen drawing functions
 void fcnDrawHeader() {
   //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
-  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeader+3599<I.currentTime)     I.lastHeader = I.currentTime;
-  else return;
+  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeader+3599<I.currentTime)     {
+    I.lastHeader = I.currentTime;
+    I.wasFlagged = I.isFlagged;
+    I.wasAC = I.isAC;
+    I.wasFan = I.isFan;
+    I.wasHeat = I.isHeat;
+  }   else return;
+
 
   tft.fillRect(0,0,tft.width(),I.HEADER_Y,BG_COLOR); //clear the header area
 
@@ -482,11 +516,7 @@ void fcnDrawScreen() {
   fcnDrawHeader();
   fncDrawCurrentCondition();
   fcnDrawWeather();
-    I.wasFlagged = I.isFlagged;
-    I.wasAC = I.isAC;
-    I.wasFan = I.isFan;
-    I.wasHeat = I.isHeat;
-
+  
   return;
 }
 
@@ -511,37 +541,37 @@ void fcnDrawSensors(int Y) {
   //fill an array with next 12 alarm entries
   int16_t alarms[rows*cols];
   byte alarmArrayInd = 0;
-  int16_t lastSensorIndex = 0;
-
+  
 //init alarms
   for (byte k = 0;k<(rows*cols);k++) {
     alarms[k] = -1;
   }
   
 //fill up to 12 alarm spots, and remember where we left off
-  int16_t startSensorIndex = I.alarmIndex % SENSORNUM;
-  
-  for (int16_t sensorIndex = startSensorIndex; sensorIndex < SENSORNUM && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-    if (!sensor || sensor->IsSet == 0) continue;
-    
-    // Skip HVAC and other special sensors
-    if ((sensor->snsType >= 50 && sensor->snsType < 60) || sensor->snsType == 99) continue;
+  int16_t SensorIndex = I.alarmIndex;
 
-    if (bitRead(sensor->Flags, 0) == 1 || sensor->expired == true) {
-      alarms[alarmArrayInd++] = sensorIndex;
-      if (alarmArrayInd >= (rows*cols)) break;
-    }
-    
-    lastSensorIndex = sensorIndex;
-  }
-  
-  // Update alarm index for next time
-  if (lastSensorIndex >= 0) {
-    I.alarmIndex = (lastSensorIndex + 1) % SENSORNUM;
-  }
+ cycleIndex(&SensorIndex,NUMSENSORS,I.alarmIndex);
 
-  alarmArrayInd = 0;
+  while (SensorIndex>=0 && alarmArrayInd<(rows*cols)) {
+      SnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
+      if (sensor && sensor->IsSet != 0) {
+        
+        // Skip HVAC and other special sensors
+        if ((sensor->snsType < 50 || sensor->snsType > 60) && sensor->snsType <99) {
+
+          if ((bitRead(sensor->Flags, 0) == 1 ) || (sensor->expired == true && bitRead(sensor->Flags, 7) == 1)) { //bit 0 is flagged and bit 7 ismonitored
+            alarms[alarmArrayInd++] = SensorIndex;          
+          }
+        }
+      }
+
+      cycleIndex(&SensorIndex,NUMSENSORS,I.alarmIndex);
+      
+  } 
+  if (SensorIndex<0) I.alarmIndex = 0;
+  else   I.alarmIndex = SensorIndex;
+  
+  alarmArrayInd=0;
 
   for (byte r=0;r<rows;r++) {
     if (alarms[alarmArrayInd] == -1) break;
@@ -561,18 +591,13 @@ void fcnDrawSensors(int Y) {
 void fcnDrawClock() {
 
   int16_t X = tft.width();
-  uint8_t FNTSZ=6;
+  uint8_t FNTSZ=8;
   uint32_t FH = setFont(FNTSZ);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   char tempbuf[20];
   int Y = tft.height() - I.CLOCK_Y;
-
-
-  if (I.currentTime == I.lastClock) return;
   bool forcedraw = false;
   if (I.lastClock==0) forcedraw=true;
-  I.lastClock = I.currentTime;
-
   
   //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
   if (I.isFlagged) {
@@ -597,107 +622,64 @@ void fcnDrawClock() {
     forcedraw=true;
   }
 
+
   //otherwise print time at bottom
-  if (second(I.currentTime)==0 || forcedraw==true) { //I am redrawing everything, minute changed
+  if (forcedraw==true || (I.currentTime != I.lastClock &&  second(I.currentTime)==0)) {
+    FNTSZ = 8;
+    I.lastClock = I.currentTime;
     tft.fillRect(0,Y,X,I.CLOCK_Y,BG_COLOR); //clear the  clock area
     snprintf(tempbuf,16,"%s",dateify(I.currentTime,"h1:nn"));
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X/2,Y+I.CLOCK_Y/2);
   }
 
+
   return;
 }
 
 void fncDrawCurrentCondition() {
+  //redraw current condition if 
+  //the last current temp does not match the current temp
+  //the current condition has not been updated in currentConditionInterval min
+
+  if ((I.lastCurrentConditionTime!=0 && I.lastCurrentConditionTime + I.currentConditionInterval*60 > I.currentTime) || (I.lastCurrentTemp!=0 && I.lastCurrentTemp == I.currentTemp)) return;
+  
+ 
+  SerialPrint("Redrawing Current Condition\n");
+
   int FNTSZ = 8;
   uint32_t FH = setFont(FNTSZ);
   int X = 180+(tft.width()-180)/2; //middle of area on side of icon
   int Z = 10;
   int Y = I.HEADER_Y;
 
-  if (I.localWeather<255) {
-    // Validate the index before calculating device and sensor indices
-    if (I.localWeather >= 0 && I.localWeather < NUMDEVICES * SENSORNUM) {
-      // Find the sensor by its index and get its value
-      int16_t deviceIndex = I.localWeather / SENSORNUM;
-      int16_t sensorIndex = I.localWeather % SENSORNUM;
-      
-      DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
-      SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-      
-      if (device && sensor && device->IsSet && sensor->IsSet) {
-        if ((int8_t) sensor->snsValue != I.currentTemp && I.currentTime - sensor->timeLogged < 180) {
-          I.currentTemp = (int8_t) sensor->snsValue;
-        } else {
-          if (I.currentTime < I.lastCurrentCondition + (I.currentConditionTime) * 60 && I.lastCurrentCondition > 0) return; //not time to update cc
-        }
-      } else {
-        if (I.currentTime < I.lastCurrentCondition + (I.currentConditionTime) * 60 && I.lastCurrentCondition > 0) return; //not time to update cc
-      }
-    } else {
-      if (I.currentTime < I.lastCurrentCondition + (I.currentConditionTime) * 60 && I.lastCurrentCondition > 0) return; //not time to update cc
-    }
-  } else {
-    if (I.currentTime < I.lastCurrentCondition + (I.currentConditionTime) * 60 && I.lastCurrentCondition > 0) return; //not time to update cc
-  }
-
-  I.lastCurrentCondition = I.currentTime;
   tft.fillRect(180,Y,tft.width()-180,180,BG_COLOR); //clear the cc area
-  
 
+  String st = "";
   byte section_spacer = 3;
-  bool islocal=false;
-  String st = "Local";
-
-  I.localWeather=findSensorByName("Outside", 4); //reset periodically, in case there is a change
-  I.currentTemp = WeatherData.getTemperature(I.currentTime);
   
-  if (I.localWeather<255) {
-    // Validate the index before calculating device and sensor indices
-    if (I.localWeather >= 0 && I.localWeather < NUMDEVICES * SENSORNUM) {
-      // Find the sensor by its index and get its value
-      int16_t deviceIndex = I.localWeather / SENSORNUM;
-      int16_t sensorIndex = I.localWeather % SENSORNUM;
-      
-      DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
-      SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-      
-      if (device && sensor && device->IsSet && sensor->IsSet) {
-        if (I.currentTime - sensor->timeLogged > 60*30) {
-          I.localWeather = 255; //localweather is only useful if <30 minutes old 
-        } else {
-          I.currentTemp = (int8_t) sensor->snsValue;
-          st+=" @" + (String) dateify(sensor->timeRead,"h1:nn");
-          byte tind = findSensorByName("Outside",61);
-          if (tind<255) {
-            // Validate battery sensor index before calculating device and sensor indices
-            if (tind >= 0 && tind < NUMDEVICES * SENSORNUM) {
-              // Find the battery sensor
-              int16_t batDeviceIndex = tind / SENSORNUM;
-              int16_t batSensorIndex = tind % SENSORNUM;
-              
-              DevType* batDevice = Sensors.getDeviceByDevIndex(batDeviceIndex);
-              SnsType* batSensor = Sensors.getSensorBySnsIndex(batSensorIndex);
-              
-              if (batDevice && batSensor && batDevice->IsSet && batSensor->IsSet) {
-                st += " Bat" + (String) ((int) batSensor->snsValue) + "%";
-              }
-            }
-          }
-          islocal=true;
-        }
-      }
+  //see if we have local weather
+  if (I.localWeatherIndex<255) {
+    SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
+    if (sensor && sensor->IsSet) {
+      st = "Local @" + (String) dateify(sensor->timeLogged,"h1:nn");
+      if (I.localBatteryIndex<255)     st += " Bat" + (String) (I.localBatteryLevel) + "%";
+    
+      FH = setFont(1);
+      Z = 2;
+      tft.setCursor(X,Y+Z);
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+      fcnPrintTxtCenter(st,1,X,Y+Z+FH/2);
+      //Y+=FH+Z;
     }
   }
-
-   
+  
   // draw current temp
-   FH = setFont(FNTSZ);
-   X = 180+(tft.width()-180)/2; //middle of area on side of icon
-   Z = 10;
-   Y = I.HEADER_Y;
- 
-  fcnPrintTxtColor(I.currentTemp,FNTSZ,X,Y+Z+FH/2);
 
+  FH = setFont(FNTSZ);
+  X = 180+(tft.width()-180)/2; //middle of area on side of icon
+  Z = 10;
+  tft.setTextColor(temp2color(I.currentTemp),BG_COLOR);
+  fcnPrintTxtCenter(I.currentTemp,FNTSZ,X,Y+Z+FH/2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   Z+=FH+section_spacer;
 
@@ -712,9 +694,8 @@ void fncDrawCurrentCondition() {
     if (tempMaxmin[1]>I.currentTemp) tempMaxmin[1]=I.currentTemp;
     I.Tmax = tempMaxmin[0];
     I.Tmin = tempMaxmin[1];
-    
-    fcnPrintTxtColor2(I.Tmax,I.Tmin,FNTSZ,X,Y+Z+FH/2);
 
+    fcnPrintTxtCenter((String) I.Tmax + "/" + I.Tmin,FNTSZ,X,Y+Z+FH/2,temp2color(I.Tmax),temp2color(I.Tmin));  
     tft.setTextColor(FG_COLOR,BG_COLOR);
 
     Z=Z+FH+section_spacer;
@@ -753,11 +734,9 @@ void fncDrawCurrentCondition() {
     Z=Z+FH+section_spacer;
 
   //end current wthr
+  I.lastCurrentTemp = I.currentTemp;
+  I.lastCurrentConditionTime = I.currentTime;
   
-  if (islocal) {
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    fcnPrintTxtCenter(st,1,X,Y+6);      
-  }
 
   return;
 }
@@ -782,8 +761,9 @@ void fcnDrawWeather() {
 
   //draw icon for NOW
   int iconID = WeatherData.getWeatherID(0);
-  if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID);
-  else snprintf(tempbuf,44,"/BMP180x180night/%d.bmp",iconID);
+  
+  if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
+  else     snprintf(tempbuf,44,"/BMP180x180night/%d.bmp",iconID);
 
   drawBmp(tempbuf,0,Y);
 
@@ -821,13 +801,14 @@ void fcnDrawWeather() {
       Z=0;
       X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
       iconID = WeatherData.getWeatherID(I.currentTime+i*I.HourlyInterval*60*60);
-      if (I.currentTime+i*I.HourlyInterval*3600 > WeatherData.sunrise  && I.currentTime+i*I.HourlyInterval*3600< WeatherData.sunset) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID);
+      uint32_t temptime = I.currentTime+i*I.HourlyInterval*3600;
+      if ((temptime > WeatherData.sunrise  && temptime < WeatherData.sunset) || temptime > WeatherData.sunrise + 86400) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night. But if we are past the prior sunrise +24h we are in the NEXT day
       else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
       
       drawBmp(tempbuf,X,Y);
       Z+=30;
 
-       tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setTextColor(FG_COLOR,BG_COLOR);
       X = (i-1)*(tft.width()/6) + ((tft.width()/6))/2; 
 
       FNTSZ=1;
@@ -835,13 +816,14 @@ void fcnDrawWeather() {
       snprintf(tempbuf,6,"%s:00",dateify(I.currentTime+i*I.HourlyInterval*60*60,"hh"));
       tft.setTextFont(FNTSZ); //small font
       fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
-
       Z+=deltaY+section_spacer;
 
       FNTSZ=4;
       deltaY = setFont(FNTSZ);
       tft.setTextFont(FNTSZ); //med font
-      fcnPrintTxtColor(WeatherData.getTemperature(I.currentTime + i*I.HourlyInterval*3600),FNTSZ,X,Y+Z+deltaY/2);
+      byte temp = WeatherData.getTemperature(I.currentTime + i*I.HourlyInterval*3600);
+      tft.setTextColor(temp2color(temp));
+      fcnPrintTxtCenter(temp,FNTSZ,X,Y+Z+deltaY/2);
       tft.setTextColor(FG_COLOR,BG_COLOR);
       Z+=deltaY+section_spacer;
     }
@@ -851,8 +833,8 @@ void fcnDrawWeather() {
 
   //now draw daily weather
     tft.setCursor(0,Y);
-    int8_t tmm[2];
     for (i=1;i<6;i++) {
+      int8_t tmm[2];
       Z=0;
       X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
       iconID = WeatherData.getDailyWeatherID(i,true);
@@ -869,9 +851,11 @@ void fcnDrawWeather() {
       
       Z+=deltaY;
       WeatherData.getDailyTemp(i,tmm);
-      fcnPrintTxtColor2(tmm[0],tmm[1],FNTSZ,X,Y+Z+deltaY/2); 
+      fcnPrintTxtCenter((String) tmm[0] + "/" + tmm[1],FNTSZ,X,Y+Z+deltaY/2,temp2color(tmm[0]),temp2color(tmm[1])); 
+      tft.setTextColor(FG_COLOR,BG_COLOR);
       
       Z+=deltaY+section_spacer;
+
     }
 }
 

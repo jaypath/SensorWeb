@@ -2,11 +2,12 @@
 #define WEATHER_OPTIMIZED_HPP
 
 #include <Arduino.h>
-#include <globals.hpp>
+#include "globals.hpp"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <functional>
+
 
 #ifdef _DEBUG
 extern uint16_t TESTRUN;
@@ -67,7 +68,6 @@ private:
     uint32_t average_response_time;
     
     // Helper methods
-    void InitWeather();
     uint8_t getIndex(time_t dT = 0);
     bool fetchGridCoordinates();
     bool fetchGridCoordinatesHelper();
@@ -77,9 +77,7 @@ private:
     bool fetchSunriseSunset();
     
     // Optimized HTTP methods
-    bool makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, 
-                          const char* cert_path = "/Certificates/NOAA.crt");
-    bool makeParallelRequests();
+    bool makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, const char* cert_path= "/Certificates/NOAA.crt");
     
     // Caching methods
     bool isGridCoordinatesValid();

@@ -8,13 +8,14 @@
 #define TIMEUPDATEINT 10800000
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP,"time.nist.gov",I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET,TIMEUPDATEINT); //3rd param is offset, 4th param is update frequency
+NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //3rd param is offset, 4th param is update frequency
 
 char DATESTRING[25]="";
 
 
 time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
 {
+
   //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
 
     int m = month(), d=day(), h=0, n=0, s=0;
@@ -24,47 +25,57 @@ time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and ret
   if (str.indexOf("/")>-1) datesplit = "/"; //date is included
   if (str.indexOf("-")>-1) datesplit = "-";//date is included
 
+
   if (datesplit!="")
   {
-    m = breakString(&str,datesplit).toInt();
+    m = breakString(&str,datesplit,true).toInt();
     if (m>12) {
       yy=m;
-      m = breakString(&str,datesplit).toInt();
+      m = breakString(&str,datesplit,true).toInt();
       if (str.indexOf(" ")<0) //time is not included
       {
         d = str.toInt();      
       } else {
-        d = breakString(&str," ").toInt();
+        d = breakString(&str," ",true).toInt();
       }
     } else {
-      d = breakString(&str,"/").toInt();
+      d = breakString(&str,datesplit,true).toInt();
       if (str.indexOf(" ")<0) //time is not included
       {
         yy = str.toInt();      
       } else {
-        yy = breakString(&str," ").toInt();
+        yy = breakString(&str," ",true).toInt();
       }
     }
     
     if (yy>2000) yy = yy-2000;
     else if (yy>1970) yy=yy-1900;
 
-    if (str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s);
+      SerialPrint((String) "   m=" + m + "...\n");
+            SerialPrint((String) "   d=" + d + "...\n");
+                  SerialPrint((String) "   yy=" + yy + "...\n");
+
+
+
+    SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
+
+    if (str.length()==0) return makeUnixTime((byte) yy, m,d,0,0,0);
   }
 
   byte hoffset = 0;
   if (str.indexOf(" ")>-1) { //there is a " AM/PM" present
     if (str.indexOf("PM")>-1)  hoffset=12;
-    str = breakString(&str," "); //remove the am/pm
+    str = breakString(&str," ",true); //remove the am/pm
   }
-  h = breakString(&str,":").toInt() + hoffset;
-  n = breakString(&str,":").toInt();
-
-
+  h = breakString(&str,":",true).toInt() + hoffset;
+  n = breakString(&str,":",true).toInt();
 
   if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data
 
   s = str.toInt();
+
+  SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
+
   return makeUnixTime((byte) yy, m,d,h,n,s);
 
 }
@@ -92,35 +103,22 @@ time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
 
 
 //Time fcn
-bool updateTime(byte retries,uint16_t waittime) {
-  bool isgood = timeClient.update();
-  byte i=1;
+bool updateTime() {
 
+  bool isgood = false;
 
-  while (i<retries && isgood==false) {
-    i++; 
-    isgood = timeClient.update();
-    if (isgood==false) {
-      delay(waittime);
-
-      #ifdef _DEBUG
-        Serial.printf("timeupdate: Attempt %u... Time is: %s and timeclient failed to update.\n",i,dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
-      #endif
-    }
-  } 
-
-  if (isgood) {
-    checkDST();
-    I.currentTime=now();    
+  if ( timeClient.update()) {  //returns false if not time to update
+    setTime(timeClient.getEpochTime());
+    isgood = true;
   }
+
+  I.currentTime=now();    
   return isgood;
 }
 
 void checkDST(void) {
   
-  timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET + I.DSTOFFSET);
-  
-
+ 
 #ifdef _DEBUG
   Serial.printf("checkDST: Starting time EST is: %s\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
 #endif
@@ -164,7 +162,11 @@ void checkDST(void) {
   }
 
   timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET);
-  
+  timeClient.forceUpdate();
+  setTime(timeClient.getEpochTime());
+   I.currentTime = now();
+
+
   #ifdef _DEBUG
     Serial.printf("checkDST: Ending time is: %s (DST offset: %ld seconds)\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"), DSTOFFSET);
   #endif
@@ -241,6 +243,8 @@ char* dateify(time_t t, String dateformat) {
 
 bool setupTime(void) {
     timeClient.begin();
+    timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET);
+
     byte i=0;
     
     while (timeClient.forceUpdate()==false && i<25) {
@@ -248,12 +252,12 @@ bool setupTime(void) {
     }
     if (i>=25) return false;
 
-    checkDST();
+    setTime(timeClient.getEpochTime());
+    I.currentTime = now();
 
-    tft.clear();
-    tft.setCursor(0,0);
-tft.println(dateify(now(),"mm/dd/yyyy hh:nn:ss"));
-delay(10000);
+
+    checkDST(); //this also sets timelib, so no need to call settime separately
+
 
     return true;
 }

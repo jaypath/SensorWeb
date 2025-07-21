@@ -1,6 +1,9 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
+
+
 #define HAS_TFT
+#define _USESERIAL
 //#define _DEBUG 0
 //#define _WEBDEBUG 0
 
@@ -14,13 +17,6 @@
 #include <Arduino.h>
 #include <String.h>
 #include <SPI.h>
-//#include <Weather.hpp>
-#include <Devices.hpp>
-
-// WEATHER OPTIMIZATION - Comment out the next line to disable optimizations
-#ifdef WEATHER_OPTIMIZATION_ENABLED
-    #include <Weather_Optimized.hpp>
-#endif
 
 #define LGFX_USE_V1         // set to use new version of library
 #include <LovyanGFX.hpp>    // main library
@@ -51,7 +47,43 @@ typedef enum {
   RESET_UNKNOWN, //unknown cause
   RESET_NEWWIFI //new wifi credentials
   } RESETCAUSE;
+
   
+  //errors in operation
+  typedef enum {
+    ERROR_UNDEFINED,   
+    ERROR_HTTPFAIL_BOX, //failed http request for grid  coordinates
+    ERROR_HTTPFAIL_GRID, //failed http request for grid
+    ERROR_HTTPFAIL_HOURLY, //failed http request for hourly
+    ERROR_HTTPFAIL_DAILY, //failed http request for DAILY
+    ERROR_HTTPFAIL_SUNRISE, //failed http request for sunrise
+    ERROR_JSON_BOX, //failed http request for grid  coordinates
+    ERROR_JSON_GRID, //failed json parse request for grid
+    ERROR_JSON_HOURLY, //failed json parse request for hourly
+    ERROR_JSON_DAILY, //failed json parse request for DAILY
+    ERROR_JSON_SUNRISE, //failed json parse request for sunrise
+    ERROR_SD_LOGOPEN,
+    ERROR_SD_LOGWRITE, //could not write to errorlog
+    ERROR_SD_FILEWRITE,
+    ERROR_SD_FILEREAD,
+    ERROR_SD_DEVICESENSORSNOSNS, //device-sensor SNS not found
+    ERROR_SD_DEVICESENSORSNODEV, //device-sensor DEV not found
+    ERROR_SD_DEVICESENSORSSIZE, //tried to read devicesensors but size was wrong
+    ERROR_SD_DEVICESENSORSOPEN, //could not open devicesensors
+    ERROR_SD_DEVICESENSORSWRITE, //could not write devicesensors
+    ERROR_SD_SCREENFLAGSWRITE, //could not write I
+    ERROR_SD_SCREENFLAGSREAD, //could not read I
+    ERROR_SD_SCREENFLAGSSIZE,  //screenflags I file was the Wrong size
+    ERROR_SD_RETRIEVEDATAPARMS, //parameter error for retreiving data
+    ERROR_SD_RETRIEVEDATAMISSING, //no data in time range
+    ERROR_SD_OPENDIR, //could not open directory
+    ERROR_SD_FILEDEL, //could not delete file
+    ERROR_DEVICE_ADD, //could not add a device
+    ERROR_SENSOR_ADD, //could not add a sensor
+    ERROR_ESPNOW_SEND
+
+
+  } ERRORCODES;
 
 
 struct STRUCT_PrefsH {        
@@ -100,12 +132,14 @@ struct Screen {
 
     uint32_t lastHeader=0;
     uint32_t lastWeather=0;
-    uint32_t lastCurrentCondition=0;
     uint32_t lastClock=0; //last time clock was updated, whether flag or not
     uint32_t lastFlagView=0; //last time clock was updated, whether flag or not
+    uint32_t lastCurrentConditionTime; //last time current condition was updated
+    int8_t lastCurrentTemp; //last current temperature
+    int8_t localBatteryLevel;
 
     uint8_t HourlyInterval = 2; //hours between daily weather display
-    uint8_t currentConditionTime = 10; //how many minutes to show current condition?
+    uint8_t currentConditionInterval = 10; //how many minutes to show current condition?
     uint8_t flagViewTime = 10; //how many seconds to show flag values?
     uint8_t weatherTime = 60; //how many MINUTES to show weather values?
 
@@ -133,18 +167,19 @@ struct Screen {
     uint8_t isCold;
     uint8_t isSoilDry;
     uint8_t isLeak;
-    uint8_t localWeather; //index of outside sensor
-
+    uint8_t localWeatherIndex; //index of outside sensor
+    uint8_t localBatteryIndex; //index of battery
     int8_t currentTemp;
     int8_t Tmax;
     int8_t Tmin;
 
     char lastError[76];
     time_t lastErrorTime;
+    ERRORCODES lastErrorCode;
 
     time_t lastESPNOW;
-    int32_t GLOBAL_TIMEZONE_OFFSET;
-    int32_t DSTOFFSET;
+    int16_t GLOBAL_TIMEZONE_OFFSET;
+    int16_t DSTOFFSET;
 };
 
 //#define _LIGHTMODE

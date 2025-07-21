@@ -6,6 +6,10 @@
 #include <vector>
 #include <algorithm>
 #include "globals.hpp"
+#include "timesetup.hpp"
+
+
+extern Screen I;
 
 // New functions for Devices_Sensors class
 bool storeDevicesSensorsSD();
@@ -34,16 +38,12 @@ struct SensorDataPoint {
 };
 
 // Helper functions for data retrieval
-bool loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
-                           std::vector<SensorDataPoint>& dataPoints, uint32_t timeStart = 0, uint32_t timeEnd = 0xFFFFFFFF);
+int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* t, double* v, uint32_t timeStart = 0, uint32_t timeEnd = 0xFFFFFFFF, uint16_t Npts = 100);
 String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID);
 double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t targetTime);
 
 // Data retrieval functions
-bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
-                            byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd);
-bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
-                            byte *N, uint32_t t[], double v[], uint32_t timeEnd);
+bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd, bool forwardOrder = true);
 
 // Advanced data processing functions
 bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
@@ -56,6 +56,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
 // Functions for storing/reading all sensors
 bool storeAllSensorSD();
 bool readAllSensorSD();
+bool writeErrorToSD();
 
 // Screen and utility functions
 bool storeScreenInfoSD();

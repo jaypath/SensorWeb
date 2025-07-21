@@ -3,7 +3,7 @@
 #define _TIMESETUPH
 
 
-#include "Arduino.h"
+#include <Arduino.h>
 
 #include <TimeLib.h>
 #include <NTPClient.h>
@@ -17,7 +17,7 @@ extern char DATESTRING[];
 extern Screen I;
 
 void checkDST(void);
-bool updateTime(byte retries=10,uint16_t waittime=250);
+bool updateTime();
 bool checkTime(void);
 bool setupTime(void);
 String fcnDOW(time_t t, bool caps=false);

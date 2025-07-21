@@ -8,28 +8,35 @@
 // Helper function to create sensor filename
 String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
     char filename[64];
-    snprintf(filename, sizeof(filename), "/Data/sns_%016llX_%02d_%02d.dat", 
-             deviceMAC, sensorType, sensorID);
+    uint8_t MACID[6] = {0};
+    uint64ToMAC(deviceMAC,MACID);
+
+    snprintf(filename, sizeof(filename), "/Data/sns_%x%x%x%x%x%x_%02d_%02d.dat", 
+             MACID[5],MACID[4],MACID[3],MACID[2],MACID[1],MACID[0], sensorType, sensorID);
+    
     return String(filename);
 }
 
 // Helper function to load sensor data from file with optional time filtering
-bool loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
-                           std::vector<SensorDataPoint>& dataPoints, uint32_t timeStart, uint32_t timeEnd) {
-    // Create filename
+int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,uint32_t* t, double* v, uint32_t timeStart, uint32_t timeEnd, uint16_t Npts) {
+  //returns the number of datapoints found
     String filename = createSensorFilename(deviceMAC, sensorType, sensorID);
     
     // Open file for reading
     File file = SD.open(filename, FILE_READ);
     if (!file) {
-        storeError("loadSensorDataFromFile: Could not open file");
-        return false;
+        SerialPrint("loadSensorDataFromFile: Could not open sensor file: " + filename,true);  
+        storeError("loadSensorDataFromFile: Could not open file",ERROR_SD_FILEREAD);
+        return -1;
     }
     
     // Read all data points and filter by time range
     SensorDataPoint dataPoint;
     
-    while (file.available() >= sizeof(SensorDataPoint)) {
+    uint16_t j;
+    for (j=0;j<Npts;j++) {
+      file.seek(file.size()-(Npts+1)*sizeof(SensorDataPoint));//go to end of file - for the most part the data of interest will be near the end. N is datapoint of interest
+      if (file.available() >= sizeof(SensorDataPoint)) {
         file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint));
         
         // Verify this is the correct sensor
@@ -40,13 +47,16 @@ bool loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sens
         }
         
         // Check if within time range
-        if (dataPoint.timeLogged >= timeStart && dataPoint.timeLogged <= timeEnd) {
-            dataPoints.push_back(dataPoint);
-        }
+        if (dataPoint.timeLogged > timeEnd) continue;
+        if (dataPoint.timeLogged >= timeStart) {
+            t[j] = dataPoint.timeLogged;
+            v[j] = dataPoint.snsValue;
+        } else break; //no more valid data       
+      } else break;
     }
-    
     file.close();
-    return true;
+
+    return j;
 }
 
 union ScreenInfoBytes {
@@ -61,7 +71,7 @@ bool storeDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
     File f = SD.open(filename, FILE_WRITE);
     if (f==false) {
-        storeError("storeDevicesSensorsSD: Could not write Devices_Sensors data");
+        storeError("storeDevicesSensorsSD: Could not write Devices_Sensors data",ERROR_SD_DEVICESENSORSWRITE,false);
         f.close();
         return false;
     }
@@ -76,13 +86,13 @@ bool readDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
     File f = SD.open(filename, FILE_READ);
     if (f==false) {
-        storeError("readDevicesSensorsSD: Could not read Devices_Sensors data");
+        storeError("readDevicesSensorsSD: Could not read Devices_Sensors data",ERROR_SD_DEVICESENSORSOPEN);
         f.close();
         return false;
     }
 
     if (f.size() != sizeof(Devices_Sensors)) {
-        storeError("readDevicesSensorsSD: File size mismatch");
+        storeError("readDevicesSensorsSD: File size mismatch",ERROR_SD_DEVICESENSORSSIZE);
         f.close();
         return false;
     }
@@ -93,12 +103,34 @@ bool readDevicesSensorsSD() {
     return true;
 }
 
+bool writeErrorToSD() {
+    String filename = "/Data/DeviceErrors.txt";
+    File f = SD.open(filename, FILE_APPEND); // Open in append mode
+
+    if (f==false) {
+        storeError("writeErrorSD: Could not open error log",ERROR_SD_LOGOPEN,false); //do not store this error, to avoid infinite loop
+        f.close();
+        return false;
+    }
+
+    String logEntry = dateify(I.lastErrorTime) + (String) "," + I.lastErrorCode + "," + I.lastError;
+    if (f.println(logEntry) == false)   {
+      storeError("writeErrorSD: Could not write to error log",ERROR_SD_LOGWRITE,false); //do not store this error, to avoid infinite loop
+      f.close();
+      return false;
+    }
+    f.close();
+    
+    return true;
+}
+
+
 //storing variables
 bool storeScreenInfoSD() {
     String filename = "/Data/ScreenFlags.dat";
     File f = SD.open(filename, FILE_WRITE);
     if (f==false) {
-        storeError("Failed to open file to write screen to SD");
+        storeError("Failed to open file to write screen to SD", ERROR_SD_SCREENFLAGSWRITE, false);
         f.close();
         return false;
     }
@@ -120,20 +152,20 @@ bool readScreenInfoSD() //read last screenInfo
     File f = SD.open(filename, FILE_READ);
 
     if (f==false)  {
-        #ifdef _DEBUG
-        Serial.printf("Failed to open screenInfo file from SD\n");
-        #endif
-        storeError("Failed to open screenInfo file from SD");
+        
+        SerialPrint("Failed to open screenInfo file from SD\n");
+        
+        storeError("Failed to open screenInfo file from SD",ERROR_SD_SCREENFLAGSREAD);
         
         f.close();
         return false;
     }
     if (f.size() != sizeof(Screen)) {
-              #ifdef _DEBUG
-        Serial.printf("file on SD was not the size of screenInfo!\n");
-        #endif
+              
+        SerialPrint("file on SD was not the size of screenInfo!\n");
+        
 
-        storeError("Screen flag file was the wrong size");
+        storeError("Screen flag file was the wrong size",ERROR_SD_SCREENFLAGSSIZE);
 
         f.close();
 
@@ -170,7 +202,8 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     // Open file for writing
     File file = SD.open(filename, FILE_WRITE);
     if (!file) {
-        Serial.printf("Failed to open file: %s\n", filename.c_str());
+        SerialPrint((String) "Failed to open file " + filename + "\n");
+        storeError(((String) "Failed to open sensor data file " + filename).c_str(),ERROR_SD_FILEWRITE,false);
         return false;
     }
     
@@ -189,7 +222,7 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     file.write((uint8_t*)sensor->snsName, 30);
     
     file.close();
-    Serial.printf("Stored sensor data to %s\n", filename.c_str());
+//    SerialPrint((String) "Stored sensor data to " +  filename,true);
     return true;
 }
 
@@ -197,14 +230,14 @@ bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID)
     // Find the device and sensor indices
     int16_t deviceIndex = Sensors.findDevice(deviceMAC);
     if (deviceIndex < 0) {
-        storeError("storeSensorDataSD: Device not found");
+        storeError("storeSensorDataSD: Device not found", ERROR_SD_DEVICESENSORSNODEV);
         return false;
     }
     
     uint64_t deviceMACValue = Sensors.getDeviceMACByDevIndex(deviceIndex);
     int16_t sensorIndex = Sensors.findSensor(deviceMACValue, sensorType, sensorID);
     if (sensorIndex < 0) {
-        storeError("storeSensorDataSD: Sensor not found");
+        storeError("storeSensorDataSD: Sensor not found", ERROR_SD_DEVICESENSORSNOSNS);
         return false;
     }
     
@@ -229,7 +262,8 @@ bool readSensorDataSD(int16_t sensorIndex) {
     // Open file for reading
     File file = SD.open(filename, FILE_READ);
     if (!file) {
-        Serial.printf("Failed to open file for reading: %s\n", filename.c_str());
+        SerialPrint( (String) "Failed to open file for reading: " + filename + "\n");
+        storeError(((String) "Failed to open " + filename).c_str(),ERROR_SD_FILEREAD);
         return false;
     }
     
@@ -257,85 +291,54 @@ bool readSensorDataSD(int16_t sensorIndex) {
 }
 
 
-
-bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd) {
-  //retrieve up to N data points between timeStart and timeEnd. If fewer than N data points are found, return the number of data points found.
-
-  // Validate inputs
-  if (N == nullptr || t == nullptr || v == nullptr || timeEnd <= timeStart) {
-    storeError("retrieveSensorDataFromSD: Invalid parameters");
-    return false;
-  }
-
-  // Store the maximum number of data points requested
-  byte maxDataPoints = *N;
-  
-  // Initialize N to 0 (will be incremented as we find data points)
-  *N = 0;
-
-  // Load data points using helper function
-  std::vector<SensorDataPoint> dataPoints;
-  if (!loadSensorDataFromFile(deviceMAC, sensorType, sensorID, dataPoints, timeStart, timeEnd)) {
-    return false;
-  }
-  
-  // Take up to maxDataPoints from the loaded data
-  for (const auto& dataPoint : dataPoints) {
-    if (*N >= maxDataPoints) break;
-    
-    t[*N] = dataPoint.timeLogged;
-    v[*N] = dataPoint.snsValue;
-    (*N)++;
-  }
-  
-  return true;
-}
-
-bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, 
-                            byte *N, uint32_t t[], double v[], uint32_t timeEnd) {
+bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd, bool forwardOrder) {
   //retrieve up to N most recent data points ending at timeEnd. If fewer than N data points are found, return the number of data points found.
 
   // Validate inputs
   if (N == nullptr || t == nullptr || v == nullptr) {
-    storeError("retrieveSensorDataFromSD: Invalid parameters");
+    SerialPrint("retrieveSensorDataFromSD: N, t, or v were nullptr.\n");
+    storeError("retrieveSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
     return false;
   }
 
-  // Store the maximum number of data points requested
-  byte maxDataPoints = *N;
-  
-  // Initialize N to 0 (will be incremented as we find data points)
-  *N = 0;
 
-  // Load data points using helper function (up to timeEnd)
-  std::vector<SensorDataPoint> dataPoints;
-  if (!loadSensorDataFromFile(deviceMAC, sensorType, sensorID, dataPoints, 0, timeEnd)) {
+  int16_t n = loadSensorDataFromFile(deviceMAC, sensorType, sensorID, t, v, timeStart, timeEnd, *N);
+  if (n<0) {
+    SerialPrint("retrieveSensorDataFromSD: file loading failed.\n");
+
     return false;
   }
   
-  if (dataPoints.empty()) {
+  if (n==0) {
+    SerialPrint("retrieveSensorDataFromSD: No errors, but no data was returned.\n");
     return true; // No data found, but not an error
   }
   
-  // Sort data points by time (most recent first)
-  std::sort(dataPoints.begin(), dataPoints.end(), 
-            [](const SensorDataPoint& a, const SensorDataPoint& b) {
-                return a.timeLogged > b.timeLogged; // Descending order
-            });
+  if (forwardOrder) {
+    // reverse the orders of t and v
+    //note that only the FIRST n points were actually entered
+
+    uint32_t t0[*N] = {0};
+    double v0[*N] = {0};
+
+    int16_t i=0;
+
+    for (int16_t j=n-1; j>=0;j--) {
+      t0[i] = t[j];
+      v0[i] = v[j];
+      i++;
+    }
+
+    //reassign actual vectors
+    for (int16_t j=0; j<*N;j++) {
+      t[j] = t0[j];
+      v[j] = v0[j];
+    }
+  } 
   
-  // Take the most recent N data points
-  byte count = 0;
-  for (const auto& point : dataPoints) {
-    if (count >= maxDataPoints) break;
-    
-    t[count] = point.timeLogged;
-    v[count] = point.snsValue;
-    count++;
-  }
-  
-  *N = count;
+  *N = n;
   return true;
-}
+} 
 
 bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
                                          uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize,
@@ -343,7 +346,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
     // Validate inputs
     if (timeEnd <= timeStart || numPointsX == 0 || windowSize == 0 || 
         averagedValues == nullptr || averagedTimes == nullptr) {
-        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters");
+        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
         return false;
     }
     
@@ -354,7 +357,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
     }
     
     if (validDataPoints.empty()) {
-        storeError("retrieveMovingAverageSensorDataFromSD: No data points in time range");
+        storeError("retrieveMovingAverageSensorDataFromSD: No data points in time range",  ERROR_SD_RETRIEVEDATAMISSING);
         return false;
     }
     
@@ -408,7 +411,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
     // Validate inputs
     if (numPointsX == 0 || windowSize == 0 || 
         averagedValues == nullptr || averagedTimes == nullptr) {
-        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters");
+        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
         return false;
     }
     
@@ -419,7 +422,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
     }
     
     if (validDataPoints.empty()) {
-        storeError("retrieveMovingAverageSensorDataFromSD: No data points found");
+        storeError("retrieveMovingAverageSensorDataFromSD: No data points found", ERROR_SD_RETRIEVEDATAMISSING);
         return false;
     }
     
@@ -532,11 +535,9 @@ void deleteFiles(const char* pattern,const char* directory) {
     String filename ;;
 
   if (!dir) {
-    storeError("deleteFiles: Could not open dir");
+    storeError("deleteFiles: Could not open dir", ERROR_SD_OPENDIR);
 
-    #ifdef _DEBUG 
-    Serial.println("Error opening root directory.");
-    #endif
+    SerialPrint("Error opening root directory.");
     return;
   }
 
@@ -544,25 +545,18 @@ void deleteFiles(const char* pattern,const char* directory) {
   while (true) {
     File entry = dir.openNextFile();
     filename  = (String) directory + "/" + entry.name();
-    #ifdef _DEBUG
-        Serial.printf("Current file: %s\n",filename);
-    #endif
+    SerialPrint("Current file: " + filename + "\n");
     if (!entry) {
       // no more files
       break;
     }
 
     if (matchPattern(entry.name(), pattern)) {
-        #ifdef _DEBUG
-        Serial.print("Deleting: ");
-        Serial.println(filename);
-        #endif
-      if (!SD.remove(filename)) {
-        #ifdef _DEBUG
-        Serial.print("Error deleting: ");
-        Serial.println(filename);
-        #endif
+        SerialPrint("Deleting: " + filename + "\n");
         
+      if (!SD.remove(filename)) {
+        SerialPrint("Error deleting: " + filename + "\n");
+        storeError(((String) "Error deleting: " + filename).c_str(), ERROR_SD_FILEDEL);
       }
     }
     entry.close();

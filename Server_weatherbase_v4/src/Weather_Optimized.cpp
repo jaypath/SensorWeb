@@ -1,7 +1,7 @@
 #include "Weather_Optimized.hpp"
-#include <ArduinoJson.h>
-#include <timesetup.hpp>
-#include <server.hpp>
+#include "timesetup.hpp"
+#include "server.hpp"
+
 
 // Constructor
 WeatherInfoOptimized::WeatherInfoOptimized() {
@@ -57,18 +57,14 @@ bool WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
     uint32_t start_time = millis();
     bool success = false;
 
-    // Use parallel requests if enabled
-    #if PARALLEL_REQUESTS_ENABLED
-        success = makeParallelRequests();
-    #else
-        // Sequential requests (fallback)
+
+        // Sequential requests 
         success = fetchGridCoordinates() &&
                   fetchHourlyForecast() &&
                   fetchGridForecast() &&
                   fetchDailyForecast() &&
                   fetchSunriseSunset();
-    #endif
-
+    
     if (success) {
         this->lastUpdateT = I.currentTime;
         saveToCache();
@@ -91,117 +87,6 @@ bool WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
     return success;
 }
 
-// Parallel request processing
-bool WeatherInfoOptimized::makeParallelRequests() {
-    // First, ensure we have grid coordinates
-    if (!isGridCoordinatesValid()) {
-        if (!fetchGridCoordinates()) {
-            return false;
-        }
-    }
-    
-    // Create HTTP clients for parallel requests
-    HTTPClient http_hourly, http_grid, http_daily;
-    WiFiClientSecure wfclient_hourly, wfclient_grid, wfclient_daily;
-    JsonDocument doc_hourly, doc_grid, doc_daily;
-    
-    String ca_cert = getCert("/Certificates/NOAA.crt");
-    
-    // Configure all clients
-    wfclient_hourly.setCACert(ca_cert.c_str());
-    wfclient_grid.setCACert(ca_cert.c_str());
-    wfclient_daily.setCACert(ca_cert.c_str());
-    
-    http_hourly.useHTTP10(true);
-    http_grid.useHTTP10(true);
-    http_daily.useHTTP10(true);
-    
-    // Start all requests simultaneously
-    String url_hourly = getGrid(2);
-    String url_grid = getGrid(0);
-    String url_daily = getGrid(1);
-    
-    http_hourly.begin(wfclient_hourly, url_hourly.c_str());
-    http_grid.begin(wfclient_grid, url_grid.c_str());
-    http_daily.begin(wfclient_daily, url_daily.c_str());
-    
-    // Send requests
-    int httpCode_hourly = http_hourly.GET();
-    int httpCode_grid = http_grid.GET();
-    int httpCode_daily = http_daily.GET();
-    
-    bool success = true;
-    
-    // Process responses
-    if (httpCode_hourly == 200) {
-        DeserializationError error = deserializeJson(doc_hourly, http_hourly.getStream());
-        if (!error) {
-            if (doc_hourly["properties"].is<JsonVariantConst>()) {
-                auto properties = doc_hourly["properties"].as<JsonObject>();
-                processHourlyData(properties);
-            } else {
-                success = false;
-                storeError("JSON error with hourly forecast");
-            }
-        } else {
-            success = false;
-            storeError("JSON deserialization error");
-        }
-    } else {
-        success = false;
-        handleApiError("hourly forecast", httpCode_hourly);
-    }
-    
-    if (httpCode_grid == 200) {
-        DeserializationError error = deserializeJson(doc_grid, http_grid.getStream());
-        if (!error) {
-            if (doc_grid["properties"].is<JsonVariantConst>()) {
-                auto properties = doc_grid["properties"].as<JsonObject>();
-                processGridData(properties);
-            } else {
-                success = false;
-                storeError("JSON error with grid forecast");
-            }
-        } else {
-            success = false;
-            storeError("JSON deserialization error");
-        }
-    } else {
-        success = false;
-        handleApiError("grid forecast", httpCode_grid);
-    }
-    
-    if (httpCode_daily == 200) {
-        DeserializationError error = deserializeJson(doc_daily, http_daily.getStream());
-        if (!error) {
-            if (doc_daily["properties"].is<JsonVariantConst>()) {
-                auto properties = doc_daily["properties"].as<JsonObject>();
-                processDailyData(properties);
-            } else {
-                success = false;
-                storeError("JSON error with daily forecast");
-            }
-        } else {
-            success = false;
-            storeError("JSON deserialization error");
-        }
-    } else {
-        success = false;
-        handleApiError("daily forecast", httpCode_daily);
-    }
-    
-    // Clean up
-    http_hourly.end();
-    http_grid.end();
-    http_daily.end();
-    
-    // Fetch sunrise/sunset if needed
-    if (success && (this->lastUpdateT > this->sunset || this->lastUpdateT == 0)) {
-        success = fetchSunriseSunset();
-    }
-    
-    return success;
-}
 
 // Helper function for grid coordinates fetching
 bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
@@ -212,7 +97,7 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
     JsonDocument doc;
     int httpCode;
     
-    if (makeSecureRequest(url, doc, httpCode)) {
+    if (makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_BOX,ERROR_JSON_BOX)) {
         if (doc["properties"].is<JsonVariantConst>() && doc["properties"]["gridId"].is<JsonVariantConst>()) {
             strncpy(this->Grid_id, doc["properties"]["gridId"], sizeof(this->Grid_id) - 1);
             this->Grid_id[sizeof(this->Grid_id) - 1] = '\0';
@@ -221,8 +106,11 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
             this->grid_coordinates_cached = true;
             updateGridCoordinatesCache();
             return true;
+        } else {
+            storeError("Grid coordinates Json had incorrect format", ERROR_JSON_BOX,true);
         }
-    }
+        
+    } 
     return false;
 }
 
@@ -236,7 +124,7 @@ bool WeatherInfoOptimized::fetchGridCoordinates() {
 }
 
 // Optimized HTTP request method
-bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, const char* cert_path) {
+bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, const char* cert_path) {
     if (WiFi.status() != WL_CONNECTED) {
         return false;
     }
@@ -251,10 +139,14 @@ bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& do
     
     uint32_t start_time = millis();
     httpCode = http.GET();
+    delay(1000);
     uint32_t response_time = millis() - start_time;
     
+
     bool success = false;
-    if (httpCode == 200) {
+
+
+    if (httpCode < 400) {
         DeserializationError error = deserializeJson(doc, http.getStream());
         if (!error) {
             success = true;
@@ -265,8 +157,10 @@ bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& do
                 average_response_time = (average_response_time + response_time) / 2;
             }
         } else {
-            storeError("JSON deserialization error");
+            storeError(enumErrorToName(JSON).c_str(),JSON,true);
         }
+    } else {
+        storeError(enumErrorToName(HTTP).c_str(),HTTP,true);
     }
     
     http.end();
@@ -275,20 +169,25 @@ bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& do
 
 // Optimized data processing methods
 bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
+
+    JsonArray periodsArray = properties["periods"].as<JsonArray>();
     uint8_t cnt = 0;
-    for (JsonObject properties_period : properties["periods"].as<JsonArray>()) {
+        
+    for (JsonObject properties_period : periodsArray) {
+
         if (cnt >= NUMWTHRDAYS * 24) break;
         
-        String tmp = properties_period["startTime"];
+        String tmp = (String) properties_period["startTime"].as<const char*>();
         this->dT[cnt] = breakNOAATimestamp(tmp);
         
         // Optimized temperature processing
         double temp = (double)properties_period["temperature"];
-        const char* tu = properties_period["temperatureUnit"];
+        const char* tu = (const char*) properties_period["temperatureUnit"];
         if (strcmp(tu, "C") == 0) {
             temp = (temp * 9.0 / 5.0) + 32.0;
         }
         this->temperature[cnt] = (int8_t)temp;
+        
         
         // Optimized other fields
         this->PoP[cnt] = (uint8_t)properties_period["probabilityOfPrecipitation"]["value"];
@@ -296,7 +195,7 @@ bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
         this->humidity[cnt] = (uint8_t)properties_period["relativeHumidity"]["value"];
         
         // Optimized wind speed parsing
-        const char* ws = properties_period["windSpeed"];
+        const char* ws = properties_period["windSpeed"].as<const char*>();
         String wind_str = String(ws);
         int mph_index = wind_str.indexOf(" mph");
         if (mph_index > 0) {
@@ -304,20 +203,25 @@ bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
         }
         
         // Optimized weather ID processing
-        const char* icon = properties_period["icon"];
+        const char* icon = properties_period["icon"].as<const char*>();
         this->weatherID[cnt] = breakIconLink(String(icon), this->dT[cnt], 0);
         
         cnt++;
     }
 
     if (cnt>0) return true;
+
+    storeError("Could not parse Hourly JSON",ERROR_JSON_HOURLY,true);
     return false;
 }
 
 bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
     // Process wet bulb temperature
+
+
+    JsonArray values = properties["wetBulbGlobeTemperature"]["values"].as<JsonArray>();
     uint16_t cnt = 0;
-    for (JsonObject value : properties["wetBulbGlobeTemperature"]["values"].as<JsonArray>()) {
+    for (JsonObject value : values) {
         if (cnt >= NUMWTHRDAYS * 24) break;
         
         String tmp = value["validTime"];
@@ -331,6 +235,11 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
         }
     }
     
+    if (cnt==0) {
+        storeError("Could not parse Grid JSON",ERROR_JSON_GRID,true);
+        return false;
+    }
+
     // Process precipitation data with optimized loops
     processPrecipitationData(properties, "quantitativePrecipitation", this->rainmm, this->flag_rain);
     processPrecipitationData(properties, "iceAccumulation", this->icemm, this->flag_ice);
@@ -340,7 +249,9 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
 
 void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, const char* field_name, uint8_t* data_array, bool& flag) {
     uint16_t cnt = 0;
-    for (JsonObject value : properties[field_name]["values"].as<JsonArray>()) {
+    
+    JsonArray values = properties[field_name]["values"].as<JsonArray>();
+    for (JsonObject value : values) {
         if (cnt >= NUMWTHRDAYS * 24) break;
         
         String tmp = value["validTime"];
@@ -356,12 +267,18 @@ void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, cons
         }
     }
 
-
+    if (cnt==0) {
+        String s = "[Minor] No " + (String) field_name + " values";
+        storeError(s.c_str(),ERROR_JSON_GRID,true);        
+    }
+    return;
 }
 
 bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
     uint16_t cnt = 0;
-    for (JsonObject properties_value : properties["periods"].as<JsonArray>()) {
+    JsonArray periodsArray = properties["periods"].as<JsonArray>();
+
+    for (JsonObject properties_value : periodsArray) {
         if (cnt >= 14) break;
         
         String tmp = properties_value["startTime"];
@@ -392,8 +309,15 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
         
         cnt++;
     }
-    return true;
+
+    if (cnt>0) {
+        return true;
+    }
+
     
+    storeError("Could not parse Daily JSON",ERROR_JSON_DAILY,true);
+    return false;
+
 }
 
 // Caching methods
@@ -432,6 +356,7 @@ void WeatherInfoOptimized::saveToCache() {
 
 // Error handling and retry logic
 bool WeatherInfoOptimized::handleApiError(const String& operation, int httpCode) {
+
     #ifdef _DEBUG
         Serial.printf("API error in %s: HTTP %d\n", operation.c_str(), httpCode);
     #endif
@@ -446,7 +371,7 @@ bool WeatherInfoOptimized::retryWithBackoff(const String& operation, std::functi
         }
         
         if (attempt < MAX_RETRY_ATTEMPTS - 1) {
-            uint32_t delay_ms = (1 << attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+            uint32_t delay_ms = (3 * attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
             delay(delay_ms);
         }
     }
@@ -484,10 +409,26 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
         JsonDocument doc;
         int httpCode;
         String url = getGrid(2);
-        JsonObject tempobj = doc["properties"];
-        return makeSecureRequest(url, doc, httpCode) && 
+
+        bool b1=false,b2 = false,b3=false;
+
+        b1=makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_HOURLY,ERROR_JSON_HOURLY);
+        if (b1) {
+            b2 = doc["properties"].is<JsonVariantConst>();
+
+            if (b2) {
+                JsonObject tempobj = doc["properties"].as<JsonObject>();
+                b3 =  processHourlyData(tempobj);
+            } else {
+                storeError("Hourly Json had incorrect format", ERROR_JSON_HOURLY,true);
+            }
+        }
+        return b1 && b2 && b3;
+
+/*        return makeSecureRequest(url, doc, httpCode) && 
                doc["properties"].is<JsonVariantConst>() &&
                processHourlyData(tempobj);
+               */
     });
 }
 
@@ -496,24 +437,47 @@ bool WeatherInfoOptimized::fetchGridForecast() {
         JsonDocument doc;
         int httpCode;
         String url = getGrid(0);
-        JsonObject tempobj = doc["properties"];
+        
+        bool b1=false,b2 = false,b3=false;
+        b1=makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_GRID,ERROR_JSON_GRID);
+        if (b1) {
+            b2 = doc["properties"].is<JsonVariantConst>();
 
-        return makeSecureRequest(url, doc, httpCode) && 
+            if (b2) {
+                JsonObject tempobj = doc["properties"].as<JsonObject>();
+                b3 =  processGridData(tempobj);
+            } else {
+                storeError("Grid Json had incorrect format", ERROR_JSON_GRID,true);
+            }
+        }
+        return b1 && b2 && b3;
+
+
+/*        return makeSecureRequest(url, doc, httpCode) && 
                doc["properties"].is<JsonVariantConst>() &&
                processGridData(tempobj);
+               */
     });
+    
 }
 
 bool WeatherInfoOptimized::fetchDailyForecast() {
     return retryWithBackoff("daily forecast", [this]() {
         JsonDocument doc;
-        int httpCode;
+        int httpCode;        
         String url = getGrid(1);
-        JsonObject tempobj = doc["properties"];
-
-        return makeSecureRequest(url, doc, httpCode) && 
-               doc["properties"].is<JsonVariantConst>() &&
-               processDailyData(tempobj);
+        bool b1=false,b2 = false,b3=false;
+        b1=makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_DAILY,ERROR_JSON_DAILY);
+        if (b1) {
+            b2 = doc["properties"].is<JsonVariantConst>();
+            if (b2) {
+                JsonObject tempobj = doc["properties"].as<JsonObject>();
+                b3 =  processDailyData(tempobj);
+            } else {
+                storeError("Daily Json had incorrect format", ERROR_JSON_DAILY,true);
+            }
+        }
+        return b1 && b2 && b3;
     });
 }
 
@@ -525,19 +489,23 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
     JsonDocument doc;
     int httpCode;
     
-    if (makeSecureRequest(url, doc, httpCode, "/Certificates/sunrisesunset.crt")) {
+    if (makeSecureRequest(url, doc, httpCode, ERROR_HTTPFAIL_SUNRISE, ERROR_JSON_SUNRISE, "/Certificates/sunrisesunset.crt")) {
         if (doc["results"].is<JsonVariantConst>()) {
             JsonObject results = doc["results"];
             const char* srise = results["sunrise"];
             const char* sset = results["sunset"];
             const char* sdat = results["date"];
+
             
             String sun = String(sdat) + " " + String(srise);
             this->sunrise = convertStrTime(sun);
             
             sun = String(sdat) + " " + String(sset);
             this->sunset = convertStrTime(sun);
+            
             return true;
+        } else {
+            storeError("Sunrise IO Json had incorrect format", ERROR_JSON_SUNRISE,true);
         }
     }
     return false;
@@ -564,14 +532,6 @@ uint8_t WeatherInfoOptimized::getIndex(time_t dT) {
 int8_t WeatherInfoOptimized::getTemperature(uint32_t dt, bool wetbulb, bool asindex) {
     if (asindex) {
         if (wetbulb) return this->wetBulbTemperature[dt];
-        if (dt==0 && I.localWeather<255) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeather);    
-            if (sensor) {
-                if (I.currentTime-sensor->timeLogged<1800) { //localweather is only useful if <30 minutes old 
-                    return I.currentTemp;
-                }
-            }
-        }
         
         return this->temperature[dt];
     }
@@ -770,6 +730,8 @@ bool WeatherInfoOptimized::initWeather() {
     this->sunrise = 0;
     this->sunset = 0;
     
+    this->lat = 42.3018906;
+    this->lon = -71.2981767;
 
     this->lastUpdateT = 0;
     this->lastUpdateAttempt = 0;

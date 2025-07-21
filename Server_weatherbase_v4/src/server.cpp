@@ -722,7 +722,7 @@ WEBHTML = WEBHTML + "</font>---------------------<br>";
   WEBHTML += "<input type=\"text\" id=\"FLAGVIEW\" name=\"FLAGVIEW\" value=\"" + String(I.flagViewTime) + "\" maxlength=\"15\"><br>";  
 
   WEBHTML += "<label for=\"CURRENTCONDITIONTIME\">MINUTES to show Current Conditions</label>";
-  WEBHTML += "<input type=\"text\" id=\"CURRENTCONDITIONTIME\" name=\"CURRENTCONDITIONTIME\" value=\"" + String(I.currentConditionTime) + "\" maxlength=\"15\"><br>";  
+  WEBHTML += "<input type=\"text\" id=\"currentConditionInterval\" name=\"currentConditionInterval\" value=\"" + String(I.currentConditionInterval) + "\" maxlength=\"15\"><br>";  
 
   WEBHTML += "<label for=\"WEATHERTIME\">MINUTES before weather screen update</label>";
   WEBHTML += "<input type=\"text\" id=\"WEATHERTIME\" name=\"WEATHERTIME\" value=\"" + String(I.weatherTime) + "\" maxlength=\"15\"><br>";  
@@ -817,8 +817,8 @@ void rootTableFill(byte j) {
     if (sensor->snsType==60 || sensor->snsType==61) delta = 3; //batery
     if (sensor->snsType>=50 && sensor->snsType<60) delta = 15; //HVAC
     
-    WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&endtime=" + (String) (I.currentTime) + "&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-    WEBHTML = WEBHTML + "<td><a href=\"http://192.168.68.93/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&endtime=" + (String) (I.currentTime) + "&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=" + (String) (I.currentTime-86400) + "&endtime=" + (String) (I.currentTime) + "&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=" + (String) (I.currentTime-86400) + "&endtime=" + (String) (I.currentTime) + "&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
     WEBHTML = WEBHTML + "</tr>";
   }
 }
@@ -991,23 +991,12 @@ void handleUPDATEDEFAULTS() {
 
     if (server.argName(i)=="FLAGVIEW") I.flagViewTime =  server.arg(i).toInt();
 
-    if (server.argName(i)=="CURRENTCONDITIONTIME") I.currentConditionTime =  server.arg(i).toInt();
+    if (server.argName(i)=="currentConditionInterval") I.currentConditionInterval =  server.arg(i).toInt();
     
     if (server.argName(i)=="WEATHERTIME") I.weatherTime =  server.arg(i).toInt();
-   
-    
-    #ifdef _DEBUG
-    if (server.argName(i)=="TESTRUN") {
-      TESTRUN =  server.arg(i).toInt();
-
-      Serial.printf("TESRUN is now %u\n",TESTRUN);
-    }
-    #endif
-
   }
   //force screen redraw
   I.lastClock = 0; 
-  I.lastCurrentCondition=0;
   I.lastFlagView=0;
   I.lastHeader=0;
   I.lastWeather=0;
@@ -1041,7 +1030,8 @@ void handleRETRIEVEDATA() {
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"MAC") {
       String macStr = server.arg(k);
-      deviceMAC = strtoull(macStr.c_str(), NULL, 16);
+      deviceMAC = strtoull(macStr.c_str(), NULL, 10);
+      
     }
     if ((String)server.argName(k) == (String)"type")  snsType=server.arg(k).toInt(); 
     if ((String)server.argName(k) == (String)"id")  snsID=server.arg(k).toInt(); 
@@ -1051,15 +1041,15 @@ void handleRETRIEVEDATA() {
   }
 
   if (deviceMAC==0 || snsType == 0 || snsID==0) {
-    WEBHTML="Inappropriate call... invalid device MAC or sensor ID";
+    WEBHTML="Inappropriate call... you provided MAC=" + (String) deviceMAC + ", snsType=" + snsType + ", and snsID=" + snsID + ". None of these can be zero";
     serverTextClose(302,false);
     return;
   }
 
   if (N>100) N=100; //don't let the array get too large!
   if (N==0) N=50;
-  if (endtime==0) endtime--; //this make endtime the max value, will just read N values.
-  if (endtime<starttime) endtime = -1;
+  if (endtime==0) endtime--; //this makes endtime the max value, will just read N values.
+  if (endtime<starttime) endtime = -1; //make sure endtime > starttime
 
   uint32_t t[N]={0};
   double v[N]={0};
@@ -1097,7 +1087,7 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"MAC") {
       String macStr = server.arg(k);
-      deviceMAC = strtoull(macStr.c_str(), NULL, 16);
+      deviceMAC = strtoull(macStr.c_str(), NULL, 10);
     }
     if ((String)server.argName(k) == (String)"type")  snsType=server.arg(k).toInt(); 
     if ((String)server.argName(k) == (String)"id")  snsID=server.arg(k).toInt(); 
@@ -1124,7 +1114,7 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
   else    success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, endtime, windowSizeN, numPointsX, v, t); //this fills from tn backwards to N*delta samples 
 
   if (success == false)  {
-    WEBHTML= "Failed to read associated file.";
+    WEBHTML= "handleRETRIEVEDATA_MOVINGAVERAGE: Failed to read associated file.";
     serverTextClose(401,false);
     return;
   }
@@ -1339,7 +1329,6 @@ void handlePost() {
     
     // Handle old HTML form data (backward compatibility)
     if (server.args() > 0) {
-        Serial.println("Received HTML form data");
         
         // Parse old-style HTML form parameters
         uint64_t deviceMAC = 0;
@@ -1347,6 +1336,7 @@ void handlePost() {
         String devName = "";
         uint8_t snsType = 0;
         uint8_t snsID = 0;
+        uint8_t ardID = 0;
         String snsName = "";
         double snsValue = 0;
         uint32_t timeRead = I.currentTime;
@@ -1361,16 +1351,21 @@ void handlePost() {
             if (argName == "MAC") {
                 deviceMAC = strtoull(argValue.c_str(), NULL, 16);
             } else if (argName == "IP") {
-                deviceIP = IPAddress().fromString(argValue);
+              argValue.replace(",",""); //remove unneeded erroneous commas
+              deviceIP = StringToIP(argValue);              
+            } else if (argName == "logID") {
+                ardID = breakString(&argValue,".",true).toInt();
+                snsType = breakString(&argValue,".",true).toInt();
+                snsID = argValue.toInt();
             } else if (argName == "devName") {
                 devName = argValue;
             } else if (argName == "snsType") {
                 snsType = argValue.toInt();
             } else if (argName == "snsID") {
                 snsID = argValue.toInt();
-            } else if (argName == "varName") {
+            } else if (argName == "varName"|| argName == "snsName") {
                 snsName = argValue;
-            } else if (argName == "varValue") {
+            } else if (argName == "varValue" || argName == "snsValue") {
                 snsValue = argValue.toDouble();
             } else if (argName == "timeRead") {
                 timeRead = argValue.toInt();
@@ -1382,35 +1377,32 @@ void handlePost() {
                 flags = argValue.toInt();
             }
         }
-        
+
         // Validate required fields
-        if (snsType == 0 || snsName.length() == 0) {
-            server.send(400, "text/plain", "Missing required fields: snsType and varName");
-            return;
+        if (snsType == 0 || snsName.length() == 0 || (deviceIP==0 && deviceMAC==0)) {
+          SerialPrint("sensor missing critical elements, skipping.\n");
+          server.send(400, "text/plain", "Missing required fields: snsType and varName");
+          return;
         }
         
         // If no MAC provided but IP is available, use IP as MAC address
         if (deviceMAC == 0 && deviceIP != 0) {
-            // Create a unique MAC address from the IP address
-            // Format: 0x00000000FF000000 | (IP << 32)
             // This creates a unique identifier that's clearly IP-based
-            deviceMAC = ((uint64_t)deviceIP << 32) | 0x00000000FF000000;
-            Serial.printf("Using IP %s as MAC address: %016llX\n", 
-                         IPAddress(deviceIP).toString().c_str(), deviceMAC);
+            deviceMAC = deviceIP;
         }
         
         // Add sensor to Devices_Sensors class
         int16_t sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
                                                snsName.c_str(), snsValue, 
                                                timeRead, timeLogged, sendingInt, flags);
-        
         if (sensorIndex >= 0) {
             // Store individual sensor data to SD card
             storeSensorDataSD(sensorIndex);
-            Serial.printf("Added HTML form sensor: type=%d, id=%d, name=%s, value=%.2f\n", 
-                        snsType, snsID, snsName.c_str(), snsValue);
+            //SerialPrint((String) "Added HTML form sensor: index " + sensorIndex + ", MAC =" + deviceMAC + ", IP =" + deviceIP + ", type=" + snsType + ", id=" + snsID + ", name=" + snsName + ", value=" + snsValue + "\n");
             server.send(200, "text/plain", "HTML form data received successfully");
         } else {
+            SerialPrint("Failed to add sensor\n");
+
             server.send(500, "text/plain", "Failed to add sensor");
         }
         return;
