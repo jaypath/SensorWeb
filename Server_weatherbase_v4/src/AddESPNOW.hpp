@@ -9,14 +9,13 @@
     #include "utility.hpp"
     #include "server.hpp"
     #include "BootSecure.hpp"
-    #include "graphics.hpp"
     #include <string.h>
     #include <esp_system.h>
     #include "timesetup.hpp"
 
 
 extern STRUCT_PrefsH Prefs;
-extern Screen I;
+extern STRUCT_CORE I;
 
 
 extern DevType Devices;

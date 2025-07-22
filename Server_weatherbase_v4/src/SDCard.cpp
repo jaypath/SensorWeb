@@ -1,9 +1,51 @@
 #include <SDCard.hpp>
 #include <globals.hpp>
 #include <SD.h>
-#include <utility.hpp>
 #include <cstdlib>
+#include "utility.hpp"
 #include "Devices.hpp"
+
+#ifdef _USEWEATHER
+#include "Weather_Optimized.hpp"
+
+extern WeatherInfoOptimized WeatherData;
+
+//functions to store weather data
+bool storeWeatherDataSD() {
+  String filename = "/Data/WeatherData.dat";
+  File f = SD.open(filename, FILE_WRITE);
+  if (f==false) {
+    storeError("storeWeatherDataSD: Could not write weather data",ERROR_SD_WEATHERDATAWRITE);
+    return false;
+  }
+
+  f.write((uint8_t*)&WeatherData, sizeof(WeatherData));
+  f.close();
+  return true;
+}
+
+//function to read weather data
+bool readWeatherDataSD() {
+  String filename = "/Data/WeatherData.dat";
+  File f = SD.open(filename, FILE_READ);
+  if (f==false) {
+    storeError("readWeatherDataSD: Could not read weather data",ERROR_SD_WEATHERDATAREAD);
+    return false;
+  }
+  if (f.size() != sizeof(WeatherData)) {
+    storeError("readWeatherDataSD: File size mismatch",ERROR_SD_WEATHERDATASIZE);
+    f.close();
+    return false;
+  }
+  f.read((uint8_t*)&WeatherData, sizeof(WeatherData));
+  f.close();
+  return true;
+}
+
+#endif
+
+
+
 
 // Helper function to create sensor filename
 String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
@@ -21,6 +63,8 @@ String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sens
 int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,uint32_t* t, double* v, uint32_t timeStart, uint32_t timeEnd, uint16_t Npts) {
   //returns the number of datapoints found
     String filename = createSensorFilename(deviceMAC, sensorType, sensorID);
+    //SerialPrint("loadSensorDataFromFile: opening sensor file: " + filename,true);  
+
     
     // Open file for reading
     File file = SD.open(filename, FILE_READ);
@@ -30,17 +74,50 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
         return -1;
     }
     
+
+    uint32_t fileSize = file.size();
+    uint32_t totalPoints = fileSize / sizeof(SensorDataPoint);
+
+    if (totalPoints == 0) {
+      SerialPrint("loadSensorDataFromFile: No data found in file: " + filename,true);
+      return 0;
+    }
+
+    uint32_t pointsToRead = 0;
+
+    if (Npts <= totalPoints)   pointsToRead = Npts;
+    else       pointsToRead = totalPoints;
+
+    //SerialPrint("loadSensorDataFromFile: totalPoints = " + (String) totalPoints + " and pointsToRead = " + (String) pointsToRead,true);
+
     // Read all data points and filter by time range
     SensorDataPoint dataPoint;
     
-    uint16_t j;
-    for (j=0;j<Npts;j++) {
-      file.seek(file.size()-(Npts+1)*sizeof(SensorDataPoint));//go to end of file - for the most part the data of interest will be near the end. N is datapoint of interest
-      if (file.available() >= sizeof(SensorDataPoint)) {
-        file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint));
-        
-        // Verify this is the correct sensor
-        if (dataPoint.deviceMAC != deviceMAC || 
+    uint32_t j;
+    uint32_t endOffset =  sizeof(SensorDataPoint);
+    if (endOffset > fileSize) {
+      SerialPrint("loadSensorDataFromFile: endOffset > fileSize, skipping",true);
+      storeError("loadSensorDataFromFile: endOffset > fileSize, skipping",ERROR_SD_RETRIEVEDATAPARMS);
+      file.close();
+      return -1;
+    }
+
+
+    file.seek(fileSize); //go to the end of the file
+    for (j = 0; j < pointsToRead; j++) {
+      
+      file.seek(file.position()-endOffset); //rewind 1 record
+      if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) != sizeof(SensorDataPoint)) {
+        SerialPrint("loadSensorDataFromFile: Could not read data point",true);
+        storeError("loadSensorDataFromFile: Could not read data point",ERROR_SD_FILEREAD);
+        file.close();
+        return -1;
+      }
+
+      file.seek(file.position()-endOffset); //rewind back to where we were
+
+
+      if (dataPoint.deviceMAC != deviceMAC || 
             dataPoint.snsType != sensorType || 
             dataPoint.snsID != sensorID) {
             continue;
@@ -51,17 +128,163 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
         if (dataPoint.timeLogged >= timeStart) {
             t[j] = dataPoint.timeLogged;
             v[j] = dataPoint.snsValue;
+            //SerialPrint("loadSensorDataFromFile: read data point " + (String) j + " of " + (String) pointsToRead + " from " + filename + " at time " + (String) dataPoint.timeLogged + " with value " + (String) dataPoint.snsValue,true);
         } else break; //no more valid data       
-      } else break;
+      
     }
+
     file.close();
 
     return j;
 }
 
+int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
+
+  if (windowSize == 0) {
+    SerialPrint("loadAverageSensorDataFromFile: windowSize is 0",true);
+    storeError("loadAverageSensorDataFromFile: windowSize is 0",ERROR_SD_RETRIEVEDATAPARMS);
+    return -1;
+  }
+
+  if (timeEnd==0) timeEnd=-1;
+  if (timeStart==0) timeStart=0;
+
+  if (timeEnd==-1) timeEnd=I.currentTime; //-1 is some huge number
+
+
+  if (timeStart>=timeEnd) {
+    SerialPrint("loadAverageSensorDataFromFile: timeStart >= timeEnd",true);
+    storeError("loadAverageSensorDataFromFile: timeStart >= timeEnd",ERROR_SD_RETRIEVEDATAPARMS);
+    return -1;
+  }
+
+  String filename = createSensorFilename(deviceMAC, sensorType, sensorID);
+
+  //SerialPrint("loadAverageSensorDataFromFile: opening sensor file: " + filename,true);  
+  
+  File file = SD.open(filename, FILE_READ);
+  if (!file) {
+    SerialPrint("loadAverageSensorDataFromFile: Could not open sensor file: " + filename,true);  
+    storeError("loadAverageSensorDataFromFile: Could not open file",ERROR_SD_FILEREAD);
+    return -1;
+  }
+
+  uint32_t fileSize = file.size();
+  //check if the file is empty
+  if (fileSize == 0) {
+    SerialPrint("loadAverageSensorDataFromFile: File is empty: " + filename,true);
+    return 0;
+  }
+
+  uint32_t totalPoints = fileSize / sizeof(SensorDataPoint);
+  uint32_t i;
+  uint32_t j;
+  SensorDataPoint dataPoint;
+
+  uint32_t numWindows = (timeEnd-timeStart)/windowSize + 1;
+  if (numWindows < numPointsX) numWindows = numPointsX; //typically numpointsX is not provided, ie numPointsX = 0, but if it is, we need to limit the number of windows
+
+  if (numWindows>100) numWindows=100;
+  if (numWindows==0) numWindows=1;
+
+  //calculate the window start and end times
+  uint32_t windowStart;
+  
+  if (timeStart + windowSize < timeEnd) windowStart = timeEnd - windowSize;
+  else windowStart = timeStart;
+
+  uint32_t endOffset = sizeof(SensorDataPoint);
+
+  if (endOffset > fileSize) {
+    SerialPrint("loadAverageSensorDataFromFile: endOffset > fileSize, skipping",true);
+    storeError("loadAverageSensorDataFromFile: endOffset > fileSize, skipping",ERROR_SD_RETRIEVEDATAPARMS);
+    file.close();
+    return -1;
+  }
+
+  uint32_t windowEnd = timeEnd;
+  //SerialPrint("loadAverageSensorDataFromFile: timeStart = " + (String) timeStart + " and timeEnd = " + (String) timeEnd + " and windowSize = " + (String) windowSize + " and numPointsX = " + (String) numPointsX + " and numWindows = " + (String) numWindows,true);
+
+  if (totalPoints == 0) {
+    SerialPrint("loadAverageSensorDataFromFile: No data found in file: " + filename,true);
+    return 0;
+  }
+  
+  file.seek(fileSize); //go to the end of the file
+
+  i=0;
+  int16_t index=0;
+  while (i<numWindows) {
+    //SerialPrint("loadAverageSensorDataFromFile: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd,true);
+    uint16_t n=0;
+    double avgVal=0;
+    bool isgood = true;
+    
+    //load data from the file if it is within the window size time range
+    for (j = 0; j < totalPoints; j++) {
+
+      if (file.position() < endOffset) {
+        SerialPrint("loadAverageSensorDataFromFile: file.position() < endOffset, skipping",true);
+        storeError("loadAverageSensorDataFromFile: file.position() < endOffset, skipping",ERROR_SD_RETRIEVEDATAPARMS);
+        isgood = false;
+        break;
+      }
+      file.seek(file.position()-endOffset); //rewind 1 record so when we read we are back at this point
+      if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) != sizeof(SensorDataPoint)) {
+        SerialPrint("loadAverageSensorDataFromFile: Could not read data point",true);
+        storeError("loadAverageSensorDataFromFile: Could not read data point",ERROR_SD_FILEREAD);
+        isgood = false;
+        break;
+      } else {
+        //SerialPrint("loadAverageSensorDataFromFile: read data point " + (String) j + " of " + (String) totalPoints + " from " + filename + " at time " + (String) dataPoint.timeLogged + " with value " + (String) dataPoint.snsValue,true);
+      }
+
+      if (dataPoint.deviceMAC != deviceMAC || 
+            dataPoint.snsType != sensorType || 
+            dataPoint.snsID != sensorID) {
+            SerialPrint("loadAverageSensorDataFromFile: Data point does not match deviceMAC, sensorType, or sensorID",true);
+            storeError("loadAverageSensorDataFromFile: Data point does not match deviceMAC, sensorType, or sensorID",ERROR_SD_RETRIEVEDATAPARMS);
+            continue;
+      }
+      
+      // Check if within time range
+      if (dataPoint.timeLogged > windowEnd) continue; //without rewinding, so we check this datapoint again
+      if (dataPoint.timeLogged >= windowStart) {
+        avgVal+= dataPoint.snsValue;
+        n++;
+      } else {
+        isgood = true; //we have reached the end of the window
+        break; //no more valid data         in this window... without rewinding, so we check this datapoint again
+      }
+
+      file.seek(file.position()-endOffset); //rewind back another record, so next time we read the prior
+
+    }
+
+    if (n>0) {
+      averagedValues[index] = avgVal/n;
+      averagedTimes[index++] = windowStart + (windowEnd-windowStart)/2;
+      //SerialPrint("loadAverageSensorDataFromFile: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd + " with avgVal = " + (String) avgVal + " and avgTime = " + (String) averagedTimes[i],true);
+    }
+
+    if (isgood==false) break;
+
+    if (windowEnd > windowSize && windowStart > windowSize) {
+      windowEnd -= windowSize;
+      windowStart -= windowSize;
+    }     else break; //no more valid data
+
+    i++;
+  }
+  file.close();
+  
+  //returns the number of datapoints found
+   return index; //the last window is not complete, so we return the previous one
+}
+
 union ScreenInfoBytes {
-    struct Screen screendata;
-    uint8_t bytes[sizeof(Screen)];
+    STRUCT_CORE screendata;
+    uint8_t bytes[sizeof(STRUCT_CORE)];
 
     ScreenInfoBytes() {};
 };
@@ -69,7 +292,7 @@ union ScreenInfoBytes {
 // New functions for Devices_Sensors class
 bool storeDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
-    File f = SD.open(filename, FILE_WRITE);
+    File f = SD.open(filename, FILE_WRITE); //overwrite the file
     if (f==false) {
         storeError("storeDevicesSensorsSD: Could not write Devices_Sensors data",ERROR_SD_DEVICESENSORSWRITE,false);
         f.close();
@@ -105,7 +328,7 @@ bool readDevicesSensorsSD() {
 
 bool writeErrorToSD() {
     String filename = "/Data/DeviceErrors.txt";
-    File f = SD.open(filename, FILE_APPEND); // Open in append mode
+    File f = SD.open(filename, FILE_APPEND); // Open in append mode to the end of the file
 
     if (f==false) {
         storeError("writeErrorSD: Could not open error log",ERROR_SD_LOGOPEN,false); //do not store this error, to avoid infinite loop
@@ -128,7 +351,7 @@ bool writeErrorToSD() {
 //storing variables
 bool storeScreenInfoSD() {
     String filename = "/Data/ScreenFlags.dat";
-    File f = SD.open(filename, FILE_WRITE);
+    File f = SD.open(filename, FILE_WRITE); //overwrite the file
     if (f==false) {
         storeError("Failed to open file to write screen to SD", ERROR_SD_SCREENFLAGSWRITE, false);
         f.close();
@@ -137,7 +360,7 @@ bool storeScreenInfoSD() {
     union ScreenInfoBytes D; 
     D.screendata = I;
 
-    f.write(D.bytes,sizeof(Screen));
+    f.write(D.bytes,sizeof(STRUCT_CORE));
 
     f.close();
     return true;
@@ -160,7 +383,7 @@ bool readScreenInfoSD() //read last screenInfo
         f.close();
         return false;
     }
-    if (f.size() != sizeof(Screen)) {
+    if (f.size() != sizeof(STRUCT_CORE)) {
               
         SerialPrint("file on SD was not the size of screenInfo!\n");
         
@@ -175,7 +398,7 @@ bool readScreenInfoSD() //read last screenInfo
     }
 
     while (f.available()) {
-        f.read(D.bytes,sizeof(Screen));
+        f.read(D.bytes,sizeof(STRUCT_CORE));
         I = D.screendata;
     }
 
@@ -186,62 +409,71 @@ bool readScreenInfoSD() //read last screenInfo
 }
 
 // New functions for individual sensor data storage using Devices_Sensors class
+//wrapper, if device infor was provided, use it to find the sensor index
+bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
+  // Find the device and sensor indices
+  int16_t deviceIndex = Sensors.findDevice(deviceMAC);
+  if (deviceIndex < 0) {
+      storeError("storeSensorDataSD: Device not found", ERROR_SD_DEVICESENSORSNODEV);
+      return false;
+  }
+  
+  uint64_t deviceMACValue = Sensors.getDeviceMACByDevIndex(deviceIndex);
+  int16_t sensorIndex = Sensors.findSensor(deviceMACValue, sensorType, sensorID);
+  if (sensorIndex < 0) {
+      storeError("storeSensorDataSD: Sensor not found", ERROR_SD_DEVICESENSORSNOSNS);
+      return false;
+  }
+  
+  return storeSensorDataSD(sensorIndex);
+}
+
+
 bool storeSensorDataSD(int16_t sensorIndex) {
     if (sensorIndex < 0 || sensorIndex >= NUMSENSORS) {
+        SerialPrint((String) "storeSensorDataSD: sensorIndex out of bounds: " + (String) sensorIndex + "\n");
+        storeError("storeSensorDataSD: sensorIndex out of bounds", ERROR_SD_RETRIEVEDATAPARMS);
         return false;
     }
     
     SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
     if (!sensor) {
+        SerialPrint((String) "storeSensorDataSD: sensor not found: " + (String) sensorIndex + "\n");
+        storeError("storeSensorDataSD: sensor not found", ERROR_SD_RETRIEVEDATAPARMS);
         return false;
     }
     
     // Create filename using helper function
     String filename = createSensorFilename(Sensors.getDeviceMACBySnsIndex(sensorIndex), sensor->snsType, sensor->snsID);
     
-    // Open file for writing
-    File file = SD.open(filename, FILE_WRITE);
+    // Open file for appending
+    File file = SD.open(filename, FILE_APPEND); //append to the file
     if (!file) {
         SerialPrint((String) "Failed to open file " + filename + "\n");
         storeError(((String) "Failed to open sensor data file " + filename).c_str(),ERROR_SD_FILEWRITE,false);
         return false;
     }
     
-    // Write sensor data in optimized format
-    // Format: deviceMAC(8) + deviceIndex(2) + snsType(1) + snsID(1) + snsValue(8) + timeRead(4) + timeLogged(4) + Flags(1) + SendingInt(4) + name(30) = 59 bytes
-    uint64_t deviceMAC = Sensors.getDeviceMACBySnsIndex(sensorIndex);
-    file.write((uint8_t*)&deviceMAC, 8);
-    file.write((uint8_t*)&sensor->deviceIndex, 2);
-    file.write((uint8_t*)&sensor->snsType, 1);
-    file.write((uint8_t*)&sensor->snsID, 1);
-    file.write((uint8_t*)&sensor->snsValue, 8);
-    file.write((uint8_t*)&sensor->timeRead, 4);
-    file.write((uint8_t*)&sensor->timeLogged, 4);
-    file.write((uint8_t*)&sensor->Flags, 1);
-    file.write((uint8_t*)&sensor->SendingInt, 4);
-    file.write((uint8_t*)sensor->snsName, 30);
+    // Create and populate SensorDataPoint struct
+    SensorDataPoint dataPoint;
+    dataPoint.deviceMAC = Sensors.getDeviceMACBySnsIndex(sensorIndex);
+    dataPoint.deviceIndex = sensor->deviceIndex;
+    dataPoint.snsType = sensor->snsType;
+    dataPoint.snsID = sensor->snsID;
+    dataPoint.snsValue = sensor->snsValue;
+    dataPoint.timeRead = sensor->timeRead;
+    dataPoint.timeLogged = sensor->timeLogged;
+    dataPoint.Flags = sensor->Flags;
+    dataPoint.SendingInt = sensor->SendingInt;
+    strncpy(dataPoint.snsName, sensor->snsName, sizeof(dataPoint.snsName));
+    dataPoint.snsName[sizeof(dataPoint.snsName) - 1] = '\0'; // Ensure null termination
+    
+    // Write the complete struct
+    file.write((uint8_t*)&dataPoint, sizeof(SensorDataPoint));
     
     file.close();
-//    SerialPrint((String) "Stored sensor data to " +  filename,true);
+    //SerialPrint((String) "StoreSensorDataSD: Stored sensor data from " + (String) sensor->snsName + " with sensor index " + (String) sensorIndex + " and associated device MAC " + (String) Sensors.getDeviceMACBySnsIndex(sensorIndex) + " to " +  filename + " with time " + (String) sensor->timeLogged,true);
     return true;
-}
-
-bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
-    // Find the device and sensor indices
-    int16_t deviceIndex = Sensors.findDevice(deviceMAC);
-    if (deviceIndex < 0) {
-        storeError("storeSensorDataSD: Device not found", ERROR_SD_DEVICESENSORSNODEV);
-        return false;
-    }
-    
-    uint64_t deviceMACValue = Sensors.getDeviceMACByDevIndex(deviceIndex);
-    int16_t sensorIndex = Sensors.findSensor(deviceMACValue, sensorType, sensorID);
-    if (sensorIndex < 0) {
-        storeError("storeSensorDataSD: Sensor not found", ERROR_SD_DEVICESENSORSNOSNS);
-        return false;
-    }
-    
-    return storeSensorDataSD(sensorIndex);
 }
 
 bool readSensorDataSD(int16_t sensorIndex) {
@@ -268,22 +500,29 @@ bool readSensorDataSD(int16_t sensorIndex) {
     }
     
     // Read sensor data in optimized format
-    // Format: deviceMAC(8) + deviceIndex(2) + snsType(1) + snsID(1) + snsValue(8) + timeRead(4) + timeLogged(4) + Flags(1) + SendingInt(4) + name(30) = 59 bytes
-    if (file.available() >= 59) {
-        file.read((uint8_t*)&deviceMAC, 8);
-        file.read((uint8_t*)&sensor->deviceIndex, 2);
-        file.read((uint8_t*)&sensor->snsType, 1);
-        file.read((uint8_t*)&sensor->snsID, 1);
-        file.read((uint8_t*)&sensor->snsValue, 8);
-        file.read((uint8_t*)&sensor->timeRead, 4);
-        file.read((uint8_t*)&sensor->timeLogged, 4);
-        file.read((uint8_t*)&sensor->Flags, 1);
-        file.read((uint8_t*)&sensor->SendingInt, 4);
-        file.read((uint8_t*)sensor->snsName, 30);
-        
-        file.close();
-        Serial.printf("Read sensor data from %s\n", filename.c_str());
-        return true;
+    // Format: deviceMAC(8) + deviceIndex(2) + snsType(1) + snsID(1) + snsValue(8) + timeRead(4) + timeLogged(4) + Flags(1) + SendingInt(4) + name(30) 
+    if (file.available() >= sizeof(SensorDataPoint)) {
+        SensorDataPoint dataPoint;
+        if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) == sizeof(SensorDataPoint)) {
+            sensor->deviceIndex = dataPoint.deviceIndex;
+            sensor->snsType = dataPoint.snsType;
+            sensor->snsID = dataPoint.snsID;
+            sensor->snsValue = dataPoint.snsValue;
+            sensor->timeRead = dataPoint.timeRead;
+            sensor->timeLogged = dataPoint.timeLogged;
+            sensor->Flags = dataPoint.Flags;
+            sensor->SendingInt = dataPoint.SendingInt;
+            strncpy(sensor->snsName, dataPoint.snsName, sizeof(sensor->snsName));
+            sensor->snsName[sizeof(sensor->snsName) - 1] = '\0'; // Ensure null termination
+            
+            file.close();
+            Serial.printf("Read sensor data from %s\n", filename.c_str());
+            return true;
+        } else {
+          SerialPrint("readSensorDataSD: Could not read sensor data from file: " + filename,true);
+          storeError(((String) "readSensorDataSD: Could not read sensor data from file: " + filename).c_str() ,ERROR_SD_FILEREAD);
+          return false;
+        }
     }
     
     file.close();
@@ -300,17 +539,28 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
     storeError("retrieveSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
     return false;
   }
+  if (timeEnd <= timeStart || *N == 0) {
+    storeError("retrieveSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+  }
 
 
   int16_t n = loadSensorDataFromFile(deviceMAC, sensorType, sensorID, t, v, timeStart, timeEnd, *N);
+
+  if (n>*N) {
+    SerialPrint("retrieveSensorDataFromSD: ?ERROR? Returned more data than requested.\n");
+    storeError("retrieveSensorDataFromSD: ?ERROR? Returned more data than requested.", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+
+  }
   if (n<0) {
     SerialPrint("retrieveSensorDataFromSD: file loading failed.\n");
-
     return false;
   }
   
   if (n==0) {
     SerialPrint("retrieveSensorDataFromSD: No errors, but no data was returned.\n");
+    storeError("retrieveSensorDataFromSD: No errors, but no data was returned.", ERROR_SD_RETRIEVEDATAMISSING);
     return true; // No data found, but not an error
   }
   
@@ -318,22 +568,19 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
     // reverse the orders of t and v
     //note that only the FIRST n points were actually entered
 
-    uint32_t t0[*N] = {0};
-    double v0[*N] = {0};
+    uint32_t t0[n] = {0};
+    double v0[n] = {0};
 
     int16_t i=0;
-
     for (int16_t j=n-1; j>=0;j--) {
       t0[i] = t[j];
       v0[i] = v[j];
       i++;
     }
 
-    //reassign actual vectors
-    for (int16_t j=0; j<*N;j++) {
-      t[j] = t0[j];
-      v[j] = v0[j];
-    }
+    memcpy(t, t0, n * sizeof(uint32_t));
+    memcpy(v, v0, n * sizeof(double));
+    // No free needed for stack arrays
   } 
   
   *N = n;
@@ -341,146 +588,55 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
 } 
 
 bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
-                                         uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize,
-                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes) {
-    // Validate inputs
-    if (timeEnd <= timeStart || numPointsX == 0 || windowSize == 0 || 
-        averagedValues == nullptr || averagedTimes == nullptr) {
-        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
-        return false;
+                                         uint32_t timeStart, uint32_t timeEnd,
+                                         uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, bool forwardOrder) {
+    
+      // Validate inputs
+    if (windowSize == 0 || averagedValues == nullptr || averagedTimes == nullptr || timeEnd <= timeStart) {
+      SerialPrint("retrieveMovingAverageSensorDataFromSD: Invalid parameters", true);
+      storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
+      return false;
     }
-    
-    // Load data points using helper function
-    std::vector<SensorDataPoint> validDataPoints;
-    if (!loadSensorDataFromFile(deviceMAC, sensorType, sensorID, validDataPoints, timeStart, timeEnd)) {
-        return false;
+
+    int16_t n = loadAverageSensorDataFromFile(deviceMAC, sensorType, sensorID, averagedTimes, averagedValues, timeStart, timeEnd, windowSize, *numPointsX);
+
+    if (n<0) {
+      SerialPrint("retrieveMovingAverageSensorDataFromSD: could not read", true);
+      storeError("retrieveMovingAverageSensorDataFromSD: could not read",  ERROR_SD_RETRIEVEDATAMISSING);
+      return false;
     }
-    
-    if (validDataPoints.empty()) {
-        storeError("retrieveMovingAverageSensorDataFromSD: No data points in time range",  ERROR_SD_RETRIEVEDATAMISSING);
-        return false;
+
+    if (n==0) {
+      SerialPrint("retrieveMovingAverageSensorDataFromSD: No data points in time range", true);
+      storeError("retrieveMovingAverageSensorDataFromSD: No data points in time range",  ERROR_SD_RETRIEVEDATAMISSING);
+      return false;
     }
+
+    if (forwardOrder) {
+      // reverse the orders of t and v
+      //note that only the FIRST n points were actually entered
+  
+      uint32_t t0[n] = {0};
+      double v0[n] = {0};
+  
+      int16_t i=0;
+      for (int16_t j=n-1; j>=0;j--) {
+        t0[i] = averagedTimes[j];
+        v0[i] = averagedValues[j];
+        i++;
+      }
+  
+      memcpy(averagedTimes, t0, n * sizeof(uint32_t));
+      memcpy(averagedValues, v0, n * sizeof(double));
+      
+    } 
     
-    // Sort data points by time
-    std::sort(validDataPoints.begin(), validDataPoints.end(), 
-              [](const SensorDataPoint& a, const SensorDataPoint& b) {
-                  return a.timeLogged < b.timeLogged;
-              });
-    
-    // Calculate time interval between output points (evenly spaced between timeStart and timeEnd)
-    uint32_t timeInterval = 0;
-    if (numPointsX > 1) {
-        timeInterval = (timeEnd - timeStart) / (numPointsX - 1);
-    }
-    
-    // Generate evenly spaced output points between timeStart and timeEnd
-    for (uint16_t i = 0; i < numPointsX; i++) {
-        uint32_t targetTime = timeStart + (i * timeInterval);
-        
-        // Calculate moving average around target time
-        double sum = 0.0;
-        uint32_t count = 0;
-        uint32_t windowStart = (targetTime > windowSize/2) ? targetTime - windowSize/2 : 0; // windowStart is windowSize/2 seconds before targetTime
-        uint32_t windowEnd = targetTime + windowSize/2; // windowEnd is windowSize/2 seconds after targetTime
-        
-        // Sum all data points within the window
-        for (const auto& point : validDataPoints) {
-            if (point.timeLogged >= windowStart && point.timeLogged <= windowEnd) {
-                sum += point.snsValue;
-                count++;
-            }
-        }
-        
-        // Calculate average and store result
-        if (count > 0) {
-            averagedValues[i] = sum / count;
-        } else {
-            // No data in window, use nearest point or interpolate
-            averagedValues[i] = findNearestValue(validDataPoints, targetTime);
-        }
-        
-        averagedTimes[i] = targetTime;
-    }
-    
+    *numPointsX = n;
+  
+
     return true;
 }
 
-bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
-                                         uint32_t timeEnd, uint32_t windowSize,
-                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes) {
-    // Validate inputs
-    if (numPointsX == 0 || windowSize == 0 || 
-        averagedValues == nullptr || averagedTimes == nullptr) {
-        storeError("retrieveMovingAverageSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
-        return false;
-    }
-    
-    // Load data points using helper function (up to timeEnd)
-    std::vector<SensorDataPoint> validDataPoints;
-    if (!loadSensorDataFromFile(deviceMAC, sensorType, sensorID, validDataPoints, 0, timeEnd)) {
-        return false;
-    }
-    
-    if (validDataPoints.empty()) {
-        storeError("retrieveMovingAverageSensorDataFromSD: No data points found", ERROR_SD_RETRIEVEDATAMISSING);
-        return false;
-    }
-    
-    // Sort data points by time (most recent first)
-    std::sort(validDataPoints.begin(), validDataPoints.end(), 
-              [](const SensorDataPoint& a, const SensorDataPoint& b) {
-                  return a.timeLogged > b.timeLogged; // Descending order
-              });
-    
-    // Limit to the most recent data points if we have more than needed
-    if (validDataPoints.size() > numPointsX * 10) { // Keep 10x more than needed for averaging
-        validDataPoints.resize(numPointsX * 10);
-    }
-    
-    // Sort back to ascending order for processing
-    std::sort(validDataPoints.begin(), validDataPoints.end(), 
-              [](const SensorDataPoint& a, const SensorDataPoint& b) {
-                  return a.timeLogged < b.timeLogged;
-              });
-    
-    // Calculate time range from the data
-    uint32_t timeStart = validDataPoints.front().timeLogged;
-    uint32_t actualTimeEnd = validDataPoints.back().timeLogged;
-    
-    // Calculate time interval between output points (windowSize seconds apart)
-    uint32_t timeInterval = windowSize;
-    
-    // Generate output points spaced windowSize seconds apart
-    for (uint16_t i = 0; i < numPointsX; i++) {
-        uint32_t targetTime = timeStart + (i * timeInterval);
-        
-        // Calculate moving average around target time
-        double sum = 0.0;
-        uint32_t count = 0;
-        uint32_t windowStart = (targetTime > windowSize/2) ? targetTime - windowSize/2 : 0;
-        uint32_t windowEnd = targetTime + windowSize/2;
-        
-        // Sum all data points within the window
-        for (const auto& point : validDataPoints) {
-            if (point.timeLogged >= windowStart && point.timeLogged <= windowEnd) {
-                sum += point.snsValue;
-                count++;
-            }
-        }
-        
-        // Calculate average and store result
-        if (count > 0) {
-            averagedValues[i] = sum / count;
-        } else {
-            // No data in window, use nearest point or interpolate
-            averagedValues[i] = findNearestValue(validDataPoints, targetTime);
-        }
-        
-        averagedTimes[i] = targetTime;
-    }
-    
-    return true;
-}
 
 // Helper function to find nearest value when no data in window
 double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t targetTime) {

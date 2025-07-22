@@ -26,30 +26,30 @@ WeatherInfoOptimized::WeatherInfoOptimized() {
 }
 
 // Optimized updateWeather method
-bool WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
+byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
+    //returns 3 if data is still fresh, 2 if too soon to retry, 1 if update was needed and successful, 0 if update failed
+
     // Check if update is needed
     if (this->lastUpdateT>0 && this->lastUpdateT + synctime > I.currentTime) {
-        return true; // Data is still fresh
+        return 3; // Data is still fresh
     }
     
     // Check retry logic
     if ((uint32_t) this->lastUpdateAttempt>0 && this->lastUpdateAttempt + 600 > I.currentTime) {
-        return false; // Too soon to retry
+        return 2; // Too soon to retry
     }
 
     this->lastUpdateAttempt = I.currentTime;
     
-    #ifdef _DEBUG
-        Serial.printf("Weather update optimized starting...\n");
-    #endif
+    SerialPrint("Weather update optimized starting...",true);
 
     // Try to load from cache first
     if (loadFromCache()) {
-        #ifdef _DEBUG
-            Serial.printf("Weather data loaded from cache\n");
-        #endif
-        return true;
+        SerialPrint("Grid data loaded from cache",true);
+    }        else {
+        fetchGridCoordinates();
     }
+
 
     // Initialize fresh data
     initWeather();
@@ -59,32 +59,30 @@ bool WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
 
 
         // Sequential requests 
-        success = fetchGridCoordinates() &&
-                  fetchHourlyForecast() &&
+        success = fetchHourlyForecast() &&
                   fetchGridForecast() &&
                   fetchDailyForecast() &&
                   fetchSunriseSunset();
     
     if (success) {
         this->lastUpdateT = I.currentTime;
+
         saveToCache();
         
         // Update performance stats
         uint32_t response_time = millis() - start_time;
         average_response_time = (average_response_time + response_time) / 2;
         total_api_calls++;
-        
-        #ifdef _DEBUG
-            Serial.printf("Weather update completed in %u ms\n", response_time);
-        #endif
+
+        storeWeatherDataSD(); //store weather data to SD card
+
+        SerialPrint(("Weather update completed in " + String(response_time) + " ms").c_str(),true);
     } else {
         failed_api_calls++;
-        #ifdef _DEBUG
-            Serial.printf("Weather update failed\n");
-        #endif
+        SerialPrint("Weather update failed",true);
     }
 
-    return success;
+    return success?1:0; //1 if successful, 0 if failed, 2 if too soon to retry
 }
 
 

@@ -103,7 +103,7 @@ public:
 
 // Global instance
 extern Devices_Sensors Sensors;
-extern STRUCT_CORE I;
+extern struct Screen I;
 
 
 // All device IP addresses are now stored as uint32_t.

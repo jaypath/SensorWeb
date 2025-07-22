@@ -9,11 +9,15 @@
 #include "timesetup.hpp"
 
 
-extern Screen I;
+extern STRUCT_CORE I;
 
 // New functions for Devices_Sensors class
 bool storeDevicesSensorsSD();
 bool readDevicesSensorsSD();
+
+// New functions for WeatherData class
+bool storeWeatherDataSD();
+bool readWeatherDataSD();
 
 
 // New functions for individual sensor data storage using Devices_Sensors class
@@ -48,11 +52,7 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
 // Advanced data processing functions
 bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
                                          uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize,
-                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes);
-bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
-                                         uint32_t timeEnd, uint32_t windowSize,
-                                         uint16_t numPointsX, double* averagedValues, uint32_t* averagedTimes);
-
+                                         uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, bool forwardOrder = true);
 // Functions for storing/reading all sensors
 bool storeAllSensorSD();
 bool readAllSensorSD();

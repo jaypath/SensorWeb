@@ -9,14 +9,15 @@
 #include <functional>
 
 
-#ifdef _DEBUG
-extern uint16_t TESTRUN;
-#endif
 
 #define NUMWTHRDAYS 5
 #define WEATHER_CACHE_SIZE 3
 #define MAX_RETRY_ATTEMPTS 3
-#define PARALLEL_REQUESTS_ENABLED 1
+//#define PARALLEL_REQUESTS_ENABLED 1
+//weather
+//wellesley, MA
+#define LAT 42.30210392783453  //only 4 decimal pts
+#define LON -71.29822225979105 //only 4 decimal pts allowed with NOAA
 
 // Weather data cache entry
 struct WeatherCacheEntry {
@@ -146,7 +147,7 @@ public:
     bool initWeather();
     
     // New optimization methods
-    bool updateWeatherOptimized(uint16_t synctime = 3600);
+    byte updateWeatherOptimized(uint16_t synctime = 3600);
     void getPerformanceStats(uint32_t& total_calls, uint32_t& failed_calls, uint32_t& avg_response_time);
     bool clearCache();
     bool isCacheValid();

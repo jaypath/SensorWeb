@@ -111,7 +111,7 @@ union convertBYTE {
 
 extern LGFX tft;
 // SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
-extern Screen I;
+extern STRUCT_CORE I;
 extern String WEBHTML;
 //extern uint8_t OldTime[4];
 extern WeatherInfoOptimized WeatherData;
@@ -452,8 +452,18 @@ void setup() {
 
     initOTA();
 
-    tft.printf("Waiting for weather to load...\n");
-    WeatherData.updateWeatherOptimized(3600);
+    tft.printf("Loading weather data...\n");
+    //load weather data from SD card
+    if (readWeatherDataSD()) {
+        if (WeatherData.updateWeatherOptimized(3600)>0) {
+            SerialPrint("Weather data loaded from SD card",true);
+        } else {
+            SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);
+        }
+    } else {
+        SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
+        WeatherData.updateWeatherOptimized(3600);
+    }
     tft.setTextColor(TFT_GREEN);
     tft.printf("Setup OK...");
     tft.setTextColor(FG_COLOR);
@@ -501,7 +511,16 @@ void loop() {
         if (I.wifiFailCount > 5) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
         // WEATHER OPTIMIZATION - Use optimized weather update method
-        WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
+        byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
+        if (weatherResult == 0) {
+            SerialPrint("Weather data is still fresh",true);
+        } else if (weatherResult == 1) {
+            SerialPrint("Weather data updated successfully",true);
+        } else if (weatherResult == 2) {
+            SerialPrint("Weather data update failed, too soon to retry",true);
+        } else {
+            SerialPrint("Weather data update failed",true);
+        }
 
         //see if we have local weather
         if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 4);  //if no local weather sensor, use outside
@@ -516,7 +535,7 @@ void loop() {
             if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
             else {
                 I.currentTemp = sensor->snsValue;
-                SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
+                //SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
             }
         }
         if (I.localWeatherIndex==255) I.currentTemp = WeatherData.getTemperature(I.currentTime);
@@ -530,7 +549,7 @@ void loop() {
             SnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
             if (batDevice && batSensor && batDevice->IsSet && batSensor->IsSet && batSensor->timeLogged + 3600 > I.currentTime) {
                 I.localBatteryLevel = batSensor->snsValue;
-                SerialPrint((String) "Local battery device found, snsindex" + I.localBatteryIndex, true + ", snsValue=" + I.localBatteryLevel);
+                //SerialPrint((String) "Local battery device found, snsindex" + I.localBatteryIndex, true + ", snsValue=" + I.localBatteryLevel);
             }             else {
                 I.localBatteryIndex = 255;
                 I.localBatteryLevel = -1;

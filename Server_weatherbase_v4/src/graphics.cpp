@@ -1,4 +1,17 @@
 #include "graphics.hpp"
+#include "globals.hpp"
+
+
+
+
+LGFX tft;
+
+extern WeatherInfoOptimized WeatherData;
+extern double LAST_BAR;
+extern STRUCT_PrefsH Prefs;
+extern Devices_Sensors Sensors;
+
+
 
 // Graphics utility functions
 uint16_t set_color(byte r, byte g, byte b) {
@@ -179,7 +192,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
     }
     if (snstype==3) {
       //soil
-      box_text += (String) "DRY_";
+      box_text += (String) ((int) sensor->snsValue) + "_";
       box_border = set_color(65,45,20);
       box_fill = set_color(250,170,100);
       text_color = set_color(255-250,255-170,255-100);
@@ -515,14 +528,15 @@ void fcnDrawScreen() {
   fcnDrawClock(); 
   fcnDrawHeader();
   fncDrawCurrentCondition();
-  fcnDrawWeather();
-  
+  fcnDrawCurrentWeather();
+  fcnDrawFutureWeather();
+
   return;
 }
 
-void fcnDrawSensors(int Y) {
+void fcnDrawSensors(int Y, int deltaY) {
   /*
-  going to show 6x2 flagged sensors (so up to 12)
+  going to show rowsxcols flagged sensors (so up to rows*cols)
   will save the last leave off position and continue from that on each redraw
 */
 
@@ -531,14 +545,16 @@ void fcnDrawSensors(int Y) {
   byte boxsize_x=50,boxsize_y=50;
   byte gapx = 4;
   byte gapy = 2;
-  
+  byte rows = 3, cols = 6;
+
+  Y+= (deltaY - rows*(boxsize_y + gapy))/2;
+
   String roomname;
 
   X = 0;
  
-  byte rows = 2, cols = 6;
 
-  //fill an array with next 12 alarm entries
+  //fill an array with next row*cols alarm entries
   int16_t alarms[rows*cols];
   byte alarmArrayInd = 0;
   
@@ -547,7 +563,7 @@ void fcnDrawSensors(int Y) {
     alarms[k] = -1;
   }
   
-//fill up to 12 alarm spots, and remember where we left off
+//fill up to row*cols alarm spots, and remember where we left off
   int16_t SensorIndex = I.alarmIndex;
 
  cycleIndex(&SensorIndex,NUMSENSORS,I.alarmIndex);
@@ -590,43 +606,16 @@ void fcnDrawSensors(int Y) {
 
 void fcnDrawClock() {
 
-  int16_t X = tft.width();
-  uint8_t FNTSZ=8;
-  uint32_t FH = setFont(FNTSZ);
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  char tempbuf[20];
-  int Y = tft.height() - I.CLOCK_Y;
-  bool forcedraw = false;
-  if (I.lastClock==0) forcedraw=true;
-  
-  //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
-  if (I.isFlagged) {
-    if (I.currentTime>I.lastFlagView+I.flagViewTime) {
-      I.lastFlagView = I.currentTime;
-      if (I.ScreenNum==1) {
-        I.ScreenNum = 0; //stop showing flags
-        forcedraw=true;
-      }
-      else {
-        I.ScreenNum = 1;
-        tft.fillRect(0,Y,X,I.CLOCK_Y,BG_COLOR); //clear the clock area
-        fcnDrawSensors(Y);
-        return;
-      }
-    } 
-    else if (I.ScreenNum==1) return;
-  }
-  
-  if (I.wasFlagged==true && I.isFlagged == false) {
-    //force full redraw
-    forcedraw=true;
-  }
 
-
-  //otherwise print time at bottom
-  if (forcedraw==true || (I.currentTime != I.lastClock &&  second(I.currentTime)==0)) {
-    FNTSZ = 8;
+  if (I.lastClock==0 || (I.currentTime != I.lastClock &&  second(I.currentTime)==0)) {
     I.lastClock = I.currentTime;
+
+    int16_t X = tft.width();
+    uint8_t FNTSZ=8;
+    uint32_t FH = setFont(FNTSZ);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    char tempbuf[20];
+    int Y = tft.height() - I.CLOCK_Y;
     tft.fillRect(0,Y,X,I.CLOCK_Y,BG_COLOR); //clear the  clock area
     snprintf(tempbuf,16,"%s",dateify(I.currentTime,"h1:nn"));
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X/2,Y+I.CLOCK_Y/2);
@@ -741,7 +730,7 @@ void fncDrawCurrentCondition() {
   return;
 }
 
-void fcnDrawWeather() {
+void fcnDrawCurrentWeather() {
   if ((uint32_t) (I.currentTime<I.lastWeather+I.weatherTime*60) && I.lastWeather>0) return;
   I.lastWeather = I.currentTime;
 
@@ -788,10 +777,56 @@ void fcnDrawWeather() {
     deltaY = setFont(FNTSZ);
     fcnPrintTxtCenter(tempbuf,FNTSZ,5,Y+170-deltaY);
   }
+  return;
+
+}  
+
+
+//break this into a separate function
+void fcnDrawFutureWeather() {
+  //this function will draw futuer weather or flags
+
+
+  bool forcedraw = false;
+  char tempbuf[45];
+  int i=0,j=0;
+  byte section_spacer = 3;
+  uint8_t FNTSZ = 0;
+  int iconID = 0;
+  int16_t Y = I.HEADER_Y+180+section_spacer;
+  int16_t X = tft.width(),Z=0;
+  int16_t deltaY = (tft.height()-I.CLOCK_Y)-Y-section_spacer+1;
+
+  //if isflagged, then show rooms with flags. Note that outside sensors and RH sensors alone do not trigger a flag.
+  if (I.isFlagged) {
+    if (I.currentTime>I.lastFlagView+I.flagViewTime) {
+      I.lastFlagView = I.currentTime;
+      if (I.ScreenNum==1) {
+        I.ScreenNum = 0; //stop showing flags
+        forcedraw=true;
+      }  else {
+        I.ScreenNum = 1;
+        tft.fillRect(0,Y,X,deltaY,BG_COLOR); //clear the future weather area
+        fcnDrawSensors(Y,deltaY);
+        return;
+      }
+    } 
+    else if (I.ScreenNum==1) return;
+  }
+  
+  if (I.wasFlagged==true && I.isFlagged == false) {
+    //force full redraw
+    forcedraw=true;
+  }
+
+  if (((uint32_t) (I.currentTime<I.lastWeather+I.weatherTime*60) && I.lastWeather>0) && forcedraw==false) return;
+
+  //clear the area
+  tft.fillRect(0,Y,X,deltaY,BG_COLOR);
 
   tft.setTextColor(FG_COLOR,BG_COLOR);
-  Y = I.HEADER_Y+180+section_spacer;
   tft.setCursor(0,Y);
+
   FNTSZ = 4;
   deltaY = setFont(FNTSZ);
     
@@ -1124,3 +1159,10 @@ void displayOTAError(int error) {
   tft.print("OTA error: ");
   tft.println(error);
 } 
+
+void screenWiFiDown() {
+  tft.clear();
+  tft.setCursor(0, 0);
+  tft.setTextColor(TFT_RED);
+  tft.printf("WiFi may be down.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1\nRebooting in 5 min...", WiFi.softAPSSID().c_str());
+}

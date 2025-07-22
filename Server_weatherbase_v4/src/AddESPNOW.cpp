@@ -31,6 +31,11 @@ Messages will use the ESPNOW_type struct for their transmission
 
 #include "AddESPNOW.hpp"
 
+#ifdef _USETFT
+#include "graphics.hpp"
+#endif
+
+
 char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
 
 
@@ -238,11 +243,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             putWiFiCredentials();
             // If password matches, WiFi may be down; enter AP mode and show message
             if (pwdMatch) {
-                #ifdef HAS_TFT
-                tft.clear();
-                tft.setCursor(0, 0);
-                tft.setTextColor(TFT_RED);
-                tft.printf("WiFi may be down.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1\nRebooting in 5 min...", WiFi.softAPSSID().c_str());
+                #ifdef _USETFT
+                screenWiFiDown();
                 #endif
                 WiFi.mode(WIFI_AP);
                 WiFi.softAP(generateAPSSID().c_str(), "S3nsor.N3t!");

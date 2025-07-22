@@ -2,6 +2,7 @@
 #include "utility.hpp"
 
 
+
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
@@ -374,7 +375,7 @@ uint32_t IPToUint32(byte* ip) {
   return (ip[3]<<24) + (ip[2]<<16) + (ip[1]<<8) + ip[0];
 }
 
-void Uint32toIPbytes(uint32_t ip32, byte* ip) {
+void uint32toIP(uint32_t ip32, byte* ip) {
   ip[3] = (ip32>>24) & 0xFF;
   ip[2] = (ip32>>16) & 0xFF;
   ip[1] = (ip32>>8) & 0xFF;
@@ -402,6 +403,17 @@ bool IPString2ByteArray(String IPstr,byte* IP) {
   return (i==4);
 }
 
+uint64_t IPToMACID(uint32_t ip) {
+  //convert IP address to MAC ID
+  //replace with 0x00000000FF000000 prefix if desired
+  return (uint64_t)ip;
+}
+
+uint64_t IPToMACID(byte* ip) {
+  //wrapper for IPToMACID when ip is a byte array
+
+  return IPToMACID(IPToUint32(ip));
+}
 
 // Convert uint64_t MAC to 6-byte array
 void uint64ToMAC(uint64_t mac64, byte* macArray) {

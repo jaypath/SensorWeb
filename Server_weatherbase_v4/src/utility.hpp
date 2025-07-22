@@ -7,7 +7,6 @@
 #include "Devices.hpp"
 #include "timesetup.hpp"
 
-
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
@@ -55,7 +54,9 @@ String IPbytes2String(byte* IP,byte len=4);
 uint32_t StringToIP(String str);
 bool IPString2ByteArray(String IPstr,byte* IP);
 uint32_t IPToUint32(byte* ip);
-void Uint32toIP(uint32_t ip32, byte* ip);
+void uint32toIP(uint32_t ip32, byte* ip);
+uint64_t IPToMACID(uint32_t ip);
+uint64_t IPToMACID(byte* ip);
 
 // --- MAC address conversion utilities ---
 void uint64ToMAC(uint64_t mac64, byte* macArray);
@@ -66,6 +67,5 @@ String MACToString(uint8_t* mac); //wrapper for ip2string
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
-extern LGFX tft;  
 
 #endif

@@ -32,8 +32,6 @@ void SerialWrite(String msg) {
 //server
 String WEBHTML;
 
-extern uint32_t I_currentTime;
-extern uint32_t lastPwdRequestMinute;
 extern STRUCT_PrefsH Prefs;
 //extern bool requestWiFiPassword(const uint8_t* serverMAC);
 
@@ -817,8 +815,8 @@ void rootTableFill(byte j) {
     if (sensor->snsType==60 || sensor->snsType==61) delta = 3; //batery
     if (sensor->snsType>=50 && sensor->snsType<60) delta = 15; //HVAC
     
-    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=" + (String) (I.currentTime-86400) + "&endtime=" + (String) (I.currentTime) + "&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=" + (String) (I.currentTime-86400) + "&endtime=" + (String) (I.currentTime) + "&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";
+    WEBHTML = WEBHTML + "<td><a href=\"http://" + (WiFi.localIP().toString()) + "/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
     WEBHTML = WEBHTML + "</tr>";
   }
 }
@@ -1048,16 +1046,16 @@ void handleRETRIEVEDATA() {
 
   if (N>100) N=100; //don't let the array get too large!
   if (N==0) N=50;
-  if (endtime==0) endtime--; //this makes endtime the max value, will just read N values.
-  if (endtime<starttime) endtime = -1; //make sure endtime > starttime
+  
+  if (endtime<=0) endtime=-1; //this makes endtime the max value, will just read N values.
 
   uint32_t t[N]={0};
   double v[N]={0};
   uint32_t sampn=0; //sample number
   
   bool success=false;
-  if (starttime>0)  success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, starttime, endtime);
-  else    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, endtime); //this fills from tn backwards to N*delta samples
+  if (starttime>0)  success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, starttime, endtime,true);
+  else    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, 0,endtime,true); //this fills from tn backwards to N*delta samples
 
   if (success == false)  {
     WEBHTML= "Failed to read associated file.";
@@ -1065,6 +1063,8 @@ void handleRETRIEVEDATA() {
     return;
   }
 
+  SerialPrint("handleRETRIEVEDATA: N=" + (String) N + " t[0]=" + (String) t[0] + " t[N-1]=" + (String) t[N-1] + " v[0]=" + (String) v[0] + " v[N-1]=" + (String) v[N-1]);
+  
   addPlotToHTML(t,v,N,deviceMAC,snsType,snsID);
 }
 
@@ -1104,15 +1104,21 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
     return;
   }
 
-  if (windowSizeN==0) windowSizeN=30*60; //in seconds
-  if (numPointsX==0 || numPointsX>100) numPointsX=100;
+  if (windowSizeN==0) windowSizeN=30*60; //in minutes
+  if (numPointsX==0 || numPointsX>100) numPointsX=0;
 
-  uint32_t t[numPointsX]={0};
-  double v[numPointsX]={0};
+  if (endtime==0) endtime=-1;
+  if (starttime>=endtime) {
+    WEBHTML="Inappropriate call... starttime >= endtime";
+    serverTextClose(302,false);
+    return;
+  }
 
-  if (starttime>0)  success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, numPointsX, v, t);
-  else    success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, endtime, windowSizeN, numPointsX, v, t); //this fills from tn backwards to N*delta samples 
+  uint32_t t[100]={0};
+  double v[100]={0};
 
+  success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t,true);
+  
   if (success == false)  {
     WEBHTML= "handleRETRIEVEDATA_MOVINGAVERAGE: Failed to read associated file.";
     serverTextClose(401,false);
@@ -1168,7 +1174,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
     WEBHTML += "['t','val'],\n";
 
     for (byte jj = 0;jj<N;jj++) {
-      WEBHTML += "[" + (String) (((float) -1*(I.currentTime-t[jj]))/3600) + "," + (String) v[jj] + "]";
+      WEBHTML += "[" + (String) t[jj] + "," + (String) v[jj] + "]";
       if (jj<N-1) WEBHTML += ",";
       WEBHTML += "\n";
     }
@@ -1201,214 +1207,166 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
 
 
 void handlePost() {
+    String responseMsg = "";
+    String senderIP = "";
+    uint64_t deviceMAC = 0;
+    uint32_t deviceIP = 0;
+
+    int16_t sensorIndex = -1;
+
+    uint8_t ardID = 0; //legacy field, not used anymore
+    String devName = ""; //optional field
+    uint8_t snsType = 0;
+    uint8_t snsID = 0;
+    String snsName = "";
+    double snsValue = 0;
+    uint32_t timeRead = 0;
+    uint32_t timeLogged = I.currentTime;
+    uint32_t sendingInt = 0;
+    uint8_t flags = 0;
+
     // Check if this is JSON data (new format)
-    if (server.hasArg("plain")) {
-        String postData = server.arg("plain");
-        Serial.println("Received POST data: " + postData);
-        
-        // Try to parse as JSON first
+    if (server.hasArg("JSON")) {
+        String postData = server.arg("JSON");
+        SerialPrint("Received POST data in JSON format: " + postData,true);
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, postData);
-        
         if (!error) {
-            // Handle new-style MAC-based messages
-            if (doc["mac"].is<JsonVariantConst>()) {
-                // Extract MAC address
-                String macStr = doc["mac"];
-                uint64_t mac = strtoull(macStr.c_str(), NULL, 16);
-                
-                // Extract IP address (optional)
-                uint32_t ip = 0;
-                if (doc["ip"].is<JsonVariantConst>()) {
-                    String ipStr = doc["ip"];
-                    ip = IPAddress().fromString(ipStr);
-                }
-                
-                // Extract device name (optional)
-                String devName = "";
-                if (doc["devName"].is<JsonVariantConst>()) {
-                    devName = doc["devName"].as<String>();
-                }
-                
-                // Extract sensors array
-                if (doc["sensors"].is<JsonArray>()) {
-                    JsonArray sensorsArray = doc["sensors"];
-                    
-                    for (JsonObject sensor : sensorsArray) {
-                        if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
-                            sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
-                            
-                            uint8_t snsType = sensor["type"];
-                            uint8_t snsID = sensor["id"];
-                            String snsName = sensor["name"];
-                            double snsValue = sensor["value"];
-                            
-                            // Optional fields
-                            uint32_t timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : I.currentTime;
-                            uint32_t timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
-                            uint32_t sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
-                            uint8_t flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
-                            
-                            // Add sensor to Devices_Sensors class
-                            int16_t sensorIndex = Sensors.addSensor(mac, ip, snsType, snsID, 
-                                                                   snsName.c_str(), snsValue, 
-                                                                   timeRead, timeLogged, sendingInt, flags);
-                            
-                            if (sensorIndex >= 0) {
-                                // Store individual sensor data to SD card
-                                storeSensorDataSD(sensorIndex);
-
-                            } else {
-                                Serial.printf("Failed to add sensor: type=%d, id=%d\n", snsType, snsID);
-                                char errorMsg[100];
-                                snprintf(errorMsg, sizeof(errorMsg), "Failed to add sensor: type=%d, id=%d", snsType, snsID);
-                                storeError(errorMsg);
-                            }
-                        }
-                    }
-                }
-                
-                server.send(200, "text/plain", "Data received successfully");
-                return;
-            }
-            
-            // Handle old-style IP-based messages (legacy compatibility)
-            if (doc["ip"].is<JsonVariantConst>()) {
+            // New-style MAC-based messages
+            if (doc["ip"].is<JsonVariantConst>()==false && doc["mac"].is<JsonVariantConst>()==false) {
+              SerialPrint("Invalid JSON message format",true);
+              responseMsg = "Invalid JSON message format";
+            } else {
+              if (doc["ip"].is<JsonVariantConst>()) {
                 String ipStr = doc["ip"];
-                uint32_t ip = IPAddress().fromString(ipStr);
-                
-                // Use IP address as MAC address for better device identification
-                uint64_t deviceMAC = ((uint64_t)ip << 32) | 0x00000000FF000000; // IP-based MAC with prefix
-                
-                if ( doc["sensors"].is<JsonArray>()) {
-                    JsonArray sensorsArray = doc["sensors"];
-                    
-                    for (JsonObject sensor : sensorsArray) {
-                        if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
-                            sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
-                            
-                            uint8_t snsType = sensor["type"];
-                            uint8_t snsID = sensor["id"];
-                            String snsName = sensor["name"];
-                            double snsValue = sensor["value"];
-                            
-                            // Optional fields
-                            uint32_t timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : I.currentTime;
-                            uint32_t timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
-                            uint32_t sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
-                            uint8_t flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
-                            
-                            // Add sensor to Devices_Sensors class using IP-derived MAC
-                            int16_t sensorIndex = Sensors.addSensor(deviceMAC, ip, snsType, snsID, 
-                                                                   snsName.c_str(), snsValue, 
-                                                                   timeRead, timeLogged, sendingInt, flags);
-                            
-                            if (sensorIndex >= 0) {
-                                // Store individual sensor data to SD card
-                                storeSensorDataSD(sensorIndex);
-                                Serial.printf("Added legacy sensor: type=%d, id=%d, name=%s, value=%.2f\n", 
-                                            snsType, snsID, snsName.c_str(), snsValue);
-                            } else {
-                                Serial.printf("Failed to add sensor: type=%d, id=%d\n", snsType, snsID);
-                                char errorMsg[100];
-                                snprintf(errorMsg, sizeof(errorMsg), "Failed to add sensor: type=%d, id=%d", snsType, snsID);
-                                storeError(errorMsg);
-                            }
-                        }
-                    }
-                }
-                
-                server.send(200, "text/plain", "Legacy data received successfully");
-                return;
-            }
-            
-            server.send(400, "text/plain", "Invalid JSON message format");
-            return;
-        }
-    }
-    
-    // Handle old HTML form data (backward compatibility)
-    if (server.args() > 0) {
-        
-        // Parse old-style HTML form parameters
-        uint64_t deviceMAC = 0;
-        uint32_t deviceIP = 0;
-        String devName = "";
-        uint8_t snsType = 0;
-        uint8_t snsID = 0;
-        uint8_t ardID = 0;
-        String snsName = "";
-        double snsValue = 0;
-        uint32_t timeRead = I.currentTime;
-        uint32_t timeLogged = I.currentTime;
-        uint32_t sendingInt = 3600;
-        uint8_t flags = 0;
-        
-        for (byte k = 0; k < server.args(); k++) {
-            String argName = server.argName(k);
-            String argValue = server.arg(k);
-            
-            if (argName == "MAC") {
-                deviceMAC = strtoull(argValue.c_str(), NULL, 16);
-            } else if (argName == "IP") {
-              argValue.replace(",",""); //remove unneeded erroneous commas
-              deviceIP = StringToIP(argValue);              
-            } else if (argName == "logID") {
-                ardID = breakString(&argValue,".",true).toInt();
-                snsType = breakString(&argValue,".",true).toInt();
-                snsID = argValue.toInt();
-            } else if (argName == "devName") {
-                devName = argValue;
-            } else if (argName == "snsType") {
-                snsType = argValue.toInt();
-            } else if (argName == "snsID") {
-                snsID = argValue.toInt();
-            } else if (argName == "varName"|| argName == "snsName") {
-                snsName = argValue;
-            } else if (argName == "varValue" || argName == "snsValue") {
-                snsValue = argValue.toDouble();
-            } else if (argName == "timeRead") {
-                timeRead = argValue.toInt();
-            } else if (argName == "timeLogged") {
-                timeLogged = argValue.toInt();
-            } else if (argName == "SendingInt") {
-                sendingInt = argValue.toInt();
-            } else if (argName == "Flags") {
-                flags = argValue.toInt();
-            }
-        }
+                deviceIP = IPAddress().fromString(ipStr);
+              }
+              if (doc["mac"].is<JsonVariantConst>()) {
+                String macStr = doc["mac"];
+                deviceMAC = strtoull(macStr.c_str(), NULL, 16);
+              } else {
+                deviceMAC = IPToMACID(deviceIP);
+              }
 
-        // Validate required fields
-        if (snsType == 0 || snsName.length() == 0 || (deviceIP==0 && deviceMAC==0)) {
-          SerialPrint("sensor missing critical elements, skipping.\n");
-          server.send(400, "text/plain", "Missing required fields: snsType and varName");
-          return;
-        }
-        
-        // If no MAC provided but IP is available, use IP as MAC address
-        if (deviceMAC == 0 && deviceIP != 0) {
-            // This creates a unique identifier that's clearly IP-based
-            deviceMAC = deviceIP;
-        }
-        
-        // Add sensor to Devices_Sensors class
-        int16_t sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
-                                               snsName.c_str(), snsValue, 
-                                               timeRead, timeLogged, sendingInt, flags);
-        if (sensorIndex >= 0) {
-            // Store individual sensor data to SD card
-            storeSensorDataSD(sensorIndex);
-            //SerialPrint((String) "Added HTML form sensor: index " + sensorIndex + ", MAC =" + deviceMAC + ", IP =" + deviceIP + ", type=" + snsType + ", id=" + snsID + ", name=" + snsName + ", value=" + snsValue + "\n");
-            server.send(200, "text/plain", "HTML form data received successfully");
+              if (doc["sensor"].is<JsonArray>()) {
+                  JsonArray sensorsArray = doc["sensor"];
+                  for (JsonObject sensor : sensorsArray) {
+                      if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
+                          sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
+                          if (sensor["devName"].is<JsonVariantConst>()) {
+                            devName = sensor["devName"].as<String>();
+                          }
+                          snsType = sensor["type"];
+                          snsID = sensor["id"];
+                          snsName = sensor["name"].as<String>();
+                          snsValue = sensor["value"];
+                          timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
+                          timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
+                          sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
+                          flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;                            
+                      }
+                  }
+              } else {
+                deviceMAC=0;
+                deviceIP=0;
+                snsType = 0;
+                SerialPrint("Invalid JSON message format",true);
+                responseMsg = "Invalid JSON message format";
+              }
+             
+            }
         } else {
-            SerialPrint("Failed to add sensor\n");
-
-            server.send(500, "text/plain", "Failed to add sensor");
+          SerialPrint("Could not deserialize JSON message",true);
+          responseMsg = "Could not deserialize JSON message";
         }
-        return;
+    } else {
+        // Handle old HTML form data (backward compatibility)
+        if (server.args() > 0) {
+          
+          // Parse old-style HTML form parameters
+          
+          for (byte k = 0; k < server.args(); k++) {
+              String argName = server.argName(k);
+              String argValue = server.arg(k);
+              
+              if (argName == "MAC") {
+                  deviceMAC = strtoull(argValue.c_str(), NULL, 16);
+              } else if (argName == "IP") {
+                argValue.replace(",",""); //remove unneeded erroneous commas //this was an error in the old code
+                deviceIP = StringToIP(argValue);              
+              } else if (argName == "logID") { //legacy code, still used by some devices
+                  ardID = breakString(&argValue,".",true).toInt(); //this is a legacy field, not used anymore
+                  snsType = breakString(&argValue,".",true).toInt();
+                  snsID = argValue.toInt();
+              } else if (argName == "devName") {
+                  devName = argValue;
+              } else if (argName == "snsType") {
+                  snsType = argValue.toInt();
+              } else if (argName == "snsID") {
+                  snsID = argValue.toInt();
+              } else if (argName == "varName"|| argName == "snsName") {
+                  snsName = argValue;
+              } else if (argName == "varValue" || argName == "snsValue") {
+                  snsValue = argValue.toDouble();
+              } else if (argName == "timeRead") {
+                  timeRead = argValue.toInt();
+              } else if (argName == "timeLogged") {
+                  timeLogged = argValue.toInt();
+              } else if (argName == "SendingInt") {
+                  sendingInt = argValue.toInt();
+              } else if (argName == "Flags") {
+                  flags = argValue.toInt();
+              }
+          }
+
+          
+          if (deviceMAC==0 && deviceIP!=0) deviceMAC = IPToMACID(deviceIP);
+          if (deviceMAC==0 && deviceIP==0) {
+            snsType = 0;
+            SerialPrint("No MAC or IP provided",true);
+            responseMsg = "No MAC or IP provided";
+          }
+          if (snsType == 0 || snsName.length() == 0 || (deviceIP==0 && deviceMAC==0)) {
+            snsType = 0;
+            deviceMAC = 0;
+            deviceIP = 0;
+            SerialPrint("sensor missing critical elements, skipping.\n");
+            responseMsg = "Missing required fields: snsType and varName";
+          }  
+
+        } else {
+          SerialPrint("No data received",true);
+          responseMsg = "No valid HTML form data received";
+        }
     }
     
-    server.send(400, "text/plain", "No data received");
+    if (deviceMAC!=0 || deviceIP!=0 || snsType!=0 || snsName.length()!=0) {
+
+        // Add sensor to Devices_Sensors class
+        sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
+                                              snsName.c_str(), snsValue, 
+                                              timeRead, timeLogged, sendingInt, flags, devName.c_str());
+        if (sensorIndex < 0) {
+          SerialPrint("Failed to add sensor",true);
+          responseMsg = "Failed to add sensor";
+        } else {
+          //message was successfully added to Devices_Sensors class
+          responseMsg = "OK";
+        }
+    }
+
+    if (sensorIndex >= 0) {
+      //message was successfully added to Devices_Sensors class
+      // Store individual sensor data to SD card
+        storeSensorDataSD(sensorIndex);
+        //SerialPrint((String) "handlePost: Added sensor data to SD card: index " + sensorIndex + ", MAC =" + deviceMAC + ", IP =" + deviceIP + ", type=" + snsType + ", id=" + snsID + ", name=" + snsName + ", value=" + snsValue + "\n");
+        server.send(200, "text/plain", responseMsg);
+    } else {
+        SerialPrint("Failed to add sensor with response message: " + responseMsg + "\n");
+        server.send(500, "text/plain", responseMsg);
+    }
+    return;
+
 }
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex

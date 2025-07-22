@@ -42,7 +42,7 @@ struct IP_TYPE {
 
 
 //declared as global constants
-extern Screen I;
+extern STRUCT_CORE I;
 extern uint32_t LAST_WEB_REQUEST;
 extern WeatherInfoOptimized WeatherData;
 extern uint32_t LAST_BAR_READ;
