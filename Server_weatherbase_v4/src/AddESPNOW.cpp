@@ -115,6 +115,7 @@ bool sendESPNOW(ESPNOW_type& msg) {
         return false;
     }
 
+    I.lastESPNOW = I.currentTime;
     SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
 
     return true;

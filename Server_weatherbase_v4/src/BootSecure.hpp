@@ -77,7 +77,7 @@
 class BootSecure {
 public:
     BootSecure();
-    bool setup(); // Call once at boot. Returns true if secure, false if not.
+    int8_t setup(); // Call once at boot. Returns 1 if secure, 0 if not, -1 if error no prefs found, -2 if PROCID mismatch
     bool isSecure() const { return secure; }
     bool setPrefs(); // Save Prefs to encrypted storage
 
@@ -92,7 +92,7 @@ public:
 
 private:
     bool secure = false;
-    bool getPrefs();
+    int8_t getPrefs();
     bool checkDeviceID();
 
 };

@@ -3,7 +3,7 @@
 
 
 #define _USETFT
-#define _USESERIAL
+//#define _USESERIAL
 #define _USEWEATHER
 #define _USEBATTERY
 
@@ -190,12 +190,14 @@ typedef enum {
     ERROR_SD_WEATHERDATAWRITE, //could not write weather data
     ERROR_SD_WEATHERDATAREAD, //could not read weather data
     ERROR_SD_WEATHERDATASIZE, //weather data file was the wrong size
-
+    ERROR_JSON_GEOCODING //failed json parse request for geocoding
   } ERRORCODES;
 
 
 
   struct STRUCT_PrefsH {        
+    bool isUpToDate; // Whether Prefs has been saved to memory
+    
     uint32_t lastESPNOW;
     byte WIFISSID[33];
     byte WIFIPWD[65];
@@ -213,6 +215,8 @@ typedef enum {
     uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
     uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
     uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
+    uint8_t LMK_KEY[16]; //espnow LMK key
+
     // --- Network configuration (merged from WiFi_type) ---
     uint32_t DHCP;  // 4 bytes
     uint32_t GATEWAY; // 4 bytes
@@ -221,10 +225,11 @@ typedef enum {
     uint32_t SUBNET; // 4 bytes
     uint32_t MYIP; // 4 bytes
     uint8_t status;
-    bool HAVECREDENTIALS; // Whether WiFi credentials are available
-    bool isUpToDate; // Whether Prefs has been saved to memory
+    bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
     uint8_t WiFiMode; // 0=STA, 1=AP, 2=AP-STA
-  
+    double LAT;
+    double LON;
+
     #ifdef _ISPERIPHERAL
     double SNS_LIMIT_MAX[SENSORNUM] = LIMIT_MAX; //store max values for each sensor in NVS
     double SNS_LIMIT_MIN[SENSORNUM] = LIMIT_MIN; //store min values for each sensor in NVS
@@ -237,6 +242,8 @@ typedef enum {
   
   
   struct STRUCT_CORE {
+
+      bool isUpToDate;  // Core has been saved to memory
       RESETCAUSE resetInfo;
       time_t lastResetTime;
       byte rebootsSinceLast=0;
@@ -247,21 +254,29 @@ typedef enum {
       #ifdef _USETFT
       byte CLOCK_Y = 105;
       byte HEADER_Y = 30;
-      uint32_t lastHeader=0;
-      uint32_t lastWeather=0;
-      uint32_t lastClock=0; //last time clock was updated, whether flag or not
-      uint32_t lastFlagView=0; //last time clock was updated, whether flag or not
-      uint32_t lastCurrentConditionTime; //last time current condition was updated
-      uint8_t HourlyInterval = 2; //hours between daily weather display
-      uint8_t currentConditionInterval = 10; //how many minutes to show current condition?
-      uint8_t flagViewTime = 10; //how many seconds to show flag values?
-      uint8_t weatherTime = 60; //how many MINUTES to show weather values?
+      uint32_t lastHeaderTime=0; //last time header was drawn
+      uint32_t lastWeatherTime=0; //last time weather was drawn
+      uint32_t lastCurrentConditionTime; //last time current condition was drawn
+      uint32_t lastClockDrawTime=0; //last time clock was updated, whether flag or not
+      uint32_t lastFutureConditionTime=0; //last time future condition was drawn
+      uint32_t lastFlagViewTime=0; //last time clock was updated, whether flag or not
+      uint8_t cycleHeaderMinutes = 30; //how many seconds to show header?
+      uint8_t cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
+      uint8_t cycleWeatherMinutes = 10; //how many minutes to show weather values?
+      uint8_t cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      uint8_t cycleFlagSeconds = 3; //how many seconds to show flag values?
+      uint8_t IntervalHourlyWeather = 2; //hours between daily weather display
+
       uint16_t touchX;
       uint16_t touchY;
       uint16_t line_clear;
       uint16_t line_keyboard;
       uint16_t line_submit;
       uint8_t alarmIndex;
+      uint8_t ScreenNum;
+      uint8_t oldScreenNum;
+      uint8_t screenChangeTimer = 0; //seconds before screen changes back to main screen
+      
       #endif
   
       #ifdef _USEWEATHER
@@ -278,8 +293,6 @@ typedef enum {
       #endif
   
       
-      uint8_t ScreenNum;
-      uint8_t SECSCREEN = 3; //seconds before alarm redraw
   
       
       uint8_t isExpired = false; //are any critical sensors expired?
@@ -298,6 +311,8 @@ typedef enum {
       uint8_t isCold;
       uint8_t isSoilDry;
       uint8_t isLeak;
+
+      uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
       #endif
   
       char lastError[76];

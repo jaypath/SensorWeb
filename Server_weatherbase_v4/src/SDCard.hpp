@@ -55,8 +55,9 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
                                          uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, bool forwardOrder = true);
 // Functions for storing/reading all sensors
 bool storeAllSensorSD();
-bool readAllSensorSD();
+bool readAllSensorsSD();
 bool writeErrorToSD();
+bool readErrorFromSD(String* error, uint16_t errornumber=0);
 
 // Screen and utility functions
 bool storeScreenInfoSD();

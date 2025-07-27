@@ -76,7 +76,6 @@ bool Server_Message(String &URL, String &payload, int &httpCode);
 bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert);
 void handleReboot();
 void handleNotFound();
-void handleGETSTATUS();
 void handlePost();
 void handleRoot(void);
 void handleALL(void);
@@ -85,21 +84,35 @@ void handleREQUESTUPDATE();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
 void handleREQUESTWEATHER();
-void handleUPDATEDEFAULTS();
 void handleRETRIEVEDATA();
 void handleRETRIEVEDATA_MOVINGAVERAGE();
 void handleFLUSHSD();
 void handleSETWIFI();
+void handleSTATUS();
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
 void serverTextHeader();
 void serverTextWiFiForm();
 void serverTextClose(int htmlcode=200, bool asHTML=true);
+// Weather configuration handlers
+void handleWeather();
+void handleWeather_POST();
+void handleWeatherRefresh();
+void handleWeatherZip();
+void handleWeatherAddress();
+void handleCONFIG();
+void handleCONFIG_POST();
+void handleCONFIG_DELETE();
+void handleWiFiConfig();
+void handleWiFiConfig_POST();
+void handleWiFiConfig_RESET();
 
 bool SendData(struct SensorVal*);
 
-void connectSoftAP();
+void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
+void Station_Mode();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();
+
 
 #endif

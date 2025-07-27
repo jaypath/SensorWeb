@@ -106,6 +106,7 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
             return true;
         } else {
             storeError("Grid coordinates Json had incorrect format", ERROR_JSON_BOX,true);
+            this->lastUpdateError = I.currentTime;
         }
         
     } 
@@ -156,9 +157,11 @@ bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& do
             }
         } else {
             storeError(enumErrorToName(JSON).c_str(),JSON,true);
+            this->lastUpdateError = I.currentTime;
         }
     } else {
         storeError(enumErrorToName(HTTP).c_str(),HTTP,true);
+        this->lastUpdateError = I.currentTime;
     }
     
     http.end();
@@ -210,6 +213,7 @@ bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
     if (cnt>0) return true;
 
     storeError("Could not parse Hourly JSON",ERROR_JSON_HOURLY,true);
+    this->lastUpdateError = I.currentTime;
     return false;
 }
 
@@ -235,6 +239,7 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
     
     if (cnt==0) {
         storeError("Could not parse Grid JSON",ERROR_JSON_GRID,true);
+        this->lastUpdateError = I.currentTime;
         return false;
     }
 
@@ -267,7 +272,8 @@ void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, cons
 
     if (cnt==0) {
         String s = "[Minor] No " + (String) field_name + " values";
-        storeError(s.c_str(),ERROR_JSON_GRID,true);        
+        storeError(s.c_str(),ERROR_JSON_GRID,true);    
+        this->lastUpdateError = I.currentTime;
     }
     return;
 }
@@ -314,6 +320,7 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
 
     
     storeError("Could not parse Daily JSON",ERROR_JSON_DAILY,true);
+    this->lastUpdateError = I.currentTime;
     return false;
 
 }
@@ -359,6 +366,7 @@ bool WeatherInfoOptimized::handleApiError(const String& operation, int httpCode)
         Serial.printf("API error in %s: HTTP %d\n", operation.c_str(), httpCode);
     #endif
     storeError(("API error: " + operation + " HTTP " + String(httpCode)).c_str());
+    this->lastUpdateError = I.currentTime;
     return false;
 }
 
@@ -375,6 +383,7 @@ bool WeatherInfoOptimized::retryWithBackoff(const String& operation, std::functi
     }
     
     storeError(("Failed " + operation + " after " + String(MAX_RETRY_ATTEMPTS) + " attempts").c_str());
+    this->lastUpdateError = I.currentTime;
     return false;
 }
 
@@ -419,6 +428,7 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
                 b3 =  processHourlyData(tempobj);
             } else {
                 storeError("Hourly Json had incorrect format", ERROR_JSON_HOURLY,true);
+                this->lastUpdateError = I.currentTime;
             }
         }
         return b1 && b2 && b3;
@@ -446,6 +456,7 @@ bool WeatherInfoOptimized::fetchGridForecast() {
                 b3 =  processGridData(tempobj);
             } else {
                 storeError("Grid Json had incorrect format", ERROR_JSON_GRID,true);
+                this->lastUpdateError = I.currentTime;
             }
         }
         return b1 && b2 && b3;
@@ -473,6 +484,7 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
                 b3 =  processDailyData(tempobj);
             } else {
                 storeError("Daily Json had incorrect format", ERROR_JSON_DAILY,true);
+                this->lastUpdateError = I.currentTime;
             }
         }
         return b1 && b2 && b3;
@@ -504,6 +516,7 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
             return true;
         } else {
             storeError("Sunrise IO Json had incorrect format", ERROR_JSON_SUNRISE,true);
+            this->lastUpdateError = I.currentTime;
         }
     }
     return false;
@@ -874,5 +887,272 @@ bool WeatherInfoOptimized::isCacheValid() {
             return true;
         }
     }
+    return false;
+}
+
+// Complete address to coordinates conversion using US Census Bureau Geocoding API
+bool WeatherInfoOptimized::getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode, double& latitude, double& longitude) {
+    // Validate ZIP code format (5 digits)
+    if (zipCode.length() != 5) {
+        SerialPrint("Invalid ZIP code format. Must be 5 digits.", true);
+        return false;
+    }
+    
+    for (int i = 0; i < 5; i++) {
+        if (!isdigit(zipCode.charAt(i))) {
+            SerialPrint("Invalid ZIP code format. Must contain only digits.", true);
+            return false;
+        }
+    }
+    
+    // Validate state format (2 letters)
+    if (state.length() != 2) {
+        SerialPrint("Invalid state format. Must be 2 letters.", true);
+        return false;
+    }
+    
+    // Build the URL for the Census Bureau Geocoding API
+    String url = "https://geocoding.geo.census.gov/geocoder/locations/address?";
+    url += "street=" + urlEncode(street);
+    url += "&city=" + urlEncode(city);
+    url += "&state=" + urlEncode(state);
+    url += "&zip=" + zipCode;
+    url += "&benchmark=Public_AR_Current&format=json";
+    
+    JsonDocument doc;
+    int httpCode;
+    
+    SerialPrint(("Fetching coordinates for address: " + street + ", " + city + ", " + state + " " + zipCode).c_str(), true);
+    SerialPrint(("API URL: " + url).c_str(), true);
+    
+    // Make HTTP request to Census Geocoding API
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(15000); // 15 second timeout for geocoding
+    
+    httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        http.end();
+        
+        SerialPrint("Received response from Census Geocoding API", true);
+        
+        // Parse JSON response
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+            SerialPrint("Failed to parse JSON response from Census Geocoding API", true);
+            SerialPrint(("JSON Error: " + String(error.c_str())).c_str(), true);
+            storeError("Failed to parse JSON response from Census Geocoding API", ERROR_JSON_GEOCODING,true);
+            return false;
+        }
+        
+        // Check if we have address matches
+        if (doc["result"]["addressMatches"].is<JsonArray>()) {
+            JsonArray addressMatches = doc["result"]["addressMatches"];
+            
+            if (addressMatches.size() > 0) {
+                // Get the first (best) match
+                JsonObject match = addressMatches[0];
+                
+                if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
+                    longitude = match["coordinates"]["x"].as<double>();
+                    latitude = match["coordinates"]["y"].as<double>();
+                    
+                    SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
+                    
+                    // Log the matched address for verification
+                    if (match["matchedAddress"].is<String>()) {
+                        String matchedAddress = match["matchedAddress"].as<String>();
+                        SerialPrint(("Matched Address: " + matchedAddress).c_str(), true);
+                    }
+                    
+                    return true;
+                }
+            }
+        }
+        
+        SerialPrint("No address matches found in the response", true);
+    } else {
+        SerialPrint(("HTTP request failed with code: " + String(httpCode)).c_str(), true);
+        http.end();
+    }
+    
+    // Fallback to ZIP code only method
+    SerialPrint("Falling back to ZIP code only method", true);
+    return getCoordinatesFromZipCodeFallback(zipCode, latitude, longitude);
+}
+
+// ZIP code to coordinates conversion using US Census Bureau Geocoding API (legacy function)
+bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, double& latitude, double& longitude) {
+    
+    // Validate ZIP code format (5 digits)
+    if (zipCode.length() != 5) {
+        SerialPrint("Invalid ZIP code format. Must be 5 digits.", true);
+        storeError("Invalid ZIP code format. Must be 5 digits.", ERROR_JSON_GEOCODING,true);
+        return false;
+    }
+    
+    for (int i = 0; i < 5; i++) {
+        if (!isdigit(zipCode.charAt(i))) {
+            SerialPrint("Invalid ZIP code format. Must contain only digits.", true);
+            storeError("Invalid ZIP code format. Must contain only digits.", ERROR_JSON_GEOCODING,true);
+            return false;
+        }
+    }
+    
+    // For now, we'll use a default address structure since we only have ZIP code
+    // In a full implementation, you would collect street, city, state from the user
+    String street = "1 Main St";  // Default street address
+    String city = "Unknown";      // Default city
+    String state = "MA";          // Default state (you might want to make this configurable)
+    
+    // Build the URL for the Census Bureau Geocoding API
+    String url = "https://geocoding.geo.census.gov/geocoder/locations/address?";
+    url += "street=" + urlEncode(street);
+    url += "&city=" + urlEncode(city);
+    url += "&state=" + urlEncode(state);
+    url += "&zip=" + zipCode;
+    url += "&benchmark=Public_AR_Current&format=json";
+    
+    JsonDocument doc;
+    int httpCode;
+    
+    SerialPrint(("Fetching coordinates for ZIP code: " + zipCode).c_str(), true);
+    SerialPrint(("API URL: " + url).c_str(), true);
+    
+    // Make HTTP request to Census Geocoding API
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(15000); // 15 second timeout for geocoding
+    
+    httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        http.end();
+        
+        SerialPrint("Received response from Census Geocoding API", true);
+        
+        // Parse JSON response
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+            SerialPrint("Failed to parse JSON response from Census Geocoding API", true);
+            SerialPrint(("JSON Error: " + String(error.c_str())).c_str(), true);
+            storeError("Failed to parse JSON response from Census Geocoding API", ERROR_JSON_GEOCODING,true);
+            return false;
+        }
+        
+        // Check if we have address matches
+        if (doc["result"]["addressMatches"].is<JsonArray>()) {
+            JsonArray addressMatches = doc["result"]["addressMatches"];
+            
+            if (addressMatches.size() > 0) {
+                // Get the first (best) match
+                JsonObject match = addressMatches[0];
+                
+                if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
+                    longitude = match["coordinates"]["x"].as<double>();
+                    latitude = match["coordinates"]["y"].as<double>();
+                    
+                    SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
+                    
+                    // Log the matched address for verification
+                    if (match["matchedAddress"].is<String>()) {
+                        String matchedAddress = match["matchedAddress"].as<String>();
+                        SerialPrint(("Matched Address: " + matchedAddress).c_str(), true);
+                    }
+                    
+                    return true;
+                }
+            }
+        }
+        storeError("No address matches found in the response", ERROR_JSON_GEOCODING,true);
+        SerialPrint("No address matches found in the response", true);
+
+    } else {
+        SerialPrint(("HTTP request failed with code: " + String(httpCode)).c_str(), true);
+
+        String error = "HTTP request failed with code: " + String(httpCode);
+        storeError(error.c_str(), ERROR_JSON_GEOCODING,true);
+        http.end();
+    }
+    
+    // Fallback to ZIP code only method
+    SerialPrint("Falling back to ZIP code only method", true);
+    return getCoordinatesFromZipCodeFallback(zipCode, latitude, longitude);
+}
+
+// Helper function to URL encode strings
+String WeatherInfoOptimized::urlEncode(const String& str) {
+    String encoded = "";
+    for (unsigned int i = 0; i < str.length(); i++) {
+        char c = str.charAt(i);
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded += c;
+        } else if (c == ' ') {
+            encoded += '+';
+        } else {
+            encoded += '%';
+            if (c < 16) {
+                encoded += '0';
+            }
+            encoded += String(c, HEX);
+        }
+    }
+    return encoded;
+}
+
+// Fallback method using a simple geocoding service
+bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCode, double& latitude, double& longitude) {
+    // Use a simple geocoding service (example with a free API)
+    // Note: This is a simplified approach. In production, you might want to use
+    // a more reliable service like Google Geocoding API (requires API key)
+    
+    String url = "http://api.zippopotam.us/US/" + zipCode;
+    
+    JsonDocument doc;
+    int httpCode;
+    
+    SerialPrint(("Using fallback geocoding service for ZIP: " + zipCode).c_str(), true);
+    
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(10000);
+    
+    httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        http.end();
+        
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+            SerialPrint("Failed to parse JSON response from geocoding service", true);
+            storeError("Failed to parse JSON response from geocoding service", ERROR_JSON_GEOCODING,true);
+            this->lastUpdateError = I.currentTime;
+            return false;
+        }
+        
+        // Extract coordinates from the response
+        if (doc["places"][0]["latitude"].is<String>() && doc["places"][0]["longitude"].is<String>()) {
+            latitude = doc["places"][0]["latitude"].as<double>();
+            longitude = doc["places"][0]["longitude"].as<double>();
+            
+            SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
+            return true;
+        }
+    } else {
+        SerialPrint(("Fallback geocoding failed with HTTP code: " + String(httpCode)).c_str(), true);
+        String error = "Fallback geocoding failed with HTTP code: " + String(httpCode);
+        storeError(error.c_str(), ERROR_JSON_GEOCODING,true);
+        http.end();
+    }
+    
+    // If all methods fail, return false
+    SerialPrint("All geocoding methods failed for ZIP code: " + zipCode, true);
     return false;
 } 

@@ -50,6 +50,8 @@ private:
 
 public:
     Devices_Sensors();
+
+    bool isUpToDate;
     
     // Device management
     int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);
@@ -81,8 +83,9 @@ public:
     int16_t findOldestDevice();
     int16_t findOldestSensor();
     byte checkExpiration(int16_t index, time_t currentTime, bool onlyCritical);
-    uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan);
-    
+    uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0);
+    bool isSensorOfType(int16_t index, String type);
+
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
     uint8_t find_sensor_count(String snsname, uint8_t snsType);
@@ -104,6 +107,7 @@ public:
 // Global instance
 extern Devices_Sensors Sensors;
 extern STRUCT_CORE I;
+
 
 
 // All device IP addresses are now stored as uint32_t.

@@ -51,8 +51,9 @@ void fcnDrawHeader();
 void fcnDrawClock();
 void fcnDrawCurrentWeather();
 void fcnDrawFutureWeather();
-void fcnDrawSensors(int Y, int deltaY);
+void fcnDrawSensors(int X,int Y, uint8_t rows=0, uint8_t cols=0, int32_t whichSensors = -1);
 void fncDrawCurrentCondition();
+void fcnDrawStatus();
 
 // Weather text functions
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
@@ -68,6 +69,7 @@ void displayWiFiStatus(byte retries, bool success);
 void displayOTAProgress(unsigned int progress, unsigned int total);
 void displayOTAError(int error);
 void screenWiFiDown();
+void checkTouchScreen();
 
 //__________________________Graphics
 

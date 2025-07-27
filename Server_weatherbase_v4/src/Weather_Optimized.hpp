@@ -14,10 +14,6 @@
 #define WEATHER_CACHE_SIZE 3
 #define MAX_RETRY_ATTEMPTS 3
 //#define PARALLEL_REQUESTS_ENABLED 1
-//weather
-//wellesley, MA
-#define LAT 42.30210392783453  //only 4 decimal pts
-#define LON -71.29822225979105 //only 4 decimal pts allowed with NOAA
 
 // Weather data cache entry
 struct WeatherCacheEntry {
@@ -105,6 +101,7 @@ public:
     // Public interface (same as original WeatherInfo)
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt = 0;
+    uint32_t lastUpdateError = 0;
     uint32_t sunrise;
     uint32_t sunset;
     bool flag_rain;
@@ -160,6 +157,12 @@ public:
     int16_t getGridX() const { return Grid_x; }
     int16_t getGridY() const { return Grid_y; }
     const char* getGridId() const { return Grid_id; }
+    
+    // Address to coordinates conversion
+    bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode, double& latitude, double& longitude);
+    bool getCoordinatesFromZipCode(const String& zipCode, double& latitude, double& longitude);
+    bool getCoordinatesFromZipCodeFallback(const String& zipCode, double& latitude, double& longitude);
+    String urlEncode(const String& str);
 };
 
 extern String WEBHTML;

@@ -35,6 +35,8 @@ bool readWeatherDataSD() {
   if (f.size() != sizeof(WeatherData)) {
     storeError("readWeatherDataSD: File size mismatch",ERROR_SD_WEATHERDATASIZE);
     f.close();
+
+    deleteFiles("WeatherData.dat","/Data");
     return false;
   }
   f.read((uint8_t*)&WeatherData, sizeof(WeatherData));
@@ -317,6 +319,7 @@ bool readDevicesSensorsSD() {
     if (f.size() != sizeof(Devices_Sensors)) {
         storeError("readDevicesSensorsSD: File size mismatch",ERROR_SD_DEVICESENSORSSIZE);
         f.close();
+        deleteFiles("DevicesSensors.dat","/Data");
         return false;
     }
 
@@ -345,6 +348,46 @@ bool writeErrorToSD() {
     f.close();
     
     return true;
+}
+
+bool readErrorFromSD(String* error, uint16_t errornumber) {
+  String filename = "/Data/DeviceErrors.txt";
+  File f = SD.open(filename, FILE_READ);
+  if (f==false) {
+    return false;
+  }
+  if (f.size() <3) { //need at least 3 characters to read
+    f.close();
+    return false;
+  }
+  
+  //start from end of file and go back errornumber lines
+  *error = "";
+  //seek the ith /n from the end of the file
+  uint32_t n=0;
+  f.seek(f.size()); //goto end of file
+      
+  while (n<errornumber+1 && f.position() > 2) {
+    //is the last character a /n?
+    f.seek(f.position()-1);
+    if (f.read() == '\n') n++;
+    //now position at the start of this line
+    while (f.position() > 2) {
+      f.seek(f.position()-2);
+      if (f.read() == '\n') break;
+    }      
+  }
+
+  if (n<errornumber+1) {
+    f.close();
+    return false;
+  }
+  
+  *error = f.readStringUntil('\n');
+  if (error->length() == 0) return false;
+  
+  f.close();
+  return true;
 }
 
 
@@ -658,20 +701,10 @@ double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t
 }
 
 bool storeAllSensorSD() {
-    bool success = true;
-    
-    for (int16_t i = 0; i < NUMSENSORS && i < Sensors.getNumSensors(); i++) {
-        if (Sensors.isSensorInit(i)) {
-            if (!storeSensorDataSD(i)) {
-                success = false;
-            }
-        }
-    }
-    
-    return success;
+    return readAllSensorsSD();
 }
 
-bool readAllSensorSD() {
+bool readAllSensorsSD() {
     bool success = true;
     
     for (int16_t i = 0; i < NUMSENSORS && i < Sensors.getNumSensors(); i++) {

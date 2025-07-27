@@ -285,11 +285,12 @@ struct STRUCT_CORE {
     uint32_t lastHeader=0;
     uint32_t lastWeather=0;
     uint32_t lastClock=0; //last time clock was updated, whether flag or not
-    uint32_t lastFlagView=0; //last time clock was updated, whether flag or not
+    uint8_t flagCycleTime = 8; //how many seconds to show flag values and then weather values (1/2 of this value will be for flags)?
+    uint32_t flagViewTimeLeft=0; //flag view seconds left
+    bool flagView = false; //is the flag view active?
     uint32_t lastCurrentConditionTime; //last time current condition was updated
     uint8_t HourlyInterval = 2; //hours between daily weather display
     uint8_t currentConditionInterval = 10; //how many minutes to show current condition?
-    uint8_t flagViewTime = 10; //how many seconds to show flag values?
     uint8_t weatherTime = 60; //how many MINUTES to show weather values?
     uint16_t touchX;
     uint16_t touchY;
@@ -297,6 +298,8 @@ struct STRUCT_CORE {
     uint16_t line_keyboard;
     uint16_t line_submit;
     uint8_t alarmIndex;
+    uint8_t screenNum;
+    uint8_t secScreen;
     #endif
 
     #ifdef _USEWEATHER
@@ -311,12 +314,7 @@ struct STRUCT_CORE {
     uint8_t localBatteryIndex; //index of battery
     int8_t localBatteryLevel;
     #endif
-
-    
-    uint8_t ScreenNum;
-    uint8_t SECSCREEN = 3; //seconds before alarm redraw
-
-    
+   
     uint8_t isExpired = false; //are any critical sensors expired?
     uint8_t isFlagged=false;
     uint8_t wasFlagged=false;

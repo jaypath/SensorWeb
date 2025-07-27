@@ -1,4 +1,3 @@
-//#define _DEBUG
 #include "utility.hpp"
 
 
@@ -344,7 +343,7 @@ String lastReset2String(bool addtime) {
   }
   
   if (addtime) {
-    output += " at " + String(I.lastResetTime);
+    output += " at " + String(I.lastResetTime ? dateify(I.lastResetTime) : "???");
   }
   
   return output;
@@ -478,15 +477,46 @@ uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
     return (procid >> (8 * (byteIndex))) & 0xFF;
 }
 
-
-void cycleIndex(int16_t* start, uint16_t arraysize, uint16_t origin) {
-  //cycles through a vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
+bool cycleByteIndex(byte* start, byte arraysize, byte origin) {
+  //cycles through a byte vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
-  //returns -1 if cycle is complete
+  //returns true if cycling, false if complete
+
+  if (arraysize==0) return false;
+  if (origin>=arraysize) return false;
+  if (*start>=arraysize) return false; 
+
 
   if (*start == arraysize-1) *start=0;
   else *start = *start + 1;
 
-  if (*start==origin)     *start = -1; //we have cycled through
+  if (*start==origin)  {
+    //cycle index has already been updated, no changes
+    return false;
+  } else {
+    return true;
+  }
+}
+
+bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin) {
+  //cycles through a vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
+  //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
+  //returns true if cycling, false if complete
+
+  if (arraysize==0) return false;
+  if (origin>=arraysize) return false;
+  if (*start>=arraysize) return false; 
+
+
+
+  if (*start == arraysize-1) *start=0;
+  else *start = *start + 1;
+
+  if (*start==origin)  {
+    //cycle index has already been updated, no changes
+    return false;
+  } else {
+    return true;
+  }
   
 }

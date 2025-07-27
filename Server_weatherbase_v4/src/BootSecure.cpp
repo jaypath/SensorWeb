@@ -5,31 +5,31 @@ byte prefs_set = 0;
 
 BootSecure::BootSecure() {}
 
-bool BootSecure::setup() {
-    secure = false;
+int8_t BootSecure::setup() {
+    int8_t prefs_status = getPrefs();
+
+    if (prefs_status <= 0) { //no prefs found or error
+        #ifdef SETSECURE
+                return prefs_status;
+        #else
+
+                Prefs.isUpToDate = false;
+        #endif
+    }
+
+
     if (!checkDeviceID()) {
-#ifdef SETSECURE
-        return false;
-#else
-    if (Prefs.PROCID != ESP.getEfuseMac()) {
-        Prefs.PROCID = ESP.getEfuseMac();
-        Prefs.isUpToDate=false;
-    }
+        #ifdef SETSECURE
+                return -2; //error, PROCID mismatch
+        #else
+            if (Prefs.PROCID != ESP.getEfuseMac()) {
+                Prefs.PROCID = ESP.getEfuseMac();
+                Prefs.isUpToDate=false;
+            }
 
-    // PROCID is now the single source of truth for MAC address
-    // No need to sync with separate MAC array
-
-#endif
+        #endif
     }
-    if (!getPrefs()) {
-#ifdef SETSECURE
-        return false;
-#else
-        return setPrefs();
-#endif
-    }
-    secure = true;
-    return true;
+    return prefs_status;
 }
 
 bool BootSecure::checkDeviceID() {
@@ -47,11 +47,21 @@ uint16_t BootSecure::CRCCalculator(uint8_t * data, uint16_t length) {
     return (sum2 << 8) | sum1;
 }
 
-bool BootSecure::getPrefs() {
+int8_t BootSecure::getPrefs() {
     Preferences p;
     p.begin("STARTUP", true);
-    if (p.isKey("Boot")) {
-        uint16_t p_length = sizeof(STRUCT_PrefsH) + (16 - (sizeof(STRUCT_PrefsH) % 16)) + 16; // padding + iv
+    if (p.isKey("Boot")) {        
+        uint8_t padding = 0;
+        if (sizeof(STRUCT_PrefsH) % 16 != 0) {
+            padding = 16 - (sizeof(STRUCT_PrefsH) % 16);
+        }
+        uint16_t p_length = sizeof(STRUCT_PrefsH) + padding + 16; // padding + iv
+        if (p.getBytesLength("Boot") != p_length) {
+            storeError("BootSecure::getPrefs: Boot length mismatch, prefs failed to load");
+            p.clear();
+            p.end();
+            return -1; //error, length mismatch
+        }
         uint8_t tempPrefs[p_length];
         memset(tempPrefs, 0, p_length);
         p.getBytes("Boot", tempPrefs, p_length);
@@ -65,9 +75,9 @@ bool BootSecure::getPrefs() {
         Prefs.isUpToDate = true;
     } else {
         p.end();
-        return false;
+        return 0; //no prefs found
     }
-    return true;
+    return 1; //success
 }
 
 bool BootSecure::setPrefs() {
@@ -81,10 +91,15 @@ bool BootSecure::setPrefs() {
     }
     Preferences p;
     if (!p.begin("STARTUP", false)) return false;
-    uint16_t p_length = sizeof(STRUCT_PrefsH) + (16 - (sizeof(STRUCT_PrefsH) % 16)) + 16; // padding + iv
+    uint8_t padding = 0;
+    if (sizeof(STRUCT_PrefsH) % 16 != 0) {
+        padding = 16 - (sizeof(STRUCT_PrefsH) % 16);
+    }
+    uint16_t p_length = sizeof(STRUCT_PrefsH) + padding + 16; // padding + iv
     uint8_t tempPrefs[p_length];
     memset(tempPrefs, 0, p_length);
     uint16_t outlen = 0;
+    Prefs.isUpToDate = true;
     if (encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)AESKEY, tempPrefs, &outlen) != 0) {
         p.end();
         return false;
@@ -92,7 +107,7 @@ bool BootSecure::setPrefs() {
     p.putBytes("Boot", tempPrefs, outlen);
     p.end();
     BootSecure::zeroize(tempPrefs, p_length);
-    Prefs.isUpToDate = true;
+    
     return true;
 }
 

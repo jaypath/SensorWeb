@@ -325,16 +325,60 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
     return expiredCount;
 }
 
-uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
-    uint8_t count = 0;
+
+uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
+    ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored and expired- alert if no updates received within time limit specified)
+    //special case for snsType = -1000, which means use I.showTheseFlags
+    //if snsType is 0, then count all sensors
+    uint16_t count = 0;
     
+    if (snsType == -1000) {
+        
+        //use I.showTheseFlags to count the number of sensors that match the flags
+        if (bitRead(I.showTheseFlags, 0) == 0) {//everything is good
+            return numSensors;
+        } 
+        //has to be flagged or expired
+        if (bitRead(I.showTheseFlags, 1) == 1 || bitRead(I.showTheseFlags, 0) == 1) {//include expired or flagged
+
+            if (bitRead(I.showTheseFlags, 2) == 1) {//include soil dry
+                count += countFlagged(3,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 3) == 1) {//include leak
+                count += countFlagged(58,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 4) == 1) {//include temperature
+                count += countFlagged(-1,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 5) == 1) {//include humidity
+                count += countFlagged(-2,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 6) == 1) {//include pressure
+                count += countFlagged(-9,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 7) == 1) {//include battery
+                count += countFlagged(61,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 8) == 1) {//include HVAC
+                count += countFlagged(55,0b00000011,0b00000011,MoreRecentThan);
+                count += countFlagged(56,0b00000011,0b00000011,MoreRecentThan);
+                count += countFlagged(57,0b00000011,0b00000011,MoreRecentThan);
+            }
+        }
+        return count;
+    }
+    
+    //count the number of sensors that match the flags
     for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
         if (!sensors[i].IsSet) continue;
         
         // Check sensor type filter
-        if (snsType >= 0 && sensors[i].snsType != snsType) continue;
-        if (snsType == -2 && (sensors[i].snsType < 1 || sensors[i].snsType > 9)) continue; // Temperature sensors only
-        
+        if (snsType > 0 && sensors[i].snsType != snsType) continue;
+        if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
+        if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
+        if (snsType == -3 && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
+        if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
+        if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
         if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;
         
@@ -417,14 +461,14 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
 
 // Data storage functions
 bool Devices_Sensors::storeAllSensors() {
-    // This would implement storing all sensors to SD card
-    // For now, return true as placeholder
+    this->isUpToDate = true;
+    storeDevicesSensorsSD();
+    
     return true;
 }
 
 bool Devices_Sensors::readAllSensors() {
-    // This would implement reading all sensors from SD card
-    // For now, return true as placeholder
+    readDevicesSensorsSD();
     return true;
 }
 
@@ -469,3 +513,39 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     return 0;
 }
 
+bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
+    uint8_t snsType = sensors[index].snsType;
+    if (type == "temperature") {//temperature
+        return (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17);
+    }
+    if (type == "humidity") {//humidity
+        return (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18);
+    }
+    if (type == "pressure") {//pressure
+        return (snsType == 9 || snsType == 13 || snsType == 19);
+    }
+    if (type == "battery") {//battery
+        return (snsType == 60 || snsType == 61);
+    }
+    if (type == "HVAC") {//HVAC
+        return (snsType == 55 || snsType == 56 || snsType == 57);
+    }
+    if (type == "soil") {//soil
+        return (snsType == 3);
+    }
+    if (type == "leak") {//leak
+        return (snsType == 58);
+    }
+    if (type == "human") {//human
+        return (snsType == 21);
+    }
+    if (type == "server") {//binary
+        return (snsType >= 100);
+    }
+    if (type == "all") {//all
+        return true;
+    }
+
+
+    return false;
+}
