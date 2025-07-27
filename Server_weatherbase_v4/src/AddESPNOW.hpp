@@ -30,10 +30,10 @@ constexpr uint8_t ESPNOW_MSG_TERMINATE            = 128; // Private: terminate c
 
 // --- ESPNow Message Struct ---
 struct ESPNOW_type {
-    uint8_t  senderMAC[6];      // Sender's MAC address
+    uint64_t  senderMAC;      // Sender's MAC address
     uint32_t senderIP;          // Sender's IP address (uint32_t)
     uint8_t  senderType;        // Device type (>=100 = server, <100 = sensor)
-    uint8_t  targetMAC[6];      // Target MAC address (all 0xFF for broadcast)
+    uint8_t  targetMAC[6];      // Target MAC address (all 0xFF for broadcast). in byte format for ESPNOW
     uint8_t  msgType;           // Message type (see constants above)
     uint8_t  payload[60];       // Payload (see message type for format)
     // For type 2: payload[0..15] = one-time key
@@ -50,6 +50,7 @@ String ESPNowError(esp_err_t result) ;
 bool initESPNOW();
 esp_err_t addESPNOWPeer(uint8_t* macad, bool doEncrypt);
 esp_err_t delESPNOWPeer(uint8_t* macad);
+esp_err_t delESPNOWPeer(uint64_t macad);
 bool sendESPNOW(const ESPNOW_type& msg);
 bool broadcastServerPresence();
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);

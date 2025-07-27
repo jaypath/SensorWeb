@@ -553,10 +553,11 @@ void fcnDrawScreen() {
   } else {
     if (I.ScreenNum==1 && I.oldScreenNum!=I.ScreenNum) {
         tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
+        tft.setTextFont(2);
         tft.setTextColor(FG_COLOR,BG_COLOR);
         tft.setCursor(0,0);
-        tft.print("Sensors");
-        fcnDrawSensors(0,0,12,6,0);
+        tft.printf("Sensors (Devices: %d; Sensors: %d)",Sensors.numDevices,Sensors.numSensors);
+        fcnDrawSensors(0,18,8,6,0);
         I.oldScreenNum = I.ScreenNum;
     } else {
       if (I.ScreenNum==2 && I.oldScreenNum!=I.ScreenNum) { //draw config
@@ -669,8 +670,9 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
           }
         }
 
-        if (isgood) alarms[alarmArrayInd++] = SensorIndex;          
       }
+      if (isgood) alarms[alarmArrayInd++] = SensorIndex;          
+
     }      
   } 
   I.alarmIndex = SensorIndex;

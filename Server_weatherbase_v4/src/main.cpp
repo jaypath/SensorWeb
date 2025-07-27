@@ -393,8 +393,8 @@ void setup() {
         // Save Prefs with the new device name
         bootSecure.setPrefs();
     }
-    WeatherData.lat = Prefs.LAT;
-    WeatherData.lon = Prefs.LON;
+    WeatherData.lat = I.LATITUDE;
+    WeatherData.lon = I.LONGITUDE;
 
 
     tft.printf("Init server... ");
@@ -445,6 +445,20 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
     if (minute() % interval == 0 && I.lastESPNOW!=I.currentTime) {        
         // ESPNow does not require WiFi connection; always broadcast
         broadcastServerPresence();
+    }
+}
+
+void handleUpdatePrefs() {
+    if (minute() % 5 == 0 && !Prefs.isUpToDate) { 
+        Prefs.isUpToDate = true;
+        bootSecure.setPrefs();
+    }
+}
+
+void handleUpdateScreenFlags() {
+    if (minute() % 5 == 0 && !I.isUpToDate) { 
+        I.isUpToDate = true;
+        storeScreenInfoSD();
     }
 }
 
@@ -552,9 +566,12 @@ void loop() {
         I.isLeak = countFlagged(70, 0b00000001, 0b00000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isExpired = checkExpiration(-1, I.currentTime, true);
         I.isFlagged += I.isExpired;
-        if (minute() % 5 == 0 && !Sensors.isUpToDate) { 
-            Sensors.storeAllSensors();        
-        }
+
+        handleESPNOWPeriodicBroadcast(5);
+        handleUpdatePrefs();
+        handleUpdateScreenFlags();
+
+        Sensors.storeAllSensors();   //do this every 5 minutes     
     }
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
@@ -570,25 +587,18 @@ void loop() {
     if (OldTime[0] != second()) {
         OldTime[0] = second();
 
-        
-        // Check if Prefs needs to be saved
-        if (!Prefs.isUpToDate) {
-            Prefs.isUpToDate = true;
-            bootSecure.setPrefs();
+        if (I.LAST_ESPNOW_SERVER_TIME > 0) {
+            I.LAST_ESPNOW_SERVER_TIME = 0;
+            Sensors.addDevice(I.LAST_ESPNOW_SERVER_MAC, I.LAST_ESPNOW_SERVER_IP, "Server");
+            I.LAST_ESPNOW_SERVER_MAC = 0;
+            I.LAST_ESPNOW_SERVER_IP = 0;
         }
-
-        if (!I.isUpToDate) {
-            I.isUpToDate = true;
-            storeScreenInfoSD();
-        }
-
-        //sensors is updated every 5 minutes if needed
 
         fcnDrawScreen();
         if (I.screenChangeTimer > 0) I.screenChangeTimer--;
 
     }
-    handleESPNOWPeriodicBroadcast(5);
+    
 
 }
 

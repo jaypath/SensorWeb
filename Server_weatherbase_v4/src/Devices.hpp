@@ -45,13 +45,13 @@ class Devices_Sensors {
 private:
     DevType devices[NUMDEVICES];
     SnsType sensors[NUMSENSORS];
-    uint8_t numDevices;
-    uint8_t numSensors;
 
 public:
     Devices_Sensors();
 
     bool isUpToDate;
+    uint8_t numDevices;
+    uint8_t numSensors;
     
     // Device management
     int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);

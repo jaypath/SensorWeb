@@ -196,25 +196,18 @@ typedef enum {
 
 
   struct STRUCT_PrefsH {        
-    bool isUpToDate; // Whether Prefs has been saved to memory
+    bool isUpToDate; // Prefs has been saved to memory
     
     uint32_t lastESPNOW;
     byte WIFISSID[33];
     byte WIFIPWD[65];
     uint32_t SSIDCRC;
     uint32_t PWDCRC;
-    uint64_t PROCID; //processor ID, might be MACID
+    uint64_t PROCID; //processor ID, same as MACID for most esp32
     uint32_t LASTBOOTTIME;
     uint8_t MyType; //see end of this file for types
     char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
     // --- ESPNow WiFi password request ephemeral key/IV and timestamp ---
-    uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
-    uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
-    uint8_t TEMP_AES_MAC[6]; // expected server MAC for WiFi PW response
-    uint8_t LAST_SERVER[6]; // MAC of last server (type 100) seen in broadcast
-    uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
-    uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
-    uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
     uint8_t LMK_KEY[16]; //espnow LMK key
 
     // --- Network configuration (merged from WiFi_type) ---
@@ -226,9 +219,6 @@ typedef enum {
     uint32_t MYIP; // 4 bytes
     uint8_t status;
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
-    uint8_t WiFiMode; // 0=STA, 1=AP, 2=AP-STA
-    double LAT;
-    double LON;
 
     #ifdef _ISPERIPHERAL
     double SNS_LIMIT_MAX[SENSORNUM] = LIMIT_MAX; //store max values for each sensor in NVS
@@ -250,6 +240,7 @@ typedef enum {
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
       time_t currentTime;
+      uint8_t WiFiMode;
       
       #ifdef _USETFT
       byte CLOCK_Y = 105;
@@ -285,6 +276,8 @@ typedef enum {
       int8_t Tmin;
       uint8_t localWeatherIndex; //index of outside sensor
       int8_t lastCurrentTemp; //last current temperature
+      double LATITUDE;
+      double LONGITUDE;
       #endif
   
       #ifdef _USEBATTERY
@@ -292,7 +285,17 @@ typedef enum {
       int8_t localBatteryLevel;
       #endif
   
-      
+      //espnow info
+      uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
+      uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
+      uint64_t TEMP_AES_MAC; // expected server MAC for WiFi PW response
+      uint64_t LAST_ESPNOW_SERVER_MAC; // MAC of last server (type 100) seen in broadcast
+      uint32_t LAST_ESPNOW_SERVER_IP;
+      uint32_t LAST_ESPNOW_SERVER_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
+      uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
+      uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
+      uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
+          
   
       
       uint8_t isExpired = false; //are any critical sensors expired?

@@ -1442,11 +1442,12 @@ String generateAPSSID() {
 
 // Connect to Soft AP mode (combined AP-station mode)
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
-  if (Prefs.WiFiMode != WIFI_AP_STA) {
+  if (I.WiFiMode != WIFI_AP_STA) {
     *wifiID = generateAPSSID();
     byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
     *apIP = IPAddress(192, 168, 4, lastByte);
     WiFi.mode(WIFI_AP_STA); // Combined AP and station mode
+    I.WiFiMode = WIFI_AP_STA;
     *wifiPWD = "S3nsor.N3t!";
     WiFi.softAPConfig(*apIP, *apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP(wifiID->c_str(), wifiPWD->c_str());
