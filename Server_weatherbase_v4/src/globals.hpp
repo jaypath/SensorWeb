@@ -1,11 +1,12 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
-
+#define GLOBALS_HPP_INCLUDED
 
 #define _USETFT
-//#define _USESERIAL
+#define _USESERIAL
 #define _USEWEATHER
 #define _USEBATTERY
+#define _USEGSHEET
 
 
 #define MYNAME "Pleasant Weather Server"
@@ -19,7 +20,28 @@
   #include <Arduino.h>
   #include <String.h>
   #include <TimeLib.h>
+  #include <WiFi.h>
+  #include <time.h>
+  #include <SPI.h>
+  #include <SD.h>
+  #include <string>
+  #include <LovyanGFX.hpp>
 
+  #include <ArduinoOTA.h>
+  #include <HTTPClient.h>
+  #include <ArduinoJson.h>
+  #include <NTPClient.h>
+  #include <WiFiUdp.h>
+  #include <esp_task_wdt.h>
+  #include <esp_now.h>
+  #include <esp_wifi.h>
+  
+
+
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+
+#endif
 
 #ifdef _ISPERIPHERAL
   const uint8_t SENSORTYPES[SENSORNUM] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //can have zeros for unused sensors, but must init all to the correct sensortypes
@@ -190,6 +212,8 @@ typedef enum {
     ERROR_SD_WEATHERDATAWRITE, //could not write weather data
     ERROR_SD_WEATHERDATAREAD, //could not read weather data
     ERROR_SD_WEATHERDATASIZE, //weather data file was the wrong size
+    ERROR_SD_GSHEETINFOWRITE, //could not write GsheetInfo data
+    ERROR_SD_GSHEETINFOREAD, //could not read GsheetInfo data
     ERROR_JSON_GEOCODING //failed json parse request for geocoding
   } ERRORCODES;
 
@@ -328,6 +352,7 @@ typedef enum {
       int16_t DSTOFFSET;
   };
   
+
 
 
 //sensors

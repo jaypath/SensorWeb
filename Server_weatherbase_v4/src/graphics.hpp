@@ -12,6 +12,9 @@
 #include "timesetup.hpp"
 #include "SDCard.hpp"
 
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+#endif
 
 // drawing
 #define NUMSCREEN 2

@@ -23,6 +23,17 @@ Devices_Sensors::Devices_Sensors() {
     }
 }
 
+bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
+    
+
+
+    bool cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
+    while (isSensorInit(*currentPosition)==false && cycling==true) {
+        cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
+    }
+    return cycling;
+}
+
 // Device management functions
 int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devName, uint32_t sendingInt, uint8_t flags) {
     // Check if device already exists
@@ -174,6 +185,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
         sensor->IsSet=1;
+        Sensors.lastUpdatedTime = I.currentTime;
         return existingIndex;
     }
     
@@ -200,6 +212,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
             if (i >= numSensors) {
                 numSensors = i + 1;
             }
+            Sensors.lastUpdatedTime = I.currentTime;
             return i;
         }
     }
@@ -252,7 +265,7 @@ uint8_t Devices_Sensors::getNumSensors() {
 }
 
 bool Devices_Sensors::isSensorInit(int16_t index) {
-    return (index >= 0 && index < NUMSENSORS && index < numSensors && sensors[index].IsSet);
+    return (index >= 0 && index < NUMSENSORS &&  sensors[index].IsSet);
 }
 
 void Devices_Sensors::initSensor(int16_t index) {
@@ -460,11 +473,14 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
 }
 
 // Data storage functions
-bool Devices_Sensors::storeAllSensors() {
-    this->isUpToDate = true;
-    storeDevicesSensorsSD();
-    
-    return true;
+uint8_t Devices_Sensors::storeAllSensors(uint8_t intervalMinutes) {
+    if (intervalMinutes==0) intervalMinutes=1;//never write to SD card more than once per minute
+    if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSDSaveTime+intervalMinutes*60<I.currentTime) { 
+        lastSDSaveTime = I.currentTime;    
+        if (storeDevicesSensorsSD()==false) return 0;
+    return 1;
+    }
+    return 0;
 }
 
 bool Devices_Sensors::readAllSensors() {

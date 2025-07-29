@@ -7,6 +7,7 @@
 #include "Devices.hpp"
 #include "timesetup.hpp"
 
+
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);

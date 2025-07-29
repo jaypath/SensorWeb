@@ -79,7 +79,7 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
         SerialPrint(("Weather update completed in " + String(response_time) + " ms").c_str(),true);
     } else {
         failed_api_calls++;
-        SerialPrint("Weather update failed",true);
+        SerialPrint("Weather update failed for the " + (String) failed_api_calls + "th time",true);
     }
 
     return success?1:0; //1 if successful, 0 if failed, 2 if too soon to retry

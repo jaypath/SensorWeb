@@ -848,7 +848,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
     SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
-    if (sensor) {
+    if (sensor && sensor->IsSet) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
       if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
         used[usedINDEX++] = j;
@@ -856,7 +856,7 @@ void handlerForRoot(bool allsensors) {
         
         for (byte jj=j+1;jj<SENSORNUM;jj++) {
           SnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);    
-          if (sensor2) {
+          if (sensor2 && sensor2->IsSet) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
             if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,SENSORNUM) == false && sensor2->deviceIndex==sensor->deviceIndex) {
                 used[usedINDEX++] = jj;
@@ -930,7 +930,7 @@ void handleFLUSHSD() {
 
     if (server.arg(0).toInt()== 3) {
       I.isUpToDate = false;
-      Sensors.isUpToDate = false;
+      Sensors.lastUpdatedTime = 0;
       Prefs.isUpToDate = false;
     } else {    
       if (server.arg(0).toInt()== 1) {
@@ -1290,7 +1290,7 @@ void handlePost() {
         }
     }
     
-    if (deviceMAC!=0 || deviceIP!=0 || snsType!=0 || snsName.length()!=0) {
+    if ((deviceMAC!=0 || deviceIP!=0) && snsType!=0 ) {
 
         // Add sensor to Devices_Sensors class
         sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
@@ -1307,8 +1307,6 @@ void handlePost() {
 
     if (sensorIndex >= 0) {
       //message was successfully added to Devices_Sensors class
-      // Store individual sensor data to SD card
-        storeSensorDataSD(sensorIndex);
         //SerialPrint((String) "handlePost: Added sensor data to SD card: index " + sensorIndex + ", MAC =" + deviceMAC + ", IP =" + deviceIP + ", type=" + snsType + ", id=" + snsID + ", name=" + snsName + ", value=" + snsValue + "\n");
         server.send(200, "text/plain", responseMsg);
     } else {
@@ -1790,7 +1788,7 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateT) ? dateify(WeatherData.lastUpdateT) : "???") + "</td></tr>";
 
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Update Attempt Time</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateAttempt) ? dateify(WeatherData.lastUpdateAttempt) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateAttempt) ? dateify(WeatherData.lastUpdateAttempt) : "???") + " " + (String) WeatherData.lastUpdateAttempt + "</td></tr>";
 
 
   // Basic weather data
@@ -1844,8 +1842,8 @@ void handleWeather() {
     int16_t weatherID = WeatherData.getDailyWeatherID(day);
     
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Day " + String(day + 1) + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(dailyT[0]) + "°C</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(dailyT[1]) + "°C</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(dailyT[0]) + "F</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(dailyT[1]) + "F</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(weatherID) + "</td></tr>";
   }
   
@@ -1861,9 +1859,9 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Update Location\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  // Address lookup form (updates lat/lon fields but doesn't submit)
-  WEBHTML = WEBHTML + "<h3>Lookup by Lattitude and Longitude from Address</h3>";
-  WEBHTML = WEBHTML + "<form id=\"addressForm\" onsubmit=\"return lookupAddress(event)\">";
+  // Address lookup form (submits directly to server)
+  WEBHTML = WEBHTML + "<h3>Lookup Coordinates from Address</h3>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WeatherAddress\">";
   WEBHTML = WEBHTML + "<p><label for=\"street\">Street Address:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"street\" name=\"street\" placeholder=\"123 Main St\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"city\">City:</label><br>";
@@ -1874,76 +1872,6 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"zipcode\" name=\"zipcode\" pattern=\"[0-9]{5}\" maxlength=\"5\" placeholder=\"12345\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Lookup Coordinates\" style=\"padding: 10px 20px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
-  
-  // JavaScript for address lookup
-  WEBHTML = WEBHTML + "<script>";
-  WEBHTML = WEBHTML + "function lookupAddress(event) {";
-  WEBHTML = WEBHTML + "  event.preventDefault();";
-  WEBHTML = WEBHTML + "  var street = document.getElementById('street').value.trim();";
-  WEBHTML = WEBHTML + "  var city = document.getElementById('city').value.trim();";
-  WEBHTML = WEBHTML + "  var state = document.getElementById('state').value.trim().toUpperCase();";
-  WEBHTML = WEBHTML + "  var zipCode = document.getElementById('zipcode').value;";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Validate required fields";
-  WEBHTML = WEBHTML + "  if (!street || !city || !state || !zipCode) {";
-  WEBHTML = WEBHTML + "    alert('Please fill in all address fields');";
-  WEBHTML = WEBHTML + "    return false;";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Validate state format";
-  WEBHTML = WEBHTML + "  if (state.length !== 2 || !/^[A-Z]{2}$/.test(state)) {";
-  WEBHTML = WEBHTML + "    alert('State must be a 2-letter code (e.g., MA, NY, CA)');";
-  WEBHTML = WEBHTML + "    return false;";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Validate ZIP code format";
-  WEBHTML = WEBHTML + "  if (zipCode.length !== 5 || !/^\\d{5}$/.test(zipCode)) {";
-  WEBHTML = WEBHTML + "    alert('ZIP code must be 5 digits');";
-  WEBHTML = WEBHTML + "    return false;";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Show loading message";
-  WEBHTML = WEBHTML + "  var submitBtn = event.target.querySelector('input[type=\"submit\"]');";
-  WEBHTML = WEBHTML + "  var originalText = submitBtn.value;";
-  WEBHTML = WEBHTML + "  submitBtn.value = 'Looking up...';";
-  WEBHTML = WEBHTML + "  submitBtn.disabled = true;";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Make AJAX request to lookup coordinates";
-  WEBHTML = WEBHTML + "  var xhr = new XMLHttpRequest();";
-  WEBHTML = WEBHTML + "  xhr.open('POST', '/WeatherAddress', true);";
-  WEBHTML = WEBHTML + "  xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  xhr.onreadystatechange = function() {";
-  WEBHTML = WEBHTML + "    if (xhr.readyState === 4) {";
-  WEBHTML = WEBHTML + "      submitBtn.value = originalText;";
-  WEBHTML = WEBHTML + "      submitBtn.disabled = false;";
-  WEBHTML = WEBHTML + "      ";
-  WEBHTML = WEBHTML + "      if (xhr.status === 200) {";
-  WEBHTML = WEBHTML + "        try {";
-  WEBHTML = WEBHTML + "          var response = JSON.parse(xhr.responseText);";
-  WEBHTML = WEBHTML + "          if (response.success) {";
-  WEBHTML = WEBHTML + "            // Update the lat/lon fields in the main form";
-  WEBHTML = WEBHTML + "            document.getElementById('lat').value = response.latitude;";
-  WEBHTML = WEBHTML + "            document.getElementById('lon').value = response.longitude;";
-  WEBHTML = WEBHTML + "            alert('Coordinates updated! Please review and submit the main form to apply changes.');";
-  WEBHTML = WEBHTML + "          } else {";
-  WEBHTML = WEBHTML + "            alert('Address lookup failed: ' + response.message);";
-  WEBHTML = WEBHTML + "          }";
-  WEBHTML = WEBHTML + "        } catch (e) {";
-  WEBHTML = WEBHTML + "          alert('Error parsing response from server');";
-  WEBHTML = WEBHTML + "        }";
-  WEBHTML = WEBHTML + "      } else {";
-  WEBHTML = WEBHTML + "        alert('Address lookup failed. Please try again.');";
-  WEBHTML = WEBHTML + "      }";
-  WEBHTML = WEBHTML + "    }";
-  WEBHTML = WEBHTML + "  };";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Build form data";
-  WEBHTML = WEBHTML + "  var formData = 'street=' + encodeURIComponent(street) + '&city=' + encodeURIComponent(city) + '&state=' + encodeURIComponent(state) + '&zipcode=' + encodeURIComponent(zipCode);";
-  WEBHTML = WEBHTML + "  xhr.send(formData);";
-  WEBHTML = WEBHTML + "  return false;";
-  WEBHTML = WEBHTML + "}";
-  WEBHTML = WEBHTML + "</script>";
   
   // Refresh weather button
   WEBHTML = WEBHTML + "<h3>Weather Actions</h3>";
@@ -2054,29 +1982,29 @@ void handleWeatherAddress() {
     
     // Validate required fields
     if (street.length() == 0 || city.length() == 0 || state.length() == 0 || zipCode.length() == 0) {
-      server.sendHeader("Content-Type", "application/json");
-      server.send(400, "application/json", "{\"success\":false,\"message\":\"All address fields are required.\"}");
+      server.sendHeader("Location", "/WEATHER?error=missing_fields");
+      server.send(302, "text/plain", "All address fields are required.");
       return;
     }
     
     // Validate state format (2 letters)
     if (state.length() != 2) {
-      server.sendHeader("Content-Type", "application/json");
-      server.send(400, "application/json", "{\"success\":false,\"message\":\"State must be a 2-letter code.\"}");
+      server.sendHeader("Location", "/WEATHER?error=invalid_state");
+      server.send(302, "text/plain", "State must be a 2-letter code.");
       return;
     }
     
     // Validate ZIP code format
     if (zipCode.length() != 5) {
-      server.sendHeader("Content-Type", "application/json");
-      server.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid ZIP code format. Must be 5 digits.\"}");
+      server.sendHeader("Location", "/WEATHER?error=invalid_zip");
+      server.send(302, "text/plain", "Invalid ZIP code format. Must be 5 digits.");
       return;
     }
     
     for (int i = 0; i < 5; i++) {
       if (!isdigit(zipCode.charAt(i))) {
-        server.sendHeader("Content-Type", "application/json");
-        server.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid ZIP code format. Must contain only digits.\"}");
+        server.sendHeader("Location", "/WEATHER?error=invalid_zip");
+        server.send(302, "text/plain", "Invalid ZIP code format. Must contain only digits.");
         return;
       }
     }
@@ -2086,17 +2014,25 @@ void handleWeatherAddress() {
     bool success = WeatherData.getCoordinatesFromAddress(street, city, state, zipCode, latitude, longitude);
     
     if (success) {
-      // Return JSON response with coordinates (don't update WeatherData yet)
-      String jsonResponse = "{\"success\":true,\"latitude\":" + String(latitude, 14) + ",\"longitude\":" + String(longitude, 14) + "}";
-      server.sendHeader("Content-Type", "application/json");
-      server.send(200, "application/json", jsonResponse);
+      // Update WeatherData with new coordinates
+      WeatherData.lat = latitude;
+      WeatherData.lon = longitude;
+      
+      // Force weather update with new coordinates
+      WeatherData.updateWeather(0);
+      
+      // Redirect back to weather page with success message
+      String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(latitude, 14) + "&lon=" + String(longitude, 14);
+      server.sendHeader("Location", redirectUrl);
+      server.send(302, "text/plain", "Address lookup successful. Coordinates updated and weather refreshed.");
+      Prefs.isUpToDate = false;
     } else {
-      server.sendHeader("Content-Type", "application/json");
-      server.send(500, "application/json", "{\"success\":false,\"message\":\"Address lookup failed. Please check the address or try again later.\"}");
+      server.sendHeader("Location", "/WEATHER?error=lookup_failed");
+      server.send(302, "text/plain", "Address lookup failed. Please check the address or try again later.");
     }
   } else {
-    server.sendHeader("Content-Type", "application/json");
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing required address fields. Please provide street, city, state, and ZIP code.\"}");
+    server.sendHeader("Location", "/WEATHER?error=missing_fields");
+    server.send(302, "text/plain", "Missing required address fields. Please provide street, city, state, and ZIP code.");
   }
 }
 

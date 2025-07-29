@@ -480,7 +480,7 @@ uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
 bool cycleByteIndex(byte* start, byte arraysize, byte origin) {
   //cycles through a byte vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
-  //returns true if cycling, false if complete
+  //returns true if cycling, false if complete, and start is incremented appropriately.
 
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;

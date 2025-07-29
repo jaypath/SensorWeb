@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include "utility.hpp"
 #include "Devices.hpp"
+#include "GsheetUpload.hpp"
+
 
 #ifdef _USEWEATHER
 #include "Weather_Optimized.hpp"
@@ -75,9 +77,25 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
         storeError("loadSensorDataFromFile: Could not open file",ERROR_SD_FILEREAD);
         return -1;
     }
-    
+
+    if (file.size() == 0) {
+      SerialPrint("loadSensorDataFromFile: File is empty: " + filename,true);
+      return 0;
+    }
+
+
 
     uint32_t fileSize = file.size();
+    if (fileSize != sizeof(SensorDataPoint)) {
+      SerialPrint("loadSensorDataFromFile: File size mismatch: " + filename,true);
+      storeError("loadSensorDataFromFile: File size mismatch",ERROR_SD_RETRIEVEDATAPARMS);
+      file.close();
+      deleteFiles(filename.c_str(),"/Data");
+      return -2; //wrong file size
+    }
+
+    
+
     uint32_t totalPoints = fileSize / sizeof(SensorDataPoint);
 
     if (totalPoints == 0) {
@@ -309,6 +327,7 @@ bool storeDevicesSensorsSD() {
 
 bool readDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
+    SerialPrint("readDevicesSensorsSD: opening file: " + filename,true);
     File f = SD.open(filename, FILE_READ);
     if (f==false) {
         storeError("readDevicesSensorsSD: Could not read Devices_Sensors data",ERROR_SD_DEVICESENSORSOPEN);
@@ -826,3 +845,35 @@ uint32_t read32(File &f) {
   ((uint8_t *)&result)[3] = f.read(); // MSB
   return result;
 }
+
+#ifdef _USEGSHEET
+extern STRUCT_GOOGLESHEET GSheetInfo;
+
+bool storeGsheetInfoSD() {
+    if (GSheetInfo.lastGsheetSDSaveTime+60>I.currentTime) return true; //only save if it's been more than 60 seconds since last save
+    String filename = "/Data/GsheetInfo.dat";
+    File f = SD.open(filename, FILE_WRITE); //overwrite the file
+    if (f==false) {
+        storeError("storeGsheetInfoSD: Could not write GsheetInfo data",ERROR_SD_GSHEETINFOWRITE,false);
+        f.close();
+        return false;
+    }
+    f.write((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
+    f.close();
+    GSheetInfo.lastGsheetSDSaveTime = I.currentTime;
+    return true;
+}
+
+bool readGsheetInfoSD() {
+    String filename = "/Data/GsheetInfo.dat";
+    File f = SD.open(filename, FILE_READ);
+    if (f==false) {
+        storeError("readGsheetInfoSD: Could not read GsheetInfo data",ERROR_SD_GSHEETINFOREAD,false);
+        f.close();
+        return false;
+    }
+    f.read((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
+    f.close();
+    return true;
+}
+#endif

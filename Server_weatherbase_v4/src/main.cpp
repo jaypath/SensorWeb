@@ -51,22 +51,6 @@
 99 = any numerical value
 */
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <SPI.h>
-#include <SD.h>
-#include <ArduinoOTA.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
-#include <TimeLib.h>
-#include <LovyanGFX.hpp>
-#include <esp_task_wdt.h>
-#include <esp_now.h>
-#include <esp_wifi.h>
-
 #include "globals.hpp"
 #include "utility.hpp"
 #include "Devices.hpp"
@@ -78,6 +62,10 @@
 #include "AddESPNOW.hpp"
 #include "BootSecure.hpp"
 #include "devices.hpp"
+
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+#endif
 
 // --- WiFi Down Timer ---
 static uint32_t wifiDownSince = 0;
@@ -111,6 +99,10 @@ extern LGFX tft;
 // SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
 extern STRUCT_CORE I;
 extern String WEBHTML;
+#ifdef _USEGSHEET
+extern STRUCT_GOOGLESHEET GSheetInfo;
+#endif
+
 //extern uint8_t OldTime[4];
 extern WeatherInfoOptimized WeatherData;
 
@@ -136,6 +128,18 @@ void initOTA();
 void handleESPNOWPeriodicBroadcast(uint8_t interval);
 
 // --- Setup Helper Implementations ---
+
+
+#ifdef _USEGSHEET
+/**
+ * @brief Initialize the Gsheet uploader 
+ */
+void initGsheetHandler() {
+    initGsheet(); 
+    initGsheetInfo(); 
+    readGsheetInfoSD();
+}
+#endif
 
 /**
  * @brief Initialize the TFT display and SPI.
@@ -418,6 +422,21 @@ void setup() {
 
     initOTA();
 
+    #ifdef _USEGSHEET
+    tft.print("Initializing Gsheet... ");
+    initGsheetHandler();
+    if (GSheet.ready()) {
+        tft.setTextColor(TFT_GREEN);
+        tft.printf("OK.\n");
+        tft.setTextColor(FG_COLOR);
+    } else {
+        tft.setTextColor(TFT_RED);
+        tft.printf("FAILED.\n");
+        tft.setTextColor(FG_COLOR);
+        storeError("Gsheet initialization failed");
+    }
+    #endif
+
     tft.printf("Loading weather data...\n");
     //load weather data from SD card
     if (readWeatherDataSD()) {
@@ -469,6 +488,10 @@ void loop() {
     updateTime(); //sets I.currenttime
     
     checkTouchScreen();
+
+    #ifdef _USEGSHEET
+    GSheet.ready(); //maintains authentication
+    #endif
     
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -492,14 +515,16 @@ void loop() {
 
         // WEATHER OPTIMIZATION - Use optimized weather update method
         byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
-        if (weatherResult == 0) {
-            SerialPrint("Weather data is still fresh",true);
+        if (weatherResult > 3) {
+            SerialPrint("Weather data has an unknown status",true);
         } else if (weatherResult == 1) {
-            SerialPrint("Weather data updated successfully",true);
+            SerialPrint("Weather updated successfully",true);
         } else if (weatherResult == 2) {
-            SerialPrint("Weather data update failed, too soon to retry",true);
+            SerialPrint("Weather update: too soon to retry",true);
+        } else if (weatherResult == 3) {
+            SerialPrint("Weather update: data is still fresh",true);    
         } else {
-            SerialPrint("Weather data update failed",true);
+            SerialPrint("Weather update: error code " + (String) weatherResult,true);
         }
 
         //see if we have local weather
@@ -509,17 +534,20 @@ void loop() {
         if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 14);  //if no local weather sensor, use outside bme
         if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 17);  //if no local weather sensor, use outside bme680
 
+
         if (I.localWeatherIndex!=255) {
             SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
-            
-            if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
-            else {
-                I.currentTemp = sensor->snsValue;
-                //SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
+            if (!sensor || !sensor->IsSet) {
+                I.localWeatherIndex = 255;
+            } else {
+                if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
+                else {
+                    I.currentTemp = sensor->snsValue;
+                    //SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
+                }
             }
         }
         if (I.localWeatherIndex==255) I.currentTemp = WeatherData.getTemperature(I.currentTime);
-
         //see if we have local battery power
         if (I.localBatteryIndex == 255) I.localBatteryIndex = findSensorByName("Outside",61);
     
@@ -542,6 +570,7 @@ void loop() {
             tft.setTextColor(TFT_RED);
             setFont(2);
             tft.printf("Weather failed \nfor 60 minutes.\nRebooting in 3 seconds...");
+            SerialPrint("Weather failed for 60 minutes. Rebooting in 3 seconds...",true);
             delay(3000);
             I.resetInfo = RESET_WEATHER;
             I.lastResetTime = I.currentTime;
@@ -570,9 +599,20 @@ void loop() {
         handleESPNOWPeriodicBroadcast(5);
         handleUpdatePrefs();
         handleUpdateScreenFlags();
+        Sensors.storeAllSensors(5);
+        #ifdef _USEGSHEET
 
-        Sensors.storeAllSensors();   //do this every 5 minutes     
+        uint8_t gsheetResult = Gsheet_uploadData();
+
+        if (gsheetResult<0) {
+            SerialPrint(GsheetUploadErrorString(),true);
+        } else {
+            //note that gsheetResult==0 is not an error, it just means that no data was uploaded
+            if (gsheetResult==1)                 storeGsheetInfoSD();            
+        }
+        #endif
     }
+
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         checkExpiration(-1, I.currentTime, false);

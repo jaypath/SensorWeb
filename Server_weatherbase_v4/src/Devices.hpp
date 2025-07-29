@@ -38,6 +38,8 @@ struct SnsType {
     uint32_t SendingInt;    // Sending interval
     uint8_t IsSet;          // Whether this sensor is initialized
     bool expired;           // Whether sensor has expired
+    uint32_t lastCloudUploadTime; // Time sensor data was last uploaded to cloud
+    uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
 };
 
 // Devices_Sensors class
@@ -49,7 +51,8 @@ private:
 public:
     Devices_Sensors();
 
-    bool isUpToDate;
+    uint32_t lastSDSaveTime;
+    uint32_t lastUpdatedTime;
     uint8_t numDevices;
     uint8_t numSensors;
     
@@ -67,7 +70,7 @@ public:
     uint8_t countDev(); // Legacy compatibility function
     bool isDeviceInit(int16_t devindex);
     void initDevice(int16_t devindex);
-    
+    bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
@@ -93,7 +96,7 @@ public:
     int16_t findSnsOfType(uint8_t snstype, bool newest = false);
     
     // Data storage
-    bool storeAllSensors();
+    uint8_t storeAllSensors(uint8_t intervalMinutes);
     bool readAllSensors();
     
     // Helper functions for expiration checking
