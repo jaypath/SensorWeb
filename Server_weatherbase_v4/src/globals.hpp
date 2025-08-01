@@ -244,6 +244,12 @@ typedef enum {
     uint8_t status;
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
 
+
+    #ifdef _USEWEATHER
+    double LATITUDE;
+    double LONGITUDE;
+    #endif
+
     #ifdef _ISPERIPHERAL
     double SNS_LIMIT_MAX[SENSORNUM] = LIMIT_MAX; //store max values for each sensor in NVS
     double SNS_LIMIT_MIN[SENSORNUM] = LIMIT_MIN; //store min values for each sensor in NVS
@@ -265,6 +271,8 @@ typedef enum {
       uint8_t wifiFailCount;
       time_t currentTime;
       uint8_t WiFiMode;
+
+      uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
       
       #ifdef _USETFT
       byte CLOCK_Y = 105;
@@ -284,9 +292,6 @@ typedef enum {
 
       uint16_t touchX;
       uint16_t touchY;
-      uint16_t line_clear;
-      uint16_t line_keyboard;
-      uint16_t line_submit;
       uint8_t alarmIndex;
       uint8_t ScreenNum;
       uint8_t oldScreenNum;

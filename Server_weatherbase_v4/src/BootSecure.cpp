@@ -82,12 +82,12 @@ int8_t BootSecure::getPrefs() {
 
 bool BootSecure::setPrefs() {
     if (Prefs.PROCID != ESP.getEfuseMac()) {
-#ifdef SETSECURE
-        return false;
-#else
-        Prefs.PROCID = ESP.getEfuseMac();
-        Prefs.isUpToDate = false;
-#endif
+        #ifdef SETSECURE
+                return false;
+        #else
+                Prefs.PROCID = ESP.getEfuseMac();
+                Prefs.isUpToDate = false;
+        #endif
     }
     Preferences p;
     if (!p.begin("STARTUP", false)) return false;
@@ -99,8 +99,9 @@ bool BootSecure::setPrefs() {
     uint8_t tempPrefs[p_length];
     memset(tempPrefs, 0, p_length);
     uint16_t outlen = 0;
+    Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
     Prefs.isUpToDate = true;
-    if (encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)AESKEY, tempPrefs, &outlen) != 0) {
+    if (BootSecure::encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)AESKEY, tempPrefs, &outlen) != 0) {
         p.end();
         return false;
     }
@@ -109,6 +110,7 @@ bool BootSecure::setPrefs() {
     BootSecure::zeroize(tempPrefs, p_length);
     
     return true;
+
 }
 
 int8_t BootSecure::encrypt(const unsigned char* input, uint16_t inputlength, char* key, unsigned char* output, uint16_t* outputlength) {

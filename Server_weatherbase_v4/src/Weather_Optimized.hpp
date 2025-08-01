@@ -159,9 +159,9 @@ public:
     const char* getGridId() const { return Grid_id; }
     
     // Address to coordinates conversion
-    bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode, double& latitude, double& longitude);
-    bool getCoordinatesFromZipCode(const String& zipCode, double& latitude, double& longitude);
-    bool getCoordinatesFromZipCodeFallback(const String& zipCode, double& latitude, double& longitude);
+    bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode);
+    bool getCoordinatesFromZipCode(const String& zipCode);
+    bool getCoordinatesFromZipCodeFallback(const String& zipCode);
     String urlEncode(const String& str);
 };
 

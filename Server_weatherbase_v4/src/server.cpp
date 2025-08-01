@@ -9,6 +9,14 @@
 #include "BootSecure.hpp"
 #include <esp_system.h>
 
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+extern STRUCT_GOOGLESHEET GSheetInfo;
+#endif
+
+
+
+
 #define WIFI_CONFIG_KEY "Kj8mN2pQ9rS5tU7vW3xY1zA4bC6dE8fG"
 
 // Base64 decoding functions
@@ -161,14 +169,14 @@ int16_t connectWiFi() {
   
   int16_t retries = tryWifi(250);
   if (retries == -1000) {
-    Station_Mode();
+    APStation_Mode();
     return -1000;
   }
 
     return retries;
 }
 
-void Station_Mode() {
+void APStation_Mode() {
   
   String wifiPWD = "";
   String wifiID = "";
@@ -180,8 +188,8 @@ void Station_Mode() {
     tft.clear();
     tft.setCursor(0, 0);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.printf("No WiFi credentials. Please join WiFi \n%s\nusing pwd \n%s\nand go to website \n%s\nto set up WiFi.\n", 
+    tft.setTextSize(1);
+    tft.printf("Setup Required. Please join\n\nWiFi: %s\npwd: \n%s\n\nand go to website:\n\n%s\n\n", 
                wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
     #endif
 
@@ -207,257 +215,6 @@ void Station_Mode() {
   controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
    
 }
-
-/*
-  void TEMP_CYCLE_SERVERS(void) {
-//this is a template for a function that will cycle through servers and attempt to connect to them. It is a remnant of the original connectwifi function
-  static uint32_t lastAttemptTime = 0;
-  static uint32_t lastServerAttemptTime = 0;
-  static uint32_t lastAPAttemptTime = 0;
-  static uint32_t lastRebootTime = 0;
-  static int16_t lastServerIndex = 0;
-  static int16_t attemptCount = 0;
-  static bool inAPMode = false;
-  
-  uint32_t nowt = now();
-  
-  // Step 1: Check if SSID and PWD are stored in Prefs
-  bool hasSSID = false;
-  bool hasPWD = false;
-  for (int i = 0; i < 33; ++i) if (Prefs.WIFISSID[i] != 0) hasSSID = true;
-  for (int i = 0; i < 65; ++i) if (Prefs.WIFIPWD[i] != 0) hasPWD = true;
-  
-  if ((!hasSSID || !hasPWD) && Prefs.HAVECREDENTIALS) {  
-    Prefs.HAVECREDENTIALS = false;
-    Prefs.isUpToDate = false;
-    return 0;
-  }
-
-  if (tryWifi()) {
-    return 0;
-  }
-
-  if (!hasSSID) {
-    // No SSID stored, go to step 6
-    if (!inAPMode) {
-      connectSoftAP();
-      inAPMode = true;
-    }
-    return -1; // failure due to no SSID
-  }
-  
-  if (!hasPWD) {
-    // No password stored, go to step 6
-    if (!inAPMode) {
-      connectSoftAP();
-      inAPMode = true;
-    }
-    return -2; // failure due to wrong pwd (no pwd stored)
-  }
-  
-  // Step 2 & 3: Try to connect with stored credentials
-  if (nowt - lastAttemptTime >= 2000) { // Every 2 seconds
-    lastAttemptTime = nowt;
-    attemptCount++;
-    
-    #ifdef HAS_TFT
-    if (attemptCount == 1) {
-      tft.print("Trying WiFi");
-    } else {
-      tft.print(".");
-    }
-    #endif
-    
-    // Try to connect
-    if (getWiFiCredentials()) {
-      WiFi.mode(WIFI_STA);
-      WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-      delay(250);
-    }
-    
-    if (WifiStatus()) {
-      Prefs.MYIP = WiFi.localIP();
-      Prefs.isUpToDate = false;
-      // Switch back to station mode if we were in AP mode
-      if (inAPMode) {
-        WiFi.mode(WIFI_STA);
-        inAPMode = false;
-      }
-      // Reset static variables for next time
-      lastAttemptTime = 0;
-      lastServerAttemptTime = 0;
-      lastAPAttemptTime = 0;
-      lastRebootTime = 0;
-      lastServerIndex = 0;
-      attemptCount = 0;
-      return attemptCount; // Return number of attempts needed
-    }
-    
-    // If 10 attempts made, proceed to step 4
-    if (attemptCount >= 10) {
-      #ifdef HAS_TFT
-      tft.println();
-      tft.println("Attempting to retrieve WiFi credentials");
-      #endif
-      
-      // Step 4: Try to get credentials from servers
-      if (nowt - lastServerAttemptTime >= 10000) { // Every 10 seconds
-        lastServerAttemptTime = nowt;
-        
-        // Find servers (devices of type 100 or higher, but not me)
-        int16_t numDevices = Sensors.getNumDevices();
-        int16_t serversFound = 0;
-        int16_t currentIndex = lastServerIndex;
-        
-        // Look for servers starting from lastServerIndex
-        for (int16_t i = 0; i < numDevices; i++) {
-          int16_t deviceIndex = (currentIndex + i) % numDevices;
-          DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
-          
-          if (device && device->IsSet && device->devType >= 100) {
-            // Check if this is not me (compare MAC addresses)
-            bool isMe = (device->MAC == Prefs.PROCID);
-            
-            if (!isMe) {
-              serversFound++;
-              lastServerIndex = deviceIndex;
-              
-              // Convert MAC to byte array
-              uint8_t serverMAC[6];
-              for (int j = 0; j < 6; j++) {
-                serverMAC[5-j] = (device->MAC >> (8*j)) & 0xFF;
-              }
-              
-              #ifdef HAS_TFT
-              tft.printf("Contacting server: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                        serverMAC[0], serverMAC[1], serverMAC[2], 
-                        serverMAC[3], serverMAC[4], serverMAC[5]);
-              #endif
-              
-              // Send WiFi password request
-              uint8_t nonce[8];
-              esp_fill_random(nonce, 8);
-              requestWiFiPassword(serverMAC, nonce);
-              
-              // Wait 10 seconds for response
-              delay(10000);
-              
-                             // Check if we got new credentials
-               if (getWiFiCredentials()) {
-                 // Try to connect with new credentials
-                 WiFi.mode(WIFI_STA);
-                 WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-                 delay(250);
-                
-                if (WifiStatus()) {
-                  Prefs.MYIP = WiFi.localIP();
-                  Prefs.isUpToDate = false;
-                  // Switch back to station mode if we were in AP mode
-                  if (inAPMode) {
-                    WiFi.mode(WIFI_STA);
-                    inAPMode = false;
-                  }
-                  // Reset static variables
-                  lastAttemptTime = 0;
-                  lastServerAttemptTime = 0;
-                  lastAPAttemptTime = 0;
-                  lastRebootTime = 0;
-                  lastServerIndex = 0;
-                  attemptCount = 0;
-                  return attemptCount; // Return number of attempts needed
-                }
-              }
-              
-              break; // Try one server at a time
-            }
-          }
-        }
-        
-        // If no servers found or no response, proceed to step 5
-        if (serversFound == 0) {
-          #ifdef HAS_TFT
-          tft.println("No servers responded, please check wifi and manually enter credentials.");
-          #endif
-          
-          // Step 5: Continue trying to connect every minute
-          if (nowt - lastAPAttemptTime >= 60000) { // Every 1 minute
-            lastAPAttemptTime = nowt;
-            
-            if (getWiFiCredentials()) {
-              WiFi.mode(WIFI_STA);
-              WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-              delay(250);
-              
-              if (WifiStatus()) {
-                Prefs.MYIP = WiFi.localIP();
-                Prefs.isUpToDate = false;
-                // Switch back to station mode if we were in AP mode
-                if (inAPMode) {
-                  WiFi.mode(WIFI_STA);
-                  inAPMode = false;
-                }
-                // Reset static variables
-                lastAttemptTime = 0;
-                lastServerAttemptTime = 0;
-                lastAPAttemptTime = 0;
-                lastRebootTime = 0;
-                lastServerIndex = 0;
-                attemptCount = 0;
-                return attemptCount; // Return number of attempts needed
-              }
-            }
-          }
-          
-          // Step 6: Enter AP mode
-          if (!inAPMode) {
-            connectSoftAP();
-            inAPMode = true;
-          }
-          
-          // If credentials are available, try every 30 seconds
-          if (hasSSID && hasPWD) {
-            if (nowt - lastAPAttemptTime >= 30000) { // Every 30 seconds
-              lastAPAttemptTime = nowt;
-              
-              if (getWiFiCredentials()) {
-                WiFi.mode(WIFI_STA);
-                WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-                delay(250);
-                
-                if (WifiStatus()) {
-                  Prefs.MYIP = WiFi.localIP();
-                  Prefs.isUpToDate = false;
-                  // Switch back to station mode if we were in AP mode
-                  if (inAPMode) {
-                    WiFi.mode(WIFI_STA);
-                    inAPMode = false;
-                  }
-                  // Reset static variables
-                  lastAttemptTime = 0;
-                  lastServerAttemptTime = 0;
-                  lastAPAttemptTime = 0;
-                  lastRebootTime = 0;
-                  lastServerIndex = 0;
-                  attemptCount = 0;
-                  return attemptCount; // Return number of attempts needed
-                }
-              }
-            }
-          }
-          
-          // Reboot every 30 minutes
-          if (nowt - lastRebootTime >= 1800000) { // 30 minutes
-            lastRebootTime = nowt;
-            controlledReboot("WiFi failed for 30 min, rebooting", RESET_WIFI, true);
-          }
-        }
-      }
-    }
-  }
-  
-  return 0; // failure due to unable to connect to network
-}
-*/
 
 
 void handleReboot() {
@@ -577,56 +334,16 @@ void handleTIMEUPDATE() {
 }
 
 
-void handleSETWIFI() {
-  if (server.uri() != "/SETWIFI") return;
-
-
-  initCreds(&Prefs);
-
-  String creds = "";
-
-  for (uint8_t i = 0; i < server.args(); i++) {
-    if (server.argName(i)=="SSID") {
-      snprintf((char *) Prefs.WIFISSID,64,"%s",server.arg(i).c_str());
-      Prefs.isUpToDate = false;
-    }
-    if (server.argName(i)=="PWD") {
-      snprintf((char *) Prefs.WIFIPWD,64,"%s",server.arg(i).c_str());
-      Prefs.isUpToDate = false;
-    }
-  }
-  Prefs.HAVECREDENTIALS = true;
-  Prefs.isUpToDate = true;
-	BootSecure bs;
-
-  if (bs.setPrefs()) {
-    WEBHTML= "OK, stored new credentials.\nSSID:" + (String) (char *) Prefs.WIFISSID + "\nPWD: NOT_SHOWN";  
-    serverTextClose(201,false);
-
-  }   else {
-    WEBHTML= "OK, Cleared credentials!";  
-    Prefs.HAVECREDENTIALS = false;
-    Prefs.isUpToDate = false;
-    serverTextClose(201,false);
-//    controlledReboot("User cleared credentials",RESET_USER);
-  }
-
-
-//  server.sendHeader("Location", "/");//This Line goes to root page
-  
-
-}
-
 
 
 void handleSTATUS() {
-  
-  LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
 
   WEBHTML = WEBHTML + "<body>";  
-  WEBHTML = WEBHTML + "<h2>" + (String) MYNAME + " Status Page</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Status Page</h2>";
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   #ifdef _USE8266
@@ -658,6 +375,17 @@ WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? d
 WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError) : "???") + "<br>";
 WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
 WEBHTML = WEBHTML + "---------------------<br>";      
+WEBHTML += "GSheets enabled: " + (String) GSheetInfo.useGsheet + "<br>";
+WEBHTML += "Last GSheets upload time: " + (String) (GSheetInfo.lastGsheetUploadTime ? dateify(GSheetInfo.lastGsheetUploadTime) : "???") + "<br>";
+WEBHTML += "Last GSheets success (-2=error, -1=not ready, 0=waiting, 1=success): " + (String) GSheetInfo.lastGsheetUploadSuccess + "<br>";
+WEBHTML += "Last GSheets fail count: " + (String) GSheetInfo.uploadGsheetFailCount + "<br>";
+WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
+WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
+WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
+WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime) : "???") + "<br>";
+WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime) : "???") + "<br>";
+WEBHTML = WEBHTML + "---------------------<br>";      
+
 WEBHTML = WEBHTML + "Previous errors (up to 10)" + "<br>";
 for (uint8_t i=1;i<11;i++) {
   String error="";
@@ -670,9 +398,6 @@ for (uint8_t i=1;i<11;i++) {
 WEBHTML = WEBHTML + "</font>---------------------<br>";      
 
 
-
-
-
   WEBHTML += R"===(
   <FORM action="/FLUSHSD" method="get">
   <p style="font-family:arial, sans-serif">
@@ -681,12 +406,10 @@ WEBHTML = WEBHTML + "</font>---------------------<br>";
   <input type="text" id="FLUSHCONFIRM" name="FLUSHCONFIRM" value="0" maxlength="5"><br>
   <br>
   <button type="submit">FLUSH</button><br>
-  </p></font></form>
-  ---------------------<br>)===";
+  </p></font></form><br>)===";
 
 
         
-  serverTextWiFiForm();
   serverTextClose(200);
 
 
@@ -710,27 +433,6 @@ void serverTextHeader() {
 )===";
 
 }
-
-void serverTextWiFiForm() {
-
-
-  WEBHTML = WEBHTML + R"===(---------------------<br>
-  <FORM action="/SETWIFI" method="post" target="_blank" id="WiFiSetForm">
-  <p style="font-family:arial, sans-serif">
-  To set or change WiFi, enter SSID and PWD.<br>
-  <label for="SSID">WiFi SSID: </label>
-  <input type="text" id="SSID" name="SSID" value="" maxlength="32"><br>  
-  <label for="PWD">WiFi PWD: </label>
-  <input type="text" id="PWD" name="PWD" value="" maxlength="64"><br>    
-  <br>
-  <button type="submit">STORE</button><br>
-  </p></font></form>
-  ---------------------<br>
-  <br>
-
-  )===";
-}
-
 
 
 void serverTextClose(int htmlcode, bool asHTML) {
@@ -773,13 +475,13 @@ void rootTableFill(byte j) {
 
 
 void handlerForRoot(bool allsensors) {
-  
-  LAST_WEB_REQUEST = I.currentTime; //this is the time of the last web request
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
-  WEBHTML = WEBHTML + "<h2>" + (String) MYNAME + " Main Page</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Main Page</h2>";
 
-  if (Prefs.HAVECREDENTIALS==true) {
+  if (Prefs.HAVECREDENTIALS==true && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and no where in the US is at 0 for either
 
 
 
@@ -792,7 +494,7 @@ void handlerForRoot(bool allsensors) {
  
   WEBHTML = WEBHTML + "---------------------<br>";      
 
-  if (I.isFlagged || I.isHeat || I.isAC) {
+  
     WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
     WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
     WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left; color: #EE4B2B;\">System Status</th>";
@@ -811,7 +513,7 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
     
     // Third row - Critical flags
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFiConfig</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a></td></tr>";
     
     // Fourth row - Leak detected
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Leak detected: " + (String) I.isLeak + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/STATUS\">Status</a></td></tr>";
@@ -831,8 +533,7 @@ void handlerForRoot(bool allsensors) {
     
     
     WEBHTML = WEBHTML + "</table>";
-  }
-
+  
   WEBHTML = WEBHTML + "---------------------<br>";      
 
 
@@ -845,7 +546,7 @@ void handlerForRoot(bool allsensors) {
 
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><p><button onclick=\"sortTable(0)\">IP Address</button></p></th style=\"width:50px\"><th>ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></p></th style=\"width:100px\"><th><button onclick=\"sortTable(5)\">Flagged</button></p></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:100px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th></tr>"; 
   for (byte j=0;j<SENSORNUM;j++)  {
     SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
     if (sensor && sensor->IsSet) {
@@ -915,10 +616,21 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
   WEBHTML += "</script> \n";
 
+} else {
+  if (Prefs.HAVECREDENTIALS==false) {
+    SerialPrint("Prefs.HAVECREDENTIALS==false, redirecting to WiFiConfig");
+    //redirect to WiFi config page
+    server.sendHeader("Location", "/WiFiConfig");
+    serverTextClose(302,false);
+    return;
+  } else {
+    SerialPrint("Prefs.HAVECREDENTIALS==true, redirecting to WEATHER");
+    //redirect to weather config page
+    server.sendHeader("Location", "/WEATHER");  
+    serverTextClose(302,false);
+    return;
+  }
 }
-
-serverTextWiFiForm();
-
 
 serverTextClose(200);
 
@@ -963,6 +675,10 @@ void handleNotFound(){
 }
 
 void handleRETRIEVEDATA() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
   byte  N=100;
   uint8_t snsType = 0, snsID = 0;
   uint64_t deviceMAC = 0;
@@ -1018,14 +734,10 @@ void handleRETRIEVEDATA() {
 }
 
 void handleRETRIEVEDATA_MOVINGAVERAGE() {
-  uint32_t starttime=0, endtime=0;
-  uint32_t windowSizeN=0;
-  uint16_t numPointsX=0;
-  uint64_t deviceMAC = 0;
-  uint8_t snsType = 0, snsID = 0;
-
-  bool success=false;
-
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
 
   if (server.args()==0) {
     WEBHTML="Inappropriate call... use RETRIEVEDATA_MOVINGAVERAGE?MAC=1234567890AB&type=1&id=1&starttime=1234567890&endtime=1731761847&windowSize=10&numPointsX=10 or RETRIEVEDATA_MOVINGAVERAGE?MAC=1234567890AB&type=1&id=1&endtime=1731761847&windowSize=10&numPointsX=10";
@@ -1033,10 +745,17 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
     return;
   }
 
+
+  uint64_t deviceMAC = 0;
+  uint8_t snsType = 0, snsID = 0;
+  uint32_t starttime=0, endtime=0;
+  uint32_t windowSizeN=0;
+  uint16_t numPointsX=0;
+
   for (byte k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"MAC") {
       String macStr = server.arg(k);
-      deviceMAC = strtoull(macStr.c_str(), NULL, 10);
+       deviceMAC = strtoull(macStr.c_str(), NULL, 10);
     }
     if ((String)server.argName(k) == (String)"type")  snsType=server.arg(k).toInt(); 
     if ((String)server.argName(k) == (String)"id")  snsID=server.arg(k).toInt(); 
@@ -1065,6 +784,7 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
 
   uint32_t t[100]={0};
   double v[100]={0};
+  bool success=false;
 
   success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t,true);
   
@@ -1084,7 +804,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
   int16_t sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
   SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
 
-  WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) MYNAME + "</title>\n";
+  WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>\n";
   WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
   WEBHTML =WEBHTML  + (String) "body {  font-family: arial, sans-serif; }";
   WEBHTML =WEBHTML  + "</style></head>";
@@ -1317,116 +1037,350 @@ void handlePost() {
 
 }
 
+
 void handleCONFIG() {
   LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
+  SerialPrint("config: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) MYNAME + " Configuration Page</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Configuration Page</h2>";
+  WEBHTML = WEBHTML + "<p>This page is used to configure editable system parameters.</p>";
   
-  // Start the form for editable fields
+  // Start the form and grid container
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/CONFIG\">";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;\">";
   
-  // Start the table
-  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
-  WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Field Name</th>";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Description</th>";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Value</th>";
-  WEBHTML = WEBHTML + "</tr>";
+  // Header row
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Field Name</div>";
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
 
-  // Non-editable fields in specified order
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">currentTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Current system time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.currentTime ? dateify(I.currentTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">ALIVESINCE</td><td style=\"border: 1px solid #ddd; padding: 8px;\">System alive since</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.ALIVESINCE ?  dateify(I.ALIVESINCE) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastResetTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last system reset time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastResetTime ?  dateify(I.lastResetTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">wifiFailCount</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Number of WiFi connection failures</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.wifiFailCount + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastError</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last error message</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastError) + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastErrorTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last error occurrence time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastErrorTime ?  dateify(I.lastErrorTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastErrorCode</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last error code</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.lastErrorCode + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastESPNOW</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last ESPNow communication time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastESPNOW  ?  dateify(I.lastESPNOW ) : "???")+ "</td></tr>";
-
-  // Editable fields in specified order
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">GLOBAL_TIMEZONE_OFFSET</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Global timezone offset in seconds</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"GLOBAL_TIMEZONE_OFFSET\" value=\"" + (String) I.GLOBAL_TIMEZONE_OFFSET + "\" style=\"width: 100%;\"></td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">DSTOFFSET</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Daylight Saving Time offset in seconds</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"DSTOFFSET\" value=\"" + (String) I.DSTOFFSET + "\" style=\"width: 100%;\"></td></tr>";
+  // Editable fields from STRUCT_CORE I in specified order
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GLOBAL_TIMEZONE_OFFSET</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"GLOBAL_TIMEZONE_OFFSET\" value=\"" + (String) I.GLOBAL_TIMEZONE_OFFSET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DSTOFFSET</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"DSTOFFSET\" value=\"" + (String) I.DSTOFFSET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   
   // CYCLE fields
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">cycleHeaderMinutes</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Minutes between header updates</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"cycleHeaderMinutes\" value=\"" + (String) I.cycleHeaderMinutes + "\" style=\"width: 100%;\"></td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">cycleWeatherMinutes</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Minutes between redraw of main weather panel</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"cycleWeatherMinutes\" value=\"" + (String) I.cycleWeatherMinutes + "\" style=\"width: 100%;\"></td></tr>";
-WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">cycleCurrentConditionMinutes</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Minutes between redraw of today conditions</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"cycleCurrentConditionMinutes\" value=\"" + (String) I.cycleCurrentConditionMinutes + "\" style=\"width: 100%;\"></td></tr>";
-WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">cycleFutureConditionsMinutes</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Minutes between redraw of future conditions</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"cycleFutureConditionsMinutes\" value=\"" + (String) I.cycleFutureConditionsMinutes + "\" style=\"width: 100%;\"></td></tr>";
-WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">cycleFlagSeconds</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Seconds to show flag information</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"cycleFlagSeconds\" value=\"" + (String) I.cycleFlagSeconds + "\" style=\"width: 100%;\"></td></tr>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleHeaderMinutes</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleHeaderMinutes\" value=\"" + (String) I.cycleHeaderMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">IntervalHourlyWeather</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Hours between hourly weather displays</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%;\"></td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">screenChangeTimer</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Screen change timer value</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"screenChangeTimer\" value=\"" + (String) I.screenChangeTimer + "\" style=\"width: 100%;\"></td></tr>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleWeatherMinutes</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleWeatherMinutes\" value=\"" + (String) I.cycleWeatherMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleCurrentConditionMinutes</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleCurrentConditionMinutes\" value=\"" + (String) I.cycleCurrentConditionMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleFutureConditionsMinutes</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleFutureConditionsMinutes\" value=\"" + (String) I.cycleFutureConditionsMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleFlagSeconds</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleFlagSeconds\" value=\"" + (String) I.cycleFlagSeconds + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">screenChangeTimer</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"screenChangeTimer\" value=\"" + (String) I.screenChangeTimer + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 
-  // Remaining fields from I in order of appearance
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">resetInfo</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Reset cause information</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.resetInfo + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">rebootsSinceLast</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Number of reboots since last reset</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.rebootsSinceLast + "</td></tr>";
-
-  #ifdef _USETFT
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">CLOCK_Y</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Clock Y position</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.CLOCK_Y + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">HEADER_Y</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Header Y position</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.HEADER_Y + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastHeaderTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last header update time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (String) (I.lastHeaderTime ? dateify(I.lastHeaderTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastWeatherTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last weather update time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastWeatherTime ? dateify(I.lastWeatherTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastClockDrawTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last clock update time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastClockDrawTime ? dateify(I.lastClockDrawTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastFlagViewTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last flag view time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastFlagViewTime ? dateify(I.lastFlagViewTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastCurrentConditionTime</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last current condition update time</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.lastCurrentConditionTime ? dateify(I.lastCurrentConditionTime) : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">IntervalHourlyWeather</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Hours between daily weather display</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.IntervalHourlyWeather + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">touchX</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Touch X coordinate</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.touchX + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">touchY</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Touch Y coordinate</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.touchY + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">line_clear</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Clear line position</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.line_clear + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">line_keyboard</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Keyboard line position</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.line_keyboard + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">line_submit</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Submit line position</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.line_submit + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">alarmIndex</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Alarm index</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.alarmIndex + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">ScreenNum</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Current screen number</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.ScreenNum + "</td></tr>";
-  #endif
-
-  #ifdef _USEWEATHER
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">currentTemp</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Current temperature</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.currentTemp + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Tmax</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Maximum temperature</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.Tmax + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Tmin</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Minimum temperature</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.Tmin + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">localWeatherIndex</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Local weather sensor index</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.localWeatherIndex + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">lastCurrentTemp</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Last current temperature</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.lastCurrentTemp + "</td></tr>";
-  #endif
-
-  #ifdef _USEBATTERY
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">localBatteryIndex</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Local battery sensor index</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.localBatteryIndex + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">localBatteryLevel</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Local battery level</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.localBatteryLevel + "</td></tr>";
-  #endif
-
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isExpired</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Are any critical sensors expired</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.isExpired ? "true" : "false") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isFlagged</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Number of flagged sensors</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isFlagged + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">wasFlagged</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Previous flagged state</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) (I.wasFlagged ? "true" : "false") + "</td></tr>";
-
-  #ifndef _ISPERIPHERAL
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isHeat</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Heat system status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isHeat + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isAC</td><td style=\"border: 1px solid #ddd; padding: 8px;\">AC system status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isAC + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isFan</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Fan system status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isFan + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">wasHeat</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Previous heat status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.wasHeat + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">wasAC</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Previous AC status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.wasAC + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">wasFan</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Previous fan status</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.wasFan + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isHot</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Hot room count</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isHot + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isCold</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Cold room count</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isCold + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isSoilDry</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Dry plant count</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isSoilDry + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">isLeak</td><td style=\"border: 1px solid #ddd; padding: 8px;\">Leak count</td><td style=\"border: 1px solid #ddd; padding: 8px;\">" + (String) I.isLeak + "</td></tr>";
-  #endif
-
-  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + "</div>";
   
   // Submit button
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  // Delete SD card contents button
-  WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete SD Card Contents\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<br><a href=\"/\">Back to Main Page</a>";
+  // Navigation links
+  WEBHTML = WEBHTML + "<br><br><a href=\"/READONLYCOREFLAGS\">View Read-Only Core Flags</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\">View Google Sheets Configuration</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
   WEBHTML = WEBHTML + "</body></html>";
 
   serverTextClose(200, true);
+}
+
+void handleREADONLYCOREFLAGS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Read-Only Core Flags</h2>";
+  WEBHTML = WEBHTML + "<p>This page displays non-editable system parameters.</p>";
+  
+  // Start the grid container
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;\">";
+  
+  // Header row
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Field Name</div>";
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
+
+  // Non-editable fields from STRUCT_CORE I in specified order
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.currentTime ? dateify(I.currentTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ALIVESINCE</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ALIVESINCE ?  dateify(I.ALIVESINCE) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastResetTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastResetTime ?  dateify(I.lastResetTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wifiFailCount</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wifiFailCount + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastError</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastError) + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastErrorTime ?  dateify(I.lastErrorTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorCode</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastErrorCode + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastESPNOW</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastESPNOW  ?  dateify(I.lastESPNOW ) : "???")+ "</div>";
+
+  // Remaining non-editable fields from I in order of appearance
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.resetInfo + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsSinceLast</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
+
+  #ifdef _USETFT
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.CLOCK_Y + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">HEADER_Y</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.HEADER_Y + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastHeaderTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (String) (I.lastHeaderTime ? dateify(I.lastHeaderTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastWeatherTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastWeatherTime ? dateify(I.lastWeatherTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastClockDrawTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastClockDrawTime ? dateify(I.lastClockDrawTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastFlagViewTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastFlagViewTime ? dateify(I.lastFlagViewTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentConditionTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastCurrentConditionTime ? dateify(I.lastCurrentConditionTime) : "???") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.IntervalHourlyWeather + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchX</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.touchX + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchY</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.touchY + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">alarmIndex</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.alarmIndex + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ScreenNum</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ScreenNum + "</div>";
+  #endif
+
+  #ifdef _USEWEATHER
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentTemp</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.currentTemp + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmax</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmax + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmin</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmin + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localWeatherIndex</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localWeatherIndex + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentTemp</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastCurrentTemp + "</div>";
+  #endif
+
+  #ifdef _USEBATTERY
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localBatteryIndex</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localBatteryIndex + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localBatteryLevel</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localBatteryLevel + "</div>";
+  #endif
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isExpired</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.isExpired ? "true" : "false") + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isFlagged</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isFlagged + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasFlagged</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.wasFlagged ? "true" : "false") + "</div>";
+
+  #ifndef _ISPERIPHERAL
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isHeat</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isHeat + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isAC</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isAC + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isFan</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isFan + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasHeat</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasHeat + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasAC</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasAC + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasFan</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasFan + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isHot</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isHot + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isCold</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isCold + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isSoilDry</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isSoilDry + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isLeak</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isLeak + "</div>";
+  #endif
+
+  WEBHTML = WEBHTML + "</div>";
+  
+  // Navigation links
+  WEBHTML = WEBHTML + "<br><br><a href=\"/CONFIG\">Edit Configuration</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\">View Google Sheets Configuration</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
+  WEBHTML = WEBHTML + "</body></html>";
+
+  serverTextClose(200, true);
+}
+
+void handleGSHEET() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
+  SerialPrint("gsheet: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+  SerialPrint("gsheet: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Google Sheets Configuration</h2>";
+  WEBHTML = WEBHTML + "<p>This page displays Google Sheets configuration and status.</p>";
+  
+  // Start the form and grid container
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/GSHEET\">";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;\">";
+  
+  // Header row
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Field Name</div>";
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
+
+  // Google Sheets Configuration Section (Editable)
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Configuration</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">useGsheet</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"checkbox\" name=\"useGsheet\" value=\"1\"" + ((GSheetInfo.useGsheet) ? " checked" : "") + " style=\"width: 20px; height: 20px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">uploadGsheetIntervalMinutes</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"uploadGsheetIntervalMinutes\" value=\"" + (String) GSheetInfo.uploadGsheetIntervalMinutes + "\" min=\"1\" max=\"1440\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetSDSaveTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"lastGsheetSDSaveTime\" value=\"" + (String) GSheetInfo.lastGsheetSDSaveTime + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetUploadTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"lastGsheetUploadTime\" value=\"" + (String) GSheetInfo.lastGsheetUploadTime + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  // Google Sheets Status Information (Read-only)
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Status Information</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9;\"></div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetUploadSuccess</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) GSheetInfo.lastGsheetUploadSuccess + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">uploadGsheetFailCount</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) GSheetInfo.uploadGsheetFailCount + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) ((GSheetInfo.lastErrorTime) ? dateify(GSheetInfo.lastErrorTime) : "N/A") + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetResponse</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.lastGsheetResponse) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetFunction</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.lastGsheetFunction) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetID</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetID) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetName</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + String(GSheetInfo.GsheetName) + "</div>";
+
+  WEBHTML = WEBHTML + "</div>";
+  
+  // Submit button
+  WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Google Sheets Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Navigation links
+  WEBHTML = WEBHTML + "<br><br><a href=\"/CONFIG\">Edit Core Configuration</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/READONLYCOREFLAGS\">View Read-Only Core Flags</a> | ";
+  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
+  WEBHTML = WEBHTML + "</body></html>";
+
+  serverTextClose(200, true);
+}
+
+void handleGSHEET_POST() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Process Google Sheets configuration
+  if (server.hasArg("useGsheet")) {
+    GSheetInfo.useGsheet = true;
+  } else {
+    GSheetInfo.useGsheet = false;
+  }
+  if (server.hasArg("uploadGsheetIntervalMinutes")) {
+    GSheetInfo.uploadGsheetIntervalMinutes = server.arg("uploadGsheetIntervalMinutes").toInt();
+  }
+  if (server.hasArg("lastGsheetSDSaveTime")) {
+    GSheetInfo.lastGsheetSDSaveTime = server.arg("lastGsheetSDSaveTime").toInt();
+  }
+  if (server.hasArg("lastGsheetUploadTime")) {
+    GSheetInfo.lastGsheetUploadTime = server.arg("lastGsheetUploadTime").toInt();
+  }
+  
+  // Validate Google Sheets configuration
+  if (GSheetInfo.uploadGsheetIntervalMinutes < 1) {
+    GSheetInfo.uploadGsheetIntervalMinutes = 1;
+  }
+  if (GSheetInfo.uploadGsheetIntervalMinutes > 1440) {
+    GSheetInfo.uploadGsheetIntervalMinutes = 1440;
+  }
+  if (GSheetInfo.lastGsheetSDSaveTime < 0) {
+    GSheetInfo.lastGsheetSDSaveTime = 0;
+  }
+  if (GSheetInfo.lastGsheetUploadTime < 0) {
+    GSheetInfo.lastGsheetUploadTime = 0;
+  }
+  
+  // Save the updated configuration
+  BootSecure::setPrefs();
+  
+  // Redirect back to the Google Sheets configuration page
+  server.sendHeader("Location", "/GSHEET");
+  server.send(302, "text/plain", "");
 }
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
@@ -1523,8 +1477,6 @@ if (I.IntervalHourlyWeather > 4) {
   I.IntervalHourlyWeather = 4;
 }
 
-
-
   // Save the updated configuration to persistent storage
   I.isUpToDate = false;
   
@@ -1538,6 +1490,9 @@ void handleCONFIG_DELETE() {
   
   // Delete the ScreenFlags.dat file from the /Data directory
   deleteFiles("ScreenFlags.dat", "/Data");
+  deleteFiles("GsheetInfo.dat", "/Data");
+  deleteFiles("WeatherData.dat", "/Data");
+  deleteFiles("DevicesSensors.dat", "/Data");
   
   // Redirect back to the configuration page with a success message
   server.sendHeader("Location", "/CONFIG");
@@ -1550,10 +1505,16 @@ void handleWiFiConfig() {
   serverTextHeader();
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) MYNAME + " WiFi Configuration</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " WiFi Configuration</h2>";
   
   // Display current WiFi status and configuration
   WEBHTML = WEBHTML + "<h3>Current WiFi Status</h3>";
+
+  if (!Prefs.HAVECREDENTIALS) {
+    WEBHTML = WEBHTML + "<p>Wifi credentials are not set, and are required.</p>";
+    WEBHTML = WEBHTML + "<p>Set your address for weather lookup (weather information will be matched to the address provided).<br></p>";
+  }
+
   WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
   if (WiFi.status() == WL_CONNECTED) {
     WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
@@ -1562,102 +1523,10 @@ void handleWiFiConfig() {
   }
   WEBHTML = WEBHTML + "<p><strong>Stored SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
   WEBHTML = WEBHTML + "<p><strong>Stored LMK Key:</strong> " + String((char*)Prefs.LMK_KEY) + "</p>";
-  
-  // WiFi configuration form
-  WEBHTML = WEBHTML + "<h3>Configure WiFi</h3>";
-  WEBHTML = WEBHTML + "<form id=\"wifiForm\" method=\"POST\" action=\"/WiFiConfig\">";
-  WEBHTML = WEBHTML + "<p><label for=\"ssid\">SSID:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"ssid\" name=\"ssid\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"password\">Password:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"password\" id=\"password\" name=\"password\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">LMK Key:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<input type=\"hidden\" id=\"BLOB\" name=\"BLOB\">";
-  WEBHTML = WEBHTML + "<input type=\"button\" value=\"Update WiFi Configuration\" onclick=\"submitEncryptedForm()\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  // JavaScript for AES128 encryption and form submission
-  WEBHTML = WEBHTML + "<script src=\"https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js\"></script>";
-  WEBHTML = WEBHTML + "<script>";
-  WEBHTML = WEBHTML + "function submitEncryptedForm() {";
-  WEBHTML = WEBHTML + "  var ssid = document.getElementById('ssid').value;";
-  WEBHTML = WEBHTML + "  var password = document.getElementById('password').value;";
-  WEBHTML = WEBHTML + "  var lmk_key = document.getElementById('lmk_key').value;";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  if (!ssid || !password || !lmk_key) {";
-  WEBHTML = WEBHTML + "    alert('Please fill in all fields');";
-  WEBHTML = WEBHTML + "    return;";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Create data string with CRC";
-  WEBHTML = WEBHTML + "  var dataString = ssid + '|' + password + '|' + lmk_key;";
-  WEBHTML = WEBHTML + "  var crc = 0;";
-  WEBHTML = WEBHTML + "  for (var i = 0; i < dataString.length; i++) {";
-  WEBHTML = WEBHTML + "    crc += dataString.charCodeAt(i);";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  dataString += '|' + crc;";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Convert string to bytes";
-  WEBHTML = WEBHTML + "  var dataBytes = [];";
-  WEBHTML = WEBHTML + "  for (var i = 0; i < dataString.length; i++) {";
-  WEBHTML = WEBHTML + "    dataBytes.push(dataString.charCodeAt(i));";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Pad to 16-byte boundary";
-  WEBHTML = WEBHTML + "  var padding = 16 - (dataBytes.length % 16);";
-  WEBHTML = WEBHTML + "  for (var i = 0; i < padding; i++) {";
-  WEBHTML = WEBHTML + "    dataBytes.push(0);";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Convert to WordArray for CryptoJS";
-  WEBHTML = WEBHTML + "  var dataWordArray = CryptoJS.lib.WordArray.create(dataBytes);";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Generate random IV";
-  WEBHTML = WEBHTML + "  var iv = CryptoJS.lib.WordArray.random(16);";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // AES key for WiFi configuration (dedicated key)";
-  WEBHTML = WEBHTML + "  var key = CryptoJS.enc.Utf8.parse('" + (String)WIFI_CONFIG_KEY +  "');";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Encrypt using AES-CBC";
-  WEBHTML = WEBHTML + "  var encrypted = CryptoJS.AES.encrypt(dataWordArray, key, {";
-  WEBHTML = WEBHTML + "    iv: iv,";
-  WEBHTML = WEBHTML + "    mode: CryptoJS.mode.CBC,";
-  WEBHTML = WEBHTML + "    padding: CryptoJS.pad.NoPadding";
-  WEBHTML = WEBHTML + "  });";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Combine IV and encrypted data";
-  WEBHTML = WEBHTML + "  var ivBytes = iv.words;";
-  WEBHTML = WEBHTML + "  var encryptedBytes = encrypted.ciphertext.words;";
-  WEBHTML = WEBHTML + "  var combinedBytes = [];";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Add IV bytes";
-  WEBHTML = WEBHTML + "  for (var i = 0; i < 4; i++) {";
-  WEBHTML = WEBHTML + "    var word = ivBytes[i];";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 24) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 16) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 8) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push(word & 0xFF);";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Add encrypted data bytes";
-  WEBHTML = WEBHTML + "  for (var i = 0; i < encryptedBytes.length; i++) {";
-  WEBHTML = WEBHTML + "    var word = encryptedBytes[i];";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 24) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 16) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push((word >>> 8) & 0xFF);";
-  WEBHTML = WEBHTML + "    combinedBytes.push(word & 0xFF);";
-  WEBHTML = WEBHTML + "  }";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  // Convert to base64";
-  WEBHTML = WEBHTML + "  var encryptedBlob = btoa(String.fromCharCode.apply(null, combinedBytes));";
-  WEBHTML = WEBHTML + "  ";
-  WEBHTML = WEBHTML + "  document.getElementById('BLOB').value = encryptedBlob;";
-  WEBHTML = WEBHTML + "  document.getElementById('wifiForm').submit();";
-  WEBHTML = WEBHTML + "}";
-  WEBHTML = WEBHTML + "</script>";
-  
-  // Additional WiFi management options
-  WEBHTML = WEBHTML + "<h3>WiFi Management</h3>";
+
+  addWiFiConfigForm();
+
+  WEBHTML = WEBHTML + "<h3>WiFi Reset</h3>";
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WiFiConfig_RESET\" style=\"display: inline;\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset WiFi Configuration\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
@@ -1668,9 +1537,187 @@ void handleWiFiConfig() {
   serverTextClose(200, true);
 }
 
+void addWiFiConfigForm() {
+  // WiFi configuration form
+  WEBHTML = WEBHTML + "<h3>Configure WiFi</h3>";
+  WEBHTML = WEBHTML + "<form id=\"wifiForm\" method=\"POST\" action=\"/WiFiConfig\">";
+  WEBHTML = WEBHTML + "<p><label for=\"ssid\">SSID:</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"ssid\" name=\"ssid\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<p><label for=\"password\">Password:</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"password\" id=\"password\" name=\"password\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Security Key (up to 16 chars):</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+
+  //add weather address lookup if no credentials
+  if (!Prefs.HAVECREDENTIALS) {
+  WEBHTML = WEBHTML + "<p><label for=\"street\">Street Address:</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"street\" name=\"street\" placeholder=\"123 Main St\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<p><label for=\"city\">City:</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"city\" name=\"city\" placeholder=\"Boston\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<p><label for=\"state\">State (2-letter code):</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"state\" name=\"state\" pattern=\"[A-Za-z]{2}\" maxlength=\"2\" placeholder=\"MA\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<p><label for=\"zipcode\">ZIP Code (5 digits):</label><br>";
+  WEBHTML = WEBHTML + "<input type=\"text\" id=\"zipcode\" name=\"zipcode\" pattern=\"[0-9]{5}\" maxlength=\"5\" placeholder=\"12345\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  }
+
+  WEBHTML = WEBHTML + "<input type=\"hidden\" id=\"BLOB\" name=\"BLOB\">";
+  WEBHTML = WEBHTML + "<input type=\"button\" value=\"Update WiFi Configuration\" onclick=\"submitEncryptedForm()\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // JavaScript for AES128 encryption and form submission
+  WEBHTML = WEBHTML + R"===(
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script>
+  function wordArrayToByteArray(wordArray) {
+    var byteArray = [];
+    var words = wordArray.words;
+    var sigBytes = wordArray.sigBytes;
+    for (var i = 0; i < sigBytes; i++) {
+        byteArray.push((words[Math.floor(i / 4)] >> (24 - 8 * (i % 4))) & 0xFF);
+    }
+    return byteArray;
+  }
+  function submitEncryptedForm() {
+    var ssid = document.getElementById('ssid').value;
+    var password = document.getElementById('password').value;
+    var lmk_key = document.getElementById('lmk_key').value;
+    
+    if (!ssid || !password || !lmk_key) {
+      alert('Please fill in all fields');
+      return;
+    }
+    
+    // Create data string with CRC
+    var dataString = ssid + '|' + password + '|' + lmk_key;
+    
+    // Calculate CRC using the same algorithm as BootSecure::CRCCalculator
+    // Convert string to UTF-8 bytes first, then calculate CRC on bytes
+    var utf8Bytes = [];
+    for (var i = 0; i < dataString.length; i++) {
+        var charCode = dataString.charCodeAt(i);
+        if (charCode < 0x80) {
+            utf8Bytes.push(charCode);
+        } else if (charCode < 0x800) {
+            utf8Bytes.push(0xC0 | (charCode >> 6));
+            utf8Bytes.push(0x80 | (charCode & 0x3F));
+        } else {
+            utf8Bytes.push(0xE0 | (charCode >> 12));
+            utf8Bytes.push(0x80 | ((charCode >> 6) & 0x3F));
+            utf8Bytes.push(0x80 | (charCode & 0x3F));
+        }
+    }
+    
+    var curr_crc = 0x0000;
+    var sum1 = curr_crc & 0xFF;
+    var sum2 = (curr_crc >> 8) & 0xFF;
+    for (var i = 0; i < utf8Bytes.length; i++) {
+        sum1 = (sum1 + utf8Bytes[i]) % 255;
+        sum2 = (sum2 + sum1) % 255;
+    }
+    var crc = (sum2 << 8) | sum1;
+    dataString += '|' + crc;
+    
+    // Convert string to WordArray directly (CryptoJS handles UTF-8 conversion properly)
+    var dataWordArray = CryptoJS.enc.Utf8.parse(dataString);
+    
+    // Pad to 16-byte boundary with zeros using a simpler approach
+    var blockSize = 16;
+    var currentLength = dataWordArray.sigBytes;
+    var paddingNeeded = blockSize - (currentLength % blockSize);
+    
+    if (paddingNeeded < blockSize) {
+        // Create a new WordArray with proper padding
+        var paddedBytes = [];
+        for (var i = 0; i < currentLength; i++) {
+            var wordIndex = Math.floor(i / 4);
+            var byteIndex = i % 4;
+            var word = dataWordArray.words[wordIndex] || 0;
+            var byte = (word >> (24 - 8 * byteIndex)) & 0xFF;
+            paddedBytes.push(byte);
+        }
+        
+        // Add zero padding
+        for (var i = 0; i < paddingNeeded; i++) {
+            paddedBytes.push(0);
+        }
+        
+        // Convert back to WordArray
+        var paddedWords = [];
+        for (var i = 0; i < paddedBytes.length; i += 4) {
+            var word = 0;
+            for (var j = 0; j < 4 && (i + j) < paddedBytes.length; j++) {
+                word |= (paddedBytes[i + j] << (24 - 8 * j));
+            }
+            paddedWords.push(word);
+        }
+        
+        dataWordArray = CryptoJS.lib.WordArray.create(paddedWords, paddedBytes.length);
+    }
+    
+    // Debug: Log padding information
+    console.log('Original data length:', dataString.length);
+    console.log('Original sigBytes:', dataWordArray.sigBytes);
+    console.log('Final sigBytes:', dataWordArray.sigBytes);
+    
+    // Generate random IV
+    var iv = CryptoJS.lib.WordArray.random(16);
+    
+    // AES key for WiFi configuration (dedicated key)
+    var key = CryptoJS.enc.Utf8.parse(')===" + String(WIFI_CONFIG_KEY) + R"===(');
+    
+    // Encrypt using AES-CBC
+    var encrypted = CryptoJS.AES.encrypt(dataWordArray, key, {
+      iv: iv,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.NoPadding
+    });
+    
+    // Combine IV and encrypted data
+    var combinedBytes = [];
+    
+    // Add IV bytes (first 16 bytes)
+    var ivArray = wordArrayToByteArray(iv);
+    for (var i = 0; i < 16; i++) {
+      combinedBytes.push(ivArray[i]);
+    }
+    
+    // Add encrypted data bytes
+    var encryptedArray = wordArrayToByteArray(encrypted.ciphertext);
+    for (var i = 0; i < encryptedArray.length; i++) {
+      combinedBytes.push(encryptedArray[i]);
+    }
+    
+    // Convert to base64 using a more reliable method
+    var binaryString = '';
+    for (var i = 0; i < combinedBytes.length; i++) {
+        binaryString += String.fromCharCode(combinedBytes[i]);
+    }
+    var encryptedBlob = btoa(binaryString);
+    
+    // Debug: Log the encrypted data length
+    console.log('Combined bytes length:', combinedBytes.length);
+    console.log('IV length:', ivArray.length);
+    console.log('Encrypted data length:', encryptedArray.length);
+    
+    document.getElementById('BLOB').value = encryptedBlob;
+    document.getElementById('wifiForm').submit();
+  }
+  </script>)===";
+
+}
+
 void handleWiFiConfig_POST() {
   LAST_WEB_REQUEST = I.currentTime;
   
+//  tft.clear();
+//  tft.setCursor(0, 0);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(1);
+  tft.printf("Received encrypted data... parsing\n");
+
+  delay(3000);
+  
+
   // Check if we have the encrypted BLOB
   if (server.hasArg("BLOB")) {
     String encryptedBlob = server.arg("BLOB");
@@ -1680,14 +1727,47 @@ void handleWiFiConfig_POST() {
     uint8_t* decodedData = new uint8_t[decodedLength];
     base64_decode(encryptedBlob.c_str(), decodedData);
     
+    // Debug: Check if data length is valid for AES decryption
+    if (decodedLength < 32 || (decodedLength % 16) != 0) {
+        SerialPrint("ERROR: Invalid data length for AES decryption. Length: " + String(decodedLength) + " (must be >= 32 and multiple of 16)",true);
+        server.sendHeader("Location", "/WiFiConfig");
+        server.send(302, "text/plain", "Invalid encrypted data format.");
+        delete[] decodedData;
+        return;
+    }
+
     // Decrypt the data using BootSecure functions
     uint8_t* decryptedData = new uint8_t[decodedLength];
+    memset(decryptedData, 0, decodedLength); // Initialize to zero
+    // Debug: Check key length
+    
     int8_t decryptResult = BootSecure::decrypt(decodedData, (char*)WIFI_CONFIG_KEY, decryptedData, decodedLength);
     
-    if (decryptResult == 0) {
+      
+    // Calculate actual decrypted data length (excluding IV)
+    uint16_t decryptedLength = decodedLength - 16; // Remove IV
+    
+    // Find the actual data length by looking for the last non-zero byte
+    uint16_t actualDataLength = 0;
+    for (int i = decryptedLength - 1; i >= 0; i--) {
+        if (decryptedData[i] != 0) {
+            actualDataLength = i + 1;
+            break;
+        }
+    }
+    
+    // Ensure null termination
+    if (actualDataLength < decodedLength) {
+        decryptedData[actualDataLength] = '\0';
+    }
+    
+    // Create a clean string from the actual data length
+    String decryptedString = String((char*)decryptedData, actualDataLength);
+    
+
+    if (decryptResult == 0 && actualDataLength > 0) {
       // Decryption successful, parse the data
       // Expected format: SSID|PASSWORD|LMK_KEY|CRC
-      String decryptedString = String((char*)decryptedData);
       int pos1 = decryptedString.indexOf('|');
       int pos2 = decryptedString.indexOf('|', pos1 + 1);
       int pos3 = decryptedString.indexOf('|', pos2 + 1);
@@ -1696,14 +1776,35 @@ void handleWiFiConfig_POST() {
         String ssid = decryptedString.substring(0, pos1);
         String password = decryptedString.substring(pos1 + 1, pos2);
         String lmk_key = decryptedString.substring(pos2 + 1, pos3);
+        
+        if (lmk_key.length() > 16) {
+          lmk_key = lmk_key.substring(0, 16);
+        } 
+        if (lmk_key.length() < 16) {
+          lmk_key = lmk_key + String(16 - lmk_key.length(), '0'); //pad short keys with 0s
+        } 
+
         String crc = decryptedString.substring(pos3 + 1);
+        
+        // Debug: Print CRC values and string details
+        SerialPrint("Received CRC string: '" + crc + "'",true);
+        SerialPrint("CRC string length: " + String(crc.length()),true);
+        SerialPrint("Data for CRC calculation: '" + decryptedString.substring(0, pos3) + "'",true);
+        
+        // Debug: Show hex representation of CRC string
+        SerialPrint("CRC string hex: ",false);
+        for (int i = 0; i < crc.length() && i < 20; i++) {
+            SerialPrint(String(crc.charAt(i), HEX) + " ",false);
+        }
+        SerialPrint("",true);
         
         // Verify CRC using BootSecure CRC calculator
         uint16_t calculatedCRC = BootSecure::CRCCalculator((uint8_t*)decryptedString.substring(0, pos3).c_str(), pos3);
         uint16_t receivedCRC = crc.toInt();
-        
+                
         if (calculatedCRC == receivedCRC) {
           // CRC is valid, update Prefs
+          tft.println("CRC is valid, updating Prefs");
           strncpy((char*)Prefs.WIFISSID, ssid.c_str(), sizeof(Prefs.WIFISSID) - 1);
           Prefs.WIFISSID[sizeof(Prefs.WIFISSID) - 1] = '\0';
           
@@ -1716,14 +1817,39 @@ void handleWiFiConfig_POST() {
           // Mark Prefs as needing update and save to NVS
           Prefs.isUpToDate = false;
           Prefs.HAVECREDENTIALS = true;
+
+          //attempt to reconnect to wifi
+          if (connectWiFi()) {
+            
+            Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
+            tft.println("Wifi connected");
+              //check if we have weather data
+            if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
+              tft.print("Attempting geocordinate lookup from address...");
+              String street = server.arg("street");
+              String city = server.arg("city");
+              String state = server.arg("state");
+              String zipcode = server.arg("zipcode");
+              if (handlerForWeatherAddress(street, city, state, zipcode)) {
+                tft.println(" OK!");
+              } else {
+                tft.printf(String(" FAILED!\nLog in to this device at\n" + WiFi.localIP().toString() + "\nto update location!\n").c_str());
+              }
+            }
+          } else {
+            tft.printf("Failed to connect to wifi, manual reboot required.");
+            while (true) {
+              delay(1000);
+            }
+          }
           
-          // Save to NVS using BootSecure
-            server.sendHeader("Location", "/WiFiConfig");
-            server.send(302, "text/plain", "WiFi configuration updated successfully and saved to NVS. Attempting to connect...");
-          
-          // Attempt to connect to new WiFi
-          WiFi.disconnect();
-          delay(1000);
+          if (!BootSecure::setPrefs()) SerialPrint("Prefs update failed");
+          delay(3000);
+        // Save to NVS using BootSecure
+          server.sendHeader("Location", "/WiFiConfig");
+          server.send(302, "text/plain", "WiFi configuration updated successfully and saved to NVS. Attempting to connect...");
+        
+
         } else {
           server.sendHeader("Location", "/WiFiConfig");
           server.send(302, "text/plain", "CRC validation failed. Configuration not updated.");
@@ -1733,6 +1859,9 @@ void handleWiFiConfig_POST() {
         server.send(302, "text/plain", "Invalid data format. Configuration not updated.");
       }
     } else {
+      tft.println("Decryption failed. Configuration not updated.");
+      SerialPrint("Decryption failed. Configuration not updated.",true);
+      delay(10000);
       server.sendHeader("Location", "/WiFiConfig");
       server.send(302, "text/plain", "Decryption failed. Configuration not updated.");
     }
@@ -1742,6 +1871,13 @@ void handleWiFiConfig_POST() {
     BootSecure::zeroize(decryptedData, decodedLength);
     delete[] decodedData;
     delete[] decryptedData;
+
+      //force prefs to save here
+      tft.println("Prefs updated, rebooting");
+      delay(3000);
+      controlledReboot("Wifi credentials updated",RESETCAUSE::RESET_NEWWIFI,true);
+    
+
   } else {
     // No BLOB provided, redirect back
     server.sendHeader("Location", "/WiFiConfig");
@@ -1773,7 +1909,7 @@ void handleWeather() {
   serverTextHeader();
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) MYNAME + " Weather Data</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
   
   // Display current weather data
   WEBHTML = WEBHTML + "<h3>Current Weather Information</h3>";
@@ -1952,12 +2088,10 @@ void handleWeatherZip() {
     }
     
     // Lookup coordinates from ZIP code
-    double latitude, longitude;
-    bool success = WeatherData.getCoordinatesFromZipCode(zipCode, latitude, longitude);
-    
+    bool success = WeatherData.getCoordinatesFromZipCode(zipCode);
     if (success) {
       // Return JSON response with coordinates (don't update WeatherData yet)
-      String jsonResponse = "{\"success\":true,\"latitude\":" + String(latitude, 14) + ",\"longitude\":" + String(longitude, 14) + "}";
+      String jsonResponse = "{\"success\":true,\"latitude\":" + String(WeatherData.lat, 14) + ",\"longitude\":" + String(WeatherData.lon, 14) + "}";
       server.sendHeader("Content-Type", "application/json");
       server.send(200, "application/json", jsonResponse);
     } else {
@@ -1970,18 +2104,18 @@ void handleWeatherZip() {
   }
 }
 
+
 void handleWeatherAddress() {
   LAST_WEB_REQUEST = I.currentTime;
-  
-  // Handle complete address lookup
+
   if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
     String street = server.arg("street");
     String city = server.arg("city");
     String state = server.arg("state");
     String zipCode = server.arg("zipcode");
-    
-    // Validate required fields
-    if (street.length() == 0 || city.length() == 0 || state.length() == 0 || zipCode.length() == 0) {
+
+     // Validate required fields
+     if (street.length() == 0 || city.length() == 0 || state.length() == 0 || zipCode.length() == 0) {
       server.sendHeader("Location", "/WEATHER?error=missing_fields");
       server.send(302, "text/plain", "All address fields are required.");
       return;
@@ -2008,32 +2142,44 @@ void handleWeatherAddress() {
         return;
       }
     }
-    
-    // Lookup coordinates from complete address
-    double latitude, longitude;
-    bool success = WeatherData.getCoordinatesFromAddress(street, city, state, zipCode, latitude, longitude);
-    
-    if (success) {
-      // Update WeatherData with new coordinates
-      WeatherData.lat = latitude;
-      WeatherData.lon = longitude;
-      
-      // Force weather update with new coordinates
-      WeatherData.updateWeather(0);
-      
+
+    if (handlerForWeatherAddress(street, city, state, zipCode)) {
       // Redirect back to weather page with success message
-      String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(latitude, 14) + "&lon=" + String(longitude, 14);
+      String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(WeatherData.lat, 14) + "&lon=" + String(WeatherData.lon, 14);
       server.sendHeader("Location", redirectUrl);
       server.send(302, "text/plain", "Address lookup successful. Coordinates updated and weather refreshed.");
       Prefs.isUpToDate = false;
     } else {
       server.sendHeader("Location", "/WEATHER?error=lookup_failed");
       server.send(302, "text/plain", "Address lookup failed. Please check the address or try again later.");
-    }
-  } else {
+    } 
+  } else {  
     server.sendHeader("Location", "/WEATHER?error=missing_fields");
     server.send(302, "text/plain", "Missing required address fields. Please provide street, city, state, and ZIP code.");
   }
+
+
+}
+
+bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
+
+  //assume data is valid   
+  if (WifiStatus()) {
+    // Lookup coordinates from complete address
+    
+    if (WeatherData.getCoordinatesFromAddress(street, city, state, zipCode)) {
+      
+      // Force weather update with new coordinates
+      WeatherData.updateWeather(0);
+      return true;
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+
+
 }
 
 

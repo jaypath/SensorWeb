@@ -62,9 +62,6 @@ void fcnDrawStatus();
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
 
-// WiFi keypad functions
-void drawKeyPad4WiFi(uint32_t y, uint8_t keyPage, uint8_t WiFiSet);
-bool isTouchKey(int16_t* keyval, uint8_t* keypage);
 
 // Setup display functions
 void displaySetupProgress(bool success = true);

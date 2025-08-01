@@ -70,6 +70,9 @@ void SerialWrite(String);
 bool WifiStatus(void);
 int16_t connectWiFi();
 int16_t tryWifi(uint16_t delayms = 250);
+void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
+void APStation_Mode();
+
 
 String getCert(String filename);
 bool Server_Message(String &URL, String &payload, int &httpCode);
@@ -91,7 +94,6 @@ void handleSETWIFI();
 void handleSTATUS();
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
 void serverTextHeader();
-void serverTextWiFiForm();
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 // Weather configuration handlers
 void handleWeather();
@@ -102,14 +104,16 @@ void handleWeatherAddress();
 void handleCONFIG();
 void handleCONFIG_POST();
 void handleCONFIG_DELETE();
+void handleREADONLYCOREFLAGS();
+void handleGSHEET();
+void handleGSHEET_POST();
 void handleWiFiConfig();
 void handleWiFiConfig_POST();
 void handleWiFiConfig_RESET();
-
+void addWiFiConfigForm();
+bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 bool SendData(struct SensorVal*);
 
-void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
-void Station_Mode();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();

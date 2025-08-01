@@ -527,9 +527,8 @@ void fcnDrawHeader() {
 
 void fcnDrawScreen() {
   
-  
-  if (I.screenChangeTimer==0) {
-    I.ScreenNum=0;
+  if(WiFi.status()!= WL_CONNECTED){  
+    screenWiFiDown();
   }
 
   if (I.ScreenNum==0 ) {    
@@ -698,8 +697,9 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
 
 void fcnDrawClock() {
   
-  if (I.lastClockDrawTime==0 || (I.currentTime != I.lastClockDrawTime &&  second(I.currentTime)==0)) {
+  if (I.lastClockDrawTime==0 || (I.currentTime != I.lastClockDrawTime &&  second(I.currentTime)==0) || I.currentMinute != minute(I.currentTime)) {
     I.lastClockDrawTime = I.currentTime;
+    I.currentMinute = minute(I.currentTime);
 
     int16_t X = tft.width();
     uint8_t FNTSZ=8;
@@ -1123,110 +1123,6 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
   return;
 }
 
-// WiFi keypad functions
-void drawKeyPad4WiFi(uint32_t y,uint8_t keyPage,uint8_t WiFiSet) {
-  
-  tft.fillRect(0,y,TFT_WIDTH,TFT_HEIGHT-y,BG_COLOR);
-  tft.setCursor(0,y);
-  uint16_t fh=setFont(2);
-  tft.fillRect(0,y,TFT_WIDTH,(fh+4)*2,TFT_DARKGRAY);
-  tft.setCursor(0,y+2);
-  tft.setTextColor(TFT_YELLOW,TFT_DARKGRAY);
-  if (WiFiSet==0)  tft.printf("SSID: %s",Prefs.WIFISSID);
-  else tft.printf("PWD: %s",Prefs.WIFIPWD);
-  y+=2*(fh+4);
-  tft.setCursor(0,y);
-
-  I.line_clear=y;
-  
-  I.line_keyboard=y;  
-
-  byte boxL = TFT_WIDTH/6;
-  byte i,j;
-  //now draw keyboard
-  for (i=0;i<=6;i++) {
-    tft.drawFastHLine(0,y+boxL*i,TFT_WIDTH,TFT_WHITE);
-    tft.drawFastVLine(boxL*i,y,TFT_HEIGHT-y,TFT_WHITE);
-  }
-
-  tft.setTextColor(TFT_WHITE,TFT_BLACK);
-
-  for (i=0;i<6;i++) {
-    for (j=0;j<6;j++) {
-      //this is the ith, jth box
-      uint16_t boxCenterX = 0+boxL*i + boxL/2;
-      uint16_t boxCenterY = y+boxL*j + boxL/2;
-      byte keyval = i+j*6;
-
-      if (keyval < 32) fcnPrintTxtCenter((String) char(keyPage*32+33+keyval),2,boxCenterX,boxCenterY);
-      else if (keyval==32) fcnPrintTxtCenter("last",1,boxCenterX,boxCenterY);
-      else if (keyval==33) fcnPrintTxtCenter("next",1,boxCenterX,boxCenterY);
-      else if (keyval==34) fcnPrintTxtCenter("space",1,boxCenterX,boxCenterY);
-      else if (keyval==35) fcnPrintTxtCenter("del",1,boxCenterX,boxCenterY);
-    }
-  }
-
-  y+=boxL*6+1;
-  I.line_submit=y;
-
-  tft.setCursor(0,y);
-  tft.setTextColor(TFT_GREEN,TFT_DARKGRAY);
-  tft.fillRect(0,y,TFT_WIDTH,TFT_HEIGHT-y,TFT_DARKGRAY);
-  fh = setFont(4);
-  if (WiFiSet<2)   {
-  if (WiFiSet==0)  fcnPrintTxtCenter("SUBMIT SSID",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
-    else fcnPrintTxtCenter("SUBMIT PWD",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
-    
-  }
-  else fcnPrintTxtCenter("PLEASE WAIT!",4,TFT_WIDTH/2,y+2 + (TFT_HEIGHT - y+2)/2);
-}
-
-bool isTouchKey(int16_t* keyval, uint8_t* keypage) {
-  //keyval
-          //<0 means submit
-          //300 means page down
-          //301 means page up
-          //257 means backspace
-          //256 means clear
-          //33-126 is an ascii value
-          
-  if (I.touchY<I.line_clear) {
-    *keyval = 256;
-    return true;
-  }
-
-  if (I.touchY>I.line_submit) {
-    *keyval = -1;
-    return true;
-  }
-
-  byte l = TFT_WIDTH/6;
-  byte i,j;
-  for (i=1;i<=6;i++) {
-    if (I.touchX < l*i) break;
-  }
-
-  for (j=1;j<=6;j++) {
-    if (I.touchY < I.line_keyboard+l*j) break;
-  }
-
-  if (i>6 || j>6) return false; //not sure how that could happen...
-
-  byte pos = (i-1)+(j-1)*6;
-
-  if (pos>=32) {
-    if (pos==32) *keyval = 300;
-    if (pos==33) *keyval = 301;
-    if (pos==34) *keyval = 32;
-    if (pos==35) *keyval = 257;
-    return true;
-  }
-
-  *keyval = *keypage*32+33 + pos;
-  
-  if (*keyval>=0  && *keyval<128)   return true;
-  return false;
-}
 
 // Setup display functions
 void displaySetupProgress(bool success) {
@@ -1268,7 +1164,7 @@ void screenWiFiDown() {
   tft.clear();
   tft.setCursor(0, 0);
   tft.setTextColor(TFT_RED);
-  tft.printf("WiFi may be down.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1\nRebooting in 5 min...", WiFi.softAPSSID().c_str());
+  tft.printf("WiFi may be down.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1\nif wifi credentials need to be updated.\nRebooting in 5 min...", WiFi.softAPSSID().c_str());
 }
 
 void checkTouchScreen() {

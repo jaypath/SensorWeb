@@ -14,8 +14,8 @@ struct STRUCT_GOOGLESHEET {
     uint32_t lastErrorTime = 0;
     char lastGsheetResponse[100];
     char lastGsheetFunction[30];
-    String GsheetID; //file ID for this month's spreadsheet
-    String GsheetName; //file name for this month's spreadsheet
+    char GsheetID[64]; //file ID for this month's spreadsheet
+    char GsheetName[24]; //file name for this month's spreadsheet
 };
 
 #define PROJECT_ID "arduinodatalog-415401"
@@ -27,12 +27,13 @@ const char PRIVATE_KEY[] PROGMEM = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgk
 
 void initGsheetInfo();
 bool initGsheet();
-bool file_findSpreadsheetIDByName(String sheetname, bool createfile, String *fileID);
-bool file_deleteSpreadsheetByID(String fileID);
-bool file_createSpreadsheet(String sheetname, bool checkfile, String *fileID);
-bool file_createHeaders(String sheetname,String Headers);
+String file_findSpreadsheetIDByName(const char* sheetname);
+bool file_deleteSpreadsheetByID(const char* fileID);
+uint8_t file_createSpreadsheet(const char* sheetname, bool checkfile, char* fileID);
+bool file_createHeaders(const char* fileID, const char* Headers);
 void tokenStatusCallback(TokenInfo info);
-bool file_deleteSpreadsheetByName(String filename);
+bool file_deleteSpreadsheetByName(const char* filename);
+String SearchForIDByFilename(const char* filename);
 int8_t Gsheet_uploadData(); //uploads data to gsheets
 bool Gsheet_uploadSensorDataFunction(void);
 String GsheetUploadErrorString();

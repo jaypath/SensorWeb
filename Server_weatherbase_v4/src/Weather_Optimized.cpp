@@ -741,9 +741,6 @@ bool WeatherInfoOptimized::initWeather() {
     this->sunrise = 0;
     this->sunset = 0;
     
-    this->lat = 42.3018906;
-    this->lon = -71.2981767;
-
     this->lastUpdateT = 0;
     this->lastUpdateAttempt = 0;
 
@@ -891,7 +888,7 @@ bool WeatherInfoOptimized::isCacheValid() {
 }
 
 // Complete address to coordinates conversion using US Census Bureau Geocoding API
-bool WeatherInfoOptimized::getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode, double& latitude, double& longitude) {
+bool WeatherInfoOptimized::getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode) {
     // Validate ZIP code format (5 digits)
     if (zipCode.length() != 5) {
         SerialPrint("Invalid ZIP code format. Must be 5 digits.", true);
@@ -957,11 +954,13 @@ bool WeatherInfoOptimized::getCoordinatesFromAddress(const String& street, const
                 JsonObject match = addressMatches[0];
                 
                 if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
-                    longitude = match["coordinates"]["x"].as<double>();
-                    latitude = match["coordinates"]["y"].as<double>();
+                    this->lon = match["coordinates"]["x"].as<double>();
+                    this->lat = match["coordinates"]["y"].as<double>();
                     
-                    SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
-                    
+                    SerialPrint(("Coordinates found: " + String(this->lat, 6) + ", " + String(this->lon, 6)).c_str(), true);
+                    Prefs.LATITUDE = this->lat;
+                    Prefs.LONGITUDE = this->lon;
+                    Prefs.isUpToDate = false;
                     // Log the matched address for verification
                     if (match["matchedAddress"].is<String>()) {
                         String matchedAddress = match["matchedAddress"].as<String>();
@@ -981,11 +980,11 @@ bool WeatherInfoOptimized::getCoordinatesFromAddress(const String& street, const
     
     // Fallback to ZIP code only method
     SerialPrint("Falling back to ZIP code only method", true);
-    return getCoordinatesFromZipCodeFallback(zipCode, latitude, longitude);
+    return getCoordinatesFromZipCodeFallback(zipCode);
 }
 
 // ZIP code to coordinates conversion using US Census Bureau Geocoding API (legacy function)
-bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, double& latitude, double& longitude) {
+bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode) {
     
     // Validate ZIP code format (5 digits)
     if (zipCode.length() != 5) {
@@ -1020,7 +1019,6 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, doub
     int httpCode;
     
     SerialPrint(("Fetching coordinates for ZIP code: " + zipCode).c_str(), true);
-    SerialPrint(("API URL: " + url).c_str(), true);
     
     // Make HTTP request to Census Geocoding API
     HTTPClient http;
@@ -1040,7 +1038,6 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, doub
         
         if (error) {
             SerialPrint("Failed to parse JSON response from Census Geocoding API", true);
-            SerialPrint(("JSON Error: " + String(error.c_str())).c_str(), true);
             storeError("Failed to parse JSON response from Census Geocoding API", ERROR_JSON_GEOCODING,true);
             return false;
         }
@@ -1054,11 +1051,13 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, doub
                 JsonObject match = addressMatches[0];
                 
                 if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
-                    longitude = match["coordinates"]["x"].as<double>();
-                    latitude = match["coordinates"]["y"].as<double>();
+                    this->lon = match["coordinates"]["x"].as<double>();
+                    this->lat = match["coordinates"]["y"].as<double>();
                     
-                    SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
-                    
+                    SerialPrint(("Coordinates found: " + String(this->lat, 6) + ", " + String(this->lon, 6)).c_str(), true);
+                    Prefs.LATITUDE = this->lat;
+                    Prefs.LONGITUDE = this->lon;
+                    Prefs.isUpToDate = false;
                     // Log the matched address for verification
                     if (match["matchedAddress"].is<String>()) {
                         String matchedAddress = match["matchedAddress"].as<String>();
@@ -1082,7 +1081,7 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode, doub
     
     // Fallback to ZIP code only method
     SerialPrint("Falling back to ZIP code only method", true);
-    return getCoordinatesFromZipCodeFallback(zipCode, latitude, longitude);
+    return getCoordinatesFromZipCodeFallback(zipCode);
 }
 
 // Helper function to URL encode strings
@@ -1106,7 +1105,7 @@ String WeatherInfoOptimized::urlEncode(const String& str) {
 }
 
 // Fallback method using a simple geocoding service
-bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCode, double& latitude, double& longitude) {
+bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCode) {
     // Use a simple geocoding service (example with a free API)
     // Note: This is a simplified approach. In production, you might want to use
     // a more reliable service like Google Geocoding API (requires API key)
@@ -1139,10 +1138,13 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCo
         
         // Extract coordinates from the response
         if (doc["places"][0]["latitude"].is<String>() && doc["places"][0]["longitude"].is<String>()) {
-            latitude = doc["places"][0]["latitude"].as<double>();
-            longitude = doc["places"][0]["longitude"].as<double>();
-            
-            SerialPrint(("Coordinates found: " + String(latitude, 6) + ", " + String(longitude, 6)).c_str(), true);
+            this->lat = doc["places"][0]["latitude"].as<double>();
+            this->lon = doc["places"][0]["longitude"].as<double>();
+
+            Prefs.LATITUDE = this->lat;
+            Prefs.LONGITUDE = this->lon;
+            Prefs.isUpToDate = false;
+            SerialPrint(("Coordinates found: " + String(this->lat, 6) + ", " + String(this->lon, 6)).c_str(), true);
             return true;
         }
     } else {

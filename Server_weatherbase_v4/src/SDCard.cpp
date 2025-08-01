@@ -858,9 +858,9 @@ bool storeGsheetInfoSD() {
         f.close();
         return false;
     }
+    GSheetInfo.lastGsheetSDSaveTime = I.currentTime;
     f.write((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
     f.close();
-    GSheetInfo.lastGsheetSDSaveTime = I.currentTime;
     return true;
 }
 
@@ -869,6 +869,12 @@ bool readGsheetInfoSD() {
     File f = SD.open(filename, FILE_READ);
     if (f==false) {
         storeError("readGsheetInfoSD: Could not read GsheetInfo data",ERROR_SD_GSHEETINFOREAD,false);
+        f.close();
+        return false;
+    }
+    if (f.size() != sizeof(STRUCT_GOOGLESHEET)) {
+        storeError("readGsheetInfoSD: File size mismatch",ERROR_SD_GSHEETINFOREAD,false);
+        deleteFiles("GsheetInfo.dat", "/Data");
         f.close();
         return false;
     }

@@ -110,6 +110,7 @@ extern uint32_t LAST_WEB_REQUEST;
 extern double LAST_BAR;
 
 uint32_t FONTHEIGHT = 0;
+BootSecure bootSecure;
 
 //time
 uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
@@ -118,7 +119,7 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
 
 // --- Helper Function Declarations ---
-void initDisplay();
+void initSystem();
 void initScreenFlags(bool completeInit = false);
 bool initSDCard();
 bool loadSensorData();
@@ -135,9 +136,21 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval);
  * @brief Initialize the Gsheet uploader 
  */
 void initGsheetHandler() {
+    SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+    SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
     initGsheet(); 
-    initGsheetInfo(); 
-    readGsheetInfoSD();
+    if (!readGsheetInfoSD()) initGsheetInfo();
+    if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
+        String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
+        strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
+        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
+        GSheetInfo.GsheetID = file_findSpreadsheetIDByName(GSheetInfo.GsheetName);
+    } else {
+        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
+    }
+
+    SerialPrint("gsheet setup2: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+    SerialPrint("gsheet setup2: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
 }
 #endif
 
@@ -218,7 +231,8 @@ void initScreenFlags(bool completeInit) {
 /**
  * @brief Initialize the TFT display and SPI.
  */
-void initDisplay() {
+void initSystem() {
+    #ifdef _USETFT
     SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
     tft.init();
     tft.setRotation(2);
@@ -227,6 +241,17 @@ void initDisplay() {
     tft.setTextFont(1);
     tft.setTextDatum(TL_DATUM);
     tft.printf("Running setup\n");
+    #endif
+    int8_t boot_status = bootSecure.setup();
+    if (boot_status <= 0) {
+        #ifdef SETSECURE
+            // Security check failed for any reason, halt device
+            while (1) { delay(1000); }
+        #endif
+        tft.println("Prefs failed to load with error code: " + String(boot_status));
+        delay(5000);
+    }
+
 }
 
 /**
@@ -257,13 +282,10 @@ bool initSDCard() {
  */
 bool loadSensorData() {
     tft.print("Loading sensor data from SD... ");
-    bool sdread = Sensors.readAllSensors();
+    bool sdread = readDevicesSensorsSD();
     displaySetupProgress( sdread);
-    if (!sdread) delay(5000);
-    #ifdef _USESERIAL
     SerialPrint("Sensor data loaded? ",false);
     SerialPrint((sdread==true)?"yes":"no",true);
-    #endif
     return sdread;
 }
 
@@ -300,10 +322,12 @@ void initServerRoutes() {
     server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
     server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
     server.on("/FLUSHSD", handleFLUSHSD);
-    server.on("/SETWIFI", HTTP_POST, handleSETWIFI);
     server.on("/CONFIG", HTTP_GET, handleCONFIG);
     server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
     server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
+    server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
+    server.on("/GSHEET", HTTP_GET, handleGSHEET);
+    server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
     server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
     server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
@@ -312,6 +336,7 @@ void initServerRoutes() {
     server.on("/WeatherRefresh", HTTP_POST, handleWeatherRefresh);
     server.on("/WeatherZip", HTTP_POST, handleWeatherZip);
     server.on("/WeatherAddress", HTTP_POST, handleWeatherAddress);
+
     server.onNotFound(handleNotFound);
 }
 
@@ -334,7 +359,6 @@ void initOTA() {
 
 
 
-BootSecure bootSecure;
 
 // --- Main Setup ---
 void setup() {
@@ -349,18 +373,9 @@ void setup() {
     Serial.begin(115200);
     #endif
 
-    WEBHTML.reserve(7000);
+    WEBHTML.reserve(20000);
 
-    initDisplay();
-    int8_t boot_status = bootSecure.setup();
-    if (boot_status <= 0) {
-        #ifdef SETSECURE
-            // Security check failed for any reason, halt device
-            while (1) { delay(1000); }
-        #endif
-        tft.println("Prefs failed to load with error code: " + String(boot_status));
-        delay(5000);
-    }
+    initSystem();
 
     initSensor(-256);
 
@@ -370,8 +385,12 @@ void setup() {
 
 
     tft.printf("Init Wifi... \n");
-    tft.printf("Wifi... ");    
+    SerialPrint("Init Wifi... ",false);
+    tft.printf("Wifi... ");   
+    SerialPrint("start server routes... ");
     initServerRoutes();
+    SerialPrint("Server routes OK",true);
+
     while (connectWiFi()<0) {
         displaySetupProgress( false);
         tft.clear();
@@ -380,6 +399,7 @@ void setup() {
         delay(10000); //do not flood wifi        
     } 
     displaySetupProgress( true);
+    SerialPrint("Wifi OK",true);
 
 
     tft.print("Set up time... ");
@@ -391,14 +411,15 @@ void setup() {
     I.ALIVESINCE = I.currentTime;
     
     
+    SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
+    SerialPrint("Prefs.MYIP: " + String(Prefs.MYIP),true);
+    SerialPrint("Prefs.MYIP.toInt(): " + String((uint32_t) Prefs.MYIP),true);
     if (Prefs.DEVICENAME[0] == 0) {
         snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
-        Prefs.isUpToDate = false;
-        // Save Prefs with the new device name
-        bootSecure.setPrefs();
+        Prefs.isUpToDate = false;        
     }
-    WeatherData.lat = I.LATITUDE;
-    WeatherData.lon = I.LONGITUDE;
+    WeatherData.lat = Prefs.LATITUDE;
+    WeatherData.lon = Prefs.LONGITUDE;
 
 
     tft.printf("Init server... ");
@@ -437,6 +458,7 @@ void setup() {
     }
     #endif
 
+
     tft.printf("Loading weather data...\n");
     //load weather data from SD card
     if (readWeatherDataSD()) {
@@ -452,6 +474,7 @@ void setup() {
     tft.setTextColor(TFT_GREEN);
     tft.printf("Setup OK...");
     tft.setTextColor(FG_COLOR);
+
     
 }
 
@@ -470,7 +493,7 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 void handleUpdatePrefs() {
     if (minute() % 5 == 0 && !Prefs.isUpToDate) { 
         Prefs.isUpToDate = true;
-        bootSecure.setPrefs();
+        BootSecure::setPrefs();
     }
 }
 
@@ -542,12 +565,21 @@ void loop() {
             } else {
                 if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
                 else {
-                    I.currentTemp = sensor->snsValue;
+                    if (I.currentTemp != sensor->snsValue) {
+                        I.currentTemp = sensor->snsValue;
+                        I.lastCurrentConditionTime = 0; //force redraw of current condition
+                    }
                     //SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
                 }
             }
         }
-        if (I.localWeatherIndex==255) I.currentTemp = WeatherData.getTemperature(I.currentTime);
+        int8_t currenttemp = WeatherData.getTemperature(I.currentTime);
+        if (I.localWeatherIndex==255 || abs(I.currentTemp-currenttemp)>15) {
+            if (I.currentTemp != currenttemp) {   
+                I.currentTemp = currenttemp;
+                I.lastCurrentConditionTime = 0; //force redraw of current condition
+            }
+        }
         //see if we have local battery power
         if (I.localBatteryIndex == 255) I.localBatteryIndex = findSensorByName("Outside",61);
     
@@ -578,6 +610,9 @@ void loop() {
             controlledReboot("Weather failed too many times", RESET_WEATHER);
         }
 
+        if (I.currentTime - Sensors.lastSDSaveTime > 600) {
+            storeDevicesSensorsSD();
+        }
 
 
         OldTime[1] = minute();
@@ -606,16 +641,14 @@ void loop() {
 
         if (gsheetResult<0) {
             SerialPrint(GsheetUploadErrorString(),true);
-        } else {
-            //note that gsheetResult==0 is not an error, it just means that no data was uploaded
-            if (gsheetResult==1)                 storeGsheetInfoSD();            
-        }
+        } 
         #endif
     }
 
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         checkExpiration(-1, I.currentTime, false);
+        
         if (OldTime[2] == 4) {
             //check if DST has changed every day at 4 am
             checkDST();
@@ -627,6 +660,10 @@ void loop() {
     if (OldTime[0] != second()) {
         OldTime[0] = second();
 
+
+        SerialPrint("gsheet loop: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+        SerialPrint("gsheet loop: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+      
         if (I.LAST_ESPNOW_SERVER_TIME > 0) {
             I.LAST_ESPNOW_SERVER_TIME = 0;
             Sensors.addDevice(I.LAST_ESPNOW_SERVER_MAC, I.LAST_ESPNOW_SERVER_IP, "Server");
