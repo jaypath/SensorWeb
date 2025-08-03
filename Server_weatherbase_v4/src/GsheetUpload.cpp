@@ -37,7 +37,7 @@ void initGsheetInfo() {
 }
 
 //gsheet functions
-bool file_deleteSpreadsheetByID(String fileID) {
+bool file_deleteSpreadsheetByID(const char* fileID) {
     SerialPrint("file_deleteSpreadsheetByID ");
     FirebaseJson response;
     
@@ -58,15 +58,15 @@ bool file_deleteSpreadsheetByID(String fileID) {
     }
   }
   
-  bool file_deleteSpreadsheetByName(String filename){
+  bool file_deleteSpreadsheetByName(const char* filename){
     SerialPrint("file_deleteSpreadsheetByName");
-    String fileID;
+    char fileID[64];
     bool success = false;
     int deleteCount = 0;
     const int MAX_DELETE_ATTEMPTS = 100; // Prevent infinite loop
     
     fileID = file_findSpreadsheetIDByName(filename);
-    while (fileID!="" && deleteCount < MAX_DELETE_ATTEMPTS) {
+    while (fileID[0]!='\0' && deleteCount < MAX_DELETE_ATTEMPTS) {
         success = file_deleteSpreadsheetByID(fileID);
         deleteCount++;
         fileID = file_findSpreadsheetIDByName(filename);
@@ -84,7 +84,7 @@ bool file_deleteSpreadsheetByID(String fileID) {
   }
   
   
-  String file_findSpreadsheetIDByName(String sheetname) {
+  char* file_findSpreadsheetIDByName(const char* sheetname) {
     
         // Searches all files for the matching filename and returns the file ID if found
         // Returns empty string if not found
