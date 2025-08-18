@@ -3,7 +3,7 @@
 #include <TimeLib.h>
 
 // Global instance
-Devices_Sensors Sensors;
+Devices_Sensors DeviceStore;
 
 // Constructor
 Devices_Sensors::Devices_Sensors() {
@@ -174,6 +174,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
         sensor->IsSet=1;
+        this->lastUpdatedTime = I.currentTime;
         return existingIndex;
     }
     
@@ -200,6 +201,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
             if (i >= numSensors) {
                 numSensors = i + 1;
             }
+            this->lastUpdatedTime = I.currentTime;
             return i;
         }
     }
@@ -416,10 +418,9 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
 }
 
 // Data storage functions
-bool Devices_Sensors::storeAllSensors() {
-    // This would implement storing all sensors to SD card
-    // For now, return true as placeholder
-    return true;
+uint8_t Devices_Sensors::storeAllSensors(uint8_t /*intervalMinutes*/) {
+    // SD persistence not supported in generic library build
+    return 0;
 }
 
 bool Devices_Sensors::readAllSensors() {

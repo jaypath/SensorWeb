@@ -30,7 +30,7 @@ bool initGsheet();
 String file_findSpreadsheetIDByName(const char* sheetname);
 bool file_deleteSpreadsheetByID(const char* fileID);
 uint8_t file_createSpreadsheet(const char* sheetname, bool checkfile, char* fileID);
-bool file_createHeaders(const char* fileID, const char* Headers);
+bool file_createHeaders(char* fileID, String Headers);
 void tokenStatusCallback(TokenInfo info);
 bool file_deleteSpreadsheetByName(const char* filename);
 String SearchForIDByFilename(const char* filename);

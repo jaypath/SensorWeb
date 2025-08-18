@@ -384,6 +384,14 @@ WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + 
 WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
 WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime) : "???") + "<br>";
 WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime) : "???") + "<br>";
+
+// Button to trigger an immediate Google Sheets upload
+WEBHTML += R"===(
+  <form action="/GSHEET_UPLOAD_NOW" method="post">
+  <p style="font-family:arial, sans-serif">
+  <button type="submit">Upload Google Sheets Now</button>
+  </p></form><br>)===";
+  
 WEBHTML = WEBHTML + "---------------------<br>";      
 
 WEBHTML = WEBHTML + "Previous errors (up to 10)" + "<br>";
@@ -393,6 +401,7 @@ for (uint8_t i=1;i<11;i++) {
   else break;
 
 }
+
 
 
 WEBHTML = WEBHTML + "</font>---------------------<br>";      
@@ -1383,6 +1392,13 @@ void handleGSHEET_POST() {
   server.send(302, "text/plain", "");
 }
 
+void handleGSHEET_UPLOAD_NOW() {
+  LAST_WEB_REQUEST = I.currentTime;
+  int8_t result = Gsheet_uploadData();
+  String msg = "Triggered immediate upload. Result: " + String(result) + ", " + GsheetUploadErrorString();
+  server.send(200, "text/plain", msg);
+}
+
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID() {
     char ssid[20];
@@ -1396,8 +1412,8 @@ String generateAPSSID() {
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
   if (I.WiFiMode != WIFI_AP_STA) {
     *wifiID = generateAPSSID();
-    byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
-    *apIP = IPAddress(192, 168, 4, lastByte);
+//    byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
+    *apIP = IPAddress(192, 168, 4, 1);
     WiFi.mode(WIFI_AP_STA); // Combined AP and station mode
     I.WiFiMode = WIFI_AP_STA;
     *wifiPWD = "S3nsor.N3t!";

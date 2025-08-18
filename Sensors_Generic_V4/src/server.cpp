@@ -2,7 +2,9 @@
 
 #include <header.hpp>
 #include "server.hpp"
-#include <timesetup.hpp>
+#include "../../GLOBAL_LIBRARY/globals.hpp"
+#include "../../GLOBAL_LIBRARY/Devices.hpp"
+#include "../../GLOBAL_LIBRARY/utility.hpp"
 
 
 //this server
@@ -19,9 +21,50 @@ bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
 IP_TYPE SERVERIP[NUMSERVERS];
 
-WiFi_type WIFI_INFO;
-
   
+#ifdef _USE8266
+#include <ESP8266HTTPClient.h>
+#endif
+
+static String macToHexNoSep() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char buf[13];
+  snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(buf);
+}
+
+static String generateAPSSID() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char ssid[20];
+  snprintf(ssid, sizeof(ssid), "SensorNet-%02X%02X%02X", mac[3], mac[4], mac[5]);
+  return String(ssid);
+}
+
+static void startSoftAP() {
+  String ssid = generateAPSSID();
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+  WiFi.softAP(ssid.c_str(), "S3nsor.N3t!");
+}
+
+static String urlEncode(const String& s) {
+  String out;
+  const char* hex = "0123456789ABCDEF";
+  for (size_t i = 0; i < s.length(); ++i) {
+    char c = s[i];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c=='-' || c=='_' || c=='.' || c=='~') {
+      out += c;
+    } else {
+      out += '%';
+      out += hex[(c >> 4) & 0xF];
+      out += hex[c & 0xF];
+    }
+  }
+  return out;
+}
+
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
   
@@ -52,10 +95,10 @@ void assignIP(byte ip[4], byte m1, byte m2, byte m3, byte m4) {
 bool WifiStatus(void) {
   if (WiFi.status() != WL_CONNECTED) 
   {
-    WIFI_INFO.status = 0;
+    Prefs.status = 0;
     return false;
   }
-  WIFI_INFO.status = WL_CONNECTED;
+  Prefs.status = WL_CONNECTED;
   return true; 
 }
 
@@ -67,29 +110,15 @@ void connectWiFi()
   //rerturn 0 if connected, else number of times I tried and failed
   IPAddress temp;
 
-  assignIP(WIFI_INFO.DHCP,192,168,68,1);
-  assignIP(WIFI_INFO.DNS,192,168,1,1);
-  assignIP(WIFI_INFO.DNS2,192,168,68,1);
-  assignIP(WIFI_INFO.GATEWAY,192,168,68,1);
-  assignIP(WIFI_INFO.SUBNET,255,255,252,0);
+  // Legacy static config removed; rely on DHCP
 
 
   if (WifiStatus()) {
-    assignIP(WIFI_INFO.MYIP, WiFi.localIP());
+    Prefs.MYIP = (uint32_t) WiFi.localIP();
     
     return;
   } else {
-    if (ASSIGNEDIP[0]==0) {
-      WIFI_INFO.MYIP[0]=0;    //will reassign this shortly
-    } else {
-      WIFI_INFO.MYIP[0] = ASSIGNEDIP[0];    
-      WIFI_INFO.MYIP[1] = ASSIGNEDIP[1];    
-      WIFI_INFO.MYIP[2] = ASSIGNEDIP[2];    
-      WIFI_INFO.MYIP[3] = ASSIGNEDIP[3];    
-
-      WiFi.config(WIFI_INFO.MYIP, WIFI_INFO.GATEWAY,  WIFI_INFO.SUBNET,WIFI_INFO.DNS,WIFI_INFO.DNS2);
-      
-    }
+    // No static fallback
   }
   
   WiFi.mode(WIFI_STA);
@@ -104,14 +133,24 @@ void connectWiFi()
 
   #ifndef _USE32
     //cannot do this async, so wait for wifi here
-    while ( WiFi.status() != WL_CONNECTED) {
+    uint16_t tries = 0;
+    while ( WiFi.status() != WL_CONNECTED && tries < 40) {
       #ifdef _DEBUG
         Serial.print(".");
       #endif
       delay(500);
+      tries++;
     }
-
-    WifiStatus(); //assign wifi status
+    if (WiFi.status() == WL_CONNECTED) {
+      WifiStatus(); //assign wifi status
+    } else {
+      // Fallback to SoftAP mode for configuration
+      #ifdef _DEBUG
+        Serial.println("\nWiFi connect failed, starting SoftAP mode");
+      #endif
+      startSoftAP();
+      return;
+    }
     
   #endif
   
@@ -120,15 +159,15 @@ void connectWiFi()
 #ifdef _USE32
 void onWiFiEvent(WiFiEvent_t event) {
   switch (event) {
-    case SYSTEM_EVENT_STA_DISCONNECTED:
+    case WIFI_EVENT_STA_DISCONNECTED:
       {
         #ifdef _DEBUG 
           Serial.print("WiFi begin failed ");
         #endif
-        WIFI_INFO.status =  0;
+        Prefs.status =  0;
       break;
       }
-    case SYSTEM_EVENT_STA_GOT_IP:
+    case IP_EVENT_STA_GOT_IP:
       {
         #ifdef _DEBUG 
         Serial.print("WiFi begin succeeded ");
@@ -136,7 +175,7 @@ void onWiFiEvent(WiFiEvent_t event) {
     
         // Connected successfully
         WifiStatus(); //assign wifi status
-        assignIP(WIFI_INFO.MYIP, WiFi.localIP());    
+        Prefs.MYIP = (uint32_t) WiFi.localIP();
         break;
       }
     default:
@@ -151,7 +190,7 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
   HTTPClient http;
 
 
-  if (WIFI_INFO.status >0 ){
+  if (Prefs.status >0 ){
      http.useHTTP10(true);
      http.begin(wfclient,URL.c_str());
      *httpCode = http.GET();
@@ -171,7 +210,7 @@ bool SendData(struct SensorVal *snsreading) {
 #ifdef  ARDID
    byte arduinoID = ARDID;
 #else
-byte arduinoID = WIFI_INFO.MYIP[3];
+byte arduinoID = WiFi.localIP()[3];
 #endif
 
 if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
@@ -184,53 +223,46 @@ byte ipindex=0;
 bool isGood = false;
 
 
-  if(WIFI_INFO.status>0){
-    String payload;
+  if(Prefs.status>0){
     String URL;
-    String tempstring;
     int httpCode=404;
-    tempstring = "/POST?IP=" + WiFi.localIP().toString() + "," + "&varName=" + String(snsreading->snsName);
-    tempstring = tempstring + "&varValue=";
-    tempstring = tempstring + String(snsreading->snsValue, DEC);
-    tempstring = tempstring + "&Flags=";
-    tempstring = tempstring + String(snsreading->Flags, DEC);
-    tempstring = tempstring + "&logID=";
-    tempstring = tempstring + String(arduinoID, DEC);
-    tempstring = tempstring + "." + String(snsreading->snsType, DEC) + "." + String(snsreading->snsID, DEC) + "&timeLogged=" + String(snsreading->LastReadTime, DEC) + "&isFlagged=" + String(bitRead(snsreading->Flags,0), DEC) + "&SendingInt=" + String(snsreading->SendingInt, DEC);
+    String macHex = macToHexNoSep();
+    String ipStr = WiFi.localIP().toString();
+    String json = "{";
+    json += "\"mac\":\"" + macHex + "\",";
+    json += "\"ip\":\"" + ipStr + "\",";
+    json += "\"sensor\":[{";
+    json += "\"type\":" + String(snsreading->snsType);
+    json += ",\"id\":" + String(snsreading->snsID);
+    json += ",\"name\":\"" + String(snsreading->snsName) + "\"";
+    json += ",\"value\":" + String(snsreading->snsValue, 6);
+    json += ",\"timeRead\":" + String(snsreading->LastReadTime);
+    json += ",\"timeLogged\":" + String(now());
+    json += ",\"sendingInt\":" + String(snsreading->SendingInt);
+    json += ",\"flags\":" + String(snsreading->Flags);
+    json += "}]}";
 
-    while(ipindex<NUMSERVERS) {
-      if (SERVERIP[ipindex].IP[0]==0 || SERVERIP[ipindex].IP[3]==0) {
-        ipindex++;
-        continue;
-      }
-      URL = "http://" + IP2String( SERVERIP[ipindex].IP);
-      URL = URL + tempstring;
-    
+    // iterate all known servers from DeviceStore (devType >=100)
+    for (int16_t i=0; i<NUMDEVICES && i<DeviceStore.getNumDevices(); ++i) {
+      DevType* d = DeviceStore.getDeviceByDevIndex(i);
+      if (!d || !d->IsSet || d->devType < 100) continue;
+      IPAddress ip(d->IP);
+      URL = String("http://") + ip.toString() + "/POST";
+
       http.useHTTP10(true);
-    //note that I'm coverting lastreadtime to GMT
-  
       snsreading->LastSendTime = now();
-        #ifdef _DEBUG
-            Serial.print("sending this message: ");
-            Serial.println(URL.c_str());
-        #endif
-
+      #ifdef _DEBUG
+        Serial.print("POST "); Serial.print(URL); Serial.print(" body: "); Serial.println(json);
+      #endif
       http.begin(wfclient,URL.c_str());
-      httpCode = (int) http.GET();
-      payload = http.getString();
+      http.addHeader("Content-Type","application/x-www-form-urlencoded");
+      String body = "JSON=" + urlEncode(json);
+      httpCode = (int) http.POST(body);
+      String payload = http.getString();
       http.end();
 
-
-        if (httpCode == 200) {
-          isGood = true;
-          SERVERIP[ipindex].server_status = httpCode;
-        } 
-
-      ipindex++;
-
-    } ;
-  
-    
+      if (httpCode == 200) { isGood = true; }
+    }
   }
 
   if (isGood) bitWrite(snsreading->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
@@ -373,8 +405,7 @@ byte k;
 #ifdef  ARDID
 byte   arduinoID = ARDID;
 #else
-byte arduinoID = WIFI_INFO.MYIP[3];
-
+byte arduinoID = WiFi.localIP()[3];
 #endif
 
 

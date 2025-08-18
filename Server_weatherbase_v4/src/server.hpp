@@ -107,6 +107,7 @@ void handleCONFIG_DELETE();
 void handleREADONLYCOREFLAGS();
 void handleGSHEET();
 void handleGSHEET_POST();
+void handleGSHEET_UPLOAD_NOW();
 void handleWiFiConfig();
 void handleWiFiConfig_POST();
 void handleWiFiConfig_RESET();

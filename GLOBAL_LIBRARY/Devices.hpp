@@ -2,11 +2,17 @@
 #define DEVICES_HPP
 
 #include <Arduino.h>
+#if defined(_USE32)
 #include <WiFi.h>
+#elif defined(_USE8266)
+#include <ESP8266WiFi.h>
+#endif
 #include "globals.hpp"
 
 // Constants
+#ifndef SENSORNUM
 #define SENSORNUM NUMSENSORS
+#endif
 
 //sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
@@ -38,6 +44,8 @@ struct SnsType {
     uint32_t SendingInt;    // Sending interval
     uint8_t IsSet;          // Whether this sensor is initialized
     bool expired;           // Whether sensor has expired
+    uint32_t lastCloudUploadTime; // Time sensor data was last uploaded to cloud
+    uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
 };
 
 // Devices_Sensors class
@@ -45,11 +53,14 @@ class Devices_Sensors {
 private:
     DevType devices[NUMDEVICES];
     SnsType sensors[NUMSENSORS];
-    uint8_t numDevices;
-    uint8_t numSensors;
 
 public:
     Devices_Sensors();
+
+    uint32_t lastSDSaveTime;
+    uint32_t lastUpdatedTime;
+    uint8_t numDevices;
+    uint8_t numSensors;
     
     // Device management
     int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);
@@ -65,7 +76,7 @@ public:
     uint8_t countDev(); // Legacy compatibility function
     bool isDeviceInit(int16_t devindex);
     void initDevice(int16_t devindex);
-    
+    bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
@@ -81,8 +92,9 @@ public:
     int16_t findOldestDevice();
     int16_t findOldestSensor();
     byte checkExpiration(int16_t index, time_t currentTime, bool onlyCritical);
-    uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan);
-    
+    uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0);
+    bool isSensorOfType(int16_t index, String type);
+
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
     uint8_t find_sensor_count(String snsname, uint8_t snsType);
@@ -90,7 +102,7 @@ public:
     int16_t findSnsOfType(uint8_t snstype, bool newest = false);
     
     // Data storage
-    bool storeAllSensors();
+    uint8_t storeAllSensors(uint8_t intervalMinutes);
     bool readAllSensors();
     
     // Helper functions for expiration checking
@@ -101,9 +113,10 @@ public:
     // All SensorVal-based functions have been eliminated
 };
 
-// Global instance
-extern Devices_Sensors Sensors;
-extern struct Screen I;
+// Global instance (named to avoid conflict with legacy SensorVal array)
+extern Devices_Sensors DeviceStore;
+extern STRUCT_CORE I;
+
 
 
 // All device IP addresses are now stored as uint32_t.

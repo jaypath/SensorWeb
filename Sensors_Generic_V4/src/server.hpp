@@ -6,7 +6,8 @@
 #include <Arduino.h>
 #include <header.hpp>
 #include <sensors.hpp>
-#include <timesetup.hpp>
+#include "../../GLOBAL_LIBRARY/timesetup.hpp"
+#include "../../GLOBAL_LIBRARY/globals.hpp"
 #include "ArduinoOTA.h"
 
 //Server requests time out after 2 seconds
@@ -41,17 +42,7 @@ struct IP_TYPE {
 
 extern IP_TYPE SERVERIP[NUMSERVERS];
 
-struct WiFi_type {
-  uint32_t DHCP;  // 4 bytes
-  uint32_t GATEWAY; // 4 bytes
-  uint32_t DNS; // 4 bytes
-  uint32_t DNS2; // 4 bytes
-  uint32_t SUBNET; // 4 bytes
-  uint32_t MYIP; // 4 bytes
-  uint8_t status;
-};
-
-extern WiFi_type WIFI_INFO;
+// Use shared Prefs instead of legacy WiFi_type
 
 //extern const char HTTP_OK_response_header[60];
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 

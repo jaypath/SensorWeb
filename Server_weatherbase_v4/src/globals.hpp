@@ -214,7 +214,12 @@ typedef enum {
     ERROR_SD_WEATHERDATASIZE, //weather data file was the wrong size
     ERROR_SD_GSHEETINFOWRITE, //could not write GsheetInfo data
     ERROR_SD_GSHEETINFOREAD, //could not read GsheetInfo data
-    ERROR_JSON_GEOCODING //failed json parse request for geocoding
+    ERROR_JSON_GEOCODING, //failed json parse request for geocoding
+    ERROR_GSHEET_CREATE, //failed to create spreadsheet
+    ERROR_GSHEET_UPLOAD, //failed to upload data to spreadsheet
+    ERROR_GSHEET_DELETE, //failed to delete spreadsheet
+    ERROR_GSHEET_FIND, //failed to find spreadsheet
+    ERROR_GSHEET_HEADERS, //failed to create headers
   } ERRORCODES;
 
 

@@ -144,7 +144,7 @@ void initGsheetHandler() {
         String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
         strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
         GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
-        GSheetInfo.GsheetID = file_findSpreadsheetIDByName(GSheetInfo.GsheetName);
+        snprintf(GSheetInfo.GsheetID,64,"%s",file_findSpreadsheetIDByName(GSheetInfo.GsheetName).c_str());
     } else {
         SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
     }
@@ -328,6 +328,7 @@ void initServerRoutes() {
     server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
     server.on("/GSHEET", HTTP_GET, handleGSHEET);
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
+    server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
     server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
     server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
     server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
@@ -661,8 +662,6 @@ void loop() {
         OldTime[0] = second();
 
 
-        SerialPrint("gsheet loop: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-        SerialPrint("gsheet loop: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
       
         if (I.LAST_ESPNOW_SERVER_TIME > 0) {
             I.LAST_ESPNOW_SERVER_TIME = 0;

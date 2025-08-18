@@ -601,6 +601,8 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   going to show rowsxcols flagged sensors (so up to rows*cols)
   starting at X,Y
 */
+
+  int16_t init_X = X;
   if (rows==0) rows = 2;
   if (cols==0) cols = 6;
   
@@ -687,7 +689,7 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
       X=X+boxsize_x+gapx;
     }
     Y+=boxsize_y + gapy;
-    X=0;
+    X=init_X;
   }
 
 

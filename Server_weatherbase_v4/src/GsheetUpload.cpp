@@ -65,11 +65,11 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     int deleteCount = 0;
     const int MAX_DELETE_ATTEMPTS = 100; // Prevent infinite loop
     
-    fileID = file_findSpreadsheetIDByName(filename);
+    snprintf(fileID,64,"%s",file_findSpreadsheetIDByName(filename).c_str());
     while (fileID[0]!='\0' && deleteCount < MAX_DELETE_ATTEMPTS) {
         success = file_deleteSpreadsheetByID(fileID);
         deleteCount++;
-        fileID = file_findSpreadsheetIDByName(filename);
+        snprintf(fileID,64,"%s",file_findSpreadsheetIDByName(filename).c_str());
     }
     
     if (deleteCount >= MAX_DELETE_ATTEMPTS) {
@@ -84,11 +84,11 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
   }
   
   
-  char* file_findSpreadsheetIDByName(const char* sheetname) {
+  String file_findSpreadsheetIDByName(const char* sheetname) {
     
         // Searches all files for the matching filename and returns the file ID if found
         // Returns empty string if not found
-        SerialPrint("SearchForIDByFilename: " + sheetname + " ");
+        SerialPrint("SearchForIDByFilename: " + String(sheetname) + " ");
         FirebaseJson result;
         
         String thisFileID = "";
@@ -152,7 +152,8 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: file not found");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_findSpreadsheetIDByName");
         GSheetInfo.lastErrorTime = I.currentTime;
-        SerialPrint(" ERROR: file_findSpreadsheetIDByName did not find " + sheetname,true);
+        storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_FIND,true);
+        SerialPrint(" ERROR: file_findSpreadsheetIDByName did not find " + String(sheetname),true);
         return "";
 }
   
@@ -161,16 +162,13 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     String outcome = "";
     memset(fileID, 0, 64);
     if (checkFile) {
-        String foundFileID = file_findSpreadsheetIDByName(sheetname);
+        String foundFileID = file_findSpreadsheetIDByName(sheetname.c_str());
         if (foundFileID.length() > 0) {
             strcpy(fileID, foundFileID.c_str());
             return 2; //file already exists
         } else {
-            snprintf(GSheetInfo.lastGsheetResponse,100,"Tried to create a file but it already exists!");
-            snprintf(GSheetInfo.lastGsheetFunction,30,"file_createSpreadsheet");
-            GSheetInfo.lastErrorTime = I.currentTime;
-            SerialPrint(" ERROR: failed to create spreadsheet",true);
-            return 0;
+            //do nothing, the file does not exist, so we will create it
+            
         }
     } 
   
@@ -276,6 +274,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         if (success==0 || strlen(GSheetInfo.GsheetID)==0 || strncmp(GSheetInfo.GsheetID,"ERROR",5)==0) {
             snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR:%s",GSheetInfo.GsheetID);
             snprintf(GSheetInfo.lastGsheetFunction,30,"file_createSpreadsheet");
+            storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_CREATE,true);
             GSheetInfo.lastErrorTime = I.currentTime;
             SerialPrint("ERROR: failed to create spreadsheet",true);
             return false;
@@ -284,10 +283,11 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         if (!file_createHeaders(GSheetInfo.GsheetID,"DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement")) {
                     snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
                     snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorDataFunction");
+                    storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_HEADERS,true);
                     GSheetInfo.lastErrorTime = I.currentTime;
                     SerialPrint(" ERROR: failed to create headers",true);
                     return false;
-                }
+        }
     }
     
     byte rowInd = 0;
@@ -298,7 +298,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         SnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
         if (sensor && sensor->IsSet) {
             DevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
-            if (device && device->IsSet) { // Add safety check
+            if (device && device->IsSet && sensor->lastCloudUploadTime < I.currentTime-(GSheetInfo.uploadGsheetIntervalMinutes*60)) { //only upload if the last upload was more than the interval minutes ago
                 valueRange.add("majorDimension", "ROWS");
                 valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC); //DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement
                 valueRange.set("values/[" + (String) rowInd + "]/[1]", IPToString(device->IP));
@@ -309,6 +309,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
                 valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) dateify(sensor->timeLogged,"mm/dd/yy hh:nn:ss")); //use timelogged, since some sensors have no clock
                 valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) bitRead(sensor->Flags,0));
                 valueRange.set("values/[" + (String) rowInd + "]/[8]", (String) sensor->snsValue);
+                sensor->lastCloudUploadTime = I.currentTime;
                 rowInd++;
             }
         }
@@ -323,19 +324,12 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     response.clear();
     
     if (success) {
-        SerialPrint("Uploaded " + (String) rowInd + " rows, now updating sensor upload times",true);
-        // Update sensor upload times
-        currentPosition = 0;
-        while (Sensors.cycleSensors(&currentPosition,0)) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
-            if (sensor && sensor->IsSet) {
-                sensor->lastCloudUploadTime = I.currentTime;
-            }
-        }
+        SerialPrint("Uploaded " + (String) rowInd + " rows",true);
         GSheetInfo.lastGsheetUploadTime = I.currentTime; 
     } else {
         snprintf(GSheetInfo.lastGsheetResponse,100,"UPDATE ERROR: %s",GSheetInfo.GsheetID);
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorData");
+        storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_UPLOAD,true);
         GSheetInfo.lastErrorTime = I.currentTime;
         SerialPrint(" ERROR: failed to upload data",true);
         return false;

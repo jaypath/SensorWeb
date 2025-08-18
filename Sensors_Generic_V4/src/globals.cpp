@@ -1,5 +1,5 @@
-#include <globals.hpp>
-#include "Devices.hpp"
+#include "../../GLOBAL_LIBRARY/globals.hpp"
+#include "../../GLOBAL_LIBRARY/Devices.hpp"
 
 
 #ifdef _USEWEATHER
@@ -11,10 +11,7 @@ WeatherInfoOptimized WeatherData;  // Optimized weather class
 //initialize variables
 
 //screen
-STRUCT_CORE I; //here, I is of a struct with core variables
-
-
-STRUCT_PrefsH Prefs;
+// Globals now provided by GLOBAL_LIBRARY/globals.cpp
 
 #ifdef _USETFT
 LGFX tft;            // declare display variable

@@ -6,7 +6,13 @@
 #include <header.hpp>
 #include <sensors.hpp>
 #include <server.hpp>
-#include <timesetup.hpp>
+#include "../../GLOBAL_LIBRARY/globals.hpp"
+#include "../../GLOBAL_LIBRARY/Devices.hpp"
+#include "../../GLOBAL_LIBRARY/utility.hpp"
+#include "../../GLOBAL_LIBRARY/timesetup.hpp"
+#if defined(_USE32)
+#include "../../GLOBAL_LIBRARY/AddESPNOW.hpp"
+#endif
 
 
 #ifdef _USE8266 
@@ -157,8 +163,7 @@ void setup()
     Serial.println("Begin Setup");
   #endif
 
-  WIFI_INFO.status=0;
-  WIFI_INFO.MYIP[0]=0; //set my ip to zero to setup wifi automatically, or to assigned IP if desired.
+  Prefs.status=0;
   connectWiFi(); //this is done async if 32, so can continue processing
 
 
@@ -169,20 +174,9 @@ void setup()
   #endif
  
 
-
-
-
-  assignIP(SERVERIP[0].IP,192,168,68,93);
-  assignIP(SERVERIP[1].IP ,192,168,68,100);
-  if (KiyaanServer)  assignIP(SERVERIP[2].IP,192,168,68,106);
-  else assignIP(SERVERIP[2].IP,0,0,0,0);
-
-#ifdef _DEBUG
-    Serial.println("servers set");
-  #endif
-
-
-
+#if defined(_USE32)
+  initESPNOW();
+#endif
   
 
 #ifdef _USESSD1306
@@ -271,7 +265,7 @@ void setup()
 
   #ifdef _USE32
   //by now wifi should have connected, but wait for it if not
-  if (WIFI_INFO.status==0)  do {
+  if (Prefs.status==0)  do {
     #ifdef _USESSD1306
     oled.print(".");
     #endif
@@ -280,7 +274,7 @@ void setup()
     #endif
     delay(200);
 
-  } while (WIFI_INFO.status==0);
+  } while (Prefs.status==0);
   #endif
 
 
@@ -311,7 +305,7 @@ void setup()
 
 //set time
 timeClient.begin(); //time is in UTC
-updateTime(10,250); //check if DST and set time to EST
+setupTime(); //initialize time and DST (shared)
 
 ALIVESINCE = now();
 OldTime[0] = 100;//some arbitrary seconds that will trigger a second update
@@ -547,7 +541,7 @@ OldTime[3] = day();
 
 void loop() {
 
-  updateTime(1,0);
+  updateTime();
   
   ArduinoOTA.handle();
   server.handleClient();
@@ -633,8 +627,7 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
   
   if (OldTime[1] != minute()) {
     
-    if (WIFI_INFO.status==0) WiFi.reconnect(); //try restarting wifi
-    if (WIFI_INFO.MYIP[3] != WiFi.localIP()[3]) assignIP(WIFI_INFO.MYIP,WiFi.localIP()); //update if wifi changed
+    if (Prefs.status==0) WiFi.reconnect(); //try restarting wifi
 
     OldTime[1] = minute();
 
