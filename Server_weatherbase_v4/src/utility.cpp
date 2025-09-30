@@ -1,9 +1,80 @@
 #include "utility.hpp"
-
+#include "BootSecure.hpp"
 
 
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+
+void initScreenFlags(bool completeInit) {
+  if (completeInit) {
+
+      I.rebootsSinceLast=0;
+      I.wifiFailCount=0;
+      I.currentTime=0;
+      I.CLOCK_Y = 105;
+      I.HEADER_Y = 30;
+      
+      I.cycleHeaderMinutes = 30; //how many seconds to show header?
+      I.cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
+      I.cycleWeatherMinutes = 10; //how many minutes to show weather values?
+      I.cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      I.cycleFlagSeconds = 3; //how many seconds to show flag values?
+      I.IntervalHourlyWeather = 2; //hours between daily weather display
+      I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
+
+      I.isExpired = false; //are any critical sensors expired?
+      I.wasFlagged=false;
+      I.isHeat=false; //first bit is heat on, bits 1-6 are zones
+      I.isAC=false; //first bit is compressor on, bits 1-6 are zones
+      I.isFan=false; //first bit is fan on, bits 1-6 are zones
+      I.wasHeat=false; //first bit is heat on, bits 1-6 are zones
+      I.wasAC=false; //first bit is compressor on, bits 1-6 are zones
+      I.wasFan=false; //first bit is fan on, bits 1-6 are zones
+
+      I.isHot=0;
+      I.isCold=0;
+      I.isSoilDry=0;
+      I.isLeak=0;
+      I.localWeatherIndex=255; //index of outside sensor
+      I.localBatteryIndex=255;
+
+      I.showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
+
+      I.currentTemp-127;
+      I.Tmax=-127;
+      I.Tmin=127;
+      I.lastErrorTime=0;
+  }
+  I.ScreenNum = 0;
+  I.oldScreenNum = 0;
+  I.lastStoreCoreDataTime = 0;
+
+  I.lastHeaderTime=0; //last time header was drawn
+  I.lastWeatherTime=0; //last time weather was drawn
+  I.lastCurrentConditionTime=0; //last time current condition was drawn
+  I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
+  I.lastFutureConditionTime=0; //last time future condition was drawn
+  I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
+  
+  I.DSTOFFSET = 0;
+  I.GLOBAL_TIMEZONE_OFFSET = -18000;
+  
+  I.localBatteryLevel=0;
+
+  I.lastESPNOW_TIME=0;
+  I.lastESPNOW_STATE=0;
+  I.lastResetTime=I.currentTime;
+  I.ALIVESINCE=I.currentTime;
+  I.wifiFailCount=0;
+  I.ScreenNum = 0;
+  I.isFlagged = false;
+
+  I.isUpToDate = false;
+
+  if (completeInit) {
+      storeScreenInfoSD();
+  }
+}
 
 
 bool SerialPrint(String S,bool newline) {
@@ -181,6 +252,7 @@ bool isSensorInit(int i) {
 }
 
 byte checkExpiration(int i, time_t t, bool onlyCritical) {
+  //i is -1 for all sensors, or the specific sensor index. Checks expiration of sensors, not devices.
   return Sensors.checkExpiration(i, t, onlyCritical);
 }
 
@@ -309,11 +381,24 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
     if (writeToSD) writeErrorToSD();
 }
 
+
+void storeCoreData() {
+  //force core data to be stored to SD
+  I.isUpToDate = true;
+  Prefs.isUpToDate = true;
+  BootSecure::setPrefs();
+  storeScreenInfoSD();
+}
+
+
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   storeError(E);
   I.resetInfo = R;
   I.lastResetTime = I.currentTime;
   I.rebootsSinceLast++;
+
+
+  storeCoreData();
   
   if (doreboot) {
     #ifdef HAS_TFT
@@ -338,7 +423,7 @@ String lastReset2String(bool addtime) {
     case RESET_OTA: output = "OTA"; break;
     case RESET_WIFI: output = "WiFi"; break;
     case RESET_TIME: output = "Time"; break;
-    case RESET_UNKNOWN: output = "Unknown"; break;
+    case RESET_UNKNOWN: output = "Unexpected Error"; break;
     default: output = "Unknown"; break;
   }
   
@@ -347,6 +432,20 @@ String lastReset2String(bool addtime) {
   }
   
   return output;
+}
+
+// Helper function to get detailed reboot information for debugging
+String getRebootDebugInfo() {
+  String info = "Reboot Debug Info:\n";
+  info += "Reset Cause: " + lastReset2String(false) + "\n";
+  info += "Last Reset Time: " + String(I.lastResetTime ? dateify(I.lastResetTime) : "Never") + "\n";
+  info += "ALIVESINCE: " + String(I.ALIVESINCE ? dateify(I.ALIVESINCE) : "Never") + "\n";
+  info += "Current Time: " + String(I.currentTime ? dateify(I.currentTime) : "Not Set") + "\n";
+  if (I.lastResetTime != 0 && I.ALIVESINCE != 0 && I.currentTime != 0) {
+    time_t timeDiff = I.currentTime - I.ALIVESINCE;
+    info += "Time Difference: " + String(timeDiff) + " seconds\n";
+  }
+  return info;
 }
 
 // --- IP address conversion utilities ---

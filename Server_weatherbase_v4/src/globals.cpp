@@ -8,6 +8,7 @@ WeatherInfoOptimized WeatherData;  // Optimized weather class
 
 #endif
 
+
 //initialize variables
 
 //screen

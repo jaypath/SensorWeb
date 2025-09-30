@@ -6,6 +6,7 @@
 #include <header.hpp>
 #include <sensors.hpp>
 #include <server.hpp>
+#include "BootSecure.hpp"
 #include "../../GLOBAL_LIBRARY/globals.hpp"
 #include "../../GLOBAL_LIBRARY/Devices.hpp"
 #include "../../GLOBAL_LIBRARY/utility.hpp"
@@ -161,6 +162,23 @@ void setup()
   #ifdef _DEBUG
     Serial.begin(115200);
     Serial.println("Begin Setup");
+  #endif
+
+  #ifdef _USE32
+    // Load preferences securely from NVS (ESP32 only)
+    BootSecure bs;
+    int8_t boot_status = bs.setup();
+    #ifdef _DEBUG
+      Serial.printf("BootSecure setup status: %d\n", boot_status);
+    #endif
+
+    // Copy persisted per-sensor config into DeviceStore metadata (intervals are used at runtime)
+    for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+      SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+      if (!s) continue;
+      s->SendingInt = Prefs.SNS_INTERVAL_SEND[si];
+      // Polling and limits are used by ReadData/checks; keep in Prefs and reference via indices
+    }
   #endif
 
   Prefs.status=0;
@@ -422,7 +440,6 @@ OldTime[3] = day();
 
 
     //init globals
-      initSensor(-256);
 
     #ifdef _USEBARPRED
       for (byte ii=0;ii<24;ii++) {
@@ -578,14 +595,16 @@ void loop() {
     */
 
       //read and send everything now if sleep was long enough
-        for (byte k=0;k<SENSORNUM;k++) {
-          
+        for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+          SensorVal temp{};
+          if (!buildSensorValFromDeviceStore(si, &temp)) continue;
                    #ifdef _DEBUG
-Serial.printf( "Going to attempt read and write sensor %u\n", k );
+          Serial.printf( "Going to attempt read and write sensor index %d (type %u id %u)\n", si, temp.snsType, temp.snsID );
        #endif
-        
-          ReadData(&Sensors[k]); //read value 
-          SendData(&Sensors[k]); //send value
+          ReadData(&temp);
+          applySensorValToDeviceStore(si, &temp);
+          SendData(&temp);
+          applySensorValToDeviceStore(si, &temp);
         }
 
                    #ifdef _DEBUG
@@ -611,16 +630,18 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
       Serial.printf( ".");
     #endif
 
-    for (byte k=0;k<SENSORNUM;k++) {
+    for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+      SensorVal temp{};
+      if (!buildSensorValFromDeviceStore(si, &temp)) continue;
       bool goodread = false;
 
-      if (Sensors[k].LastReadTime==0 || Sensors[k].LastReadTime>t || Sensors[k].LastReadTime + Sensors[k].PollingInt < t || t- Sensors[k].LastReadTime >60*60*24 ) goodread = ReadData(&Sensors[k]); //read value if it's time or if the read time is more than 24 hours from now in either direction
+      if (temp.LastReadTime==0 || temp.LastReadTime>t || temp.LastReadTime + temp.PollingInt < t || t- temp.LastReadTime >60*60*24 ) goodread = ReadData(&temp);
       
       if (goodread == true) {
-        if (Sensors[k].LastSendTime ==0 || Sensors[k].LastSendTime>t || Sensors[k].LastSendTime + Sensors[k].SendingInt < t || bitRead(Sensors[k].Flags,6) /* isflagged changed since last read*/ || t - Sensors[k].LastSendTime >60*60*24) SendData(&Sensors[k]); //note that I also send result if flagged status changed or if it's been 24 hours
+        if (temp.LastSendTime ==0 || temp.LastSendTime>t || temp.LastSendTime + temp.SendingInt < t || bitRead(temp.Flags,6) /* isflagged changed since last read*/ || t - temp.LastSendTime >60*60*24) SendData(&temp);
       }
 
-
+      applySensorValToDeviceStore(si, &temp);
     }
 
   }
@@ -652,8 +673,7 @@ Serial.printf( "Going to attempt read and write sensor %u\n", k );
   
     checkDST();
 
-    //expire 24 hour old readings
-    initSensor(24*60);
+    //expire 24 hour old readings handled via DeviceStore timestamps
 
     OldTime[2] = hour();
 

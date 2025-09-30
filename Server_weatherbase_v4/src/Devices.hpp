@@ -34,6 +34,7 @@ struct SnsType {
     double snsValue;        // Current sensor value
     uint32_t timeRead;      // Time sensor was read
     uint32_t timeLogged;    // Time sensor data was logged
+    uint32_t timeWritten;     // Time sensor data was written to SD card
     uint8_t Flags;          // Sensor flags... 
     uint32_t SendingInt;    // Sending interval
     uint8_t IsSet;          // Whether this sensor is initialized
@@ -72,6 +73,7 @@ public:
     void initDevice(int16_t devindex);
     bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
+    uint16_t isSensorIndexInvalid(int16_t index);
     int16_t addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                      uint32_t sendingInt, uint8_t flags, const char* devName = "");
@@ -88,6 +90,7 @@ public:
     byte checkExpiration(int16_t index, time_t currentTime, bool onlyCritical);
     uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0);
     bool isSensorOfType(int16_t index, String type);
+    uint8_t getSensorFlag(int16_t index);
 
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
@@ -95,10 +98,15 @@ public:
     uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
     int16_t findSnsOfType(uint8_t snstype, bool newest = false);
     
+    #ifdef _USESDCARD
     // Data storage
-    uint8_t storeAllSensors(uint8_t intervalMinutes);
-    bool readAllSensors();
+    bool setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten=0);
+    uint8_t storeDevicesSensorsArrayToSD(uint8_t intervalMinutes);
+    bool readDevicesSensorsArrayFromSD();
+    uint8_t storeAllSensorsSD();
+    #endif
     
+
     // Helper functions for expiration checking
     byte checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical);
     byte checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical);

@@ -14,9 +14,11 @@ bool SerialPrint(String S, bool newline=false);
 
 // Legacy compatibility functions - these are now methods of the Devices_Sensors class
 // but we keep them as standalone functions for backward compatibility
-
+void initScreenFlags(bool completeInit = false);
+void storeCoreData();
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
 String lastReset2String(bool addtime=true);
+String getRebootDebugInfo();
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot=true);
 int inArrayBytes(byte arr[], int N, byte value,bool returncount=false);
 int inArray(int arr[], int N, int value,bool returncount=false);

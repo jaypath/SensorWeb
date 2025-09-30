@@ -25,6 +25,7 @@
   #include <WiFi.h> //esp32
   #include <WebServer.h>
   #include <HTTPClient.h>
+  #include "BootSecure.hpp"
   extern WebServer server;
   extern WiFiClient wfclient;
   extern HTTPClient http;
@@ -69,7 +70,7 @@ void handleNEXT(void);
 void handleLAST(void);
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 char* strPad(char* str, char* pad, byte L);
-bool SendData(struct SensorVal*);
+bool SendData(struct SnsType*);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 void connectWiFi();

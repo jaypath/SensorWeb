@@ -1,11 +1,141 @@
-#include <SDCard.hpp>
-#include <globals.hpp>
+#include "globals.hpp"
+
+#ifdef _USESDCARD
+
 #include <SD.h>
 #include <cstdlib>
+#include "SDCard.hpp"
 #include "utility.hpp"
 #include "Devices.hpp"
 #include "GsheetUpload.hpp"
 
+// ESP32 VFS timestamp functions
+#ifdef ESP32
+#include <sys/stat.h>
+#include <sys/time.h>
+#endif
+
+
+
+// Function to maintain a timestamp index file
+void updateTimestampIndex(const char* filename) {
+    String indexFilename = "/Data/FileTimestamps.dat";
+    String newEntry = String(filename) + "," + String(I.currentTime) + "\n";
+    
+    // First, check if the file already exists in the index
+    File indexFile = SD.open(indexFilename, FILE_READ);
+    if (indexFile) {
+        String content = "";
+        while (indexFile.available()) {
+            content += indexFile.readString();
+        }
+        indexFile.close();
+        
+        // Check if filename already exists in the index
+        bool fileExists = false;
+        String newContent = "";
+        int lineStart = 0;
+        int lineEnd = content.indexOf('\n');
+        
+        while (lineEnd >= 0) {
+            String line = content.substring(lineStart, lineEnd);
+            line.trim();
+            
+            if (line.length() > 0) {
+                int commaPos = line.indexOf(',');
+                if (commaPos > 0) {
+                    String fileInIndex = line.substring(0, commaPos);
+                    if (fileInIndex == String(filename)) {
+                        // File exists, update the timestamp
+                        newContent += newEntry;
+                        fileExists = true;
+                    } else {
+                        // Keep the existing line unchanged
+                        newContent += line + "\n";
+                    }
+                }
+            }
+            
+            lineStart = lineEnd + 1;
+            lineEnd = content.indexOf('\n', lineStart);
+        }
+        
+        // If file wasn't found, add it as a new entry
+        if (!fileExists) {
+            newContent += newEntry;
+        }
+        
+        // Write the updated content back to the index file
+        File newIndexFile = SD.open(indexFilename, FILE_WRITE);
+        if (newIndexFile) {
+            newIndexFile.print(newContent);
+            newIndexFile.close();
+            SerialPrint("Updated timestamp index for: " + String(filename) + " at " + dateify(I.currentTime), true);
+        } else {
+            SerialPrint("Failed to update timestamp index for: " + String(filename), true);
+        }
+    } else {
+        // Index file doesn't exist, create it with the new entry
+        File newIndexFile = SD.open(indexFilename, FILE_WRITE);
+        if (newIndexFile) {
+            newIndexFile.print(newEntry);
+            newIndexFile.close();
+            SerialPrint("Created timestamp index with: " + String(filename) + " at " + dateify(I.currentTime), true);
+        } else {
+            SerialPrint("Failed to create timestamp index for: " + String(filename), true);
+        }
+    }
+}
+
+// Function to remove a file from the timestamp index
+void removeFromTimestampIndex(const char* filename) {
+    String indexFilename = "/Data/FileTimestamps.dat";
+    
+    // Read the current index file
+    File indexFile = SD.open(indexFilename, FILE_READ);
+    if (!indexFile) {
+        // Index file doesn't exist, nothing to remove
+        return;
+    }
+    
+    String content = "";
+    while (indexFile.available()) {
+        content += indexFile.readString();
+    }
+    indexFile.close();
+    
+    // Parse and filter out the deleted file
+    String newContent = "";
+    int lineStart = 0;
+    int lineEnd = content.indexOf('\n');
+    
+    while (lineEnd >= 0) {
+        String line = content.substring(lineStart, lineEnd);
+        line.trim();
+        
+        if (line.length() > 0) {
+            int commaPos = line.indexOf(',');
+            if (commaPos > 0) {
+                String fileInIndex = line.substring(0, commaPos);
+                // Only keep lines that don't match the deleted filename
+                if (fileInIndex != String(filename)) {
+                    newContent += line + "\n";
+                }
+            }
+        }
+        
+        lineStart = lineEnd + 1;
+        lineEnd = content.indexOf('\n', lineStart);
+    }
+    
+    // Write the filtered content back to the index file
+    File newIndexFile = SD.open(indexFilename, FILE_WRITE);
+    if (newIndexFile) {
+        newIndexFile.print(newContent);
+        newIndexFile.close();
+        SerialPrint("Removed from timestamp index: " + String(filename), true);
+    }
+}
 
 #ifdef _USEWEATHER
 #include "Weather_Optimized.hpp"
@@ -23,6 +153,10 @@ bool storeWeatherDataSD() {
 
   f.write((uint8_t*)&WeatherData, sizeof(WeatherData));
   f.close();
+  
+  // Update the timestamp index file
+  updateTimestampIndex(filename.c_str());
+  
   return true;
 }
 
@@ -37,7 +171,7 @@ bool readWeatherDataSD() {
   if (f.size() != sizeof(WeatherData)) {
     storeError("readWeatherDataSD: File size mismatch",ERROR_SD_WEATHERDATASIZE);
     f.close();
-
+    SerialPrint("readWeatherDataSD: File size mismatch, deleting file: " + filename,true);
     deleteFiles("WeatherData.dat","/Data");
     return false;
   }
@@ -64,7 +198,7 @@ String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sens
 }
 
 // Helper function to load sensor data from file with optional time filtering
-int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,uint32_t* t, double* v, uint32_t timeStart, uint32_t timeEnd, uint16_t Npts) {
+int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,uint32_t* t, double* v, uint8_t f[], uint32_t timeStart, uint32_t timeEnd, uint16_t Npts) {
   //returns the number of datapoints found
     String filename = createSensorFilename(deviceMAC, sensorType, sensorID);
     //SerialPrint("loadSensorDataFromFile: opening sensor file: " + filename,true);  
@@ -86,9 +220,9 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
 
 
     uint32_t fileSize = file.size();
-    if (fileSize != sizeof(SensorDataPoint)) {
-      SerialPrint("loadSensorDataFromFile: File size mismatch: " + filename,true);
-      storeError("loadSensorDataFromFile: File size mismatch",ERROR_SD_RETRIEVEDATAPARMS);
+    if (fileSize % sizeof(SensorDataPoint) != 0) {
+      SerialPrint("loadSensorDataFromFile: File size is not a multiple of SensorDataPoint size: " + filename + " (size: " + String(fileSize) + ", expected multiple of " + String(sizeof(SensorDataPoint)) + ")",true);
+      storeError("loadSensorDataFromFile: File size is not a multiple of SensorDataPoint size",ERROR_SD_RETRIEVEDATAPARMS);
       file.close();
       deleteFiles(filename.c_str(),"/Data");
       return -2; //wrong file size
@@ -148,7 +282,8 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
         if (dataPoint.timeLogged >= timeStart) {
             t[j] = dataPoint.timeLogged;
             v[j] = dataPoint.snsValue;
-            //SerialPrint("loadSensorDataFromFile: read data point " + (String) j + " of " + (String) pointsToRead + " from " + filename + " at time " + (String) dataPoint.timeLogged + " with value " + (String) dataPoint.snsValue,true);
+            f[j] = dataPoint.Flags;
+            
         } else break; //no more valid data       
       
     }
@@ -158,7 +293,7 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
     return j;
 }
 
-int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
+int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
 
   if (windowSize == 0) {
     SerialPrint("loadAverageSensorDataFromFile: windowSize is 0",true);
@@ -238,6 +373,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
     //SerialPrint("loadAverageSensorDataFromFile: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd,true);
     uint16_t n=0;
     double avgVal=0;
+    uint8_t avgFlag=0;
     bool isgood = true;
     
     //load data from the file if it is within the window size time range
@@ -271,6 +407,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
       if (dataPoint.timeLogged > windowEnd) continue; //without rewinding, so we check this datapoint again
       if (dataPoint.timeLogged >= windowStart) {
         avgVal+= dataPoint.snsValue;
+        if (bitRead(dataPoint.Flags,0)) avgFlag=1;
         n++;
       } else {
         isgood = true; //we have reached the end of the window
@@ -283,6 +420,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
 
     if (n>0) {
       averagedValues[index] = avgVal/n;
+      averagedFlags[index] = avgFlag;
       averagedTimes[index++] = windowStart + (windowEnd-windowStart)/2;
       //SerialPrint("loadAverageSensorDataFromFile: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd + " with avgVal = " + (String) avgVal + " and avgTime = " + (String) averagedTimes[i],true);
     }
@@ -310,6 +448,7 @@ union ScreenInfoBytes {
 };
 
 // New functions for Devices_Sensors class
+
 bool storeDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
     File f = SD.open(filename, FILE_WRITE); //overwrite the file
@@ -322,6 +461,11 @@ bool storeDevicesSensorsSD() {
     // Write the entire Devices_Sensors object
     f.write((uint8_t*)&Sensors, sizeof(Devices_Sensors));
     f.close();
+    
+    
+    // Update the timestamp index file
+    updateTimestampIndex(filename.c_str());
+    
     return true;
 }
 
@@ -337,6 +481,7 @@ bool readDevicesSensorsSD() {
 
     if (f.size() != sizeof(Devices_Sensors)) {
         storeError("readDevicesSensorsSD: File size mismatch",ERROR_SD_DEVICESENSORSSIZE);
+        SerialPrint("readDevicesSensorsSD: File size mismatch, deleting file: " + filename,true);
         f.close();
         deleteFiles("DevicesSensors.dat","/Data");
         return false;
@@ -365,6 +510,9 @@ bool writeErrorToSD() {
       return false;
     }
     f.close();
+    
+    // Update the timestamp index file
+    updateTimestampIndex(filename.c_str());
     
     return true;
 }
@@ -419,12 +567,20 @@ bool storeScreenInfoSD() {
         f.close();
         return false;
     }
+    I.isUpToDate = true;
+    I.lastStoreCoreDataTime = I.currentTime;
+
     union ScreenInfoBytes D; 
     D.screendata = I;
 
     f.write(D.bytes,sizeof(STRUCT_CORE));
 
     f.close();
+    
+    
+    // Update the timestamp index file
+    updateTimestampIndex(filename.c_str());
+    
     return true;
     
 }
@@ -454,7 +610,7 @@ bool readScreenInfoSD() //read last screenInfo
 
         f.close();
 
-        deleteFiles("ScreenFlags.dat","/Data");
+        deleteCoreStruct();
 
         return false;
     }
@@ -473,15 +629,8 @@ bool readScreenInfoSD() //read last screenInfo
 // New functions for individual sensor data storage using Devices_Sensors class
 //wrapper, if device infor was provided, use it to find the sensor index
 bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID) {
-  // Find the device and sensor indices
-  int16_t deviceIndex = Sensors.findDevice(deviceMAC);
-  if (deviceIndex < 0) {
-      storeError("storeSensorDataSD: Device not found", ERROR_SD_DEVICESENSORSNODEV);
-      return false;
-  }
   
-  uint64_t deviceMACValue = Sensors.getDeviceMACByDevIndex(deviceIndex);
-  int16_t sensorIndex = Sensors.findSensor(deviceMACValue, sensorType, sensorID);
+  int16_t sensorIndex = Sensors.findSensor(deviceMAC, sensorType, sensorID);
   if (sensorIndex < 0) {
       storeError("storeSensorDataSD: Sensor not found", ERROR_SD_DEVICESENSORSNOSNS);
       return false;
@@ -492,32 +641,48 @@ bool storeSensorDataSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID)
 
 
 bool storeSensorDataSD(int16_t sensorIndex) {
-    if (sensorIndex < 0 || sensorIndex >= NUMSENSORS) {
-        SerialPrint((String) "storeSensorDataSD: sensorIndex out of bounds: " + (String) sensorIndex + "\n");
-        storeError("storeSensorDataSD: sensorIndex out of bounds", ERROR_SD_RETRIEVEDATAPARMS);
-        return false;
+  uint8_t invalidIndex = Sensors.isSensorIndexInvalid(sensorIndex);
+  if (invalidIndex != 0) {
+    if (invalidIndex == 1) {
+      SerialPrint((String) "storeSensorDataSD: sensor Index out of bounds: " + (String) sensorIndex + "\n");
+      storeError("storeSensorDataSD: sensorIndex out of bounds", ERROR_SD_RETRIEVEDATAPARMS);
+    } else if (invalidIndex == 2) {
+      SerialPrint((String) "storeSensorDataSD: sensor Index not set: " + (String) sensorIndex + "\n");
+      storeError("storeSensorDataSD: sensorIndex not set", ERROR_SD_RETRIEVEDATAPARMS);     
+    } else if (invalidIndex == 3) {
+      SerialPrint((String) "storeSensorDataSD: sensor Index expired: " + (String) sensorIndex + "\n");
+      storeError("storeSensorDataSD: sensorIndex expired", ERROR_SD_RETRIEVEDATAPARMS);
     }
-    
-    SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-    if (!sensor) {
-        SerialPrint((String) "storeSensorDataSD: sensor not found: " + (String) sensorIndex + "\n");
-        storeError("storeSensorDataSD: sensor not found", ERROR_SD_RETRIEVEDATAPARMS);
-        return false;
-    }
-    
-    // Create filename using helper function
-    String filename = createSensorFilename(Sensors.getDeviceMACBySnsIndex(sensorIndex), sensor->snsType, sensor->snsID);
-    
-    // Open file for appending
-    File file = SD.open(filename, FILE_APPEND); //append to the file
-    if (!file) {
-        SerialPrint((String) "Failed to open file " + filename + "\n");
-        storeError(((String) "Failed to open sensor data file " + filename).c_str(),ERROR_SD_FILEWRITE,false);
-        return false;
-    }
+    return false;
+  }
+
+  SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  if (!sensor) {
+      SerialPrint((String) "storeSensorDataSD: sensor not found: " + (String) sensorIndex + "\n");
+      storeError("storeSensorDataSD: sensor not found", ERROR_SD_RETRIEVEDATAPARMS);
+      return false;
+  }
+  
+  // Create filename using helper function
+  String filename = createSensorFilename(Sensors.getDeviceMACBySnsIndex(sensorIndex), sensor->snsType, sensor->snsID);
+  
+  // Open file for appending
+  File file = SD.open(filename, FILE_APPEND); //append to the file
+  if (!file) {
+      SerialPrint((String) "Failed to open file " + filename + "\n");
+      storeError(((String) "Failed to open sensor data file " + filename).c_str(),ERROR_SD_FILEWRITE,false);
+      return false;
+  }
     
     // Create and populate SensorDataPoint struct
     SensorDataPoint dataPoint;
+    if (Sensors.setWriteTimestamp(sensorIndex)==false) {
+      SerialPrint((String) "storeSensorDataSD: setWriteTimestamp failed for sensor index " + (String) sensorIndex + "\n");
+      storeError("storeSensorDataSD: setWriteTimestamp failed", ERROR_SD_DEVICESENSORSNOSNS);
+      file.close();
+      return false;
+    }
+
     dataPoint.deviceMAC = Sensors.getDeviceMACBySnsIndex(sensorIndex);
     dataPoint.deviceIndex = sensor->deviceIndex;
     dataPoint.snsType = sensor->snsType;
@@ -527,6 +692,7 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     dataPoint.timeLogged = sensor->timeLogged;
     dataPoint.Flags = sensor->Flags;
     dataPoint.SendingInt = sensor->SendingInt;
+    dataPoint.fileWriteTimestamp = sensor->timeWritten;  // Set when data is written to file
     strncpy(dataPoint.snsName, sensor->snsName, sizeof(dataPoint.snsName));
     dataPoint.snsName[sizeof(dataPoint.snsName) - 1] = '\0'; // Ensure null termination
     
@@ -534,65 +700,18 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     file.write((uint8_t*)&dataPoint, sizeof(SensorDataPoint));
     
     file.close();
+    
+    
+    // Update the timestamp index file
+    updateTimestampIndex(filename.c_str());
+    
     //SerialPrint((String) "StoreSensorDataSD: Stored sensor data from " + (String) sensor->snsName + " with sensor index " + (String) sensorIndex + " and associated device MAC " + (String) Sensors.getDeviceMACBySnsIndex(sensorIndex) + " to " +  filename + " with time " + (String) sensor->timeLogged,true);
     return true;
 }
 
-bool readSensorDataSD(int16_t sensorIndex) {
-    if (sensorIndex < 0 || sensorIndex >= NUMSENSORS) {
-        return false;
-    }
-    
-    SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-    if (!sensor) {
-        return false;
-    }
-    
-    uint64_t deviceMAC = Sensors.getDeviceMACBySnsIndex(sensorIndex);
-
-    // Create filename using helper function
-    String filename = createSensorFilename(deviceMAC, sensor->snsType, sensor->snsID);
-    
-    // Open file for reading
-    File file = SD.open(filename, FILE_READ);
-    if (!file) {
-        SerialPrint( (String) "Failed to open file for reading: " + filename + "\n");
-        storeError(((String) "Failed to open " + filename).c_str(),ERROR_SD_FILEREAD);
-        return false;
-    }
-    
-    // Read sensor data in optimized format
-    // Format: deviceMAC(8) + deviceIndex(2) + snsType(1) + snsID(1) + snsValue(8) + timeRead(4) + timeLogged(4) + Flags(1) + SendingInt(4) + name(30) 
-    if (file.available() >= sizeof(SensorDataPoint)) {
-        SensorDataPoint dataPoint;
-        if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) == sizeof(SensorDataPoint)) {
-            sensor->deviceIndex = dataPoint.deviceIndex;
-            sensor->snsType = dataPoint.snsType;
-            sensor->snsID = dataPoint.snsID;
-            sensor->snsValue = dataPoint.snsValue;
-            sensor->timeRead = dataPoint.timeRead;
-            sensor->timeLogged = dataPoint.timeLogged;
-            sensor->Flags = dataPoint.Flags;
-            sensor->SendingInt = dataPoint.SendingInt;
-            strncpy(sensor->snsName, dataPoint.snsName, sizeof(sensor->snsName));
-            sensor->snsName[sizeof(sensor->snsName) - 1] = '\0'; // Ensure null termination
-            
-            file.close();
-            Serial.printf("Read sensor data from %s\n", filename.c_str());
-            return true;
-        } else {
-          SerialPrint("readSensorDataSD: Could not read sensor data from file: " + filename,true);
-          storeError(((String) "readSensorDataSD: Could not read sensor data from file: " + filename).c_str() ,ERROR_SD_FILEREAD);
-          return false;
-        }
-    }
-    
-    file.close();
-    return false;
-}
 
 
-bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, byte *N, uint32_t t[], double v[], uint32_t timeStart, uint32_t timeEnd, bool forwardOrder) {
+bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, byte *N, uint32_t t[], double v[], uint8_t f[], uint32_t timeStart, uint32_t timeEnd, bool forwardOrder) {
   //retrieve up to N most recent data points ending at timeEnd. If fewer than N data points are found, return the number of data points found.
 
   // Validate inputs
@@ -607,7 +726,7 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
   }
 
 
-  int16_t n = loadSensorDataFromFile(deviceMAC, sensorType, sensorID, t, v, timeStart, timeEnd, *N);
+  int16_t n = loadSensorDataFromFile(deviceMAC, sensorType, sensorID, t, v, f, timeStart, timeEnd, *N);
 
   if (n>*N) {
     SerialPrint("retrieveSensorDataFromSD: ?ERROR? Returned more data than requested.\n");
@@ -632,16 +751,19 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
 
     uint32_t t0[n] = {0};
     double v0[n] = {0};
+    uint8_t f0[n] = {0};
 
     int16_t i=0;
     for (int16_t j=n-1; j>=0;j--) {
       t0[i] = t[j];
       v0[i] = v[j];
+      f0[i] = f[j];
       i++;
     }
 
     memcpy(t, t0, n * sizeof(uint32_t));
     memcpy(v, v0, n * sizeof(double));
+    memcpy(f, f0, n * sizeof(uint8_t));
     // No free needed for stack arrays
   } 
   
@@ -651,7 +773,7 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
 
 bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID,
                                          uint32_t timeStart, uint32_t timeEnd,
-                                         uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, bool forwardOrder) {
+                                         uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder) {
     
       // Validate inputs
     if (windowSize == 0 || averagedValues == nullptr || averagedTimes == nullptr || timeEnd <= timeStart) {
@@ -660,7 +782,7 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
       return false;
     }
 
-    int16_t n = loadAverageSensorDataFromFile(deviceMAC, sensorType, sensorID, averagedTimes, averagedValues, timeStart, timeEnd, windowSize, *numPointsX);
+    int16_t n = loadAverageSensorDataFromFile(deviceMAC, sensorType, sensorID, averagedTimes, averagedValues, averagedFlags, timeStart, timeEnd, windowSize, *numPointsX);
 
     if (n<0) {
       SerialPrint("retrieveMovingAverageSensorDataFromSD: could not read", true);
@@ -680,17 +802,19 @@ bool retrieveMovingAverageSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorTyp
   
       uint32_t t0[n] = {0};
       double v0[n] = {0};
+      uint8_t f0[n] = {0};
   
       int16_t i=0;
       for (int16_t j=n-1; j>=0;j--) {
         t0[i] = averagedTimes[j];
         v0[i] = averagedValues[j];
+        f0[i] = averagedFlags[j];
         i++;
       }
   
       memcpy(averagedTimes, t0, n * sizeof(uint32_t));
       memcpy(averagedValues, v0, n * sizeof(double));
-      
+      memcpy(averagedFlags, f0, n * sizeof(uint8_t));
     } 
     
     *numPointsX = n;
@@ -719,57 +843,59 @@ double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t
     return nearestValue;
 }
 
-bool storeAllSensorSD() {
-    return readAllSensorsSD();
+uint16_t deleteCoreStruct() {
+  uint16_t nDeleted = deleteFiles("ScreenFlags.dat","/Data");
+
+  if (nDeleted > 0) {
+    initScreenFlags(true);
+  } 
+
+  return nDeleted;
 }
 
-bool readAllSensorsSD() {
-    bool success = true;
-    
-    for (int16_t i = 0; i < NUMSENSORS && i < Sensors.getNumSensors(); i++) {
-        if (Sensors.isSensorInit(i)) {
-            if (!readSensorDataSD(i)) {
-                success = false;
-            }
-        }
-    }
-    
-    return success;
-}
+uint16_t deleteFiles(const char* pattern,const char* directory) {
+  //returns number of files deleted
+  File dir = SD.open(directory); // Open the target directory
 
-void deleteFiles(const char* pattern,const char* directory) {
-  File dir = SD.open(directory); // Open the root directory
-
-    String filename ;;
+    String filename ;
 
   if (!dir) {
     storeError("deleteFiles: Could not open dir", ERROR_SD_OPENDIR);
 
     SerialPrint("Error opening root directory.");
-    return;
+    return 0;
   }
 
-
+  
+  uint16_t nDeleted = 0;
   while (true) {
     File entry = dir.openNextFile();
-    filename  = (String) directory + "/" + entry.name();
-    SerialPrint("Current file: " + filename + "\n");
     if (!entry) {
       // no more files
       break;
     }
 
-    if (matchPattern(entry.name(), pattern)) {
+    filename  = entry.name();
+    
+    if (matchPattern(filename.c_str(),  pattern)) {
         SerialPrint("Deleting: " + filename + "\n");
-        
+        filename = String(directory) + "/" + filename;
       if (!SD.remove(filename)) {
         SerialPrint("Error deleting: " + filename + "\n");
         storeError(((String) "Error deleting: " + filename).c_str(), ERROR_SD_FILEDEL);
+      } else {
+        // Remove the deleted file from the timestamp index
+        removeFromTimestampIndex(filename.c_str());
+        nDeleted++;
       }
-    }
+    } 
     entry.close();
   }
   dir.close();
+  if (nDeleted == 0) {
+    SerialPrint("deleteFiles: No files deleted\n");
+  }
+  return nDeleted;
 }
 
 
@@ -830,14 +956,14 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
   }
 }
 
-uint16_t read16(File &f) {
+uint16_t read16(fs::File &f) {
   uint16_t result;
   ((uint8_t *)&result)[0] = f.read(); // LSB
   ((uint8_t *)&result)[1] = f.read(); // MSB
   return result;
 }
 
-uint32_t read32(File &f) {
+uint32_t read32(fs::File &f) {
   uint32_t result;
   ((uint8_t *)&result)[0] = f.read(); // LSB
   ((uint8_t *)&result)[1] = f.read();
@@ -861,6 +987,11 @@ bool storeGsheetInfoSD() {
     GSheetInfo.lastGsheetSDSaveTime = I.currentTime;
     f.write((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
     f.close();
+    
+    
+    // Update the timestamp index file
+    updateTimestampIndex(filename.c_str());
+    
     return true;
 }
 
@@ -874,6 +1005,7 @@ bool readGsheetInfoSD() {
     }
     if (f.size() != sizeof(STRUCT_GOOGLESHEET)) {
         storeError("readGsheetInfoSD: File size mismatch",ERROR_SD_GSHEETINFOREAD,false);
+        SerialPrint("readGsheetInfoSD: File size mismatch, deleting file: " + filename,true);
         deleteFiles("GsheetInfo.dat", "/Data");
         f.close();
         return false;
@@ -883,3 +1015,5 @@ bool readGsheetInfoSD() {
     return true;
 }
 #endif
+
+#endif //_USESDCARD

@@ -67,13 +67,16 @@ static String urlEncode(const String& s) {
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 void initHVAC(void){
-  
-  
-  for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsType >=50 && Sensors[j].snsType <=57) {
-      SendData(&Sensors[j]);
-      Sensors[j].snsValue = 0;
-    }      
+  for (int16_t si=0; si<DeviceStore.getNumSensors(); ++si) {
+    SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+    if (!s) continue;
+    if (s->snsType >=50 && s->snsType <=57) {
+      // Build a transient view to reuse SendData
+      SensorVal temp{}; // temporary legacy struct for SendData compatibility
+      temp.snsType = s->snsType; temp.snsID = s->snsID; strncpy(temp.snsName, s->snsName, sizeof(temp.snsName)-1); temp.snsValue = s->snsValue; temp.LastReadTime = s->timeRead; temp.LastSendTime = s->timeLogged; temp.SendingInt = s->SendingInt; temp.Flags = s->Flags;
+      SendData(&temp);
+      s->snsValue = 0;
+    }
   }
 }
 #endif
@@ -176,6 +179,12 @@ void onWiFiEvent(WiFiEvent_t event) {
         // Connected successfully
         WifiStatus(); //assign wifi status
         Prefs.MYIP = (uint32_t) WiFi.localIP();
+        // If preferences were modified earlier, persist now that we are online
+        #ifdef _USE32
+        if (!Prefs.isUpToDate) {
+          BootSecure::setPrefs();
+        }
+        #endif
         break;
       }
     default:
@@ -203,7 +212,7 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 }
 
 
-bool SendData(struct SensorVal *snsreading) {
+bool SendData(struct SnsType *snsreading) {
 
 
 
@@ -236,7 +245,7 @@ bool isGood = false;
     json += ",\"id\":" + String(snsreading->snsID);
     json += ",\"name\":\"" + String(snsreading->snsName) + "\"";
     json += ",\"value\":" + String(snsreading->snsValue, 6);
-    json += ",\"timeRead\":" + String(snsreading->LastReadTime);
+    json += ",\"timeRead\":" + String(snsreading->timeRead);
     json += ",\"timeLogged\":" + String(now());
     json += ",\"sendingInt\":" + String(snsreading->SendingInt);
     json += ",\"flags\":" + String(snsreading->Flags);
@@ -250,7 +259,7 @@ bool isGood = false;
       URL = String("http://") + ip.toString() + "/POST";
 
       http.useHTTP10(true);
-      snsreading->LastSendTime = now();
+      snsreading->timeLogged = now();
       #ifdef _DEBUG
         Serial.print("POST "); Serial.print(URL); Serial.print(" body: "); Serial.println(json);
       #endif
@@ -307,38 +316,70 @@ bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum) {
 
 void handleUPDATESENSORPARAMS() {
   String stateSensornum = server.arg("SensorNum");
-
-  byte j = stateSensornum.toInt();
+  int16_t j = stateSensornum.toInt();
 
   for (uint8_t i = 0; i < server.args(); i++) {
-    if (server.argName(i)=="SensorName") snprintf(Sensors[j].snsName,31,"%s", server.arg(i).c_str());
+    SnsType* s = DeviceStore.getSensorBySnsIndex(j);
+    if (!s) continue;
+    if (server.argName(i)=="SensorName") snprintf(s->snsName,31,"%s", server.arg(i).c_str());
 
     if (server.argName(i)=="Monitored") {
-      if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,1,0);
-      else bitWrite(Sensors[j].Flags,1,1);
+      if (server.arg(i) == "0") bitWrite(s->Flags,1,0);
+      else bitWrite(s->Flags,1,1);
     }
 
     if (server.argName(i)=="Critical") {
-      if (server.arg(i) == "0") bitWrite(Sensors[j].Flags,7,0);
-      else bitWrite(Sensors[j].Flags,7,1);
+      if (server.arg(i) == "0") bitWrite(s->Flags,7,0);
+      else bitWrite(s->Flags,7,1);
     }
 
     if (server.argName(i)=="Outside") {
-      if (server.arg(i)=="0") bitWrite(Sensors[j].Flags,2,0);
-      else bitWrite(Sensors[j].Flags,2,1);
+      if (server.arg(i)=="0") bitWrite(s->Flags,2,0);
+      else bitWrite(s->Flags,2,1);
     }
 
-    if (server.argName(i)=="UpperLim") Sensors[j].limitUpper = server.arg(i).toDouble();
+    if (server.argName(i)=="UpperLim") {
+      double val = server.arg(i).toDouble();
+      Prefs.SNS_LIMIT_MAX[j] = val;
+      Prefs.isUpToDate = false;
+    }
 
-    if (server.argName(i)=="LowerLim") Sensors[j].limitLower = server.arg(i).toDouble();
+    if (server.argName(i)=="LowerLim") {
+      double val = server.arg(i).toDouble();
+      Prefs.SNS_LIMIT_MIN[j] = val;
+      Prefs.isUpToDate = false;
+    }
 
-    if (server.argName(i)=="SendInt") Sensors[j].SendingInt = server.arg(i).toDouble();
-    if (server.argName(i)=="PollInt") Sensors[j].PollingInt = server.arg(i).toDouble();
+    if (server.argName(i)=="SendInt") {
+      uint16_t val = server.arg(i).toInt();
+      Prefs.SNS_INTERVAL_SEND[j] = val;
+      Prefs.isUpToDate = false;
+    }
+    if (server.argName(i)=="PollInt") {
+      uint16_t val = server.arg(i).toInt();
+      Prefs.SNS_INTERVAL_POLL[j] = val;
+      Prefs.isUpToDate = false;
+    }
 
   }
 
-  ReadData(&Sensors[j]);
-  SendData(&Sensors[j]);
+  // Rebuild a SensorVal from DeviceStore for read/send and apply back
+  {
+    SensorVal temp{};
+    if (buildSensorValFromDeviceStore(j, &temp)) {
+      ReadData(&temp);
+      applySensorValToDeviceStore(j, &temp);
+      SendData(&temp);
+      applySensorValToDeviceStore(j, &temp);
+    }
+  }
+
+  #ifdef _USE32
+  // Persist updates immediately if any changes were made
+  if (!Prefs.isUpToDate) {
+    BootSecure::setPrefs();
+  }
+  #endif
 
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Updated-- Press Back Button");  //This Line Keeps It on Same Page
@@ -367,11 +408,12 @@ void handleLAST() {
 }
 
 void handleUPDATESENSORREAD() {
-  byte j = server.arg("SensorNum").toInt();
-
-
-  ReadData(&Sensors[j]);
-  SendData(&Sensors[j]);
+  int16_t j = server.arg("SensorNum").toInt();
+  SnsType* s = DeviceStore.getSensorBySnsIndex(j);
+  if (s) {
+    ReadData(s);
+    SendData(s);
+  }
 
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Updated-- Press Back Button");  //This Line Keeps It on Same Page
@@ -386,9 +428,11 @@ currentLine += " = ";
 currentLine += (String) dateify() + "\n";
 
 
-for (byte k=0;k<SENSORNUM;k++) {
-  ReadData(&Sensors[k]);      
-  currentLine +=  "Sensor " + (String) Sensors[k].snsName + " data sent to at least 1 server: " + SendData(&Sensors[k]) + "\n";
+for (int16_t k=0; k<DeviceStore.getNumSensors(); k++) {
+  SnsType* s = DeviceStore.getSensorBySnsIndex(k);
+  if (!s) continue;
+  ReadData(s);
+  currentLine +=  "Sensor " + (String) s->snsName + " data sent to at least 1 server: " + SendData(s) + "\n";
 }
   server.send(200, "text/plain", "Status...\n" + currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
 
@@ -432,18 +476,21 @@ byte arduinoID = WiFi.localIP()[3];
     
   }
 
-  k = findSensor(snsType,snsNum);
+  k = 255;
   if (k<100) {
-    if (limitLower != -1) Sensors[k].limitLower = limitLower;
-    if (limitUpper != -1) Sensors[k].limitUpper = limitUpper;
-    if (PollingInt>0) Sensors[k].PollingInt = PollingInt;
-    if (SendingInt>0) Sensors[k].SendingInt = SendingInt;
-    checkSensorValFlag(&Sensors[k]);
+    if (limitLower != -1) Prefs.SNS_LIMIT_MIN[k] = limitLower;
+    if (limitUpper != -1) Prefs.SNS_LIMIT_MAX[k] = limitUpper;
+    if (PollingInt>0) Prefs.SNS_INTERVAL_POLL[k] = PollingInt;
+    if (SendingInt>0) Prefs.SNS_INTERVAL_SEND[k] = SendingInt;
+    SnsType* s = DeviceStore.getSensorBySnsIndex(k);
+    if (s) checkSensorValFlag(s);
     String currentLine = "";
     byte j=k;
     currentLine += (String) dateify() + "\n";
 
-    currentLine = currentLine + "ARDID:" + String(arduinoID, DEC) + "; snsType:"+(String) Sensors[j].snsType+"; snsID:"+ (String) Sensors[j].snsID + "; SnsName:"+ (String) Sensors[j].snsName + "; LastRead:"+(String) Sensors[j].LastReadTime+"; LastSend:"+(String) Sensors[j].LastSendTime + "; snsVal:"+(String) Sensors[j].snsValue + "; UpperLim:"+(String) Sensors[j].limitUpper + "; LowerLim:"+(String) Sensors[j].limitLower + "; Flag:"+(String) bitRead(Sensors[j].Flags,0) + "; Monitored: " + (String) bitRead(Sensors[j].Flags,1) + "\n";
+    if (s) {
+      currentLine = currentLine + "ARDID:" + String(arduinoID, DEC) + "; snsType:"+(String) s->snsType+"; snsID:"+ (String) s->snsID + "; SnsName:"+ (String) s->snsName + "; LastRead:"+(String) s->timeRead+"; LastSend:"+(String) s->timeLogged + "; snsVal:"+(String) s->snsValue + "; UpperLim:"+(String) Prefs.SNS_LIMIT_MAX[j] + "; LowerLim:"+(String) Prefs.SNS_LIMIT_MIN[j] + "; Flag:"+(String) bitRead(s->Flags,0) + "; Monitored: " + (String) bitRead(s->Flags,1) + "\n";
+    }
     server.send(400, "text/plain", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
   } else {
     server.send(400, "text/plain", "That sensor was not found");   // Send HTTP status 400 as error
@@ -502,13 +549,11 @@ currentLine += "<br>-----------------------<br>\n";
 
 
   byte used[SENSORNUM];
-  for (byte j=0;j<SENSORNUM;j++)  {
-    used[j] = 255;
-
-    if (Sensors[j].snsID>0 && Sensors[j].snsType>0)
-        currentLine += "<form action=\"/UPDATESENSORPARAMS\" method=\"GET\" id=\"frm_SNS" + (String) j + "\"><input form=\"frm_SNS"+ (String) j + "\"  id=\"SNS" + (String) j + "\" type=\"hidden\" name=\"SensorNum\" value=\"" + (String) j + "\"></form>\n";
-  
-    //add form tags
+  for (byte j=0;j<SENSORNUM;j++)  used[j] = 255;
+  for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si)  {
+    SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+    if (!s || !s->IsSet) continue;
+    currentLine += "<form action=\"/UPDATESENSORPARAMS\" method=\"GET\" id=\"frm_SNS" + (String) si + "\"><input form=\"frm_SNS"+ (String) si + "\"  id=\"SNS" + (String) si + "\" type=\"hidden\" name=\"SensorNum\" value=\"" + (String) si + "\"></form>\n";
   }
       
   byte usedINDEX = 0;  
@@ -521,54 +566,56 @@ currentLine += "<br>-----------------------<br>\n";
   currentLine = currentLine + "<th><button onclick=\"sortTable(5)\">PollInt</button></th><th><button onclick=\"sortTable(6)\">SendInt</button></th><th><button onclick=\"sortTable(7)\">Flag</button></th>";
   currentLine = currentLine + "<th><button onclick=\"sortTable(8)\">LastLog</button></th><th><button onclick=\"sortTable(9)\">LastSend</button></th><th>IsMonit</th><th>IsCritical</th><th>IsOut</th><th>Flags</th><th>SnsName</th>";
   currentLine = currentLine + "<th>Submit</th><th>Recheck</th></tr>\n"; 
-  for (byte j=0;j<SENSORNUM;j++)  {
-
-    if (Sensors[j].snsID>0 && Sensors[j].snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
-      used[usedINDEX++] = j;
+  for (int16_t si=0; si<DeviceStore.getNumSensors(); si++)  {
+    SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+    if (!s || !s->IsSet) continue;
+    if (inIndex(si,used,SENSORNUM) == false)  {
+      used[usedINDEX++] = si;
       currentLine = currentLine + "<tr>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsType + "</td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsID + "</td>";
-      currentLine = currentLine + "<td>" + (String) Sensors[j].snsValue + "</td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"UpperLim\" value=\"" + String(Sensors[j].limitUpper,DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"LowerLim\" value=\"" + String(Sensors[j].limitLower,DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"PollInt\" value=\"" + String(Sensors[j].PollingInt,DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"SendInt\" value=\"" + String(Sensors[j].SendingInt,DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,0) + "</td>";
-      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastReadTime) + "</td>";
-      currentLine = currentLine + "<td>" + (String) dateify(Sensors[j].LastSendTime) + "</td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[j].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[j].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td>" + (String) bitRead(Sensors[j].Flags,2) + "</td>";
-      Byte2Bin(Sensors[j].Flags,tempchar,true);
+      currentLine = currentLine + "<td>" + (String) s->snsType + "</td>";
+      currentLine = currentLine + "<td>" + (String) s->snsID + "</td>";
+      currentLine = currentLine + "<td>" + (String) s->snsValue + "</td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"UpperLim\" value=\"" + String(Prefs.SNS_LIMIT_MAX[si],DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"LowerLim\" value=\"" + String(Prefs.SNS_LIMIT_MIN[si],DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"PollInt\" value=\"" + String(Prefs.SNS_INTERVAL_POLL[si],DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"SendInt\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[si],DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td>" + (String) bitRead(s->Flags,0) + "</td>";
+      currentLine = currentLine + "<td>" + (String) dateify(s->timeRead) + "</td>";
+      currentLine = currentLine + "<td>" + (String) dateify(s->timeLogged) + "</td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(s->Flags,1),DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(s->Flags,7),DEC) + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td>" + (String) bitRead(s->Flags,2) + "</td>";
+      Byte2Bin(s->Flags,tempchar,true);
       currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
-      currentLine = currentLine + "<td><input type=\"text\"  name=\"SensorName\" value=\"" +  (String) Sensors[j].snsName + "\" form = \"frm_SNS" + (String) j + "\"></td>";
-      currentLine = currentLine + "<td><button type=\"submit\" form = \"frm_SNS" + (String) j + "\" name=\"Sub" + (String) j + "\">Submit</button></td>";
-      currentLine += "<td><button type=\"submit\" formaction=\"/UPDATESENSORREAD\" form = \"frm_SNS" + (String) j + "\" name=\"Upd" + (String) j + "\">Update</button></td>";
+      currentLine = currentLine + "<td><input type=\"text\"  name=\"SensorName\" value=\"" +  (String) s->snsName + "\" form = \"frm_SNS" + (String) si + "\"></td>";
+      currentLine = currentLine + "<td><button type=\"submit\" form = \"frm_SNS" + (String) si + "\" name=\"Sub" + (String) si + "\">Submit</button></td>";
+      currentLine += "<td><button type=\"submit\" formaction=\"/UPDATESENSORREAD\" form = \"frm_SNS" + (String) si + "\" name=\"Upd" + (String) si + "\">Update</button></td>";
       currentLine += "</tr>\n";
 
       
-      for (byte jj=j+1;jj<SENSORNUM;jj++) {
-        if (Sensors[jj].snsID>0 && Sensors[jj].snsType>0 && inIndex(jj,used,SENSORNUM) == false && Sensors[jj].snsType==Sensors[j].snsType) {
-          used[usedINDEX++] = jj;
+      for (int16_t sj=si+1; sj<DeviceStore.getNumSensors(); sj++) {
+        SnsType* s2 = DeviceStore.getSensorBySnsIndex(sj);
+        if (s2 && s2->IsSet && inIndex(sj,used,SENSORNUM) == false && s2->snsType==s->snsType) {
+          used[usedINDEX++] = sj;
           currentLine = currentLine + "<tr>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsType + "</td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsID + "</td>";
-          currentLine = currentLine + "<td>" + (String) Sensors[jj].snsValue + "</td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"UpperLim\" value=\"" + String(Sensors[jj].limitUpper,DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"LowerLim\" value=\"" + String(Sensors[jj].limitLower,DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"PollInt\" value=\"" + String(Sensors[jj].PollingInt,DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"SendInt\" value=\"" + String(Sensors[jj].SendingInt,DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,0) + "</td>";
-          currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastReadTime) + "</td>";
-          currentLine = currentLine + "<td>" + (String) dateify(Sensors[jj].LastSendTime) + "</td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(Sensors[jj].Flags,1),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(Sensors[jj].Flags,7),DEC) + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td>" + (String) bitRead(Sensors[jj].Flags,2) + "</td>";
-          Byte2Bin(Sensors[jj].Flags,tempchar,true);
+          currentLine = currentLine + "<td>" + (String) s2->snsType + "</td>";
+          currentLine = currentLine + "<td>" + (String) s2->snsID + "</td>";
+          currentLine = currentLine + "<td>" + (String) s2->snsValue + "</td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"UpperLim\" value=\"" + String(Prefs.SNS_LIMIT_MAX[sj],DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"LowerLim\" value=\"" + String(Prefs.SNS_LIMIT_MIN[sj],DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"PollInt\" value=\"" + String(Prefs.SNS_INTERVAL_POLL[sj],DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"SendInt\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[sj],DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td>" + (String) bitRead(s2->Flags,0) + "</td>";
+          currentLine = currentLine + "<td>" + (String) dateify(s2->timeRead) + "</td>";
+          currentLine = currentLine + "<td>" + (String) dateify(s2->timeLogged) + "</td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"Monitored\" value=\"" + String(bitRead(s2->Flags,1),DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"Critical\" value=\"" + String(bitRead(s2->Flags,7),DEC) + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td>" + (String) bitRead(s2->Flags,2) + "</td>";
+          Byte2Bin(s2->Flags,tempchar,true);
           currentLine = currentLine + "<td>" + (String) tempchar + "</td>";
-          currentLine = currentLine + "<td><input type=\"text\"  name=\"SensorName\" value=\"" +  (String) Sensors[jj].snsName + "\" form = \"frm_SNS" + (String) jj + "\"></td>";
-          currentLine = currentLine + "<td><button type=\"submit\" form = \"frm_SNS" + (String) jj + "\" name=\"Sub" + (String) jj + "\">Submit</button></td>";
-          currentLine += "<td><button type=\"submit\" formaction=\"/UPDATESENSORREAD\" form = \"frm_SNS" + (String) jj + "\" name=\"Upd" + (String) jj + "\">Update</button></td>";
+          currentLine = currentLine + "<td><input type=\"text\"  name=\"SensorName\" value=\"" +  (String) s2->snsName + "\" form = \"frm_SNS" + (String) sj + "\"></td>";
+          currentLine = currentLine + "<td><button type=\"submit\" form = \"frm_SNS" + (String) sj + "\" name=\"Sub" + (String) sj + "\">Submit</button></td>";
+          currentLine += "<td><button type=\"submit\" formaction=\"/UPDATESENSORREAD\" form = \"frm_SNS" + (String) sj + "\" name=\"Upd" + (String) sj + "\">Update</button></td>";
           currentLine += "</tr>\n";
         }
       }
@@ -638,7 +685,11 @@ currentLine += "<br>-----------------------<br>\n";
       // Set Options
         currentLine += "const options" + (String) j + " = {\n";
         currentLine += "hAxis: {title: 'min from now'}, \n";
-        currentLine += "vAxis: {title: '" + (String) Sensors[SensorCharts[j].snsNum].snsName + "'},\n";
+        {
+          int idx = SensorCharts[j].snsNum;
+          SnsType* s = DeviceStore.getSensorBySnsIndex(idx);
+          currentLine += "vAxis: {title: '" + (String) (s ? s->snsName : "") + "'},\n";
+        }
         currentLine += "legend: 'none'\n};\n";
 
         currentLine += "const chart" + (String) j + " = new google.visualization.LineChart(document.getElementById('myChart" + (String) j + "'));\n";
@@ -656,7 +707,8 @@ currentLine += "<br>-----------------------<br>\n";
       currentLine += "['HoursAgo',";
       
       for (byte j=0;j<HVACSNSNUM;j++) {
-        currentLine += "'" + (String) Sensors[j].snsName + "'";
+        SnsType* sh = DeviceStore.getSensorBySnsIndex(j);
+        currentLine += "'" + (String) (sh ? sh->snsName : "") + "'";
         if (j<HVACSNSNUM-1) currentLine += ",";
         else currentLine += "],\n";
       }

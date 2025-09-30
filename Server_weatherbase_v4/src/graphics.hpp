@@ -34,8 +34,10 @@ const uint16_t TRANSPARENT_COLOR = 0; //black
 
 // Graphics utility functions
 uint16_t set_color(byte r, byte g, byte b);
+uint16_t invert_color(uint16_t color);
 uint32_t setFont(uint8_t FNTSZ);
 uint16_t temp2color(int temp, bool invertgray = false);
+uint16_t convertColor565ToGrayscale(uint16_t color) ;
 
 // Drawing functions
 void drawBmp(const char* filename, int16_t x, int16_t y, uint16_t alpha = TRANSPARENT_COLOR);
@@ -57,6 +59,8 @@ void fcnDrawFutureWeather();
 void fcnDrawSensors(int X,int Y, uint8_t rows=0, uint8_t cols=0, int32_t whichSensors = -1);
 void fncDrawCurrentCondition();
 void fcnDrawStatus();
+void fcnDrawSensorScreen();
+void fcnDrawSensorInfo();
 
 // Weather text functions
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);

@@ -3,7 +3,7 @@
 #include <TimeLib.h>
 
 // Global instance
-Devices_Sensors DeviceStore;
+Devices_Sensors Sensors;
 
 // Constructor
 Devices_Sensors::Devices_Sensors() {
@@ -21,6 +21,17 @@ Devices_Sensors::Devices_Sensors() {
         sensors[i].expired = false;
         sensors[i].deviceIndex = -1;
     }
+}
+
+bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
+    
+
+
+    bool cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
+    while (isSensorInit(*currentPosition)==false && cycling==true) {
+        cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
+    }
+    return cycling;
 }
 
 // Device management functions
@@ -165,7 +176,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
     // Check if sensor already exists
     int16_t existingIndex = findSensor(deviceMAC, snsType, snsID);
     if (existingIndex >= 0) {
-        // Update existing sensor
+        // Update existing sensor. note that timeWritten is not updated here.
         SnsType* sensor = &sensors[existingIndex];
         sensor->snsValue = snsValue;
         sensor->timeRead = timeRead;
@@ -174,7 +185,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
         sensor->IsSet=1;
-        this->lastUpdatedTime = I.currentTime;
+        Sensors.lastUpdatedTime = I.currentTime;
         return existingIndex;
     }
     
@@ -193,6 +204,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
             sensors[i].snsValue = snsValue;
             sensors[i].timeRead = timeRead;
             sensors[i].timeLogged = timeLogged;
+            sensors[i].timeWritten = 0;
             sensors[i].Flags = flags;
             sensors[i].SendingInt = sendingInt;
             sensors[i].IsSet = 1;
@@ -201,7 +213,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
             if (i >= numSensors) {
                 numSensors = i + 1;
             }
-            this->lastUpdatedTime = I.currentTime;
+            Sensors.lastUpdatedTime = I.currentTime;
             return i;
         }
     }
@@ -254,7 +266,7 @@ uint8_t Devices_Sensors::getNumSensors() {
 }
 
 bool Devices_Sensors::isSensorInit(int16_t index) {
-    return (index >= 0 && index < NUMSENSORS && index < numSensors && sensors[index].IsSet);
+    return (index >= 0 && index < NUMSENSORS &&  sensors[index].IsSet);
 }
 
 void Devices_Sensors::initSensor(int16_t index) {
@@ -296,12 +308,7 @@ int16_t Devices_Sensors::findOldestSensor() {
 
 byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index >= 0) {
-        // Check specific device or sensor
-        if (index < NUMDEVICES && index < numDevices) {
-            if (devices[index].IsSet) {
-                return checkExpirationDevice(index, currentTime, onlyCritical);
-            }
-        } else if (index < NUMSENSORS && index < numSensors) {
+        if (index < NUMSENSORS && index < numSensors) {
             if (sensors[index].IsSet) {
                 return checkExpirationSensor(index, currentTime, onlyCritical);
             }
@@ -312,12 +319,6 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
     // Check all devices and sensors
     byte expiredCount = 0;
     
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
-        if (devices[i].IsSet) {
-            expiredCount += checkExpirationDevice(i, currentTime, onlyCritical);
-        }
-    }
-    
     for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
         if (sensors[i].IsSet) {
             expiredCount += checkExpirationSensor(i, currentTime, onlyCritical);
@@ -327,16 +328,60 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
     return expiredCount;
 }
 
-uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
-    uint8_t count = 0;
+
+uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
+    ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored and expired- alert if no updates received within time limit specified)
+    //special case for snsType = -1000, which means use I.showTheseFlags
+    //if snsType is 0, then count all sensors
+    uint16_t count = 0;
     
+    if (snsType == -1000) {
+        
+        //use I.showTheseFlags to count the number of sensors that match the flags
+        if (bitRead(I.showTheseFlags, 0) == 0) {//everything is good
+            return numSensors;
+        } 
+        //has to be flagged or expired
+        if (bitRead(I.showTheseFlags, 1) == 1 || bitRead(I.showTheseFlags, 0) == 1) {//include expired or flagged
+
+            if (bitRead(I.showTheseFlags, 2) == 1) {//include soil dry
+                count += countFlagged(3,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 3) == 1) {//include leak
+                count += countFlagged(58,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 4) == 1) {//include temperature
+                count += countFlagged(-1,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 5) == 1) {//include humidity
+                count += countFlagged(-2,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 6) == 1) {//include pressure
+                count += countFlagged(-9,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 7) == 1) {//include battery
+                count += countFlagged(61,0b00000011,0b00000011,MoreRecentThan);
+            }
+            if (bitRead(I.showTheseFlags, 8) == 1) {//include HVAC
+                count += countFlagged(55,0b00000011,0b00000011,MoreRecentThan);
+                count += countFlagged(56,0b00000011,0b00000011,MoreRecentThan);
+                count += countFlagged(57,0b00000011,0b00000011,MoreRecentThan);
+            }
+        }
+        return count;
+    }
+    
+    //count the number of sensors that match the flags
     for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
         if (!sensors[i].IsSet) continue;
         
         // Check sensor type filter
-        if (snsType >= 0 && sensors[i].snsType != snsType) continue;
-        if (snsType == -2 && (sensors[i].snsType < 1 || sensors[i].snsType > 9)) continue; // Temperature sensors only
-        
+        if (snsType > 0 && sensors[i].snsType != snsType) continue;
+        if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
+        if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
+        if (snsType == -3 && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
+        if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
+        if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
         if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;
         
@@ -417,19 +462,62 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
     return targetIndex;
 }
 
+#ifdef _USESDCARD
 // Data storage functions
-uint8_t Devices_Sensors::storeAllSensors(uint8_t /*intervalMinutes*/) {
-    // SD persistence not supported in generic library build
-    return 0;
-}
+uint8_t Devices_Sensors::storeAllSensorsSD() {
+    //march through all sensors and write to SD card if timeWritten is older than 1 hour
+    uint8_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+      if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
+        storeSensorDataSD(i);
+        count++;
+      }
+    }
+    return count;
+  }
+  
+bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten) {
+    if (isSensorIndexInvalid(sensorIndex)!=0) {
+        return false;
+    }
+    if (timeWritten == 0) sensors[sensorIndex].timeWritten = I.currentTime;
+    else sensors[sensorIndex].timeWritten = timeWritten;
 
-bool Devices_Sensors::readAllSensors() {
-    // This would implement reading all sensors from SD card
-    // For now, return true as placeholder
     return true;
 }
 
+uint8_t Devices_Sensors::storeDevicesSensorsArrayToSD(uint8_t intervalMinutes) {
+    //stores devicesensors array to sd
+    if (intervalMinutes==0) intervalMinutes=1;//never write to SD card more than once per minute
+    if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSDSaveTime+intervalMinutes*60<I.currentTime) { 
+        lastSDSaveTime = I.currentTime;    
+        if (storeDevicesSensorsSD()==false) return 0;
+    return 1;
+    }
+    return 0;
+}
+
+bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
+    readDevicesSensorsSD();
+    return true;
+}
+
+#endif
+
 // Helper functions for expiration checking
+uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS || index >= numSensors) {
+        return 1;
+    }
+    if (!sensors[index].IsSet) {
+        return 2;
+    }
+    if (sensors[index].expired) {
+        return 3;
+    }
+    return 0;
+}
+
 byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index < 0 || index >= NUMDEVICES || index >= numDevices || !devices[index].IsSet) {
         return 0;
@@ -456,7 +544,9 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     }
     
     SnsType* sensor = &sensors[index];
-    uint32_t expirationTime = sensor->timeLogged + sensor->SendingInt * 2; // 2x sending interval
+    uint16_t sendint = sensor->SendingInt;
+    if (sendint==0) sendint = 300; //default to 5 minutes
+    uint32_t expirationTime = sensor->timeLogged + sendint * 2; // 2x sending interval
     
     if (currentTime > expirationTime) {
         if (onlyCritical && !bitRead(sensor->Flags, 7)) {
@@ -470,3 +560,43 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     return 0;
 }
 
+uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
+    return sensors[index].Flags;
+}
+
+bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
+    uint8_t snsType = sensors[index].snsType;
+    if (type == "temperature") {//temperature
+        return (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17);
+    }
+    if (type == "humidity") {//humidity
+        return (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18);
+    }
+    if (type == "pressure") {//pressure
+        return (snsType == 9 || snsType == 13 || snsType == 19);
+    }
+    if (type == "battery") {//battery
+        return (snsType == 60 || snsType == 61);
+    }
+    if (type == "HVAC") {//HVAC
+        return (snsType == 55 || snsType == 56 || snsType == 57);
+    }
+    if (type == "soil") {//soil
+        return (snsType == 3);
+    }
+    if (type == "leak") {//leak
+        return (snsType == 70);
+    }
+    if (type == "human") {//human
+        return (snsType == 21);
+    }
+    if (type == "server") {//binary
+        return (snsType >= 100);
+    }
+    if (type == "all" || type == "any") {//all
+        return true;
+    }
+
+
+    return false;
+}

@@ -14,10 +14,14 @@
 extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 
+#ifdef _USEFIREBASE
+#include "FirebaseUpload.hpp"
+#endif
 
 
 
-#define WIFI_CONFIG_KEY "Kj8mN2pQ9rS5tU7vW3xY1zA4bC6dE8fG"
+
+#define WIFI_CONFIG_KEY "Kj8mN2pQ9rS5tU7vW3xY1zA4bC6dE8fG" //key to encrypt/decrypt wifi config
 
 // Base64 decoding functions
 int base64_dec_len(const char* input, int length) {
@@ -75,6 +79,7 @@ String WEBHTML;
 extern STRUCT_PrefsH Prefs;
 //extern bool requestWiFiPassword(const uint8_t* serverMAC);
 
+
 String getCert(String filename) 
 {
 
@@ -89,6 +94,19 @@ String getCert(String filename)
 
     
     return s;
+}
+
+// Helper function to format bytes into human-readable format
+String formatBytes(uint64_t bytes) {
+  if (bytes >= (1024ULL * 1024ULL * 1024ULL)) {
+    return String(bytes / (1024.0 * 1024.0 * 1024.0), 1) + " GB";
+  } else if (bytes >= (1024ULL * 1024ULL)) {
+    return String(bytes / (1024.0 * 1024.0), 1) + " MB";
+  } else if (bytes >= 1024ULL) {
+    return String(bytes / 1024.0, 1) + " KB";
+  } else {
+    return String(bytes) + " bytes";
+  }
 }
 
 bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert) { 
@@ -136,6 +154,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
+    I.WiFiMode = WIFI_STA;
     return true;
   }
 
@@ -144,10 +163,12 @@ bool WifiStatus(void) {
 }
 
 int16_t tryWifi(uint16_t delayms) {
+  //return -1000 if no credentials, or connection attempts if success, or -1*number of attempts if failure
   int16_t retries = 0;
   int16_t i = 0;
   if (Prefs.HAVECREDENTIALS) {
     WiFi.mode(WIFI_STA);
+    I.WiFiMode = WIFI_STA;
     for (i = 1; i < 51; i++) {
       if (!WifiStatus()) {        
         WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
@@ -169,6 +190,7 @@ int16_t connectWiFi() {
   
   int16_t retries = tryWifi(250);
   if (retries == -1000) {
+    SerialPrint("No credentials, starting AP Station Mode",true);
     APStation_Mode();
     return -1000;
   }
@@ -177,19 +199,45 @@ int16_t connectWiFi() {
 }
 
 void APStation_Mode() {
+  I.WiFiMode = WIFI_AP_STA;
   
-  String wifiPWD = "";
-  String wifiID = "";
+  //wifi ID and pwd will be set in connectsoftap
+  String wifiPWD;
+  String wifiID;
   IPAddress apIP;
+  
+
+  SerialPrint("Init AP Station Mode... Please wait... ",false);
+
+  // Add delay to ensure system is ready
+  delay(500);
+  
   connectSoftAP(&wifiID,&wifiPWD,&apIP);
+
+  delay(500);
+
+
+  SerialPrint("AP Station ID started.",false);
+  
+  // Add delay before starting server
+  delay(500);
   server.begin(); //start server
+
+
+  SerialPrint("AP Station ID: ",false);
+  SerialPrint(wifiID,true);
+  SerialPrint("AP Station Password: ",false);
+  SerialPrint(wifiPWD,true);
+  SerialPrint("AP Station IP: ",false);
+  SerialPrint(apIP.toString(),true);
 
     #ifdef _USETFT
     tft.clear();
     tft.setCursor(0, 0);
     tft.setTextColor(TFT_WHITE);
+    tft.setTextFont(2);
     tft.setTextSize(1);
-    tft.printf("Setup Required. Please join\n\nWiFi: %s\npwd: \n%s\n\nand go to website:\n\n%s\n\n", 
+    tft.printf("Setup Required. Please join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
                wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
     #endif
 
@@ -358,70 +406,59 @@ void handleSTATUS() {
   
   #endif
 
+  WEBHTML += "Number of devices/sensors: " + (String) Sensors.getNumDevices() + " / " + (String) Sensors.getNumSensors() + "<br>";
+  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
+  WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
+  WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "Last LAN Message: " + (String) I.lastESPNOW_TIME + " @" + (String) (I.lastESPNOW_TIME ? dateify(I.lastESPNOW_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Message State: " + (String) I.lastESPNOW_STATE + "<br>";
+  WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+  WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML += "GSheets enabled: " + (String) GSheetInfo.useGsheet + "<br>";
+  WEBHTML += "Last GSheets upload time: " + (String) (GSheetInfo.lastGsheetUploadTime ? dateify(GSheetInfo.lastGsheetUploadTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Last GSheets success (-2=error, -1=not ready, 0=waiting, 1=success): " + (String) GSheetInfo.lastGsheetUploadSuccess + "<br>";
+  WEBHTML += "Last GSheets fail count: " + (String) GSheetInfo.uploadGsheetFailCount + "<br>";
+  WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
+  WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
+  WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
+  WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
 
-  /*  WEBHTML += "<FORM action=\"/TIMEUPDATE\" method=\"get\">";
-  WEBHTML += "<input type=\"text\" name=\"NTPSERVER\" value=\"time.nist.gov\"><br>";  
-  WEBHTML += "<button type=\"submit\">Update Time</button><br>";
-  WEBHTML += "</FORM><br>";
-*/
-
-WEBHTML += "Number of devices/sensors: " + (String) Sensors.getNumDevices() + " / " + (String) Sensors.getNumSensors() + "<br>";
-WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
-WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime) : "???") + "<br>";
-WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + "<br>";
-WEBHTML = WEBHTML + "---------------------<br>";      
-
-WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT) : "???") + "<br>";
-WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError) : "???") + "<br>";
-WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
-WEBHTML = WEBHTML + "---------------------<br>";      
-WEBHTML += "GSheets enabled: " + (String) GSheetInfo.useGsheet + "<br>";
-WEBHTML += "Last GSheets upload time: " + (String) (GSheetInfo.lastGsheetUploadTime ? dateify(GSheetInfo.lastGsheetUploadTime) : "???") + "<br>";
-WEBHTML += "Last GSheets success (-2=error, -1=not ready, 0=waiting, 1=success): " + (String) GSheetInfo.lastGsheetUploadSuccess + "<br>";
-WEBHTML += "Last GSheets fail count: " + (String) GSheetInfo.uploadGsheetFailCount + "<br>";
-WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
-WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
-WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
-WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime) : "???") + "<br>";
-WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime) : "???") + "<br>";
-
-// Button to trigger an immediate Google Sheets upload
-WEBHTML += R"===(
+  // Button to trigger an immediate Google Sheets upload
+  WEBHTML += R"===(
   <form action="/GSHEET_UPLOAD_NOW" method="post">
   <p style="font-family:arial, sans-serif">
   <button type="submit">Upload Google Sheets Now</button>
   </p></form><br>)===";
   
-WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "---------------------<br>";      
 
-WEBHTML = WEBHTML + "Previous errors (up to 10)" + "<br>";
-for (uint8_t i=1;i<11;i++) {
-  String error="";
-  if (readErrorFromSD(&error,i)) WEBHTML += (String) i + ": " + error + "<br>";
-  else break;
+  // Error log button
+  WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
 
-}
+  WEBHTML = WEBHTML + "</font>---------------------<br>";      
 
-
-
-WEBHTML = WEBHTML + "</font>---------------------<br>";      
-
-
-  WEBHTML += R"===(
-  <FORM action="/FLUSHSD" method="get">
-  <p style="font-family:arial, sans-serif">
-  Type a number and Click FLUSH to download or delete SD card data and reboot. !!!WARNING!!! Cannot be undone! <br>
-  <label for="FLUSHCONFIRM">1=Delete screen data, 2=Delete sensor data, 3=Download variables to SD. (1 and 2 will result in reboot) </label>
-  <input type="text" id="FLUSHCONFIRM" name="FLUSHCONFIRM" value="0" maxlength="5"><br>
-  <br>
-  <button type="submit">FLUSH</button><br>
-  </p></font></form><br>)===";
-
-
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #795548; color: white; text-decoration: none; border-radius: 4px;\">Reboot Debug</a>";
+  WEBHTML = WEBHTML + "</div>";
         
   serverTextClose(200);
-
-
 }
 
 
@@ -514,24 +551,24 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "Heat is " + (I.isHeat ? "on" : "off");
     
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/CONFIG\">Configuration</a></td></tr>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/STATUS\">Status</a></td></tr>";
     
     // Second row - Weather data link and AC status
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "AC is " + (I.isAC ? "on" : "off");
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a></td></tr>";
     
     // Third row - Critical flags
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/CONFIG\">System Configuration</a></td></tr>";
     
     // Fourth row - Leak detected
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Leak detected: " + (String) I.isLeak + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/STATUS\">Status</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Leak detected: " + (String) I.isLeak + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td></tr>";
     
     // Fifth row - Hot rooms
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Interior rooms over max temp: " + (String) I.isHot + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Interior rooms over max temp: " + (String) I.isHot + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/SDCARD\">SD Card Config</a></td></tr>";
     
     // Sixth row - Cold rooms
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Interior rooms below min temp: " + (String) I.isCold + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Interior rooms below min temp: " + (String) I.isCold + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
     
     // Seventh row - Dry plants
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Plants dry: " + (String) I.isSoilDry + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
@@ -645,35 +682,6 @@ serverTextClose(200);
 
 }
 
-void handleFLUSHSD() {
-  if (server.args()==0) return;
-  if (server.argName(0)=="FLUSHCONFIRM") {
-
-    if (server.arg(0).toInt()== 3) {
-      I.isUpToDate = false;
-      Sensors.lastUpdatedTime = 0;
-      Prefs.isUpToDate = false;
-    } else {    
-      if (server.arg(0).toInt()== 1) {
-        deleteFiles("ScreenFlags.dat","/Data");
-      }
-      if (server.arg(0).toInt()== 2) {
-        deleteFiles("SensorBackupv2.dat","/Data");
-      }
-      WEBHTML = "text/plain","OK, about to reset";
-      
-      serverTextClose(200,false);
-      
-      controlledReboot("User Request",RESET_USER);
-    }
-  }
-
-  server.sendHeader("Location", "/");//This Line goes to root page
-
-  WEBHTML= "Attempted.";  
-  serverTextClose(302,false);
-
-}
 
 
 
@@ -725,11 +733,12 @@ void handleRETRIEVEDATA() {
 
   uint32_t t[N]={0};
   double v[N]={0};
+  uint8_t f[N]={0};
   uint32_t sampn=0; //sample number
   
   bool success=false;
-  if (starttime>0)  success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, starttime, endtime,true);
-  else    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, 0,endtime,true); //this fills from tn backwards to N*delta samples
+  if (starttime>0)  success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
+  else    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
 
   if (success == false)  {
     WEBHTML= "Failed to read associated file.";
@@ -793,9 +802,10 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
 
   uint32_t t[100]={0};
   double v[100]={0};
+  uint8_t f[100]={0};
   bool success=false;
 
-  success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t,true);
+  success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t, f,true);
   
   if (success == false)  {
     WEBHTML= "handleRETRIEVEDATA_MOVINGAVERAGE: Failed to read associated file.";
@@ -900,7 +910,7 @@ void handlePost() {
     String snsName = "";
     double snsValue = 0;
     uint32_t timeRead = 0;
-    uint32_t timeLogged = I.currentTime;
+    uint32_t timeLogged = 0;
     uint32_t sendingInt = 0;
     uint8_t flags = 0;
 
@@ -922,6 +932,7 @@ void handlePost() {
               }
               if (doc["mac"].is<JsonVariantConst>()) {
                 String macStr = doc["mac"];
+                //mac should be 12 hex digits
                 deviceMAC = strtoull(macStr.c_str(), NULL, 16);
               } else {
                 deviceMAC = IPToMACID(deviceIP);
@@ -997,7 +1008,6 @@ void handlePost() {
                   flags = argValue.toInt();
               }
           }
-
           
           if (deviceMAC==0 && deviceIP!=0) deviceMAC = IPToMACID(deviceIP);
           if (deviceMAC==0 && deviceIP==0) {
@@ -1018,8 +1028,23 @@ void handlePost() {
           responseMsg = "No valid HTML form data received";
         }
     }
-    
+
+    if (timeRead == 0) timeRead = I.currentTime;
+    timeLogged = I.currentTime; //always set timelogged to current time, regardless of what is sent
+
+    bool addToSD = false;
     if ((deviceMAC!=0 || deviceIP!=0) && snsType!=0 ) {
+
+        sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
+        if (sensorIndex < 0) {
+          SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
+          addToSD = true;
+        } else {
+          if (Sensors.getSensorFlag(sensorIndex) != flags) {
+            SerialPrint("Sensor found, flags changed, adding to SD",true);
+            addToSD = true;
+          }
+        }
 
         // Add sensor to Devices_Sensors class
         sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
@@ -1034,10 +1059,20 @@ void handlePost() {
         }
     }
 
-    if (sensorIndex >= 0) {
+    #ifdef _USESDCARD
+    if (sensorIndex >= 0 && addToSD) {
       //message was successfully added to Devices_Sensors class
-        //SerialPrint((String) "handlePost: Added sensor data to SD card: index " + sensorIndex + ", MAC =" + deviceMAC + ", IP =" + deviceIP + ", type=" + snsType + ", id=" + snsID + ", name=" + snsName + ", value=" + snsValue + "\n");
-        server.send(200, "text/plain", responseMsg);
+      //save to SD card if addToSD is true [flag was changed]. Otherwise it will save hourly
+      if (storeSensorDataSD(sensorIndex)) {
+        SerialPrint("Individual sensor data saved to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
+      } else {
+        SerialPrint("Warning: Failed to save individual sensor data to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
+      }
+    }
+    #endif
+
+    if (responseMsg == "OK") {
+      server.send(200, "text/plain", responseMsg);
     } else {
         SerialPrint("Failed to add sensor with response message: " + responseMsg + "\n");
         server.send(500, "text/plain", responseMsg);
@@ -1055,7 +1090,7 @@ void handleCONFIG() {
   SerialPrint("config: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Configuration Page</h2>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " System Configuration</h2>";
   WEBHTML = WEBHTML + "<p>This page is used to configure editable system parameters.</p>";
   
   // Start the form and grid container
@@ -1092,19 +1127,31 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">screenChangeTimer</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"screenChangeTimer\" value=\"" + (String) I.screenChangeTimer + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
   WEBHTML = WEBHTML + "</div>";
   
   // Submit button
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  // Navigation links
-  WEBHTML = WEBHTML + "<br><br><a href=\"/READONLYCOREFLAGS\">View Read-Only Core Flags</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\">View Google Sheets Configuration</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
+  // Reset button
+  WEBHTML = WEBHTML + "<br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset to Defaults & Delete Stored Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
   WEBHTML = WEBHTML + "</body></html>";
 
   serverTextClose(200, true);
@@ -1149,8 +1196,11 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorCode</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastErrorCode + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastESPNOW</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastESPNOW  ?  dateify(I.lastESPNOW ) : "???")+ "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANMessage</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastESPNOW_TIME  ?  dateify(I.lastESPNOW_TIME ) : "???")+ "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANMessageState</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastESPNOW_STATE + "</div>";
 
   // Remaining non-editable fields from I in order of appearance
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
@@ -1295,7 +1345,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
 
   // Google Sheets Configuration Section (Editable)
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Configuration</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Configuration (Editable)</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9;\"></div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">useGsheet</div>";
@@ -1304,11 +1354,21 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">uploadGsheetIntervalMinutes</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"uploadGsheetIntervalMinutes\" value=\"" + (String) GSheetInfo.uploadGsheetIntervalMinutes + "\" min=\"1\" max=\"1440\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetSDSaveTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"lastGsheetSDSaveTime\" value=\"" + (String) GSheetInfo.lastGsheetSDSaveTime + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  // Google Sheets Credentials Section (Read-only)
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Credentials (Read-only)</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9;\"></div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetUploadTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"lastGsheetUploadTime\" value=\"" + (String) GSheetInfo.lastGsheetUploadTime + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Project ID</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.projectID) + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Client Email</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.clientEmail) + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">User Email</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.userEmail) + "</div>";
+  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Private Key</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">[Hidden for security]</div>";
   
   // Google Sheets Status Information (Read-only)
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f9f9f9; font-weight: bold;\">Google Sheets Status Information</div>";
@@ -1333,8 +1393,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetID) + "</div>";
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetName</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
-  WEBHTML = WEBHTML + String(GSheetInfo.GsheetName) + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetName) + "</div>";
 
   WEBHTML = WEBHTML + "</div>";
   
@@ -1342,10 +1401,24 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Google Sheets Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  // Navigation links
-  WEBHTML = WEBHTML + "<br><br><a href=\"/CONFIG\">Edit Core Configuration</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/READONLYCOREFLAGS\">View Read-Only Core Flags</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
+  // Upload now button
+  WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_UPLOAD_NOW\" method=\"post\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload to Gsheets Immediately\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
   WEBHTML = WEBHTML + "</body></html>";
 
   serverTextClose(200, true);
@@ -1363,12 +1436,6 @@ void handleGSHEET_POST() {
   if (server.hasArg("uploadGsheetIntervalMinutes")) {
     GSheetInfo.uploadGsheetIntervalMinutes = server.arg("uploadGsheetIntervalMinutes").toInt();
   }
-  if (server.hasArg("lastGsheetSDSaveTime")) {
-    GSheetInfo.lastGsheetSDSaveTime = server.arg("lastGsheetSDSaveTime").toInt();
-  }
-  if (server.hasArg("lastGsheetUploadTime")) {
-    GSheetInfo.lastGsheetUploadTime = server.arg("lastGsheetUploadTime").toInt();
-  }
   
   // Validate Google Sheets configuration
   if (GSheetInfo.uploadGsheetIntervalMinutes < 1) {
@@ -1377,15 +1444,13 @@ void handleGSHEET_POST() {
   if (GSheetInfo.uploadGsheetIntervalMinutes > 1440) {
     GSheetInfo.uploadGsheetIntervalMinutes = 1440;
   }
-  if (GSheetInfo.lastGsheetSDSaveTime < 0) {
-    GSheetInfo.lastGsheetSDSaveTime = 0;
-  }
-  if (GSheetInfo.lastGsheetUploadTime < 0) {
-    GSheetInfo.lastGsheetUploadTime = 0;
-  }
   
-  // Save the updated configuration
-  BootSecure::setPrefs();
+  // Save to SD card
+  if (storeGsheetInfoSD()) {
+    SerialPrint("Google Sheets configuration saved to SD card", true);
+  } else {
+    SerialPrint("Failed to save Google Sheets configuration to SD card", true);
+  }
   
   // Redirect back to the Google Sheets configuration page
   server.sendHeader("Location", "/GSHEET");
@@ -1411,16 +1476,40 @@ String generateAPSSID() {
 // Connect to Soft AP mode (combined AP-station mode)
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
   if (I.WiFiMode != WIFI_AP_STA) {
-    *wifiID = generateAPSSID();
-//    byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
-    *apIP = IPAddress(192, 168, 4, 1);
-    WiFi.mode(WIFI_AP_STA); // Combined AP and station mode
     I.WiFiMode = WIFI_AP_STA;
-    *wifiPWD = "S3nsor.N3t!";
-    WiFi.softAPConfig(*apIP, *apIP, IPAddress(255, 255, 255, 0));
-    WiFi.softAP(wifiID->c_str(), wifiPWD->c_str());
-    delay(100);
+    I.isUpToDate = false;
   }
+
+  *wifiID = generateAPSSID();
+//    byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
+  *apIP = IPAddress(192, 168, 4, 1);
+  
+  // Ensure WiFi is properly initialized
+  WiFi.disconnect(true);
+  delay(200);
+  
+  WiFi.mode(WIFI_OFF);
+  delay(200);
+  
+  WiFi.mode(WIFI_AP_STA); // Combined AP and station mode
+  *wifiPWD = "S3nsor.N3t!";
+  
+
+  SerialPrint("Setting config for soft AP", true);
+  // Configure AP with proper error handling
+  if (!WiFi.softAPConfig(*apIP, *apIP, IPAddress(255, 255, 255, 0))) {
+    SerialPrint("Failed to configure AP", true);
+    return;
+  } 
+  SerialPrint("Config for soft AP set", true);
+  
+  if (!WiFi.softAP(wifiID->c_str(), wifiPWD->c_str())) {
+    SerialPrint("Failed to start AP", true);
+    return;
+  }
+  SerialPrint("AP starting (please wait)", true);
+
+  
 }
 
 void handleCONFIG_POST() {
@@ -1505,7 +1594,7 @@ void handleCONFIG_DELETE() {
   LAST_WEB_REQUEST = I.currentTime;
   
   // Delete the ScreenFlags.dat file from the /Data directory
-  deleteFiles("ScreenFlags.dat", "/Data");
+  deleteCoreStruct(); //delete the screen flags file
   deleteFiles("GsheetInfo.dat", "/Data");
   deleteFiles("WeatherData.dat", "/Data");
   deleteFiles("DevicesSensors.dat", "/Data");
@@ -1537,8 +1626,22 @@ void handleWiFiConfig() {
     WEBHTML = WEBHTML + "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
     WEBHTML = WEBHTML + "<p><strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
   }
+  
+  // Add WiFi mode information
+  String wifiModeStr = "Unknown";
+  if (I.WiFiMode == WIFI_AP_STA) {
+    wifiModeStr = "Access Point + Station (AP+STA)";
+  } else if (I.WiFiMode == WIFI_STA) {
+    wifiModeStr = "Station Mode Only";
+  } else if (I.WiFiMode == WIFI_AP) {
+    wifiModeStr = "Access Point Mode Only";
+  } else if (I.WiFiMode == WIFI_OFF) {
+    wifiModeStr = "WiFi Off";
+  }
+  WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + wifiModeStr + "</p>";
+  
   WEBHTML = WEBHTML + "<p><strong>Stored SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>Stored LMK Key:</strong> " + String((char*)Prefs.LMK_KEY) + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
 
   addWiFiConfigForm();
 
@@ -1547,7 +1650,20 @@ void handleWiFiConfig() {
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset WiFi Configuration\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  WEBHTML = WEBHTML + "<br><br><a href=\"/\">Back to Main Page</a>";
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
   WEBHTML = WEBHTML + "</body></html>";
 
   serverTextClose(200, true);
@@ -1561,7 +1677,7 @@ void addWiFiConfigForm() {
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"ssid\" name=\"ssid\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"password\">Password:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"password\" id=\"password\" name=\"password\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Security Key (up to 16 chars):</label><br>";
+  WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Local Security Key (up to 16 chars) - must be same for all devices:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
 
   //add weather address lookup if no credentials
@@ -1576,10 +1692,15 @@ void addWiFiConfigForm() {
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"zipcode\" name=\"zipcode\" pattern=\"[0-9]{5}\" maxlength=\"5\" placeholder=\"12345\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   }
 
-  WEBHTML = WEBHTML + "<input type=\"hidden\" id=\"BLOB\" name=\"BLOB\">";
-  WEBHTML = WEBHTML + "<input type=\"button\" value=\"Update WiFi Configuration\" onclick=\"submitEncryptedForm()\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  //hidden field for BLOB is needed for old encryption code
+//  WEBHTML = WEBHTML + "<input type=\"hidden\" id=\"BLOB\" name=\"BLOB\">";
+//  WEBHTML = WEBHTML + "<input type=\"button\" value=\"Update WiFi Configuration\" onclick=\"submitEncryptedForm()\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Update WiFi Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
+
+  /*
   // JavaScript for AES128 encryption and form submission
   WEBHTML = WEBHTML + R"===(
   <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
@@ -1719,9 +1840,73 @@ void addWiFiConfigForm() {
     document.getElementById('wifiForm').submit();
   }
   </script>)===";
+  */
 
 }
 
+
+void handleWiFiConfig_POST() { //updated code
+  LAST_WEB_REQUEST = I.currentTime;
+
+
+  tft.clear();
+  tft.setCursor(0, 0);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(1);
+  tft.setTextFont(2);
+  tft.printf("Updating Wifi Settings...\n");
+
+  if (server.hasArg("ssid") && server.hasArg("password") && server.hasArg("lmk_key")) {
+    String ssid = server.arg("ssid");
+    String password = server.arg("password");
+    String lmk_key = server.arg("lmk_key");
+    
+    
+    if (lmk_key.length() > 16) {
+      lmk_key = lmk_key.substring(0, 16);
+    } 
+    if (lmk_key.length() < 16) {
+      lmk_key = lmk_key + String(16 - lmk_key.length(), '0'); //pad short keys with 0s
+    } 
+    snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
+    snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
+    snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
+    Prefs.HAVECREDENTIALS = true;
+    Prefs.isUpToDate = false;
+  
+  }
+
+
+  if (connectWiFi()) {
+    Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
+    
+    if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
+      String street = server.arg("street");
+      String city = server.arg("city");
+      String state = server.arg("state");
+      String zipcode = server.arg("zipcode");
+      handlerForWeatherAddress(street, city, state, zipcode);
+    }
+
+  } else {    
+    server.sendHeader("Location", "/WiFiConfig");
+    server.send(302, "text/plain", "Failed to connect to wifi, manual reboot required.");
+  }
+
+    server.sendHeader("Location", "/WiFiConfig");
+    server.send(302, "text/plain", "WiFi configuration updated successfully and saved to NVS. Attempting to connect...");
+
+  //force prefs to save here
+  tft.println("Prefs updated, rebooting");
+  delay(3000);
+
+  //controlled reboot will store prefs and reboot
+  controlledReboot("Wifi credentials updated",RESETCAUSE::RESET_NEWWIFI,true);
+  
+}
+
+//this is the old decryption code using blob
+/* 
 void handleWiFiConfig_POST() {
   LAST_WEB_REQUEST = I.currentTime;
   
@@ -1827,8 +2012,8 @@ void handleWiFiConfig_POST() {
           strncpy((char*)Prefs.WIFIPWD, password.c_str(), sizeof(Prefs.WIFIPWD) - 1);
           Prefs.WIFIPWD[sizeof(Prefs.WIFIPWD) - 1] = '\0';
           
-          strncpy((char*)Prefs.LMK_KEY, lmk_key.c_str(), sizeof(Prefs.LMK_KEY) - 1);
-          Prefs.LMK_KEY[sizeof(Prefs.LMK_KEY) - 1] = '\0';
+          strncpy((char*)Prefs.KEYS.ESPNOW_KEY, lmk_key.c_str(), sizeof(Prefs.KEYS.ESPNOW_KEY) - 1);
+          Prefs.KEYS.ESPNOW_KEY[sizeof(Prefs.KEYS.ESPNOW_KEY) - 1] = '\0';
           
           // Mark Prefs as needing update and save to NVS
           Prefs.isUpToDate = false;
@@ -1900,6 +2085,7 @@ void handleWiFiConfig_POST() {
     server.send(302, "text/plain", "No encrypted data provided. Please try again.");
   }
 }
+*/
 
 void handleWiFiConfig_RESET() {
   LAST_WEB_REQUEST = I.currentTime;
@@ -1907,7 +2093,7 @@ void handleWiFiConfig_RESET() {
   // Clear WiFi credentials and LMK key
   memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
   memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
-  memset(Prefs.LMK_KEY, 0, sizeof(Prefs.LMK_KEY));
+  memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
   Prefs.HAVECREDENTIALS = false;
   Prefs.isUpToDate = false;
   
@@ -2030,6 +2216,20 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WeatherRefresh\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Refresh Weather Now\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
+  
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
+  WEBHTML = WEBHTML + "</div>";
   
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "</html>";
@@ -2198,4 +2398,913 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
 
 }
 
+void handleSDCARD() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
 
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " SD Card Configuration</h2>";
+  
+  // SD Card Information
+  WEBHTML = WEBHTML + "<h3>SD Card Information</h3>";
+  
+  // Get SD card size information
+  uint64_t cardSize = SD.cardSize();
+  uint64_t totalBytes = cardSize;  // Use cardSize instead of SD.totalBytes()
+  uint64_t usedBytes = SD.usedBytes();  // Direct usage, not subtraction
+  
+  // Sanity check: if usedBytes is larger than cardSize, something is wrong
+  if (usedBytes > cardSize) {
+    SerialPrint("WARNING: usedBytes > cardSize! This indicates a library issue.", true);
+    SerialPrint("usedBytes: " + String(usedBytes) + ", cardSize: " + String(cardSize), true);
+    
+    // Try alternative approach - estimate used space based on actual files
+    uint64_t estimatedUsedBytes = 0;
+    File root = SD.open("/Data");
+    if (root && root.isDirectory()) {
+      File file = root.openNextFile();
+      while (file) {
+        estimatedUsedBytes += file.size();
+        file = root.openNextFile();
+      }
+      root.close();
+      
+      if (estimatedUsedBytes < cardSize) {
+        usedBytes = estimatedUsedBytes;
+        SerialPrint("Using estimated used space from file sizes: " + String(usedBytes) + " bytes", true);
+      }
+    }
+  }
+  
+  // Debug output to Serial
+  SerialPrint("=== SD Card Debug Info ===", true);
+  SerialPrint("SD.cardSize(): " + String(cardSize) + " bytes (" + formatBytes(cardSize) + ")", true);
+  SerialPrint("SD.usedBytes(): " + String(usedBytes) + " bytes (" + formatBytes(usedBytes) + ")", true);
+  SerialPrint("Calculated free space: " + String(totalBytes - usedBytes) + " bytes (" + formatBytes(totalBytes - usedBytes) + ")", true);
+  
+  // Additional debugging for potential issues
+  if (cardSize < (1024ULL * 1024ULL * 1024ULL)) {
+    SerialPrint("WARNING: Card size is less than 1GB - this might indicate a detection issue", true);
+  }
+  if (usedBytes > (1024ULL * 1024ULL * 1024ULL * 100ULL)) {
+    SerialPrint("WARNING: Used bytes is extremely large (>100GB) - this might indicate a calculation bug", true);
+  }
+  
+  // Check if this looks like a 16GB card (common size)
+  if (cardSize >= (15ULL * 1024ULL * 1024ULL * 1024ULL) && cardSize <= (16ULL * 1024ULL * 1024ULL * 1024ULL)) {
+    SerialPrint("Detected ~16GB card - this should show ~14.8GB free space", true);
+    
+      // If this is a 16GB card but usedBytes is suspiciously large, try to estimate
+      if (usedBytes > (2ULL * 1024ULL * 1024ULL * 1024ULL)) {
+        SerialPrint("WARNING: 16GB card showing >2GB used - likely a library bug", true);
+        SerialPrint("Attempting to estimate actual used space from files...", true);
+        
+        // Force recalculation of used space from actual files
+        uint64_t actualUsedBytes = 0;
+        File root = SD.open("/Data");
+        if (root && root.isDirectory()) {
+          File file = root.openNextFile();
+          while (file) {
+            actualUsedBytes += file.size();
+            file = root.openNextFile();
+          }
+          root.close();
+          
+          if (actualUsedBytes < usedBytes && actualUsedBytes < cardSize) {
+            usedBytes = actualUsedBytes;
+            SerialPrint("Corrected used space from " + String(usedBytes) + " to " + String(actualUsedBytes) + " bytes", true);
+          }
+        }
+      }
+  }
+  
+  SerialPrint("==========================", true);
+  
+  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
+  WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Property</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Value</th>";
+  WEBHTML = WEBHTML + "</tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Card Size</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(cardSize) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Total Space</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(totalBytes) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Used Space</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(usedBytes) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Free Space</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(totalBytes - usedBytes) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Number of Devices</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(Sensors.getNumDevices()) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Number of Sensors</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(Sensors.getNumSensors()) + "</td></tr>";
+  
+  WEBHTML = WEBHTML + "</table>";
+  
+  // Debug information (raw values)
+  WEBHTML = WEBHTML + "<details style=\"margin: 10px 0;\">";
+  WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; color: #666;\"><strong>Debug Information (Raw Values)</strong></summary>";
+  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0; font-family: monospace; font-size: 12px;\">";
+  WEBHTML = WEBHTML + "<tr style=\"background-color: #f8f8f8;\">";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 4px; text-align: left;\">Property</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 4px; text-align: left;\">Raw Bytes</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 4px; text-align: left;\">MB</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 4px; text-align: left;\">GB</th>";
+  WEBHTML = WEBHTML + "</tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 4px;\"><strong>SD.cardSize()</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(cardSize) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(cardSize / (1024.0 * 1024.0), 2) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(cardSize / (1024.0 * 1024.0 * 1024.0), 2) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 4px;\"><strong>SD.usedBytes()</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(usedBytes) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(usedBytes / (1024.0 * 1024.0), 2) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(usedBytes / (1024.0 * 1024.0 * 1024.0), 2) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 4px;\"><strong>Free Space</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String(totalBytes - usedBytes) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String((totalBytes - usedBytes) / (1024.0 * 1024.0), 2) + "</td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 4px;\">" + String((totalBytes - usedBytes) / (1024.0 * 1024.0 * 1024.0), 2) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 4px;\">";
+  // Additional debugging notes
+  WEBHTML = WEBHTML + "<div style=\"margin: 10px 0; padding: 10px; background-color: #f0f8ff; border-left: 4px solid #0066cc;\">";
+  WEBHTML = WEBHTML + "The debug information shows raw values returned by the file table. ";
+  WEBHTML = WEBHTML + "<strong>Note:</strong> Free space may be incorrect in the following cases:";
+  WEBHTML = WEBHTML + "<ul style=\"margin: 5px 0; padding-left: 20px;\">";
+  WEBHTML = WEBHTML + "<li>Issues with large cards (>16GB)</li>";
+  WEBHTML = WEBHTML + "<li>SD card filesystem limitations (FAT16/FAT32)</li>";
+  WEBHTML = WEBHTML + "<li>Card formatting or partition issues</li>";
+  WEBHTML = WEBHTML + "<li>Files not being properly closed or deleted</li>";
+  WEBHTML = WEBHTML + "<li>Fragmentation or corruption of the filesystem</li>";
+  WEBHTML = WEBHTML + "</ul>";
+  WEBHTML = WEBHTML + "A warning will follow this message if an error is likely.";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "</td></tr>";
+  // Status indicator
+  if (usedBytes > (2ULL * 1024ULL * 1024ULL * 1024ULL) && cardSize >= (15ULL * 1024ULL * 1024ULL * 1024ULL)) {
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 4px;\">";
+    WEBHTML = WEBHTML + "<div style=\"margin: 10px 0; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107;\">";
+    WEBHTML = WEBHTML + "<strong>WARNING:</strong> Large card detected with suspicious used space values. ";
+    WEBHTML = WEBHTML + "The system has attempted to correct this by scanning actual files. ";
+    WEBHTML = WEBHTML + "You should manually check SD card usage if concerned about the values.";
+    WEBHTML = WEBHTML + "</div>";
+    WEBHTML = WEBHTML + "</td></tr>";
+  }
+
+  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + "</details>";
+  
+  
+  
+  // Combined Files Table
+  WEBHTML = WEBHTML + "<h3>All Files on SD Card</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
+  WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Filename</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Size (KB)</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Last Updated</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Type</th>";
+  WEBHTML = WEBHTML + "</tr>";
+  
+  // List all files in a single pass
+  File root = SD.open("/Data");
+  int fileCount = 0;  // Moved declaration to correct scope
+  if (root && root.isDirectory()) {
+    File file = root.openNextFile();
+    
+    while (file && fileCount < 100) { // Increased limit to show more files
+      String filename = file.name();
+      
+      if (filename.endsWith(".dat") || filename.endsWith(".txt")) {
+        // Determine file type and category
+        String fileType = "Unknown";
+        String fileCategory = "Unknown";
+        
+        if (filename == "ScreenFlags.dat") {
+          fileType = "Screen Flags";
+          fileCategory = "Core Data";
+        } else if (filename == "SensorBackupv2.dat") {
+          fileType = "Sensor Backup";
+          fileCategory = "Core Data";
+        } else if (filename == "GsheetInfo.dat") {
+          fileType = "Google Sheets";
+          fileCategory = "Core Data";
+        } else if (filename == "WeatherData.dat") {
+          fileType = "Weather Data";
+          fileCategory = "Weather Data";
+        } else if (filename == "DevicesSensors.dat") {
+          fileType = "Devices & Sensors";
+          fileCategory = "Devices";
+        } else if (filename == "FileTimestamps.dat") {
+          fileType = "File Timestamps";
+          fileCategory = "Core Data";
+        } else if (filename == "ErrorLog.txt") {
+          fileType = "Error Log";
+          fileCategory = "Core Data";
+        } else {
+          // Individual sensor file (format: sns_MAC_TYPE_ID.dat)
+          fileCategory = "Individual Sensors";          
+          fileType = "Individual Sensor";
+        }
+        
+        // Calculate size in KB
+        uint32_t sizeBytes = file.size();
+        float sizeKB = sizeBytes / 1024.0;
+        
+        // Get file modification time (if available)
+        String lastUpdated = "Unknown";
+        time_t fileTime = file.getLastWrite();
+        
+        // For sensor data files, try to read the actual data timestamp
+        if (filename.endsWith(".dat") && filename.startsWith("sns_")) {
+            // This is a sensor data file, try to read the timestamp from content
+            if (sizeBytes >= sizeof(SensorDataPoint)) {
+                // Read the last data point to get the timestamp
+                file.seek(sizeBytes - sizeof(SensorDataPoint));
+                SensorDataPoint dataPoint;
+                if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) == sizeof(SensorDataPoint)) {
+                    // Debug: log what we read
+                    //SerialPrint("Read SensorDataPoint from " + filename + ": timestamp=" + String(dataPoint.fileWriteTimestamp) + ", size=" + String(sizeof(SensorDataPoint)), true);
+                    
+                    if (dataPoint.fileWriteTimestamp > 0) {
+                        // Use the timestamp from the file content
+                        struct tm *timeinfo = localtime((time_t*)&dataPoint.fileWriteTimestamp);
+                        if (timeinfo) {
+                            char timeStr[25];
+                            strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
+                            lastUpdated = String(timeStr) + " (Content)";
+                        } else {
+                            // Fallback to raw timestamp if localtime fails
+                            lastUpdated = String(dataPoint.fileWriteTimestamp) + " (Content Raw)";
+                        }
+                    } else {
+                        // Debug: log when timestamp is 0
+                        //SerialPrint("Sensor file " + filename + " has fileWriteTimestamp = 0", true);
+                    }
+                } else {
+                    // Debug: log when reading fails
+                    SerialPrint("Failed to read SensorDataPoint from " + filename + ", bytes read: " + String(file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint))), true);
+                }
+                // Reset file position for next operations
+                file.seek(0);
+            } else {
+                // Debug: log when file is too small
+                SerialPrint("Sensor file " + filename + " is too small: " + String(sizeBytes) + " bytes, need " + String(sizeof(SensorDataPoint)), true);
+            }
+        }
+        
+        // If we still don't have a timestamp, try file system timestamp
+        if (lastUpdated == "Unknown" && fileTime > 0) {
+            struct tm *timeinfo = localtime(&fileTime);
+            if (timeinfo) {
+                char timeStr[25];
+                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
+                lastUpdated = String(timeStr) + " (File)";
+            }
+        }
+        
+        // Add row to table
+        WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">" + filename + "</td>";
+        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(sizeKB, 1) + " KB</td>";
+        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + lastUpdated + "</td>";
+        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + fileCategory + "</td></tr>";
+        
+        fileCount++;
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+    
+    if (fileCount == 0) {
+      WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">No .dat files found</td></tr>";
+    } else if (fileCount >= 100) {
+      WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Showing first 100 files. More files may exist.</td></tr>";
+    }
+  }
+  
+  WEBHTML = WEBHTML + "</table>";
+  
+  // File Summary
+  WEBHTML = WEBHTML + "<h3>File Summary</h3>";
+  WEBHTML = WEBHTML + "<p><strong>Total Files Listed:</strong> " + String(fileCount) + " .dat files</p>";
+  
+  // Individual Sensor Files Status
+  WEBHTML = WEBHTML + "<p><strong>Note:</strong> Individual sensor files are automatically created when new sensor data is received.</p>";
+  
+  // Action Buttons
+  WEBHTML = WEBHTML + "<h3>SD Card Actions</h3>";
+  
+  // Delete buttons
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_SCREENFLAGS\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete ScreenFlags.dat\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_WEATHERDATA\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete WeatherData.dat\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_DEVICES\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete DevicesSensors Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_SENSORS\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete All Sensor History Files\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_ERRORLOG\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete Error Log\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_TIMESTAMPS\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete Timestamps Log\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_GSHEET\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete GSheet Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Save buttons
+  WEBHTML = WEBHTML + "<br><br>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_SAVE_SCREENFLAGS\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Save ScreenFlags.dat Now\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_SAVE_WEATHERDATA\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Save WeatherData.dat Now\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_STORE_DEVICES\" style=\"display: inline;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Store DevicesSensors Data Now\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // View timestamps button
+  WEBHTML = WEBHTML + "<br><br>";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD_TIMESTAMPS\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">List File Timestamps</a>";
+  
+  // Navigation links to other config pages
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
+  #ifdef _USEFIREBASE
+  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
+  WEBHTML = WEBHTML + "</body></html>";
+  
+  serverTextClose(200, true);
+}
+
+void handleSDCARD_DELETE_DEVICES() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the sensors data file
+  uint16_t nDeleted = deleteFiles("DevicesSensors.dat", "/Data");
+  if (nDeleted > 0) {
+    SerialPrint("DevicesSensors data file deleted " + String(nDeleted) + " files successfully", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "DevicesSensors data file deleted " + String(nDeleted) + " files successfully.");
+  } else {
+    SerialPrint("Failed to delete DevicesSensors data file", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to delete DevicesSensors data file.");
+  }
+}
+
+void handleSDCARD_DELETE_SENSORS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete all individual sensor history files
+  File root = SD.open("/Data");
+  if (root && root.isDirectory()) {
+    File file = root.openNextFile();
+    int deletedCount = 0;
+    while (file) {
+      String filename = file.name();
+      if (filename.endsWith(".dat") && filename != "ScreenFlags.dat" && filename != "SensorBackupv2.dat" && filename != "GsheetInfo.dat" && filename != "FileTimestamps.dat" && filename != "WeatherData.dat" && filename != "DevicesSensors.dat") {
+        if (SD.remove("/Data/" + filename)) {
+          deletedCount++;
+        }
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+    
+    SerialPrint("Deleted " + String(deletedCount) + " sensor history files", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Deleted " + String(deletedCount) + " sensor history files.");
+  } else {
+    SerialPrint("Failed to access Data directory", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to access Data directory.");
+  }
+}
+
+void handleSDCARD_STORE_DEVICES() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Store the devices and sensors data to SD card
+  if (storeDevicesSensorsSD()) {
+    SerialPrint("DevicesSensors data stored to SD card successfully", true);
+    server.send(302, "text/plain", "DevicesSensors data stored to SD card successfully.");
+  } else {
+    SerialPrint("Failed to store DevicesSensors data to SD card", true);
+    server.send(302, "text/plain", "Failed to store DevicesSensors data to SD card.");
+  }
+}
+
+void handleSDCARD_DELETE_SCREENFLAGS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the ScreenFlags.dat file
+  uint16_t nDeleted = deleteCoreStruct();
+
+  if (nDeleted > 0) {
+    SerialPrint("ScreenFlags.dat deleted " + String(nDeleted) + " files successfully", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "ScreenFlags.dat deleted " + String(nDeleted) + " files successfully.");
+  } else {
+    SerialPrint("Failed to delete ScreenFlags.dat", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to delete ScreenFlags.dat.");
+  }
+
+}
+
+void handleSDCARD_DELETE_WEATHERDATA() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the WeatherData.dat file
+  uint16_t nDeleted = deleteFiles("WeatherData.dat", "/Data");
+  if (nDeleted > 0) {
+    SerialPrint("WeatherData.dat deleted " + String(nDeleted) + " files successfully", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "WeatherData.dat deleted " + String(nDeleted) + " files successfully.");
+  } else {
+    SerialPrint("Failed to delete WeatherData.dat", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to delete WeatherData.dat.");
+  }
+}
+
+void handleSDCARD_SAVE_SCREENFLAGS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Save ScreenFlags.dat immediately
+  if (storeScreenInfoSD()) {
+    SerialPrint("ScreenFlags.dat saved to SD card successfully", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "ScreenFlags.dat saved to SD card successfully.");
+  } else {
+    SerialPrint("Failed to save ScreenFlags.dat to SD card", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to save ScreenFlags.dat to SD card.");
+  }
+}
+
+void handleSDCARD_SAVE_WEATHERDATA() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Save WeatherData.dat immediately
+  if (storeWeatherDataSD()) {
+    SerialPrint("WeatherData.dat saved to SD card successfully", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "WeatherData.dat saved to SD card successfully.");
+  } else {
+    SerialPrint("Failed to save WeatherData.dat to SD card", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Failed to save WeatherData.dat to SD card.");
+  }
+}
+
+void handleSDCARD_TIMESTAMPS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Open and read the FileTimestamps.dat file
+  String filename = "/Data/FileTimestamps.dat";
+  File file = SD.open(filename, FILE_READ);
+  
+  if (!file) {
+    // File doesn't exist or can't be opened
+    server.send(200, "text/html", 
+      "<html><head><title>File Timestamps</title></head><body>"
+      "<h1>File Timestamps</h1>"
+      "<p>The FileTimestamps.dat file does not exist or cannot be opened.</p>"
+      "<p>This file is created automatically when files are written to the SD card.</p>"
+      "<br><a href=\"/SDCARD\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to SD Card</a>"
+      "</body></html>");
+    return;
+  }
+  
+  // Read the file content
+  String content = "";
+  while (file.available()) {
+    content += file.readString();
+  }
+  file.close();
+  
+  if (content.length() == 0) {
+    // File is empty
+    server.send(200, "text/html", 
+      "<html><head><title>File Timestamps</title></head><body>"
+      "<h1>File Timestamps</h1>"
+      "<p>The FileTimestamps.dat file is empty.</p>"
+      "<p>This file will be populated as files are written to the SD card.</p>"
+      "<br><a href=\"/SDCARD\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to SD Card</a>"
+      "</body></html>");
+    return;
+  }
+  
+  // Format the content for display
+  String htmlContent = "<html><head><title>File Timestamps</title>";
+  htmlContent += "<style>";
+  htmlContent += "body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }";
+  htmlContent += "h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }";
+  htmlContent += ".timestamp-entry { background-color: white; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #4CAF50; }";
+  htmlContent += ".filename { font-weight: bold; color: #2196F3; }";
+  htmlContent += ".timestamp { color: #666; font-family: monospace; }";
+  htmlContent += ".back-button { padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; display: inline-block; margin-top: 20px; }";
+  htmlContent += "</style></head><body>";
+  htmlContent += "<h1>File Timestamps</h1>";
+  htmlContent += "<p>This shows when files were last written to the SD card:</p>";
+  
+  // Parse and format each line
+  int lineStart = 0;
+  int lineEnd = content.indexOf('\n');
+  int entryCount = 0;
+  
+  while (lineEnd >= 0 && entryCount < 1000) { // Limit to 1000 entries to prevent memory issues
+    String line = content.substring(lineStart, lineEnd);
+    line.trim();
+    
+    if (line.length() > 0) {
+      int commaPos = line.indexOf(',');
+      if (commaPos > 0) {
+        String filename = line.substring(0, commaPos);
+        String timestamp = line.substring(commaPos + 1);
+        
+        // Convert timestamp to readable format
+        uint32_t timestampValue = timestamp.toInt();
+        String readableTime = "Unknown";
+        if (timestampValue > 0) {
+          readableTime = dateify(timestampValue);
+        }
+        
+        htmlContent += "<div class=\"timestamp-entry\">";
+        htmlContent += "<span class=\"filename\">" + filename + "</span><br>";
+        htmlContent += "<span class=\"timestamp\">Written: " + readableTime + " (" + timestamp + ")</span>";
+        htmlContent += "</div>";
+        
+        entryCount++;
+      }
+    }
+    
+    lineStart = lineEnd + 1;
+    lineEnd = content.indexOf('\n', lineStart);
+  }
+  
+  if (entryCount == 0) {
+    htmlContent += "<p>No timestamp entries found in the file.</p>";
+  } else {
+    htmlContent += "<p><strong>Total entries: " + String(entryCount) + "</strong></p>";
+  }
+  
+  htmlContent += "<a href=\"/SDCARD\" class=\"back-button\">Back to SD Card</a>";
+  htmlContent += "</body></html>";
+  
+  server.send(200, "text/html", htmlContent);
+}
+
+void handleERROR_LOG() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Open and read the DeviceErrors.txt file
+  String filename = "/Data/DeviceErrors.txt";
+  File file = SD.open(filename, FILE_READ);
+  
+  if (!file) {
+    // File doesn't exist or can't be opened
+    server.send(200, "text/html", 
+      "<html><head><title>Error Log</title></head><body>"
+      "<h1>Error Log</h1>"
+      "<p>The DeviceErrors.txt file does not exist or cannot be opened.</p>"
+      "<p>This file is created automatically when errors occur on the device.</p>"
+      "<br><a href=\"/STATUS\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Status</a>"
+      "</body></html>");
+    return;
+  }
+  
+  // Read the file content
+  String content = "";
+  while (file.available()) {
+    content += file.readString();
+  }
+  file.close();
+  
+  if (content.length() == 0) {
+    // File is empty
+    server.send(200, "text/html", 
+      "<html><head><title>Error Log</title></head><body>"
+      "<h1>Error Log</h1>"
+      "<p>The DeviceErrors.txt file is empty.</p>"
+      "<p>No errors have been logged yet.</p>"
+      "<br><a href=\"/STATUS\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Status</a>"
+      "</body></html>");
+    return;
+  }
+  
+  // Format the content for display
+  String htmlContent = "<html><head><title>Error Log</title>";
+  htmlContent += "<style>";
+  htmlContent += "body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }";
+  htmlContent += "h1 { color: #333; border-bottom: 2px solid #f44336; padding-bottom: 10px; }";
+  htmlContent += ".error-entry { background-color: white; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #f44336; }";
+  htmlContent += ".error-time { font-weight: bold; color: #f44336; }";
+  htmlContent += ".error-code { color: #FF9800; font-family: monospace; }";
+  htmlContent += ".error-message { color: #333; margin-top: 5px; }";
+  htmlContent += ".back-button { padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; display: inline-block; margin-top: 20px; }";
+  htmlContent += "pre { background-color: #f8f8f8; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }";
+  htmlContent += "</style></head><body>";
+  htmlContent += "<h1>Device Error Log</h1>";
+  htmlContent += "<p>This shows all errors that have occurred on the device:</p>";
+  
+  // Parse and format each line
+  int lineStart = 0;
+  int lineEnd = content.indexOf('\n');
+  int entryCount = 0;
+  
+  while (lineEnd >= 0 && entryCount < 1000) { // Limit to 1000 entries to prevent memory issues
+    String line = content.substring(lineStart, lineEnd);
+    line.trim();
+    
+    if (line.length() > 0) {
+      // Parse the error log format: timestamp,errorcode,errormessage
+      int firstComma = line.indexOf(',');
+      int secondComma = line.indexOf(',', firstComma + 1);
+      
+      if (firstComma > 0 && secondComma > firstComma) {
+        String timestamp = line.substring(0, firstComma);
+        String errorCode = line.substring(firstComma + 1, secondComma);
+        String errorMessage = line.substring(secondComma + 1);
+        
+        htmlContent += "<div class=\"error-entry\">";
+        htmlContent += "<span class=\"error-time\">" + timestamp + "</span><br>";
+        htmlContent += "<span class=\"error-code\">Error Code: " + errorCode + "</span><br>";
+        htmlContent += "<div class=\"error-message\">" + errorMessage + "</div>";
+        htmlContent += "</div>";
+        
+        entryCount++;
+      } else {
+        // If the format doesn't match, just display the raw line
+        htmlContent += "<div class=\"error-entry\">";
+        htmlContent += "<div class=\"error-message\">" + line + "</div>";
+        htmlContent += "</div>";
+        entryCount++;
+      }
+    }
+    
+    lineStart = lineEnd + 1;
+    lineEnd = content.indexOf('\n', lineStart);
+  }
+  
+  if (entryCount == 0) {
+    htmlContent += "<p>No error entries found in the file.</p>";
+  } else {
+    htmlContent += "<p><strong>Total entries: " + String(entryCount) + "</strong></p>";
+  }
+  
+  // Also show the raw file content for debugging
+  htmlContent += "<h3>Raw File Content (for debugging)</h3>";
+  htmlContent += "<pre>" + content + "</pre>";
+  
+  htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
+  htmlContent += "</body></html>";
+  
+  server.send(200, "text/html", htmlContent);
+}
+
+void handleSDCARD_DELETE_ERRORLOG() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the DeviceErrors.txt file
+  String filename = "/Data/DeviceErrors.txt";
+  if (SD.exists(filename)) {
+    if (SD.remove(filename)) {
+      // Remove the error log file from the timestamp index
+      removeFromTimestampIndex(filename.c_str());
+      SerialPrint("Error log file deleted successfully", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "Error log file deleted successfully.");
+    } else {
+      SerialPrint("Failed to delete error log file", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "Failed to delete error log file.");
+    }
+  } else {
+    SerialPrint("Error log file does not exist", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Error log file does not exist.");
+  }
+}
+
+void handleSDCARD_DELETE_TIMESTAMPS() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the FileTimestamps.dat file
+  String filename = "/Data/FileTimestamps.dat";
+  if (SD.exists(filename)) {
+    if (SD.remove(filename)) {
+      SerialPrint("File timestamps log deleted successfully", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "File timestamps log deleted successfully.");
+    } else {
+      SerialPrint("Failed to delete file timestamps log", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "Failed to delete file timestamps log.");
+    }
+  } else {
+    SerialPrint("File timestamps log does not exist", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "File timestamps log does not exist.");
+  }
+}
+
+void handleSDCARD_DELETE_GSHEET() {
+  LAST_WEB_REQUEST = I.currentTime;
+  
+  // Delete the GsheetInfo.dat file
+  String filename = "/Data/GsheetInfo.dat";
+  if (SD.exists(filename)) {
+    if (SD.remove(filename)) {
+      // Remove the GSheet info file from the timestamp index
+      removeFromTimestampIndex(filename.c_str());
+      SerialPrint("GSheet info file deleted successfully", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "GSheet info file deleted successfully.");
+    } else {
+      SerialPrint("Failed to delete GSheet info file", true);
+      server.sendHeader("Location", "/SDCARD");
+      server.send(302, "text/plain", "Failed to delete GSheet info file.");
+    }
+  } else {
+    SerialPrint("GSheet info file does not exist", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "GSheet info file does not exist.");
+  }
+}
+
+// Firebase web interface handlers
+#ifdef _USEFIREBASE
+void handleFIREBASE() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Firebase Database Management</h2>";
+  
+  
+  
+  // Firebase operations
+  WEBHTML = WEBHTML + "<h3>Firebase Operations</h3>";
+  WEBHTML = WEBHTML + "<div style=\"margin: 20px 0;\">";
+  
+  
+  // Upload all data button
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/FIREBASE_UPLOAD_ALL\" style=\"display: inline; margin-right: 10px;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload All Data\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "</div>";
+  
+  
+  // Navigation links
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Navigation</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
+  WEBHTML = WEBHTML + "</body></html>";
+  
+  serverTextClose(200, true);
+}
+
+
+void handleFIREBASE_UPLOAD_ALL() {
+  sendToFirebase("/sensordata");
+  
+  // Redirect back to Firebase page
+  server.sendHeader("Location", "/FIREBASE", true);
+  server.send(302, "text/plain", "");
+}
+#endif
+
+void handleREBOOT_DEBUG() {
+  LAST_WEB_REQUEST = I.currentTime;
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader();
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Reboot Debug Information</h2>";
+  
+  // Display reboot debug information
+  WEBHTML = WEBHTML + "<div style=\"margin: 20px 0; padding: 20px; background-color: #f5f5f5; border-radius: 8px;\">";
+  WEBHTML = WEBHTML + "<pre style=\"font-family: monospace; white-space: pre-wrap;\">";
+  WEBHTML = WEBHTML + getRebootDebugInfo();
+  WEBHTML = WEBHTML + "</pre>";
+  WEBHTML = WEBHTML + "</div>";
+  
+  // Navigation links
+  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
+  WEBHTML = WEBHTML + "<h3>Navigation</h3>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a>";
+  WEBHTML = WEBHTML + "</div>";
+  
+  WEBHTML = WEBHTML + "</body></html>";
+  
+  serverTextClose(200, true);
+}
+
+/**
+ * @brief Setup all HTTP server routes.
+ * This function registers all the server handlers and should be called from main.cpp
+ * instead of having the routes defined there.
+ */
+void setupServerRoutes() {
+    // Main routes
+    server.on("/", handleRoot);
+    server.on("/ALLSENSORS", handleALL);
+    server.on("/POST", handlePost);
+    server.on("/REQUESTUPDATE", handleREQUESTUPDATE);
+    server.on("/CLEARSENSOR", handleCLEARSENSOR);
+    server.on("/TIMEUPDATE", handleTIMEUPDATE);
+    server.on("/REQUESTWEATHER", handleREQUESTWEATHER);
+    server.on("/REBOOT", handleReboot);
+    server.on("/STATUS", handleSTATUS);
+    server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
+    server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
+    
+    // Configuration routes
+    server.on("/CONFIG", HTTP_GET, handleCONFIG);
+    server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
+    server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
+    server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
+    
+    // Google Sheets routes
+    server.on("/GSHEET", HTTP_GET, handleGSHEET);
+    server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
+    server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
+    
+    // WiFi configuration routes
+    server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
+    server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
+    server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
+    
+    // Weather routes
+    server.on("/WEATHER", HTTP_GET, handleWeather);
+    server.on("/WEATHER", HTTP_POST, handleWeather_POST);
+    server.on("/WeatherRefresh", HTTP_POST, handleWeatherRefresh);
+    server.on("/WeatherZip", HTTP_POST, handleWeatherZip);
+    server.on("/WeatherAddress", HTTP_POST, handleWeatherAddress);
+    
+    // SD Card routes
+    server.on("/SDCARD", HTTP_GET, handleSDCARD);
+    server.on("/SDCARD_DELETE_DEVICES", HTTP_POST, handleSDCARD_DELETE_DEVICES);
+    server.on("/SDCARD_DELETE_SENSORS", HTTP_POST, handleSDCARD_DELETE_SENSORS);
+    server.on("/SDCARD_STORE_DEVICES", HTTP_POST, handleSDCARD_STORE_DEVICES);
+    server.on("/SDCARD_DELETE_SCREENFLAGS", HTTP_POST, handleSDCARD_DELETE_SCREENFLAGS);
+    server.on("/SDCARD_DELETE_WEATHERDATA", HTTP_POST, handleSDCARD_DELETE_WEATHERDATA);
+    server.on("/SDCARD_SAVE_SCREENFLAGS", HTTP_POST, handleSDCARD_SAVE_SCREENFLAGS);
+    server.on("/SDCARD_SAVE_WEATHERDATA", HTTP_POST, handleSDCARD_SAVE_WEATHERDATA);
+    server.on("/SDCARD_TIMESTAMPS", HTTP_GET, handleSDCARD_TIMESTAMPS);
+    server.on("/ERROR_LOG", HTTP_GET, handleERROR_LOG);
+    server.on("/REBOOT_DEBUG", HTTP_GET, handleREBOOT_DEBUG);
+    server.on("/SDCARD_DELETE_ERRORLOG", HTTP_POST, handleSDCARD_DELETE_ERRORLOG);
+    server.on("/SDCARD_DELETE_TIMESTAMPS", HTTP_POST, handleSDCARD_DELETE_TIMESTAMPS);
+    server.on("/SDCARD_DELETE_GSHEET", HTTP_POST, handleSDCARD_DELETE_GSHEET);
+
+    // Firebase routes
+    #ifdef _USEFIREBASE
+    server.on("/FIREBASE", HTTP_GET, handleFIREBASE);
+    server.on("/FIREBASE_UPLOAD_ALL", HTTP_POST, handleFIREBASE_UPLOAD_ALL);
+    #endif
+
+    // 404 handler
+    server.onNotFound(handleNotFound);
+}

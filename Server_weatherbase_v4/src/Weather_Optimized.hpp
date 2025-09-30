@@ -8,8 +8,6 @@
 #include <WiFiClientSecure.h>
 #include <functional>
 
-
-
 #define NUMWTHRDAYS 5
 #define WEATHER_CACHE_SIZE 3
 #define MAX_RETRY_ATTEMPTS 3

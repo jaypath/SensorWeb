@@ -112,12 +112,34 @@ void handleWiFiConfig();
 void handleWiFiConfig_POST();
 void handleWiFiConfig_RESET();
 void addWiFiConfigForm();
+void handleSDCARD();
+void handleSDCARD_DELETE_DEVICES();
+void handleSDCARD_DELETE_SENSORS();
+void handleSDCARD_STORE_DEVICES();
+void handleSDCARD_DELETE_SCREENFLAGS();
+void handleSDCARD_DELETE_WEATHERDATA();
+void handleSDCARD_SAVE_SCREENFLAGS();
+void handleSDCARD_SAVE_WEATHERDATA();
+void handleSDCARD_TIMESTAMPS();
+void handleERROR_LOG();
+void handleREBOOT_DEBUG();
+void handleSDCARD_DELETE_ERRORLOG();
+void handleSDCARD_DELETE_TIMESTAMPS();
+void handleSDCARD_DELETE_GSHEET();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 bool SendData(struct SensorVal*);
 
+// Firebase handlers
+void handleFIREBASE();
+void handleFIREBASE_TEST();
+void handleFIREBASE_UPLOAD_ALL();
+void handleFIREBASE_UPLOAD_WEATHER();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();
+
+// Server route setup function
+void setupServerRoutes();
 
 
 #endif

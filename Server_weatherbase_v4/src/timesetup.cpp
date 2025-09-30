@@ -109,8 +109,11 @@ bool updateTime() {
 
   if ( timeClient.update()) {  //returns false if not time to update
     setTime(timeClient.getEpochTime());
+//    configTime(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET, 0, "time.nist.gov"); //configure the ESP32 time to match the NTP server
+
     isgood = true;
   }
+
 
   I.currentTime=now();    
   return isgood;

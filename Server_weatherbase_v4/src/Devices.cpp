@@ -176,7 +176,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
     // Check if sensor already exists
     int16_t existingIndex = findSensor(deviceMAC, snsType, snsID);
     if (existingIndex >= 0) {
-        // Update existing sensor
+        // Update existing sensor. note that timeWritten is not updated here.
         SnsType* sensor = &sensors[existingIndex];
         sensor->snsValue = snsValue;
         sensor->timeRead = timeRead;
@@ -204,6 +204,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
             sensors[i].snsValue = snsValue;
             sensors[i].timeRead = timeRead;
             sensors[i].timeLogged = timeLogged;
+            sensors[i].timeWritten = 0;
             sensors[i].Flags = flags;
             sensors[i].SendingInt = sendingInt;
             sensors[i].IsSet = 1;
@@ -307,12 +308,7 @@ int16_t Devices_Sensors::findOldestSensor() {
 
 byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index >= 0) {
-        // Check specific device or sensor
-        if (index < NUMDEVICES && index < numDevices) {
-            if (devices[index].IsSet) {
-                return checkExpirationDevice(index, currentTime, onlyCritical);
-            }
-        } else if (index < NUMSENSORS && index < numSensors) {
+        if (index < NUMSENSORS && index < numSensors) {
             if (sensors[index].IsSet) {
                 return checkExpirationSensor(index, currentTime, onlyCritical);
             }
@@ -322,12 +318,6 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
     
     // Check all devices and sensors
     byte expiredCount = 0;
-    
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
-        if (devices[i].IsSet) {
-            expiredCount += checkExpirationDevice(i, currentTime, onlyCritical);
-        }
-    }
     
     for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
         if (sensors[i].IsSet) {
@@ -472,8 +462,32 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
     return targetIndex;
 }
 
+#ifdef _USESDCARD
 // Data storage functions
-uint8_t Devices_Sensors::storeAllSensors(uint8_t intervalMinutes) {
+uint8_t Devices_Sensors::storeAllSensorsSD() {
+    //march through all sensors and write to SD card if timeWritten is older than 1 hour
+    uint8_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+      if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
+        storeSensorDataSD(i);
+        count++;
+      }
+    }
+    return count;
+  }
+  
+bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten) {
+    if (isSensorIndexInvalid(sensorIndex)!=0) {
+        return false;
+    }
+    if (timeWritten == 0) sensors[sensorIndex].timeWritten = I.currentTime;
+    else sensors[sensorIndex].timeWritten = timeWritten;
+
+    return true;
+}
+
+uint8_t Devices_Sensors::storeDevicesSensorsArrayToSD(uint8_t intervalMinutes) {
+    //stores devicesensors array to sd
     if (intervalMinutes==0) intervalMinutes=1;//never write to SD card more than once per minute
     if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSDSaveTime+intervalMinutes*60<I.currentTime) { 
         lastSDSaveTime = I.currentTime;    
@@ -483,12 +497,27 @@ uint8_t Devices_Sensors::storeAllSensors(uint8_t intervalMinutes) {
     return 0;
 }
 
-bool Devices_Sensors::readAllSensors() {
+bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
     readDevicesSensorsSD();
     return true;
 }
 
+#endif
+
 // Helper functions for expiration checking
+uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS || index >= numSensors) {
+        return 1;
+    }
+    if (!sensors[index].IsSet) {
+        return 2;
+    }
+    if (sensors[index].expired) {
+        return 3;
+    }
+    return 0;
+}
+
 byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index < 0 || index >= NUMDEVICES || index >= numDevices || !devices[index].IsSet) {
         return 0;
@@ -515,7 +544,9 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     }
     
     SnsType* sensor = &sensors[index];
-    uint32_t expirationTime = sensor->timeLogged + sensor->SendingInt * 2; // 2x sending interval
+    uint16_t sendint = sensor->SendingInt;
+    if (sendint==0) sendint = 300; //default to 5 minutes
+    uint32_t expirationTime = sensor->timeLogged + sendint * 2; // 2x sending interval
     
     if (currentTime > expirationTime) {
         if (onlyCritical && !bitRead(sensor->Flags, 7)) {
@@ -527,6 +558,10 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     
     sensor->expired = false;
     return 0;
+}
+
+uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
+    return sensors[index].Flags;
 }
 
 bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
@@ -550,7 +585,7 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
         return (snsType == 3);
     }
     if (type == "leak") {//leak
-        return (snsType == 58);
+        return (snsType == 70);
     }
     if (type == "human") {//human
         return (snsType == 21);
@@ -558,7 +593,7 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
     if (type == "server") {//binary
         return (snsType >= 100);
     }
-    if (type == "all") {//all
+    if (type == "all" || type == "any") {//all
         return true;
     }
 

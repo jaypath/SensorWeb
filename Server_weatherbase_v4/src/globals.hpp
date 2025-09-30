@@ -7,7 +7,7 @@
 #define _USEWEATHER
 #define _USEBATTERY
 #define _USEGSHEET
-
+#define _USESDCARD
 
 #define MYNAME "Pleasant Weather Server"
 #define NUMDEVICES 50
@@ -172,7 +172,7 @@ typedef enum {
   RESET_OTA, //ota reset
   RESET_WIFI, //no wifi so reset
   RESET_TIME, //time based reset 
-  RESET_UNKNOWN, //unknown cause
+  RESET_UNKNOWN, //unexpected reboot/crash detected
   RESET_NEWWIFI //new wifi credentials
   } RESETCAUSE;
 
@@ -224,10 +224,13 @@ typedef enum {
 
 
 
+  struct STRUCT_KEYS {
+    uint8_t ESPNOW_KEY[17]; // espnow PMK key, only 16 bytes are used
+  };
+
   struct STRUCT_PrefsH {        
     bool isUpToDate; // Prefs has been saved to memory
     
-    uint32_t lastESPNOW;
     byte WIFISSID[33];
     byte WIFIPWD[65];
     uint32_t SSIDCRC;
@@ -236,8 +239,8 @@ typedef enum {
     uint32_t LASTBOOTTIME;
     uint8_t MyType; //see end of this file for types
     char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
-    // --- ESPNow WiFi password request ephemeral key/IV and timestamp ---
-    uint8_t LMK_KEY[16]; //espnow LMK key
+
+    STRUCT_KEYS KEYS;
 
     // --- Network configuration (merged from WiFi_type) ---
     uint32_t DHCP;  // 4 bytes
@@ -267,7 +270,7 @@ typedef enum {
   
   
   struct STRUCT_CORE {
-
+      time_t lastStoreCoreDataTime;
       bool isUpToDate;  // Core has been saved to memory
       RESETCAUSE resetInfo;
       time_t lastResetTime;
@@ -283,11 +286,11 @@ typedef enum {
       byte CLOCK_Y = 105;
       byte HEADER_Y = 30;
       uint32_t lastHeaderTime=0; //last time header was drawn
-      uint32_t lastWeatherTime=0; //last time weather was drawn
+      uint32_t lastWeatherTime=0; //last time weather image was drawn
       uint32_t lastCurrentConditionTime; //last time current condition was drawn
       uint32_t lastClockDrawTime=0; //last time clock was updated, whether flag or not
       uint32_t lastFutureConditionTime=0; //last time future condition was drawn
-      uint32_t lastFlagViewTime=0; //last time clock was updated, whether flag or not
+      uint32_t lastFlagViewTime=0; //last time flags were drawn, instead of weather image
       uint8_t cycleHeaderMinutes = 30; //how many seconds to show header?
       uint8_t cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
       uint8_t cycleWeatherMinutes = 10; //how many minutes to show weather values?
@@ -323,6 +326,8 @@ typedef enum {
       uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
       uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
       uint64_t TEMP_AES_MAC; // expected server MAC for WiFi PW response
+      time_t lastESPNOW_TIME;
+      int8_t lastESPNOW_STATE; //-2 if receive failure, -1 if send failure, 0 if indeterminate, 1 if send success, 2 if receive success
       uint64_t LAST_ESPNOW_SERVER_MAC; // MAC of last server (type 100) seen in broadcast
       uint32_t LAST_ESPNOW_SERVER_IP;
       uint32_t LAST_ESPNOW_SERVER_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
@@ -356,7 +361,6 @@ typedef enum {
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;
   
-      time_t lastESPNOW;
   
       int16_t GLOBAL_TIMEZONE_OFFSET;
       int16_t DSTOFFSET;
@@ -431,9 +435,10 @@ struct DeviceVal {
 55 - heat on/off {requires N DIO Pins}
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
-58 - leak yes/no
+58 - 
 60 -  battery power
 61 - battery %
+70 - leak sensor 
 98 - clock
 99 = any numerical value
 100+ is a server type sensor, to which other sensors will send their data

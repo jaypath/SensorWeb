@@ -2,6 +2,12 @@
 #include "timesetup.hpp"
 #include "server.hpp"
 
+#ifndef _USESDCARD
+#error "SDCard.hpp cannot be included in Weather_Optimized.cpp because _USESDCARD is not defined"
+#endif
+
+#include "SDCard.hpp"
+
 
 // Constructor
 WeatherInfoOptimized::WeatherInfoOptimized() {

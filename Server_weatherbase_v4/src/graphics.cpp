@@ -4,6 +4,12 @@
 
 
 
+//for drawing sensors. The maximum number of sensors on a screen is 48.
+#define MAXALARMS 48
+byte alarms[MAXALARMS] = {255};
+
+
+
 LGFX tft;
 
 extern WeatherInfoOptimized WeatherData;
@@ -17,6 +23,37 @@ extern Devices_Sensors Sensors;
 uint16_t set_color(byte r, byte g, byte b) {
   return tft.color565(r, g, b);
 }
+
+uint16_t invert_color(uint16_t color) {
+  return tft.color565(255-color>>16, 255-color>>8, 255-color);
+}
+
+uint16_t convertColor565ToGrayscale(uint16_t color) {
+  // 1. Extract the 5-bit red, 6-bit green, and 5-bit blue components.
+  // The bit masks and shifts are based on the RGB565 format.
+  uint8_t red_5bit = (color >> 11) & 0x1F;
+  uint8_t green_6bit = (color >> 5) & 0x3F;
+  uint8_t blue_5bit = color & 0x1F;
+
+  // 2. Scale the components to 8-bit (0-255) for accurate calculation.
+  uint8_t red_8bit = (red_5bit << 3) | (red_5bit >> 2);
+  uint8_t green_8bit = (green_6bit << 2) | (green_6bit >> 4);
+  uint8_t blue_8bit = (blue_5bit << 3) | (blue_5bit >> 2);
+  
+  // 3. Calculate the luminance (grayscale value) using a weighted average.
+  // The ITU-R BT.601 standard weights are a common choice.
+  // To avoid floating-point math, integer arithmetic with shifting is used.
+  uint16_t luminance = (red_8bit * 77 + green_8bit * 150 + blue_8bit * 29) >> 8;
+  // The constants are scaled from 0.299, 0.587, 0.114 by multiplying by 256.
+
+  // 4. Scale the 8-bit luminance back to 5-bit and 6-bit values.
+  uint8_t gray_5bit = luminance >> 3; // For red and blue
+  uint8_t gray_6bit = luminance >> 2; // For green
+
+  // 5. Combine the grayscale components back into a 16-bit RGB565 color.
+  return (gray_5bit << 11) | (gray_6bit << 5) | gray_5bit;
+}
+
 
 uint32_t setFont(uint8_t FNTSZ) {
   switch (FNTSZ) {
@@ -177,39 +214,68 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
     byte snstype = sensor->snsType;
     if (snstype==1 || snstype==4 || snstype==10 || snstype==14 || snstype==17) {
       //temperature
-      box_text += (String) ((int) sensor->snsValue) + "F_";
-      if (bitRead(sensor->Flags,5)==1) {        
-        box_border = set_color(150,20,20);
-        box_fill = set_color(255,100,100);
-        text_color = set_color(255-255,255-100,255-100);
+      box_border = set_color(150,150,20);
+      if (isnan(sensor->snsValue)) {
+        box_text += (String) ("???_");
+        box_fill = set_color(200,200,200);
+        text_color = set_color(55,55,55);    
+      } else {
+        box_text += (String) ((int) sensor->snsValue) + "F_";
+        
+        if (bitRead(sensor->Flags,0)==1) { //flagged
+          if (bitRead(sensor->Flags,5)==1) {        
+            box_fill = set_color(255,100,100);
+            text_color = convertColor565ToGrayscale(invert_color(box_fill));
+          }
+          else {
+            box_fill = set_color(150,150,255);
+            text_color = convertColor565ToGrayscale(invert_color(box_fill));
+          }
+        } else {
+          box_fill = set_color(147, 235, 157);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }
       }
-      else {
-        box_border = set_color(20,20,150);
-        box_fill = set_color(150,150,255);
-        text_color = set_color(255-150,255-150,255-255);
-      }
-
     }
     if (snstype==3) {
       //soil
       box_text += (String) ((int) sensor->snsValue) + "_";
-      box_border = set_color(65,45,20);
-      box_fill = set_color(250,170,100);
-      text_color = set_color(255-250,255-170,255-100);
+
+      if (bitRead(sensor->Flags,0)==1) {
+        if (bitRead(sensor->Flags,5)==1) { //too dry
+          box_border = set_color(150,20,20);
+          box_fill = set_color(250,170,100);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }
+        else { //too wet
+          box_border = set_color(111, 15, 46);
+          box_fill = set_color(11, 15, 46);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }
+      } else { //just right
+        box_border = set_color(100, 70, 20);
+        box_fill = set_color(100, 70, 20);
+        text_color = convertColor565ToGrayscale(invert_color(box_fill));
+      }
     }
 
     if (snstype==2 || snstype==5 || snstype==15 || snstype==18) {
       //humidity
       box_text += (String) ((int) sensor->snsValue) + "%RH_";
-      if (bitRead(sensor->Flags,5)==0) {
-        box_border = set_color(65,45,20);
-        box_fill = set_color(250,170,100);
-        text_color = set_color(255-250,255-170,255-100);
-      }
-      else {
-        box_border = set_color(0,0,255);
-        box_fill = set_color(0,190,255);
-        text_color = set_color(255-0,255-190,255-255);
+      if (bitRead(sensor->Flags,0)==1) {
+        if (bitRead(sensor->Flags,5)==0) { //too dry
+          box_border = set_color(201, 216, 221);
+          box_fill = set_color(205, 235, 250);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }        else { //too wet
+          box_border = set_color(201, 216, 221);
+          box_fill = set_color(70, 168, 179);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }
+      } else {
+        box_border = set_color(201, 216, 221);
+        box_fill = set_color(155, 211, 229);
+        text_color = convertColor565ToGrayscale(invert_color(box_fill));
       }
     }
 
@@ -221,27 +287,36 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       text_color = set_color(255-0,255-190,255-255);
     }
 
-    if (snstype==60 || snstype==61) {
+    if (snstype==61) {
       //bat
-      box_text += (String) ((int) sensor->snsValue) + "%(LOW)_";
-      box_border = set_color(20,20,150);
-      box_fill = set_color(150,150,255);
-      text_color = set_color(255-150,255-150,255-255);
+      box_text += (String) ((int) sensor->snsValue) + "%_";
+      box_border = set_color(200,200,200);
+      if (bitRead(sensor->Flags,0)==1) {        
+        box_fill = set_color(228, 70, 110);
+        text_color = set_color(0,0,0);
+      } else {
+        box_fill = set_color(150,150,255);
+        text_color = set_color(0,0,0);
+      }
     }
 
 
     if (snstype==9 || snstype==13 || snstype==19) {
       //air pressure
+      box_border = set_color(192, 222, 233);
       box_text += (String) ((int) sensor->snsValue) + "hPA_";
-      if (bitRead(sensor->Flags,5)==0) { //low pressure    
-        box_border = set_color(20,20,100);
-        box_fill = set_color(100,100,255);
-        text_color = set_color(255-100,255-100,255-255);
-      } 
-      else {
-        box_border = set_color(100,20,20);
-        box_fill = set_color(255,100,100);
-        text_color = set_color(255-255,255-100,255-100);
+      if (bitRead(sensor->Flags,0)==1) {
+        if (bitRead(sensor->Flags,5)==0) { //low pressure              
+          box_fill = set_color(99, 151, 223);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        } 
+        else {
+          box_fill = set_color(214, 153, 152);
+          text_color = convertColor565ToGrayscale(invert_color(box_fill));
+        }
+      } else {
+        box_fill = set_color(152, 225, 189);
+        text_color = convertColor565ToGrayscale(invert_color(box_fill));
       }
     }
   }
@@ -551,21 +626,166 @@ void fcnDrawScreen() {
     fcnDrawFutureWeather();
   } else {
     if (I.ScreenNum==1 && I.oldScreenNum!=I.ScreenNum) {
-        tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
-        tft.setTextFont(2);
-        tft.setTextColor(FG_COLOR,BG_COLOR);
-        tft.setCursor(0,0);
-        tft.printf("Sensors (Devices: %d; Sensors: %d)",Sensors.numDevices,Sensors.numSensors);
-        fcnDrawSensors(0,18,8,6,0);
+      fcnDrawSensorScreen();
         I.oldScreenNum = I.ScreenNum;
     } else {
-      if (I.ScreenNum==2 && I.oldScreenNum!=I.ScreenNum) { //draw config
+      if ((I.ScreenNum==2 || I.ScreenNum==3) && I.oldScreenNum!=I.ScreenNum) { //draw config or confirm
         fcnDrawStatus();
         I.oldScreenNum = I.ScreenNum;
+      } else {
+        if (I.ScreenNum>3 && I.oldScreenNum!=I.ScreenNum) { //draw sensor info
+          fcnDrawSensorInfo();
+          I.oldScreenNum = I.ScreenNum;
+        }
       }
     }
   }
   
+  return;
+}
+
+
+void fcnDrawSensorInfo() {
+  byte boxnum = I.ScreenNum-10;
+  if (boxnum >= 0 && boxnum < MAXALARMS && alarms[boxnum] != 255) {
+//figure out which sensor boxnum equates to    
+    SnsType* sensor = Sensors.getSensorBySnsIndex(alarms[boxnum]);
+    if (sensor && sensor->IsSet ) {
+
+
+    int16_t X=0,graphstart=0, graphheight=150,graphwidth=300;
+   byte rightmargin=5;
+  
+    tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
+    tft.setTextFont(2);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    tft.setCursor(0,0);
+    tft.printf("Sensor Info for sensor %s",sensor->snsName);
+    graphstart+=tft.fontHeight()+4;
+
+    //draw an xy graph of the historical sensor data
+
+    //get the historical sensor data
+    
+    byte N=100;
+    uint32_t  endtime=-1;
+    
+    uint32_t t[N]={0};
+    double v[N]={0};
+    uint8_t f[N]={0};
+    
+    bool success=false;
+    success = retrieveSensorDataFromSD(Sensors.getDeviceMACBySnsIndex(alarms[boxnum]), sensor->snsType, sensor->snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
+    SerialPrint(String("Success: ") + success + " N: " + N + "\n");
+    uint32_t maxt=0, mint=UINT32_MAX;
+    double maxv=0, minv=1000000;
+
+    if (success) {
+      tft.fillRect(0,graphstart,tft.width(),graphheight,BG_COLOR); //grid will be tft.width() wide and 100 pixels high
+      tft.setTextFont(1);
+      tft.drawLine(0,graphstart+graphheight,tft.width()-rightmargin,graphstart+graphheight,FG_COLOR);
+      
+      //find max and min of v
+      for (byte k=0;k<N;k++) {
+        if (v[k]>maxv) maxv=v[k];
+        if (v[k]<minv) minv=v[k];
+        if (t[k]>maxt) maxt=t[k];
+        if (t[k]<mint) mint=t[k];
+      }
+
+      //draw the y axis labels
+      tft.setTextFont(0);
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setCursor(0,graphstart);
+      tft.printf("%.0f",maxv);
+      tft.setCursor(0,graphstart+graphheight-tft.fontHeight()-4);
+      tft.printf("%.0f",minv);
+      //draw the x axis labels
+      tft.setCursor(tft.width()-graphwidth,graphstart+graphheight+tft.fontHeight()+4);
+      tft.printf("%s",dateify(mint,"mm/dd/yyyy hh:nn:ss"));
+      tft.setCursor(tft.width()-tft.textWidth("mm/dd/yyyy hh:nn:ss"),graphstart+graphheight+tft.fontHeight()+4);
+      tft.printf("%s",dateify(maxt,"mm/dd/yyyy hh:nn:ss"));
+
+      //draw a vertical line at the start of the graph
+      tft.drawLine(tft.width()-graphwidth,graphstart,tft.width()-graphwidth,graphstart+graphheight,FG_COLOR);
+
+      double oldtval = -1;
+      //draw pixels representing each [time,value]. Scale to maxv and minv to fit in 100 pixel height and 300 pixel width, and to maxt and mint to fit in 300 pixel width
+      for (byte k=0;k<N;k++) {
+        //ensure pixels do not overlap
+        double tval = (double)(t[k]-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
+        //SerialPrint(String("tval: ") + tval + " oldtval: " + oldtval + "\n");
+        if ((int) tval != (int) oldtval || k==N-1) { //draw the last pixel no matter what
+          double vscale = (v[k]-minv)/(maxv-minv)*graphheight;          
+          if (bitRead(f[k],0)==1) {
+            tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_RED);
+          } else {
+            tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_GREEN);
+          }
+          oldtval = tval;
+        }
+      }
+      double tval = (double)(sensor->timeLogged-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
+      double vscale = (sensor->snsValue-minv)/(maxv-minv)*graphheight;          
+      tft.fillCircle(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),2,TFT_GOLD); //most recent value
+    }
+    tft.setTextFont(2);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    tft.setCursor(0,graphstart+graphheight+tft.fontHeight()*2);
+    tft.printf("Min: %.02f\n",minv);
+    if (bitRead(sensor->Flags,0)==1) {
+      tft.setTextColor(TFT_RED,BG_COLOR);
+    } else {
+      tft.setTextColor(TFT_GREEN,BG_COLOR);
+    }
+    tft.printf("Current: %0.02f\n",sensor->snsValue);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    tft.printf("Max: %.02f\n",maxv);
+
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    tft.printf("Device IP: %s\n",IPToString(Sensors.getDeviceIPBySnsIndex(alarms[boxnum])).c_str());
+    tft.printf("Sns type: %d\n",sensor->snsType);
+    tft.printf("Sns ID: %d\n",sensor->snsID);
+    tft.printf("Sns name: %s\n",sensor->snsName);
+    tft.printf("Sns last logged: %s\n",dateify(sensor->timeLogged,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("Sns last read: %s\n",dateify(sensor->timeRead,"mm/dd/yyyy hh:nn:ss"));
+
+
+    } else tft.printf("Sensor not set");
+    } else {
+      tft.setTextFont(2);
+      tft.setTextColor(TFT_RED,BG_COLOR);
+      tft.setCursor(tft.width()-150,tft.height()-25);
+      tft.printf("Sensor not found");
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+    }
+
+
+  return;
+}
+
+
+void fcnDrawSensorScreen() {
+        //on screen 1, draw the sensors. Touching a sensor box will move to screen 3, where that sensor's info will be displayed
+      //touching the bottom right corner will move to screen 2, where the status will be displayed
+      tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
+      tft.setTextFont(2);
+      tft.setTextColor(FG_COLOR,BG_COLOR);
+      tft.setCursor(0,0);
+      tft.printf("Sensors (Devices: %d; Sensors: %d)",Sensors.numDevices,Sensors.numSensors);
+      fcnDrawSensors(0,18,8,6,0);
+
+      //draw a box at the bottom right corner of screen, that when pushed moves to next previous screen
+      tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+      tft.setCursor(25,tft.height()-25);
+      fcnPrintTxtCenter("Previous",1,25,tft.height()-25);
+
+      tft.fillRoundRect(54,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+      tft.setCursor(54+25,tft.height()-25);
+      fcnPrintTxtCenter("Next",1,54+25,tft.height()-25);
+
   return;
 }
 
@@ -574,25 +794,47 @@ void fcnDrawStatus() {
   tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
-  tft.setTextFont(1);
-  tft.setTextDatum(TL_DATUM);
-  tft.println("Status");
-  tft.printf("Last Reset: %s\n",dateify(I.lastResetTime,"h1:nn"));
-  tft.printf("Alive Since: %s\n",dateify(I.ALIVESINCE,"h1:nn"));
-  tft.printf("Current Time: %s\n",dateify(I.currentTime,"h1:nn"));
-  tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
-  tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
-  tft.printf("DST Offset: %d\n",I.DSTOFFSET);
-  tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
-  tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
-  tft.printf("Local Battery Level: %d\n",I.localBatteryLevel);
-  tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
-  tft.printf("Last ESPNOW : %d\n",I.lastESPNOW);
+  tft.setTextDatum(TL_DATUM);  
+  if (I.ScreenNum==2) {
+    tft.setTextFont(1);
+    tft.println("Status");
+    tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last LAN Msg Time: %s\n",(I.lastESPNOW_TIME!=0)?dateify(I.lastESPNOW_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last LAN Msg State: %s\n",(I.lastESPNOW_STATE==2)?"Receive Success":((I.lastESPNOW_STATE==1)?"Send Success":((I.lastESPNOW_STATE==0)?"Indeterminate":((I.lastESPNOW_STATE==-1)?"Send Fail":((I.lastESPNOW_STATE==-2)?"Receive Fail": "Unknown")))));
+    tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last Error: %s\n",I.lastError);
+    tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
+    tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
+    tft.printf("DST Offset: %d\n",I.DSTOFFSET);
+    tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
+    tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
+    tft.printf("Local Battery Level: %d\n",I.localBatteryLevel);
+    tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
 
-  tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-  tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-  tft.setCursor(25,tft.height()-25);
-  fcnPrintTxtCenter("Reset I",1,25,tft.height()-25);
+    tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+    tft.setCursor(25,tft.height()-25);
+    fcnPrintTxtCenter("Reset I",1,25,tft.height()-25);
+  } else {
+    //draw confirm screen
+
+    tft.setTextFont(2);
+    tft.printf("Are you sure?\n");
+    tft.setTextFont(1);
+    tft.printf("This will delete stored screen data\n");
+    tft.printf("and reset screen defaults.\n");
+    tft.printf("The device will reboot.\n");
+    tft.printf("This will not affect sensor data.\n");
+    tft.printf("Touch CONFIRM to continue.\n");
+    tft.printf("Touch anywhere else to abort.\n");
+
+    tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+    tft.setCursor(25,tft.height()-25);
+    fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
+  }
 
 }
 
@@ -600,12 +842,20 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   /*
   going to show rowsxcols flagged sensors (so up to rows*cols)
   starting at X,Y
+
+  note that the alarms array will be filled up to MAXALARMS sensors, but we may only be able to display rows*cols of these. In that case only fill alarms array up to rows*cols
 */
+
 
   int16_t init_X = X;
   if (rows==0) rows = 2;
   if (cols==0) cols = 6;
+
   
+  byte alarmsToDisplay = rows*cols;
+  if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
+
+
   byte boxsize_x=50,boxsize_y=50;
   byte gapx = 4;
   byte gapy = 2;
@@ -613,67 +863,52 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   String roomname;
 
   //fill an array with next row*cols alarm entries
-  byte alarms[rows*cols];
+//  byte alarms[rows*cols];
   byte alarmArrayInd = 0;
   
 //init alarms
-  for (byte k = 0;k<(rows*cols);k++) {
+  for (byte k = 0;k<(MAXALARMS);k++) {
     alarms[k] = 255;
   }
   
-//fill up to row*cols alarm spots, and remember where we left off
+//fill up to alarmsToDisplay alarm spots, and remember where we left off. Also, fill each sensor type before moving to the next sensor type
   byte SensorIndex = I.alarmIndex;
 
   if (whichSensors == -1) whichSensors = I.showTheseFlags;
 
-  while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(rows*cols)) {
+  String sensorType[10] = {"leak", "soil", "temperature", "humidity", "pressure", "battery", "HVAC", "human", "server","all"};
+  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = server, 9 = anything else
+  for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
+    
+    while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       SnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
-      if (sensor && sensor->IsSet != 0) {
-        bool isgood = false;
+      if (!sensor || sensor->IsSet == 0) continue;
+      bool isgood = false;
 
-      //if bit 0 is 0 then include all sensors
-      //if bit 0 is set then include flagged 
-      //if bit 1 is set the include expired (overrides bit 0)
-      //  if bits 0 or 1 are set then include sensors if they meet criteria of subsequent bits
-        
-      if (bitRead(whichSensors, 0) == 0) { //any flag
-        isgood = true;
-      } else {
-        if (bitRead(whichSensors, 1) == 1) { //include expired
-          if (sensor->expired == true || bitRead(sensor->Flags, 0) == 1) {
-            if (bitRead(whichSensors, 2) == 1) { //include soil dry
-              if (Sensors.isSensorOfType(SensorIndex,"soil")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 3) == 1) { //include leak
-              if (Sensors.isSensorOfType(SensorIndex,"leak")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 4) == 1) { //include temperature
-              if (Sensors.isSensorOfType(SensorIndex,"temperature")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 5) == 1) { //include RH
-              if (Sensors.isSensorOfType(SensorIndex,"humidity")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 6) == 1) { //include pressure
-              if (Sensors.isSensorOfType(SensorIndex,"pressure")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 7) == 1) { //include battery
-              if (Sensors.isSensorOfType(SensorIndex,"battery")) isgood = true;
-            }
-
-            if (bitRead(whichSensors, 8) == 1) { //include HVAC
-              if (Sensors.isSensorOfType(SensorIndex,"HVAC")) isgood = true;
-            }
-          }
+      //this check is not redundant, as this checks for what is allowed, as the previous check puts sensors in order of sensor type
+      if (Sensors.isSensorOfType(SensorIndex,sensorType[snstypeindex])) {
+        if (bitRead(whichSensors, 0) == 0) { //any flag
+          isgood = true;
+        } else { //must be flagged
+          if (bitRead(sensor->Flags, 0) == 0) continue; //not flagged, exclude
+          if (bitRead(whichSensors, 1) == 1 && (sensor->expired )) isgood = true; //expired so include
+          if (bitRead(whichSensors, 2) == 1 && Sensors.isSensorOfType(SensorIndex,"soil")) isgood = true;
+          if (bitRead(whichSensors, 3) == 1 && Sensors.isSensorOfType(SensorIndex,"leak")) isgood = true;
+          if (bitRead(whichSensors, 4) == 1 && Sensors.isSensorOfType(SensorIndex,"temperature")) isgood = true;
+          if (bitRead(whichSensors, 5) == 1 && Sensors.isSensorOfType(SensorIndex,"humidity")) isgood = true;
+          if (bitRead(whichSensors, 6) == 1 && Sensors.isSensorOfType(SensorIndex,"pressure")) isgood = true;
+          if (bitRead(whichSensors, 7) == 1 && Sensors.isSensorOfType(SensorIndex,"battery")) isgood = true;
+          if (bitRead(whichSensors, 8) == 1 && Sensors.isSensorOfType(SensorIndex,"HVAC")) isgood = true;
         }
-
+        //if bit 0 is 0 then include all sensors
+        //if bit 0 is set then include flagged 
+        //if bit 1 is set the include expired (overrides bit 0)
+        //  if bits 0 or 1 are set then include sensors if they meet criteria of subsequent bits
+        //aggregate sensors in this order: leak, soil dry, temperature, humidity, pressure, battery, HVAC
       }
-      if (isgood) alarms[alarmArrayInd++] = SensorIndex;          
 
+      if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
+      
     }      
   } 
   I.alarmIndex = SensorIndex;
@@ -824,39 +1059,45 @@ void fncDrawCurrentCondition() {
 }
 
 void fcnDrawCurrentWeather() {
+//this function will draw the current weather image and any flags that are flagged
+bool forceweather = false;
+bool forceflags = false;
 
-  bool forcedraw = false;
 
-  //do I show flags?
+if (I.lastWeatherTime==0) forceweather=true;
+else {
+  //are we flagged?
   if (I.isFlagged>0) {
-    
+    //but not all flags matter - depends on which are flagged and when
     if (Sensors.countFlagged(-1000,0b00000011,0b00000011,I.currentTime-86400)>0) {
+      //ok, critical sensors are flagged, were we already showing flags?
 
-      if (I.lastWeatherTime!=0 && I.lastFlagViewTime!=0 && I.lastWeatherTime + I.cycleFlagSeconds>I.currentTime) {
-        return; //still showing flags or weather, no changes until the cycle is complete
-      }    else {
-        if (I.lastFlagViewTime!= I.lastWeatherTime || I.lastFlagViewTime==0) {
-          I.lastFlagViewTime = I.currentTime;
-          I.lastWeatherTime = I.currentTime;
-          tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-          
-          fcnDrawSensors(8,I.HEADER_Y,3,3,-1);      
-          
-          return;
+      if (I.lastFlagViewTime==0) forceflags=true;
+      else {
+        if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
+          if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) forceflags=true; //showed weather for at least the cycle time and flags are due)
+          else return; //not time to do anything yet
         } else {
-          forcedraw = true; //was showing flags, make sure to draw weather
+          //we are showing flags, not weather
+          if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
+          else return; //not time to do anything yet
         }
-      }
+      }       
     }
   }
+}
 
-  if (I.wasFlagged == true && I.isFlagged == false) forcedraw = true;
+if (forceflags) {
+  I.lastFlagViewTime = I.currentTime;
+  tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
+  fcnDrawSensors(8,I.HEADER_Y,3,3,-1);      
+  return;
+}
 
+//do I draw  weather?
+if (forceweather==false && (uint32_t) I.lastWeatherTime>0 && I.lastWeatherTime+I.cycleWeatherMinutes*60>I.currentTime)   return; //not time to show  weather and no need to redraw
 
-  //do I draw  weather?
-  if (forcedraw==false && (uint32_t) I.lastWeatherTime>0 && I.lastWeatherTime+I.cycleWeatherMinutes*60>I.currentTime)   return; //not time to show  weather and no need to redraw
-
-  I.lastWeatherTime = I.currentTime;
+I.lastWeatherTime = I.currentTime;
 
   int X=0,Y = I.HEADER_Y,Z=0; //header ends at 30
 
@@ -1171,23 +1412,60 @@ void screenWiFiDown() {
 
 void checkTouchScreen() {
   tft.getTouch(&I.touchX, &I.touchY);
-  delay(300);
- 
+  
   if (I.touchX > 0 && I.touchY > 0) {
+    tft.fillCircle(I.touchX,I.touchY,12,TFT_GOLD);
 
-    if (I.ScreenNum==2 && I.touchX > 0 && I.touchX < 50 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
-        //touched a submit button
-        deleteFiles("ScreenFlags.dat","/Data"); //delete the screen flags file
-        controlledReboot("Reset I",RESET_USER,true); //reset the device
-    } 
-    else {
-      I.screenChangeTimer = 30;
-      if (I.ScreenNum<2) {
-        I.ScreenNum++;
-      } else {
-        I.ScreenNum=0;
-      }
+    switch (I.ScreenNum) {
+      case 0:
+        I.screenChangeTimer = 30;
+        I.ScreenNum=1;
+        break; //do nothing
+      case 1:
+        if ( I.touchY > tft.height()-50 && I.touchY < tft.height()) {
+          if(I.touchX > 0 && I.touchX < 52)           I.ScreenNum=0;
+          else if(I.touchX >= 52 && I.touchX < 104) I.ScreenNum=2;
+        } 
+        else {
+          if (I.touchX > 0 && I.touchX < tft.width()) {
+            //There are 8 rows and 6 cols, so MAXALARMS boxes
+            //figure out the box number, starting from upper left and moving right and then down.
+            byte boxnum = (I.touchX/54) + (I.touchY/54)*6;
+            I.ScreenNum=10+boxnum;
+          }
+        }
+        break;
+      case 2:
+        if (I.touchX < 50 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
+          I.screenChangeTimer = 30;
+          I.ScreenNum=3; //confirm deletion screen
+        } else {
+          I.screenChangeTimer = 30;
+          I.ScreenNum=0;
+        }
+        break; 
+      case 3:
+        if (I.touchX < 50 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
+          //touched a reset button
+          deleteCoreStruct(); //delete the screen flags file        
+          controlledReboot("Reset I",RESET_USER,true); //reset the device
+        } else {
+          I.screenChangeTimer = 30;
+          I.ScreenNum=0;
+        }
+        break; //do nothing
+      default:
+        //displaying sensor info. any touch on this screen will return to sensor screen
+        I.screenChangeTimer = 30;
+        I.ScreenNum=1;
+        break; 
+
     }
+
+    fcnDrawScreen();
+    delay(150);
+ 
+
   }
 
   I.touchX = 0;

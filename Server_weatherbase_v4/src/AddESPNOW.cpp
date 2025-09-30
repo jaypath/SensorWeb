@@ -31,12 +31,12 @@ Messages will use the ESPNOW_type struct for their transmission
 
 #include "AddESPNOW.hpp"
 #include "utility.hpp"
+#include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
 #ifdef _USETFT
 #include "graphics.hpp"
 #endif
 
 
-char PMK_KEY_STR[17] = "KiKa.yaas1anni!~"; //note this is not stored in prefs
 
 
 namespace {
@@ -68,6 +68,50 @@ void unpackServerList(const uint8_t* payload, uint8_t serverMACs[][6], uint32_t*
     }
 }
 
+// --- Utility: Check if LMK is configured ---
+bool isLMKConfigured() {
+    for (int i = 0; i < 16; i++) {
+        if (Prefs.KEYS.ESPNOW_KEY[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- Utility: Validate LMK key format ---
+bool isValidLMKKey() {
+    if (!isLMKConfigured()) {
+        return false;
+    }
+   
+
+    //key can contain any characters, so we don't need to check for printable ASCII characters
+    if (false) {
+        // Check if key contains only printable ASCII characters
+        for (int i = 0; i < 16; i++) {
+            if (Prefs.KEYS.ESPNOW_KEY[i] != 0 && (Prefs.KEYS.ESPNOW_KEY[i] < 32 || Prefs.KEYS.ESPNOW_KEY[i] > 126)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+// --- Utility: Get ESPNow encryption status ---
+String getESPNOWEncryptionStatus() {
+    if (!isLMKConfigured()) {
+        return "LMK_KEY not configured - all communications unencrypted";
+    }
+    
+    if (!isValidLMKKey()) {
+        return "LMK_KEY invalid format - all communications unencrypted";
+    }
+    
+    return "LMK_KEY configured - private messages encrypted on channel 3";
+}
+
 // --- ESPNow Initialization ---
 bool initESPNOW() {
     if (esp_now_init() != ESP_OK) {
@@ -76,7 +120,9 @@ bool initESPNOW() {
     }
     uint8_t MACB[6] = {0};
     memset(MACB,255,6);
-    addESPNOWPeer(MACB, false); //register the broadcast address
+    
+    // Register broadcast address (no encryption, I'll handle that separately)
+    addESPNOWPeer(MACB);
 
     esp_now_register_send_cb(OnESPNOWDataSent);
     esp_now_register_recv_cb(OnDataRecv);
@@ -85,13 +131,27 @@ bool initESPNOW() {
 }
 
 // --- Peer Management ---
-esp_err_t addESPNOWPeer(uint8_t* macad, bool doEncrypt) {
+esp_err_t addESPNOWPeer(uint8_t* macad) {
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, macad, 6);
-    peerInfo.channel = 0;
+    
+//all ESPNOW messages are unencrypted, and the channel is set to 0, which means auto-channel selection
+//encryption is handled separately, and is not required for all messages
+//the LMK is used to encrypt private messages, and the PMK is used to encrypt broadcast messages and provisioning LMK
+
+    peerInfo.channel = 0;  // use the wifi channel, and 0 defines auto-channel selection
     peerInfo.encrypt = false;
-    return esp_now_add_peer(&peerInfo);
+            
+    
+    esp_err_t result = esp_now_add_peer(&peerInfo);
+    
+    if (result != ESP_OK) {
+        SerialPrint("Failed to add ESPNow peer: " + MACToString(macad) + " Error: " + String(result), true);
+    }
+    
+    return result;
 }
+
 esp_err_t delESPNOWPeer(uint8_t* macad) {
     return esp_now_del_peer(macad);
 }
@@ -106,10 +166,26 @@ esp_err_t delESPNOWPeer(uint64_t macad) {
 bool sendESPNOW(ESPNOW_type& msg) {
     bool isBroadcast = true;
 
-    for (int i = 0; i < 6; ++i) if (msg.targetMAC[i] != 0xFF) isBroadcast = false;
-    if (!isBroadcast) {
-        addESPNOWPeer(msg.targetMAC, false);
+    if (msg.msgType>0) {
+        if (isValidLMKKey()) {
+            // Encrypt the message
+            encryptESPNOWMessage(msg);
+        } else {
+            storeError("ESPNow: LMK not valid, message cannot be encrypted");
+            return false;
+        }
     }
+
+    for (int i = 0; i < 6; ++i) if (msg.targetMAC[i] != 0xFF) isBroadcast = false;
+    
+    if (!isBroadcast) {
+        // Determine encryption based on message type and LMK availability
+        
+        // Add peer 
+        addESPNOWPeer(msg.targetMAC);
+    }
+
+    
     esp_err_t result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
 
     if (!isBroadcast) {
@@ -118,10 +194,10 @@ bool sendESPNOW(ESPNOW_type& msg) {
     if (result != ESP_OK) {
         SerialPrint((String) "ESPNow tried sending to " + MACToString(msg.targetMAC) + " and failed with code: " + result,true);
         storeError(ESPNowError(result).c_str(),ERROR_ESPNOW_SEND);
+        
         return false;
     }
 
-    I.lastESPNOW = I.currentTime;
     SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
 
     return true;
@@ -150,9 +226,12 @@ String ESPNowError(esp_err_t result) {
 // --- ESPNow Send Callback ---
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (status == ESP_NOW_SEND_SUCCESS) {
-        I.lastESPNOW = I.currentTime;
+        I.lastESPNOW_TIME = I.currentTime;
+        I.lastESPNOW_STATE = 1;
         I.isUpToDate = false;
     } else {
+        I.lastESPNOW_STATE = -1;
+        I.lastESPNOW_TIME = I.currentTime;
         storeError("ESPNow: Failed to send data");
     }
 }
@@ -161,151 +240,158 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
+        I.lastESPNOW_STATE = -2;
+        I.lastESPNOW_TIME = I.currentTime;
         return;
     }
     ESPNOW_type msg;
     memcpy(&msg, incomingData, sizeof(msg));
-    I.lastESPNOW = I.currentTime;
+    
+    I.LAST_ESPNOW_SERVER_MAC = msg.senderMAC;
+    I.LAST_ESPNOW_SERVER_IP = msg.senderIP;
+    I.LAST_ESPNOW_SERVER_TIME = I.currentTime;
+    I.isUpToDate = false;
+    I.lastESPNOW_STATE = 2;
+    I.lastESPNOW_TIME = I.currentTime;
 
-    switch (msg.msgType) {
-        case ESPNOW_MSG_BROADCAST_ALIVE:
-            // received a server message; update presence table will occur in main loop
-            //no need to do anything here except register the server in I
-            I.LAST_ESPNOW_SERVER_MAC = msg.senderMAC;
-            I.LAST_ESPNOW_SERVER_IP = msg.senderIP;
-            I.LAST_ESPNOW_SERVER_TIME = I.currentTime;
-            I.isUpToDate = false;
-            break;
-        case ESPNOW_MSG_SERVER_LIST:
-            // Received server list; update local list
-            // (User can implement server list update logic here)
-            break;
-        case ESPNOW_MSG_WIFI_PW_REQUEST: {
-            // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV)
-            ESPNOW_type resp = {};
-            resp.senderMAC = Prefs.PROCID;
-            resp.senderIP = Prefs.MYIP;
-            resp.senderType = MYTYPE;
-            uint64ToMAC(msg.senderMAC, resp.targetMAC);
-            resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
-            // Encrypt password using provided key and IV
-            uint8_t encrypted[48] = {0};
-            uint16_t outlen = 0;
-                         BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
-            memcpy(resp.payload, encrypted, (outlen < 48) ? outlen : 48);
-            sendESPNOW(resp);
-            break;
+
+    if (msg.msgType>0) {
+        decryptESPNOWMessage(msg);
+    }
+    
+    if (msg.msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
+        // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV)
+        ESPNOW_type resp = {};
+        resp.senderMAC = Prefs.PROCID;
+        resp.senderIP = Prefs.MYIP;
+        resp.senderType = MYTYPE;
+        uint64ToMAC(msg.senderMAC, resp.targetMAC);
+        resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
+        // Encrypt password using provided key and IV
+        uint8_t encrypted[48] = {0};
+        uint16_t outlen = 0;
+                        BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
+        memcpy(resp.payload, encrypted, (outlen < 48) ? outlen : 48);
+        
+        if (!sendESPNOW(resp)) {
+            storeError("ESPNow: Failed to send WiFi password response");
+            return;
         }
-        case ESPNOW_MSG_WIFI_PW_RESPONSE: {
-            // Check TEMP_AES, TEMP_AES_TIME, TEMP_AES_MAC, and NONCE
-            uint32_t nowt = (uint32_t)time(nullptr);
-            bool valid = false;
-            if (I.TEMP_AES_TIME != 0 && (nowt - I.TEMP_AES_TIME) <= 300) {
-                for (int i = 0; i < 32; ++i) if (I.TEMP_AES[i] != 0) valid = true;
-            }
-            // Check MAC match
-            bool macMatch = true;
-            if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
-            // Check nonce
-            bool nonceMatch = true;
-            for (int i = 0; i < 8; ++i) {
-                if (I.WIFI_RECOVERY_NONCE[i] != msg.payload[32 + i]) nonceMatch = false;
-            }
-            if (!valid || !macMatch || !nonceMatch) {
-                storeError("WiFi PW response: No valid TEMP_AES, expired, MAC mismatch, or nonce mismatch");
-                memset(I.TEMP_AES, 0, 32);
-                I.TEMP_AES_TIME = 0;
-                I.TEMP_AES_MAC = 0;
-                memset(I.WIFI_RECOVERY_NONCE, 0, 8);
-                break;
-            }
-            // Decrypt
-            char key[17]; memcpy(key, I.TEMP_AES, 16); key[16] = 0;
-            uint8_t* iv = I.TEMP_AES + 16;
-            uint8_t decrypted[65] = {0};
-            int8_t decres = BootSecure::decryptWithIV((unsigned char*)msg.payload, key, iv, decrypted, 32); // 32 bytes encrypted
-            if (decres != 0) {
-                storeError("WiFi PW response: Decryption failed");
-                memset(I.TEMP_AES, 0, 32);
-                I.TEMP_AES_TIME = 0;
-                I.TEMP_AES_MAC = 0;
-                memset(I.WIFI_RECOVERY_NONCE, 0, 8);
-                I.isUpToDate = false;
-                break;
-            }
-            // Store WiFi password
-            bool pwdMatch = (memcmp(Prefs.WIFIPWD, decrypted, 64) == 0);
-            memcpy(Prefs.WIFIPWD, decrypted, 64);
-            Prefs.WIFIPWD[64] = 0;
-            Prefs.HAVECREDENTIALS = true;
-            Prefs.isUpToDate = false;
+    }
+    else if (msg.msgType== ESPNOW_MSG_WIFI_PW_RESPONSE) {
+        // Check TEMP_AES, TEMP_AES_TIME, TEMP_AES_MAC, and NONCE
+        uint32_t nowt = (uint32_t)time(nullptr);
+        bool valid = false;
+        if (I.TEMP_AES_TIME != 0 && (nowt - I.TEMP_AES_TIME) <= 300) {
+            for (int i = 0; i < 32; ++i) if (I.TEMP_AES[i] != 0) valid = true;
+        }
+        // Check MAC match
+        bool macMatch = true;
+        if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
+        
+        decryptESPNOWMessage(msg); //decrypt the message using the ESPNOW_KEY
+        
+        // Check nonce
+        bool nonceMatch = true;
+        for (int i = 0; i < 8; ++i) {
+            if (I.WIFI_RECOVERY_NONCE[i] != msg.payload[32 + i]) nonceMatch = false;
+        }
+        if (!valid || !macMatch || !nonceMatch) {
+            storeError("WiFi PW response: No valid TEMP_AES, expired, MAC mismatch, or nonce mismatch");
             memset(I.TEMP_AES, 0, 32);
             I.TEMP_AES_TIME = 0;
             I.TEMP_AES_MAC = 0;
             memset(I.WIFI_RECOVERY_NONCE, 0, 8);
-            putWiFiCredentials();
-            // If password matches, WiFi may be down; enter AP mode and show message
-            if (pwdMatch) {
-                #ifdef _USETFT
-                screenWiFiDown();
-                #endif
-                WiFi.mode(WIFI_AP);
-                WiFi.softAP(generateAPSSID().c_str(), "S3nsor.N3t!");
-                delay(100);
-                WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
-                delay(300000); // 5 min
-                controlledReboot("WiFi may be down, AP fallback", RESET_WIFI, true);
-            }
-            // Log success
-            #ifdef _DEBUG
-            Serial.println("[ESPNow] WiFi password updated from server response.");
-            #endif
-            break;
+            storeError("WiFi PW response: No valid TEMP_AES, expired, MAC mismatch, or nonce mismatch");
+            return;
         }
-        case ESPNOW_MSG_WIFI_KEY_REQUIRED: {
-            // Check MAC and time (2 minutes)
-            uint32_t nowt = (uint32_t)time(nullptr);
-            bool valid = false;
-            if (I.TEMP_AES_TIME != 0 && (nowt - I.TEMP_AES_TIME) <= 300) {
-                valid = true;
-            }
-            bool macMatch = true;
-            if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
-            if (!valid || !macMatch) {
-                storeError("WiFi KEY REQUIRED: MAC mismatch or expired");
-                memset(I.TEMP_AES, 0, 32);
-                I.TEMP_AES_TIME = 0;
-                I.TEMP_AES_MAC = 0;
-                I.isUpToDate = false;
-                break;
-            }
-            // Zero out old TEMP_AES and TEMP_AES_TIME
+        // Decrypt using the TEMP_AES and IV
+        char key[17]; memcpy(key, I.TEMP_AES, 16); key[16] = 0;
+        uint8_t* iv = I.TEMP_AES + 16;
+        uint8_t decrypted[65] = {0};
+        int8_t decres = BootSecure::decryptWithIV((unsigned char*)msg.payload, key, iv, decrypted, 32); // 32 bytes encrypted
+        if (decres != 0) {
+            storeError("WiFi PW response: Decryption failed");
             memset(I.TEMP_AES, 0, 32);
             I.TEMP_AES_TIME = 0;
-            I.isUpToDate = false;
-            // Send a new type 2 message to the same MAC
-            uint8_t mac[6] = {0};
-            uint64ToMAC(I.TEMP_AES_MAC, mac);
-            requestWiFiPassword(mac, nullptr);
-            break;
-        }
-        case ESPNOW_MSG_TERMINATE:
-            // Terminate communication, delete peer if needed
-            delESPNOWPeer(msg.senderMAC);
-            // Zero TEMP_AES and TEMP_AES_TIME for security
-            memset(I.TEMP_AES, 0, 32);
-            I.TEMP_AES_TIME = 0;
-            I.isUpToDate = false;
-
             I.TEMP_AES_MAC = 0;
-            break;
-        default:
-            // Unknown type
-            break;
+            memset(I.WIFI_RECOVERY_NONCE, 0, 8);
+            I.isUpToDate = false;
+            storeError("WiFi PW response: Decryption failed");
+            return;
+        }
+        // Store WiFi password
+        bool pwdMatch = (memcmp(Prefs.WIFIPWD, decrypted, 64) == 0);
+        memcpy(Prefs.WIFIPWD, decrypted, 64);
+        Prefs.WIFIPWD[64] = 0;
+        Prefs.HAVECREDENTIALS = true;
+        Prefs.isUpToDate = false;
+        memset(I.TEMP_AES, 0, 32);
+        I.TEMP_AES_TIME = 0;
+        I.TEMP_AES_MAC = 0;
+        memset(I.WIFI_RECOVERY_NONCE, 0, 8);
+        putWiFiCredentials();
+        // If password matches, WiFi may be down; enter AP mode and show message
+        if (pwdMatch) {
+            #ifdef _USETFT
+            screenWiFiDown();
+            #endif
+            WiFi.mode(WIFI_AP);
+            WiFi.softAP(generateAPSSID().c_str(), "S3nsor.N3t!");
+            delay(100);
+            WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
+            delay(300000); // 5 min
+            controlledReboot("WiFi may be down, AP fallback", RESET_WIFI, true);
+        }
+        // Log success
+        #ifdef _DEBUG
+        Serial.println("[ESPNow] WiFi password updated from server response.");
+        #endif
     }
+    else if (msg.msgType== ESPNOW_MSG_WIFI_KEY_REQUIRED) {
+        // Check MAC and time (2 minutes)
+        uint32_t nowt = (uint32_t)time(nullptr);
+        bool valid = false;
+        if (I.TEMP_AES_TIME != 0 && (nowt - I.TEMP_AES_TIME) <= 300) {
+            valid = true;
+        }
+        bool macMatch = true;
+        if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
+        
+        if (!valid || !macMatch) {
+            storeError("WiFi KEY REQUIRED: MAC mismatch or expired");
+            memset(I.TEMP_AES, 0, 32);
+            I.TEMP_AES_TIME = 0;
+            I.TEMP_AES_MAC = 0;
+            I.isUpToDate = false;
+            storeError("WiFi KEY REQUIRED: MAC mismatch or expired");
+            return;
+        }
+        // Zero out old TEMP_AES and TEMP_AES_TIME
+        memset(I.TEMP_AES, 0, 32);
+        I.TEMP_AES_TIME = 0;
+        I.isUpToDate = false;
+        // Send a new type 2 message to the same MAC
+        uint8_t mac[6] = {0};
+        uint64ToMAC(I.TEMP_AES_MAC, mac);
+        requestWiFiPassword(mac, nullptr);
+    }
+    else if (msg.msgType== ESPNOW_MSG_TERMINATE) {
+        // Terminate communication, delete peer if needed
+        delESPNOWPeer(msg.senderMAC);
+        // Zero TEMP_AES and TEMP_AES_TIME for security
+        memset(I.TEMP_AES, 0, 32);
+        I.TEMP_AES_TIME = 0;
+        I.isUpToDate = false;
+
+        I.TEMP_AES_MAC = 0;
+        
+    }
+    return ;
 }
 
-// --- Broadcast Server Presence (Type 0) ---
+//at present I do not offer a type 0 message, so all messages are encrypted
+// --- Broadcast Server Presence (Type 1) ---
 bool broadcastServerPresence() {
 
     ESPNOW_type msg = {};
@@ -314,11 +400,13 @@ bool broadcastServerPresence() {
     msg.senderType = MYTYPE;
 
     memset(msg.targetMAC, 0xFF, sizeof(msg.targetMAC));
-    msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE;
+    msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
     memset(msg.payload, 0, 60);
+
 
     return sendESPNOW(msg);
 }
+
 
 // --- Broadcast Server List (Type 1) ---
 bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count) {
@@ -331,6 +419,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
         memset(msg.targetMAC, 0xFF, 6);
         msg.msgType = ESPNOW_MSG_SERVER_LIST;
         packServerList(msg.payload, serverMACs, serverIPs, count);
+        
         return sendESPNOW(msg);
     }
 
@@ -355,6 +444,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     memset(msg.targetMAC, 0xFF, 6);
     msg.msgType = ESPNOW_MSG_SERVER_LIST;
     packServerList(msg.payload, macs, ips, found);
+    
     return sendESPNOW(msg);
 }
 
@@ -421,3 +511,49 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
     return ok;
 }
   
+
+
+bool encryptESPNOWMessage(ESPNOW_type& msg) {
+    // Encrypt the message using stored ESPNOW_KEY
+    //user must know that the message must be 64 bytes or less (so that the encrypted message is 64 bytes + 16 bytes for the IV)
+    //returns 1 if successful, 0 if encryption failed, -1 if payload is too large
+
+    uint8_t encrypted[80] = {0};
+    uint16_t outlen = 0;
+
+
+    int8_t ret = BootSecure::encrypt((const unsigned char*)msg.payload, 64, (char*)Prefs.KEYS.ESPNOW_KEY, encrypted, &outlen,16);
+    if (ret == -2) {
+        storeError("ESPNow: Invalid key");
+        return false;
+    }
+    if (ret == -3) {
+        storeError("ESPNow: Failed to encrypt message");
+        return false;
+    }
+    memcpy(msg.payload, encrypted, (outlen < 80) ? outlen : 80);
+
+    return true;
+}
+
+bool decryptESPNOWMessage(ESPNOW_type& msg) {
+    // Decrypt the message using stored ESPNOW_KEY
+    //returns 1 if successful, 0 if decryption failed, -1 if payload is too large
+    uint8_t decrypted[80] = {0};
+    uint16_t outlen = 0;
+    
+    int8_t ret = BootSecure::decrypt((unsigned char*)msg.payload, (char*)Prefs.KEYS.ESPNOW_KEY, decrypted, 80,16);
+    if (ret == -2) {
+        storeError("ESPNow: Invalid key");
+        return false;
+    }
+    if (ret == -3) {
+        storeError("ESPNow: Failed to decrypt message");
+        return false;
+    }
+    uint8_t tempmsg[80] = {0};
+    memcpy(tempmsg, decrypted, (outlen < 80) ? outlen : 80);
+    memcpy(msg.payload, tempmsg, 80);
+    return true;
+
+}

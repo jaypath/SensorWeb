@@ -51,6 +51,8 @@
 99 = any numerical value
 */
 
+#define _USESDCARD
+
 #include "globals.hpp"
 #include "utility.hpp"
 #include "Devices.hpp"
@@ -65,6 +67,9 @@
 
 #ifdef _USEGSHEET
 #include "GsheetUpload.hpp"
+#endif
+#ifdef _USEFIREBASE
+#include "FirebaseUpload.hpp"
 #endif
 
 // --- WiFi Down Timer ---
@@ -120,7 +125,7 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
 // --- Helper Function Declarations ---
 void initSystem();
-void initScreenFlags(bool completeInit = false);
+
 bool initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
@@ -138,8 +143,12 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval);
 void initGsheetHandler() {
     SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
     SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+    
+    if (!readGsheetInfoSD() || GSheetInfo.clientEmail == NULL || GSheetInfo.projectID == NULL || GSheetInfo.privateKey == NULL) {
+        initGsheetInfo();
+        storeGsheetInfoSD();        
+    }
     initGsheet(); 
-    if (!readGsheetInfoSD()) initGsheetInfo();
     if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
         String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
         strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
@@ -157,75 +166,6 @@ void initGsheetHandler() {
 /**
  * @brief Initialize the TFT display and SPI.
  */
-void initScreenFlags(bool completeInit) {
-    if (completeInit) {
-
-        deleteFiles("ScreenFlags.dat","/Data");
-
-        I.rebootsSinceLast=0;
-        I.wifiFailCount=0;
-        I.currentTime=0;
-        I.CLOCK_Y = 105;
-        I.HEADER_Y = 30;
-        
-        I.cycleHeaderMinutes = 30; //how many seconds to show header?
-        I.cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
-        I.cycleWeatherMinutes = 10; //how many minutes to show weather values?
-        I.cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
-        I.cycleFlagSeconds = 3; //how many seconds to show flag values?
-        I.IntervalHourlyWeather = 2; //hours between daily weather display
-        I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
-
-        I.isExpired = false; //are any critical sensors expired?
-        I.wasFlagged=false;
-        I.isHeat=false; //first bit is heat on, bits 1-6 are zones
-        I.isAC=false; //first bit is compressor on, bits 1-6 are zones
-        I.isFan=false; //first bit is fan on, bits 1-6 are zones
-        I.wasHeat=false; //first bit is heat on, bits 1-6 are zones
-        I.wasAC=false; //first bit is compressor on, bits 1-6 are zones
-        I.wasFan=false; //first bit is fan on, bits 1-6 are zones
-
-        I.isHot=0;
-        I.isCold=0;
-        I.isSoilDry=0;
-        I.isLeak=0;
-        I.localWeatherIndex=255; //index of outside sensor
-        I.localBatteryIndex=255;
-
-        I.showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
-
-        I.currentTemp-127;
-        I.Tmax=-127;
-        I.Tmin=127;
-        I.lastErrorTime=0;
-    }
-    I.ScreenNum = 0;
-    I.oldScreenNum = 0;
-
-    I.lastHeaderTime=0; //last time header was drawn
-    I.lastWeatherTime=0; //last time weather was drawn
-    I.lastCurrentConditionTime=0; //last time current condition was drawn
-    I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
-    I.lastFutureConditionTime=0; //last time future condition was drawn
-    I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
-    
-    I.DSTOFFSET = 0;
-    I.GLOBAL_TIMEZONE_OFFSET = -18000;
-    
-    I.localBatteryLevel=0;
-
-    I.lastESPNOW=0;
-    I.lastResetTime=I.currentTime;
-    I.ALIVESINCE=I.currentTime;
-    I.wifiFailCount=0;
-    I.ScreenNum = 0;
-    I.isFlagged = false;
-
-
-    if (completeInit) {
-        storeScreenInfoSD();
-    }
-}
 
 
 /**
@@ -258,6 +198,8 @@ void initSystem() {
  * @brief Initialize SD card and mount filesystem.
  * @return true if SD card mounted successfully, false otherwise.
  */
+
+
 bool initSDCard() {
     tft.print("SD Card mounting...");
     if (!SD.begin(41)) {
@@ -271,8 +213,10 @@ bool initSDCard() {
         controlledReboot("SD Card failed", RESET_SD, true);
         return false;
     }
+
     SerialPrint("SD mounted... ",true);
     displaySetupProgress(true);
+
     return true;
 }
 
@@ -282,7 +226,7 @@ bool initSDCard() {
  */
 bool loadSensorData() {
     tft.print("Loading sensor data from SD... ");
-    bool sdread = readDevicesSensorsSD();
+    bool sdread = Sensors.readDevicesSensorsArrayFromSD();
     displaySetupProgress( sdread);
     SerialPrint("Sensor data loaded? ",false);
     SerialPrint((sdread==true)?"yes":"no",true);
@@ -298,47 +242,21 @@ bool loadScreenFlags() {
     bool sdread = readScreenInfoSD();
     displaySetupProgress( sdread);
     if (!sdread) {
-        delay(5000);
+        delay(5000);    
         initScreenFlags(true);
-    }
-    initScreenFlags(false);
+    } else     initScreenFlags(false);
+    SerialPrint("Screen flags loaded? ",false);
+    SerialPrint((sdread==true)?"yes":"no",true);
     return sdread;
 }
 
 
 /**
  * @brief Initialize HTTP server routes.
+ * This function is now a wrapper that calls setupServerRoutes() from server.cpp
  */
 void initServerRoutes() {
-    server.on("/", handleRoot);
-    server.on("/ALLSENSORS", handleALL);
-    server.on("/POST", handlePost);
-    server.on("/REQUESTUPDATE", handleREQUESTUPDATE);
-    server.on("/CLEARSENSOR", handleCLEARSENSOR);
-    server.on("/TIMEUPDATE", handleTIMEUPDATE);
-    server.on("/REQUESTWEATHER", handleREQUESTWEATHER);
-    server.on("/REBOOT", handleReboot);
-    server.on("/STATUS", handleSTATUS);
-    server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
-    server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
-    server.on("/FLUSHSD", handleFLUSHSD);
-    server.on("/CONFIG", HTTP_GET, handleCONFIG);
-    server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
-    server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
-    server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
-    server.on("/GSHEET", HTTP_GET, handleGSHEET);
-    server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
-    server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
-    server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
-    server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
-    server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
-    server.on("/WEATHER", HTTP_GET, handleWeather);
-    server.on("/WEATHER", HTTP_POST, handleWeather_POST);
-    server.on("/WeatherRefresh", HTTP_POST, handleWeatherRefresh);
-    server.on("/WeatherZip", HTTP_POST, handleWeatherZip);
-    server.on("/WeatherAddress", HTTP_POST, handleWeatherAddress);
-
-    server.onNotFound(handleNotFound);
+    setupServerRoutes();
 }
 
 /**
@@ -411,6 +329,30 @@ void setup() {
     }
     I.ALIVESINCE = I.currentTime;
     
+    // Check for unexpected reboot by comparing previous ALIVESINCE with current time
+    // The logic works as follows:
+    // 1. On normal operation, ALIVESINCE is set to current time during setup
+    // 2. If an unexpected reboot occurs, the previous ALIVESINCE value will be loaded from SD
+    // 3. When we set ALIVESINCE again, if it's significantly different from the loaded value,
+    //    it indicates an unexpected reboot occurred
+    if (I.lastResetTime != 0 && I.ALIVESINCE != 0) {
+        // If the previous ALIVESINCE is significantly different from current time, 
+        // this indicates an unexpected reboot occurred
+        time_t timeDiff = I.currentTime - I.ALIVESINCE;
+        if (timeDiff > 300) { // If more than 5 minutes difference, consider it unexpected
+            I.resetInfo = RESET_UNKNOWN;
+            I.lastResetTime = I.currentTime;
+            SerialPrint("Unexpected reboot detected! Previous ALIVESINCE: " + String(I.ALIVESINCE) + 
+                       ", Current time: " + String(I.currentTime) + 
+                       ", Time difference: " + String(timeDiff) + " seconds", true);
+            storeScreenInfoSD(); // Save the updated reset info
+        }
+    } else if (I.lastResetTime == 0) {
+        // This is likely the first boot, set initial values
+        I.resetInfo = RESET_DEFAULT;
+        I.lastResetTime = I.currentTime;
+        SerialPrint("First boot detected, setting initial reset info", true);
+    }
     
     SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
     SerialPrint("Prefs.MYIP: " + String(Prefs.MYIP),true);
@@ -460,6 +402,7 @@ void setup() {
     #endif
 
 
+
     tft.printf("Loading weather data...\n");
     //load weather data from SD card
     if (readWeatherDataSD()) {
@@ -485,31 +428,31 @@ void setup() {
  * @brief Handle periodic ESPNow server presence broadcast (every 5 minutes).
  */
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
-    if (minute() % interval == 0 && I.lastESPNOW!=I.currentTime) {        
+    if (minute() % interval == 0 && I.lastESPNOW_TIME!=I.currentTime) {        
         // ESPNow does not require WiFi connection; always broadcast
         broadcastServerPresence();
     }
 }
 
-void handleUpdatePrefs() {
-    if (minute() % 5 == 0 && !Prefs.isUpToDate) { 
+void handleStoreCoreData() {
+    if (!Prefs.isUpToDate) { 
         Prefs.isUpToDate = true;
-        BootSecure::setPrefs();
+        BootSecure::setPrefs();        
     }
-}
 
-void handleUpdateScreenFlags() {
-    if (minute() % 5 == 0 && !I.isUpToDate) { 
+    if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if more than 5 minutes since last store
         I.isUpToDate = true;
         storeScreenInfoSD();
     }
 }
+
 
 // --- Main Loop ---
 void loop() {
     esp_task_wdt_reset();
 
     updateTime(); //sets I.currenttime
+
     
     checkTouchScreen();
 
@@ -615,7 +558,7 @@ void loop() {
             storeDevicesSensorsSD();
         }
 
-
+        
         OldTime[1] = minute();
         I.isFlagged = 0;
         I.isSoilDry = 0;
@@ -633,9 +576,8 @@ void loop() {
         I.isFlagged += I.isExpired;
 
         handleESPNOWPeriodicBroadcast(5);
-        handleUpdatePrefs();
-        handleUpdateScreenFlags();
-        Sensors.storeAllSensors(5);
+        handleStoreCoreData();
+        Sensors.storeDevicesSensorsArrayToSD(5);
         #ifdef _USEGSHEET
 
         uint8_t gsheetResult = Gsheet_uploadData();
@@ -648,8 +590,13 @@ void loop() {
 
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
+
+
         checkExpiration(-1, I.currentTime, false);
-        
+
+        Sensors.storeAllSensorsSD(); //store all sensors to SD card once an hour
+
+
         if (OldTime[2] == 4) {
             //check if DST has changed every day at 4 am
             checkDST();
@@ -661,8 +608,6 @@ void loop() {
     if (OldTime[0] != second()) {
         OldTime[0] = second();
 
-
-      
         if (I.LAST_ESPNOW_SERVER_TIME > 0) {
             I.LAST_ESPNOW_SERVER_TIME = 0;
             Sensors.addDevice(I.LAST_ESPNOW_SERVER_MAC, I.LAST_ESPNOW_SERVER_IP, "Server");
@@ -672,6 +617,8 @@ void loop() {
 
         fcnDrawScreen();
         if (I.screenChangeTimer > 0) I.screenChangeTimer--;
+        else I.ScreenNum=0;
+
 
     }
     

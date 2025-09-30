@@ -1,4 +1,5 @@
 #include <sensors.hpp>
+#include "../../GLOBAL_LIBRARY/Devices.hpp"
 
 /*sens types
 //0 - not defined
@@ -31,9 +32,10 @@
 55 - heat on/off {requires N DIO Pins}
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
-58 - leak yes/no
+58 - 
 60 -  battery power
 61 - battery %
+70 - leak sensor 
 98 - clock
 99 = any numerical value
 100+ is a server type sensor, to which other sensors will send their data
@@ -51,7 +53,7 @@ uint8_t HVACSNSNUM = 0;
 #endif
 
 
-SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
+// No local Sensors[] array; use DeviceStore exclusively
 
 #ifdef _USETFLUNA
 TFLunaType LocalTF;
@@ -191,10 +193,12 @@ snsArr[9] = -1;
 
 
 
-  for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
-        if (Sensors[j].LastReadTime> MoreRecentThan) count++;
+  for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+    SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+    if (!s) continue;
+    if (snsType==0 || (snsType<0 && inArray(snsArr,10,s->snsType)>=0) || s->snsType == snsType) 
+      if ((s->Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
+        if (s->timeRead> MoreRecentThan) count++;
       }
   }
 
@@ -204,14 +208,7 @@ snsArr[9] = -1;
 
 
 void setupSensors() {
-/*
-          Sensors[i].snsPin=_USEDHT; //this is the pin to read/write from - not always used
-          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME); //sensor name
-            Sensors[i].limitUpper = 88; //upper limit of normal
-            Sensors[i].limitLower = 20; //lower limit of normal
-          Sensors[i].PollingInt=120; //how often to check this sensor, in seconds
-          Sensors[i].SendingInt=2*60; //how often to send data from this sensor. nte that value will be sent regardless if flag status changes, so can set to arbitrarily high value if you only want to send when flag status changes
-*/
+/* legacy template removed; DeviceStore is now the source of truth */
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
 //init hvachx 
@@ -257,20 +254,17 @@ uint16_t  sc_interval;
 
 
   for (byte i=0;i<SENSORNUM;i++) {
-    Sensors[i].snsType=SENSORTYPES[i];
-    Sensors[i].snsID=find_sensor_count(Sensors[i].snsType); 
-
-
-    Sensors[i].Flags = 0;
-    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status since prior read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
-    bitWrite(Sensors[i].Flags,7,1); //default sensors to monitored level
-    if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
-    else bitWrite(Sensors[i].Flags,1,0);
+    uint8_t stype = SENSORTYPES[i];
+    if (stype == 0) continue;
+    uint8_t flags = 0;
+    bitWrite(flags,7,1);
+    if (bitRead(MONITORED_SNS,i)) bitWrite(flags,1,1);
+    else bitWrite(flags,1,0);
     
-    if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
-    else bitWrite(Sensors[i].Flags,2,0);
+    if (bitRead(OUTSIDE_SNS,i)) bitWrite(flags,2,1);
+    else bitWrite(flags,2,0);
 
-    switch (Sensors[i].snsType) {
+    switch (stype) {
       case 1: //DHT temp
       {
         //sc_multiplier = 1;
@@ -278,18 +272,10 @@ uint16_t  sc_interval;
         sc_interval=60*30;//seconds 
 
         #ifdef DHTTYPE
-          Sensors[i].snsPin=_USEDHT;
-          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 20;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=2*60;          
+          if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=88; Prefs.SNS_LIMIT_MIN[i]=20; }
+          else { Prefs.SNS_LIMIT_MAX[i]=80; Prefs.SNS_LIMIT_MIN[i]=60; }
+          Prefs.SNS_INTERVAL_POLL[i]=120; Prefs.SNS_INTERVAL_SEND[i]=2*60;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(ARDNAME+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         #endif
         break;
       }
@@ -301,19 +287,10 @@ uint16_t  sc_interval;
         sc_interval=60*30;//seconds 
 //        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         #ifdef DHTTYPE
-          Sensors[i].snsPin=_USEDHT;
-          snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 95;
-            Sensors[i].limitLower = 10;
-          }
-          else {
-            Sensors[i].limitUpper = 65;
-            Sensors[i].limitLower = 25;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          Sensors[i].PollingInt=2*60;
-          Sensors[i].SendingInt=5*60;
+          if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=95; Prefs.SNS_LIMIT_MIN[i]=10; }
+          else { Prefs.SNS_LIMIT_MAX[i]=65; Prefs.SNS_LIMIT_MIN[i]=25; bitWrite(flags,1,0); }
+          Prefs.SNS_INTERVAL_POLL[i]=2*60; Prefs.SNS_INTERVAL_SEND[i]=5*60;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(ARDNAME+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         #endif
         break;
        }
@@ -323,22 +300,14 @@ uint16_t  sc_interval;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
         #ifdef _USESOILCAP
-          Sensors[i].snsPin=SOILPIN; //input, usually A0
-          snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
-          Sensors[i].limitUpper = 290;
-          Sensors[i].limitLower = 25;
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=600;
+          Prefs.SNS_LIMIT_MAX[i]=290; Prefs.SNS_LIMIT_MIN[i]=25; Prefs.SNS_INTERVAL_POLL[i]=120; Prefs.SNS_INTERVAL_SEND[i]=600;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(ARDNAME+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         #endif
         #ifdef _USESOILRES
           pinMode(_USESOILRES,OUTPUT);  
 
-          Sensors[i].snsPin=SOILPIN;
-          snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = SOILR_MAX;
-          Sensors[i].limitLower = 0;
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=60*60;
+          Prefs.SNS_LIMIT_MAX[i]=SOILR_MAX; Prefs.SNS_LIMIT_MIN[i]=0; Prefs.SNS_INTERVAL_POLL[i]=120; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(ARDNAME+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         #endif
 
         break;
@@ -350,18 +319,11 @@ uint16_t  sc_interval;
         sc_interval=60*30;//seconds 
 
         #if defined(_USEAHT) || defined(_USEAHTADA)
-          Sensors[i].snsPin=0;
-          snprintf(Sensors[i].snsName,31,"%s_AHT_T",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 20;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=5*60;
+          if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=88; Prefs.SNS_LIMIT_MIN[i]=20; }
+          else { Prefs.SNS_LIMIT_MAX[i]=80; Prefs.SNS_LIMIT_MIN[i]=60; }
+          Prefs.SNS_INTERVAL_POLL[i]=5*60; Prefs.SNS_INTERVAL_SEND[i]=5*60;
+          int16_t si = DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 4, 0, String(ARDNAME+String("_AHT_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
+          if (si>=0) { SnsType* s = DeviceStore.getSensorBySnsIndex(si); if (s) s->snsPin = 0; }
         #endif
         break;
         }
@@ -373,19 +335,11 @@ uint16_t  sc_interval;
        // bitWrite(Sensors[i].Flags,7,0); //not a "critically monitored" sensor, ie do not alarm if sensor expires
 
         #if defined(_USEAHT) || defined(_USEAHTADA)
-          Sensors[i].snsPin=0;
-          snprintf(Sensors[i].snsName,31,"%s_AHT_RH",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 95;
-            Sensors[i].limitLower = 10;
-          }
-          else {
-            Sensors[i].limitUpper = 65;
-            Sensors[i].limitLower = 25;
-            // bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=10*60;
+          if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=95; Prefs.SNS_LIMIT_MIN[i]=10; }
+          else { Prefs.SNS_LIMIT_MAX[i]=65; Prefs.SNS_LIMIT_MIN[i]=25; }
+          Prefs.SNS_INTERVAL_POLL[i]=10*60; Prefs.SNS_INTERVAL_SEND[i]=10*60;
+          int16_t si = DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 5, 0, String(ARDNAME+String("_AHT_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
+          if (si>=0) { SnsType* s = DeviceStore.getSensorBySnsIndex(si); if (s) s->snsPin = 0; }
         #endif
         break;
         }
@@ -394,14 +348,10 @@ uint16_t  sc_interval;
         {
           //sc_multiplier = 1;
         //sc_offset=50;
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        bitWrite(flags,7,0);
         sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0; //not used
-        snprintf(Sensors[i].snsName,31,"%s_Dist",ARDNAME);
-        Sensors[i].limitUpper = 2000;
-        Sensors[i].limitLower = -1001;
-        Sensors[i].PollingInt=60;
-        Sensors[i].SendingInt=120;
+        Prefs.SNS_LIMIT_MAX[i]=2000; Prefs.SNS_LIMIT_MIN[i]=-1001; Prefs.SNS_INTERVAL_POLL[i]=60; Prefs.SNS_INTERVAL_SEND[i]=120;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 7, 0, String(ARDNAME+String("_Dist")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 9: //BMP pres
@@ -410,12 +360,8 @@ uint16_t  sc_interval;
         //sc_offset=-950; //now range is <100, so multiplier of .5 is ok
         //bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*60;//seconds 
-        Sensors[i].snsPin=0; //i2c
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SNS_LIMIT_MAX[i]=1022; Prefs.SNS_LIMIT_MIN[i]=1009; Prefs.SNS_INTERVAL_POLL[i]=30*60; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 9, 0, String(ARDNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 10: //BMP temp
@@ -423,34 +369,21 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=50;
         sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMP_t",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 25;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        bitWrite(flags,1,0);
+        if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=88; Prefs.SNS_LIMIT_MIN[i]=25; }
+        else { Prefs.SNS_LIMIT_MAX[i]=80; Prefs.SNS_LIMIT_MIN[i]=60; }
+        Prefs.SNS_INTERVAL_POLL[i]=30*60; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 10, 0, String(ARDNAME+String("_BMP_t")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 11: //BMP alt
         {
           //sc_multiplier = 1;
         //sc_offset=0;
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        bitWrite(flags,7,0);
         sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=60000;
-        Sensors[i].SendingInt=60000;
+        Prefs.SNS_LIMIT_MAX[i]=100; Prefs.SNS_LIMIT_MIN[i]=-5; Prefs.SNS_INTERVAL_POLL[i]=60000; Prefs.SNS_INTERVAL_SEND[i]=60000;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 11, 0, String(ARDNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 12: //Bar prediction
@@ -460,14 +393,9 @@ uint16_t  sc_interval;
         sc_interval=60*30;//seconds 
         bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_Pred",ARDNAME);
-        Sensors[i].limitUpper = 0;
-        Sensors[i].limitLower = 0; //anything over 0 is an alarm
-        Sensors[i].PollingInt=60*60;
-        Sensors[i].SendingInt=60*60;
-        bitWrite(Sensors[i].Flags,3,1); //calculated
-        bitWrite(Sensors[i].Flags,4,1); //predictive
+        Prefs.SNS_LIMIT_MAX[i]=0; Prefs.SNS_LIMIT_MIN[i]=0; Prefs.SNS_INTERVAL_POLL[i]=60*60; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+        bitWrite(flags,3,1); bitWrite(flags,4,1);
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 12, 0, String(ARDNAME+String("_Pred")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 13: //BME pres
@@ -476,12 +404,8 @@ uint16_t  sc_interval;
         //sc_offset=-950; //now range is <100, so multiply by 2
        // bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         sc_interval=60*60;//seconds 
-        Sensors[i].snsPin=0; //i2c
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SNS_LIMIT_MAX[i]=1022; Prefs.SNS_LIMIT_MIN[i]=1009; Prefs.SNS_INTERVAL_POLL[i]=30*60; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 13, 0, String(ARDNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 14: //BMEtemp
@@ -489,18 +413,10 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=100;
         sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMEt",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 25;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
+        if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=88; Prefs.SNS_LIMIT_MIN[i]=25; }
+        else { Prefs.SNS_LIMIT_MAX[i]=80; Prefs.SNS_LIMIT_MIN[i]=60; }
+        Prefs.SNS_INTERVAL_POLL[i]=120; Prefs.SNS_INTERVAL_SEND[i]=5*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 14, 0, String(ARDNAME+String("_BMEt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 15: //bme rh
@@ -508,21 +424,11 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMErh",ARDNAME);
-        if (bitRead(OUTSIDE_SNS,i)) {
-          Sensors[i].limitUpper = 95;
-          Sensors[i].limitLower = 10;
-        }
-        else {
-          Sensors[i].limitUpper = 65;
-          Sensors[i].limitLower = 25;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-        }
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
+        bitWrite(flags,7,0);
+        if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=95; Prefs.SNS_LIMIT_MIN[i]=10; }
+        else { Prefs.SNS_LIMIT_MAX[i]=65; Prefs.SNS_LIMIT_MIN[i]=25; bitWrite(flags,1,0); }
+        Prefs.SNS_INTERVAL_POLL[i]=120; Prefs.SNS_INTERVAL_SEND[i]=5*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 15, 0, String(ARDNAME+String("_BMErh")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 16: //bme alt
@@ -530,14 +436,9 @@ uint16_t  sc_interval;
           //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=15*60*60;
-        Sensors[i].SendingInt=15*60*60;
+        bitWrite(flags,7,0);
+        Prefs.SNS_LIMIT_MAX[i]=100; Prefs.SNS_LIMIT_MIN[i]=-5; Prefs.SNS_INTERVAL_POLL[i]=15*60*60; Prefs.SNS_INTERVAL_SEND[i]=15*60*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 16, 0, String(ARDNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 17: //bme680
@@ -565,21 +466,11 @@ uint16_t  sc_interval;
              //sc_multiplier = 1;
         //sc_offset=0;
         sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
-        if (bitRead(OUTSIDE_SNS,i)) {
-          Sensors[i].limitUpper = 95;
-          Sensors[i].limitLower = 10;
-        }
-        else {
-          Sensors[i].limitUpper = 65;
-          Sensors[i].limitLower = 25;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-        }
-        Sensors[i].PollingInt=15*60;
-        Sensors[i].SendingInt=15*60;
+        bitWrite(flags,7,0);
+        if (bitRead(OUTSIDE_SNS,i)) { Prefs.SNS_LIMIT_MAX[i]=95; Prefs.SNS_LIMIT_MIN[i]=10; }
+        else { Prefs.SNS_LIMIT_MAX[i]=65; Prefs.SNS_LIMIT_MIN[i]=25; bitWrite(flags,1,0); }
+        Prefs.SNS_INTERVAL_POLL[i]=15*60; Prefs.SNS_INTERVAL_SEND[i]=15*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 18, 0, String(ARDNAME+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 19: //bme680
@@ -588,12 +479,8 @@ uint16_t  sc_interval;
         //sc_offset=-950; //now range is <100, so multiply by 2
         sc_interval=60*60;//seconds 
      //   bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1020;
-        Sensors[i].limitLower = 1012;
-        Sensors[i].PollingInt=60*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SNS_LIMIT_MAX[i]=1020; Prefs.SNS_LIMIT_MIN[i]=1012; Prefs.SNS_INTERVAL_POLL[i]=60*60; Prefs.SNS_INTERVAL_SEND[i]=60*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 19, 0, String(ARDNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
       case 20: //bme680
@@ -602,12 +489,8 @@ uint16_t  sc_interval;
         //sc_offset=00;
         sc_interval=60*30;//seconds 
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_VOC",ARDNAME);
-        Sensors[i].limitUpper = 1000;
-        Sensors[i].limitLower = 50;
-        Sensors[i].PollingInt=1*60;
-        Sensors[i].SendingInt=1*60;
+        Prefs.SNS_LIMIT_MAX[i]=1000; Prefs.SNS_LIMIT_MIN[i]=50; Prefs.SNS_INTERVAL_POLL[i]=1*60; Prefs.SNS_INTERVAL_SEND[i]=1*60;
+        DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 20, 0, String(ARDNAME+String("_VOC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         break;
         }
 
@@ -616,14 +499,8 @@ uint16_t  sc_interval;
          {
 
           sc_interval=60*30;//seconds 
-
-          snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
-      
-          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300; 
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          Prefs.SNS_LIMIT_MAX[i]=1440; Prefs.SNS_LIMIT_MIN[i]=-1; Prefs.SNS_INTERVAL_POLL[i]=60; Prefs.SNS_INTERVAL_SEND[i]=300; bitWrite(flags,3,1);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 50, 0, String(ARDNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
           
           break;
          }
@@ -634,8 +511,6 @@ uint16_t  sc_interval;
          {
 
           sc_interval=60*30;//seconds 
-
-          snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
           /*
           #ifdef _USEMUX
             
@@ -644,11 +519,8 @@ uint16_t  sc_interval;
             pinMode(Sensors[i].snsPin, INPUT);
           #endif
           */
-          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300; 
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          Prefs.SNS_LIMIT_MAX[i]=1440; Prefs.SNS_LIMIT_MIN[i]=-1; Prefs.SNS_INTERVAL_POLL[i]=60; Prefs.SNS_INTERVAL_SEND[i]=300; bitWrite(flags,3,1);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 50, 0, String(ARDNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
           
           break;
          }
@@ -659,16 +531,17 @@ uint16_t  sc_interval;
         //sc_offset=0;
           sc_interval=60*30;//seconds 
 
-          snprintf(Sensors[i].snsName,31,"%s_GAS",ARDNAME);
+          {
+            String nm = String(ARDNAME) + "_GAS";
+            Prefs.SNS_LIMIT_MAX[i]=100; Prefs.SNS_LIMIT_MIN[i]=-1; Prefs.SNS_INTERVAL_POLL[i]=30; Prefs.SNS_INTERVAL_SEND[i]=600;
+            DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 51, 0, nm.c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
+          }
           #ifdef _USEMUX
             Sensors[i].snsPin=0; //the DIO configuration to select this channel            
           #else
             //undefined. gas is not measured if notusing mux
           #endif
-          Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30; //short poll int given that gas may not be on often 
-          Sensors[i].SendingInt=600; 
+          
           break;
         }
         case 55: //heat
@@ -699,13 +572,8 @@ uint16_t  sc_interval;
             //sc_multiplier = 4096/256;
           //sc_offset=0;
           sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=DIOPINS[2];
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
-          Sensors[i].limitUpper = 700;
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30;
-          Sensors[i].SendingInt=300;
+          Prefs.SNS_LIMIT_MAX[i]=700; Prefs.SNS_LIMIT_MIN[i]=-1; Prefs.SNS_INTERVAL_POLL[i]=30; Prefs.SNS_INTERVAL_SEND[i]=300;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 56, 0, String(ARDNAME+String("_comp")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
           break;
           }
         case 57: //aircon fan
@@ -713,13 +581,8 @@ uint16_t  sc_interval;
             //sc_multiplier = 4096/256;
           //sc_offset=0;
           sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=DIOPINS[3];
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
-          Sensors[i].limitUpper = 700;
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30;
-          Sensors[i].SendingInt=300;
+          Prefs.SNS_LIMIT_MAX[i]=700; Prefs.SNS_LIMIT_MIN[i]=-1; Prefs.SNS_INTERVAL_POLL[i]=30; Prefs.SNS_INTERVAL_SEND[i]=300;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 57, 0, String(ARDNAME+String("_fan")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
           break;
           }
           
@@ -728,15 +591,8 @@ uint16_t  sc_interval;
         {
           #ifdef _USELEAK
           sc_interval=60*60;//seconds 
-          Sensors[i].snsPin=_LEAKPIN;
-          pinMode(Sensors[i].snsPin,INPUT);
-          pinMode(_LEAKDIO,OUTPUT);
-          digitalWrite(_LEAKDIO, LOW);
-          snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
-          Sensors[i].limitUpper = 0.5;
-          Sensors[i].limitLower = -0.5;
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=10*60;
+          Prefs.SNS_LIMIT_MAX[i]=0.5; Prefs.SNS_LIMIT_MIN[i]=-0.5; Prefs.SNS_INTERVAL_POLL[i]=10*60; Prefs.SNS_INTERVAL_SEND[i]=10*60;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 70, 0, String(ARDNAME+String("_leak")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
           #endif
           break;
         }
@@ -747,14 +603,8 @@ uint16_t  sc_interval;
           //sc_multiplier = .01;
           //sc_offset=-3.1;
           sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=_USELIBATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
-          Sensors[i].limitUpper = 4.3;
-          Sensors[i].limitLower = 3.7;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
+          Prefs.SNS_LIMIT_MAX[i]=4.3; Prefs.SNS_LIMIT_MIN[i]=3.7; Prefs.SNS_INTERVAL_POLL[i]=1*60; Prefs.SNS_INTERVAL_SEND[i]=5*60; bitWrite(flags,1,0);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 60, 0, String(ARDNAME+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
 
           
         #endif
@@ -762,14 +612,8 @@ uint16_t  sc_interval;
           //sc_multiplier = .01;
           //sc_offset=-3.1;
           sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=_USESLABATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
-          Sensors[i].limitUpper = 12.89;
-          Sensors[i].limitLower = 12.23;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
+          Prefs.SNS_LIMIT_MAX[i]=12.89; Prefs.SNS_LIMIT_MIN[i]=12.23; Prefs.SNS_INTERVAL_POLL[i]=60*60; Prefs.SNS_INTERVAL_SEND[i]=60*60; bitWrite(flags,1,0);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 60, 0, String(ARDNAME+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         #endif
 
         break;
@@ -781,14 +625,8 @@ uint16_t  sc_interval;
           //sc_offset=0;
           sc_interval=60*30;//seconds 
 
-          Sensors[i].snsPin=_USELIBATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
-          Sensors[i].limitUpper = 105;
-          Sensors[i].limitLower = 10;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          Prefs.SNS_LIMIT_MAX[i]=105; Prefs.SNS_LIMIT_MIN[i]=10; Prefs.SNS_INTERVAL_POLL[i]=1*60; Prefs.SNS_INTERVAL_SEND[i]=5*60; bitWrite(flags,3,1);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 61, 0, String(ARDNAME+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
 
         #endif
         #ifdef _USESLABATTERY
@@ -796,14 +634,8 @@ uint16_t  sc_interval;
           //sc_offset=0;
           sc_interval=60*60;//seconds 
 
-          Sensors[i].snsPin=_USESLABATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
-          Sensors[i].limitUpper = 100;
-          Sensors[i].limitLower = 50;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          Prefs.SNS_LIMIT_MAX[i]=100; Prefs.SNS_LIMIT_MIN[i]=50; Prefs.SNS_INTERVAL_POLL[i]=60*60; Prefs.SNS_INTERVAL_SEND[i]=60*60; bitWrite(flags,3,1);
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 61, 0, String(ARDNAME+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
 
         #endif
         break;
@@ -811,17 +643,9 @@ uint16_t  sc_interval;
       case 90: //Sleep info
         {
           sc_interval=60*30;//seconds 
-          bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-          Sensors[i].snsPin=0;
-          //pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_sleep",ARDNAME);
-          Sensors[i].limitUpper = 14400;
-          Sensors[i].limitLower = 0;
-          Sensors[i].PollingInt=10*60; //these don't matter
-          Sensors[i].SendingInt=10*60; //these don't matter
-          bitWrite(Sensors[i].Flags,3,1); //calculated
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
+          bitWrite(flags,7,0); bitWrite(flags,3,1); bitWrite(flags,1,0);
+          Prefs.SNS_LIMIT_MAX[i]=14400; Prefs.SNS_LIMIT_MIN[i]=0; Prefs.SNS_INTERVAL_POLL[i]=10*60; Prefs.SNS_INTERVAL_SEND[i]=10*60;
+          DeviceStore.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 90, 0, String(ARDNAME+String("_sleep")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, ARDNAME);
         
         break;
         }
@@ -847,6 +671,9 @@ uint16_t  sc_interval;
     #endif
 
   }
+
+  // After initializing local Sensors[], create/update local device and attach sensors to DeviceStore
+  syncAllSensorsToDeviceStore();
 
 
 
@@ -923,14 +750,14 @@ int peak_to_peak(int pin, int ms) {
 
 
 
-bool ReadData(struct SensorVal *P) {
+bool ReadData(struct SnsType *P) {
   
   time_t t=now();
   byte nsamps; //only used for some sensors
   double val;
   bitWrite(P->Flags,0,0);
 
-  P->LastsnsValue = P->snsValue;
+  double LastsnsValue = P->snsValue;
   
   switch (P->snsType) {
     case 1: //DHT temp
@@ -1559,13 +1386,13 @@ bool ReadData(struct SensorVal *P) {
     
   }
   checkSensorValFlag(P); //sets isFlagged
-  P->LastReadTime = t; //localtime
+  P->timeRead = t; //localtime
 
   #ifdef _WEBCHART
     for (byte k=0;k<_WEBCHART;k++) {
       if (SensorCharts[k].snsType == P->snsType) {
-        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->LastReadTime) {
-          SensorCharts[k].lastRead = P->LastReadTime;
+        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->timeRead) {
+          SensorCharts[k].lastRead = P->timeRead;
           //byte tmpval = (byte) ((double) (P->snsValue + SensorCharts[k].offset) / SensorCharts[k].multiplier );
 
           pushDoubleArray(SensorCharts[k].values,_NUMWEBCHARTPNTS,P->snsValue);
@@ -1581,89 +1408,14 @@ bool ReadData(struct SensorVal *P) {
 return true;
 }
 
-byte find_limit_sensortypes(String snsname, byte snsType,bool highest){
-  //returns nidex to sensorval for the entry that is flagged and highest for sensor with name like snsname and type like snsType
-byte cnt = find_sensor_count(snsType);
-byte j = 255;
-byte ind = 255;
-double snsVal;
-if (highest) snsVal=-99999;
-else snsVal = 99999;
-bool newind = false;
-  for (byte i=1;i<=cnt;i++) {
-    newind = false;
-    j = find_sensor_name(snsname,snsType,i);
-    if (j!=255) {
-      if (highest) { 
-        if (snsVal<Sensors[j].snsValue) newind = true;
-      } else {
-        if (snsVal>Sensors[j].snsValue) newind = true;
-      }
-
-      if (newind) {
-        snsVal = Sensors[j].snsValue;
-        ind=j;
-      }
-    }
-  }
-
-  return ind;
-
-}
 
 
-byte find_sensor_count(byte snsType) {
-//find the number of sensors associated with sensor havign snsname 
-byte cnt =0;
-  for (byte j=0; j<SENSORNUM;j++) {
-
-    if (Sensors[j].snsType == snsType) cnt++;
-
-  }
-
-  return cnt;
-}
-
-byte find_sensor_type(byte snsType,byte snsID) {
-  //return the first sensor that is of specified type
-  //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
-  //returns 255 if no such sensor found
-  String temp;
-  for (byte j=0; j<SENSORNUM;j++) {
-    if (snsID==255) {
-      if (Sensors[j].snsType == snsType) return j;
-    } else {
-      if (Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
-    }
-  }
-  return 255;
-}
-
-
-byte find_sensor_name(String snsname,byte snsType,byte snsID) {
-  //return the first sensor that has fieldname within its name
-  //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
-  //returns 255 if no such sensor found
-  String temp;
-
-  if (snsname=="") snsname = ARDNAME;
-  for (byte j=0; j<SENSORNUM;j++) {
-    temp = Sensors[j].snsName; 
-
-    if (snsID==255) {
-      if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType) return j;
-    } else {
-      if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
-    }
-  }
-  return 255;
-}
-
-bool checkSensorValFlag(struct SensorVal *P) {
+byte 
+bool checkSensorValFlag(struct SnsType *P) {
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
   //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
   
-  bool lastflag = false;
+  bool lastflag = bitRead(P->Flags,0);
   bool thisflag = false;
 
   if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
@@ -1689,14 +1441,16 @@ bool checkSensorValFlag(struct SensorVal *P) {
     }
   }
 
-  if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
+  int16_t idx = getIndexForSnsPtr(P);
+  double limitUpper = (idx>=0) ? Prefs.SNS_LIMIT_MAX[idx] : 0;
+  double limitLower = (idx>=0) ? Prefs.SNS_LIMIT_MIN[idx] : 0;
 
-  if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
+  if (P->snsValue>limitUpper || P->snsValue<limitLower) {
     thisflag = true;
     bitWrite(P->Flags,0,1);
 
     //is it too high? write bit 5
-    if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
+    if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1);
     else bitWrite(P->Flags,5,0);
   } 
 
@@ -1712,63 +1466,14 @@ bool checkSensorValFlag(struct SensorVal *P) {
 
 }
 
-uint8_t findSensor(byte snsType, byte snsID) {
-  for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsID == snsID && Sensors[j].snsType == snsType) return j; 
+int16_t getIndexForSnsPtr(struct SnsType* P) {
+  for (int16_t i=0;i<DeviceStore.getNumSensors();++i) {
+    if (DeviceStore.getSensorBySnsIndex(i) == P) return i;
   }
-  return 255;  
+  return -1;
 }
 
-uint16_t findOldestDev() {
-  int oldestInd = 0;
-  int  i=0;
-  for (i=0;i<SENSORNUM;i++) {
-    if (Sensors[oldestInd].LastReadTime == 0) oldestInd = i;
-    else if (Sensors[i].LastReadTime< Sensors[oldestInd].LastReadTime && Sensors[i].LastReadTime >0) oldestInd = i;
-  }
-  if (Sensors[oldestInd].LastReadTime == 0) oldestInd = 255; //some arbitrarily large number that will never be seen...
-
-  return oldestInd;
-}
-
-void initSensor(int k) {
-  //special cases... k>255 then expire any sensor that is older than k mimnutes
-  //k<0 then init ALL sensors
-  time_t t=now();
-  if (k<-255)  {
-    for (byte i=0;i<SENSORNUM;i++) initSensor(i); //init all sensors
-  }
-    
-  if (k>255) { //init all sensors that are this old in unixtime minutes
-    for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>(uint32_t) k*60)  {//convert to seconds
-        //remove N hour old values 
-        initSensor(i);
-      }
-    }
-  }
-  if (k<0) return; //cannot deciper this
-  if (k>=SENSORNUM) return; //cannot deciper this
-
-  sprintf(Sensors[k].snsName,"");
-  Sensors[k].snsID = 255; //this is an impossible value for ID, as 0 is valid
-  Sensors[k].snsType = 0;
-  Sensors[k].snsValue = 0;
-  Sensors[k].PollingInt = 0;
-  Sensors[k].SendingInt = 0;
-  Sensors[k].LastReadTime = 0;
-  Sensors[k].LastSendTime = 0;  
-  Sensors[k].Flags =0; 
-}
-
-
-uint8_t countDev() {
-  uint8_t c = 0;
-  for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsType > 0) c++; 
-  }
-  return c;
-}
+// removed legacy find/init/count helpers
 
 void pushByteArray(byte arr[], byte N, byte value) {
   for (byte i = N-1; i > 0 ; i--) {
@@ -1851,6 +1556,80 @@ for (int i = 0; i < N-1 ; i++)   if (arr[i]==value) return i;
 return -1;
 
 
+}
+
+// --- DeviceStore sync helpers ---
+int16_t findLocalDevice() {
+  uint64_t mac = 0;
+  #if defined(_USE32)
+    mac = ESP.getEfuseMac();
+  #elif defined(_USE8266)
+    mac = ((uint64_t)ESP.getChipId());
+  #endif
+  int16_t devIndex = DeviceStore.findDevice(mac);
+  if (devIndex < 0) {
+    uint32_t ip = (uint32_t) WiFi.localIP();
+    devIndex = DeviceStore.addDevice(mac, ip, ARDNAME, 300, 0);
+  }
+  return devIndex;
+}
+
+void syncSensorToDeviceStore(uint8_t index) {
+  if (index >= SENSORNUM) return;
+  int16_t devIndex = findLocalDevice();
+  if (devIndex < 0) return;
+  uint64_t mac = DeviceStore.getDeviceMACByDevIndex(devIndex);
+  uint32_t ip = DeviceStore.getDeviceIPByDevIndex(devIndex);
+  SensorVal &S = Sensors[index];
+  // Flags and intervals are mapped to DeviceStore SnsType structure
+  uint8_t flags = S.Flags;
+  uint32_t sendingInt = S.SendingInt;
+  DeviceStore.addSensor(mac, ip, S.snsType, S.snsID, S.snsName, S.snsValue,
+                        S.LastReadTime, now(), sendingInt, flags, ARDNAME);
+}
+
+void syncAllSensorsToDeviceStore() {
+  int16_t devIndex = findLocalDevice();
+  if (devIndex < 0) return;
+  for (byte i = 0; i < SENSORNUM; ++i) {
+    if (Sensors[i].snsType > 0) {
+      syncSensorToDeviceStore(i);
+    }
+  }
+}
+
+// Translate between DeviceStore sensor and legacy SensorVal for read/send logic
+static bool buildSensorValFromDeviceStore(int16_t snsIndex, SensorVal* out) {
+  if (!out) return false;
+  SnsType* s = DeviceStore.getSensorBySnsIndex(snsIndex);
+  if (!s) return false;
+  out->snsType = s->snsType;
+  out->snsID = s->snsID;
+  out->snsPin = 0; // pin managed elsewhere during setup
+  strncpy(out->snsName, s->snsName, sizeof(out->snsName) - 1);
+  out->snsName[sizeof(out->snsName) - 1] = '\0';
+  out->LastsnsValue = out->snsValue;
+  out->snsValue = s->snsValue;
+  // Limits and intervals from Prefs arrays, indexed by snsIndex
+  out->limitUpper = Prefs.SNS_LIMIT_MAX[snsIndex];
+  out->limitLower = Prefs.SNS_LIMIT_MIN[snsIndex];
+  out->PollingInt = Prefs.SNS_INTERVAL_POLL[snsIndex];
+  out->SendingInt = Prefs.SNS_INTERVAL_SEND[snsIndex];
+  out->LastReadTime = s->timeRead;
+  out->LastSendTime = s->timeLogged;
+  out->Flags = s->Flags;
+  return true;
+}
+
+static void applySensorValToDeviceStore(int16_t snsIndex, const SensorVal* in) {
+  if (!in) return;
+  SnsType* s = DeviceStore.getSensorBySnsIndex(snsIndex);
+  if (!s) return;
+  s->snsValue = in->snsValue;
+  s->timeRead = in->LastReadTime;
+  s->timeLogged = in->LastSendTime;
+  s->Flags = in->Flags;
+  s->SendingInt = in->SendingInt;
 }
 
 
