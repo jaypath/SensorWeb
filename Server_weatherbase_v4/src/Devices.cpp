@@ -546,7 +546,7 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     SnsType* sensor = &sensors[index];
     uint16_t sendint = sensor->SendingInt;
     if (sendint==0) sendint = 300; //default to 5 minutes
-    uint32_t expirationTime = sensor->timeLogged + sendint * 2; // 2x sending interval
+    uint32_t expirationTime = sensor->timeLogged + sendint * 3; // 3x sending interval
     
     if (currentTime > expirationTime) {
         if (onlyCritical && !bitRead(sensor->Flags, 7)) {

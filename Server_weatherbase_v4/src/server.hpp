@@ -129,11 +129,7 @@ void handleSDCARD_DELETE_GSHEET();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 bool SendData(struct SensorVal*);
 
-// Firebase handlers
-void handleFIREBASE();
-void handleFIREBASE_TEST();
-void handleFIREBASE_UPLOAD_ALL();
-void handleFIREBASE_UPLOAD_WEATHER();
+
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();

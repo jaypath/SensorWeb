@@ -362,6 +362,7 @@ typedef enum {
       uint8_t wifiFailCount;
       time_t currentTime;
       uint8_t WiFiMode;
+      uint32_t lastServerStatusUpdate;
 
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
       

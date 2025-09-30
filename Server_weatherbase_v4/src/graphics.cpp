@@ -748,7 +748,6 @@ void fcnDrawSensorInfo() {
     tft.printf("Sns ID: %d\n",sensor->snsID);
     tft.printf("Sns name: %s\n",sensor->snsName);
     tft.printf("Sns last logged: %s\n",dateify(sensor->timeLogged,"mm/dd/yyyy hh:nn:ss"));
-    tft.printf("Sns last read: %s\n",dateify(sensor->timeRead,"mm/dd/yyyy hh:nn:ss"));
 
 
     } else tft.printf("Sensor not set");
@@ -1083,6 +1082,16 @@ else {
           else return; //not time to do anything yet
         }
       }       
+    } else {
+      // No critical flagged sensors, show weather if flags were previously shown
+      if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
+        forceweather = true;
+      }
+    }
+  } else {
+    // No flags at all, show weather if flags were previously shown
+    if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
+      forceweather = true;
     }
   }
 }

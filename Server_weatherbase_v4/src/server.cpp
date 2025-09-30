@@ -14,9 +14,6 @@
 extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 
-#ifdef _USEFIREBASE
-#include "FirebaseUpload.hpp"
-#endif
 
 
 
@@ -450,9 +447,6 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a> ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #795548; color: white; text-decoration: none; border-radius: 4px;\">Reboot Debug</a>";
@@ -1145,9 +1139,6 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
   WEBHTML = WEBHTML + "</div>";
@@ -1412,9 +1403,6 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
   WEBHTML = WEBHTML + "</div>";
@@ -1657,9 +1645,6 @@ void handleWiFiConfig() {
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
   WEBHTML = WEBHTML + "</div>";
@@ -2224,9 +2209,6 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
   WEBHTML = WEBHTML + "</div>";
@@ -2753,9 +2735,6 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  #ifdef _USEFIREBASE
-  WEBHTML = WEBHTML + "<a href=\"/FIREBASE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Firebase</a> ";
-  #endif
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
   WEBHTML = WEBHTML + "</div>";
@@ -3163,54 +3142,7 @@ void handleSDCARD_DELETE_GSHEET() {
   }
 }
 
-// Firebase web interface handlers
-#ifdef _USEFIREBASE
-void handleFIREBASE() {
-  LAST_WEB_REQUEST = I.currentTime;
-  WEBHTML.clear();
-  WEBHTML = "";
-  serverTextHeader();
 
-  WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Firebase Database Management</h2>";
-  
-  
-  
-  // Firebase operations
-  WEBHTML = WEBHTML + "<h3>Firebase Operations</h3>";
-  WEBHTML = WEBHTML + "<div style=\"margin: 20px 0;\">";
-  
-  
-  // Upload all data button
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/FIREBASE_UPLOAD_ALL\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload All Data\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "</div>";
-  
-  
-  // Navigation links
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Navigation</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a>";
-  WEBHTML = WEBHTML + "</div>";
-  
-  WEBHTML = WEBHTML + "</body></html>";
-  
-  serverTextClose(200, true);
-}
-
-
-void handleFIREBASE_UPLOAD_ALL() {
-  sendToFirebase("/sensordata");
-  
-  // Redirect back to Firebase page
-  server.sendHeader("Location", "/FIREBASE", true);
-  server.send(302, "text/plain", "");
-}
-#endif
 
 void handleREBOOT_DEBUG() {
   LAST_WEB_REQUEST = I.currentTime;
@@ -3299,11 +3231,6 @@ void setupServerRoutes() {
     server.on("/SDCARD_DELETE_TIMESTAMPS", HTTP_POST, handleSDCARD_DELETE_TIMESTAMPS);
     server.on("/SDCARD_DELETE_GSHEET", HTTP_POST, handleSDCARD_DELETE_GSHEET);
 
-    // Firebase routes
-    #ifdef _USEFIREBASE
-    server.on("/FIREBASE", HTTP_GET, handleFIREBASE);
-    server.on("/FIREBASE_UPLOAD_ALL", HTTP_POST, handleFIREBASE_UPLOAD_ALL);
-    #endif
 
     // 404 handler
     server.onNotFound(handleNotFound);

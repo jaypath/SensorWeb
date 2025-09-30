@@ -19,9 +19,7 @@
 
 
 String WEBHTML;
-bool KiyaanServer = false;
 byte CURRENTSENSOR_WEB = 1;
-IP_TYPE SERVERIP[NUMSERVERS];
 extern STRUCT_PrefsH Prefs;
   
 #ifdef _USE8266
@@ -214,15 +212,7 @@ bool Server_Message(String URL, String* payload, int* httpCode) {
 
 bool SendData(struct SnsType *snsreading) {
 
-
-
-#ifdef  ARDID
-   byte arduinoID = ARDID;
-#else
-byte arduinoID = WiFi.localIP()[3];
-#endif
-
-if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
+  if (bitRead(snsreading->Flags,1) == 0) return false; //not monitored
 
 
 WiFiClient wfclient;
@@ -290,7 +280,7 @@ bool inIndex(byte lookfor,byte used[],byte arraysize) {
 }
 
 void handleWiFiConfig_RESET() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Clear WiFi credentials and LMK key
   memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
@@ -308,6 +298,9 @@ void handleWiFiConfig_RESET() {
 }
 
 void handleUpdateSensorParams() {
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+  
   String stateSensornum = server.arg("SensorNum");
   int16_t j = stateSensornum.toInt();
 
@@ -379,6 +372,8 @@ void handleUpdateSensorParams() {
 }
 
 void handleNEXT() {
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
 
   CURRENTSENSOR_WEB++;
   if (CURRENTSENSOR_WEB>SENSORNUM) CURRENTSENSOR_WEB = 1;
@@ -390,6 +385,8 @@ void handleNEXT() {
 }
 
 void handleLAST() {
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
 
   if (CURRENTSENSOR_WEB==1) CURRENTSENSOR_WEB = SENSORNUM;
   else CURRENTSENSOR_WEB--;
@@ -401,6 +398,9 @@ void handleLAST() {
 }
 
 void handleUpdateSensorRead() {
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+  
   int16_t j = server.arg("SensorNum").toInt();
   SnsType* s = DeviceStore.getSensorBySnsIndex(j);
   if (s) {
@@ -413,7 +413,10 @@ void handleUpdateSensorRead() {
 }
 
 void handleUpdateAllSensorReads() {
-String WEBHTML = "";
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  String WEBHTML = "";
 
 WEBHTML += "Current time ";
 WEBHTML += (String) now();
@@ -433,65 +436,106 @@ for (int16_t k=0; k<DeviceStore.getNumSensors(); k++) {
 
 
 void handleSetThreshold() {
-byte snsNum, snsType;
-String strTemp;
-double limitUpper=-1, limitLower=-1;
-uint16_t PollingInt=0;
-  uint16_t SendingInt=0;
-byte k;
-#ifdef  ARDID
-byte   arduinoID = ARDID;
-#else
-byte arduinoID = WiFi.localIP()[3];
-#endif
-
-jspxx - converrt to post
-
-  for (k=0;k<server.args();k++) {
-    if ((String)server.argName(k) == (String)"LOGID") breakLOGID(server.arg(k),&arduinoID,&snsType,&snsNum);
-    if ((String)server.argName(k) == (String)"UPPER") {
-      strTemp = server.arg(k);      
-      limitUpper=strTemp.toDouble();
-    }
-    if ((String)server.argName(k) == (String)"LOWER") {
-      strTemp = server.arg(k);      
-      limitLower=strTemp.toDouble();
-    }
-    if ((String)server.argName(k) == (String)"POLLINGINT") {
-      strTemp = server.arg(k);      
-      PollingInt=strTemp.toInt();
-    }
-    if ((String)server.argName(k) == (String)"SENDINGINT") {
-      strTemp = server.arg(k);      
-      SendingInt=strTemp.toInt();
-    }
-
-    
+  // Updated to use HTTP POST and new Devices_Sensors framework with MAC ID instead of ARDID
+  
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  String WEBHTML = "";
+  
+  // Parse POST parameters - only snsType and snsID are required
+  if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
+    server.send(400, "text/plain", "Error: Missing required parameters (snsType, snsID)");
+    return;
   }
-
-  k = 255;
-  if (k<100) {
-    if (limitLower != -1) Prefs.SNS_LIMIT_MIN[k] = limitLower;
-    if (limitUpper != -1) Prefs.SNS_LIMIT_MAX[k] = limitUpper;
-    if (PollingInt>0) Prefs.SNS_INTERVAL_POLL[k] = PollingInt;
-    if (SendingInt>0) Prefs.SNS_INTERVAL_SEND[k] = SendingInt;
-    Prefs.isUpToDate = false;
-    SnsType* s = DeviceStore.getSensorBySnsIndex(k);
-    if (s) checkSensorValFlag(s);
-    String WEBHTML = "";
-    byte j=k;
-    WEBHTML += (String) dateify() + "\n";
-
-    if (s) {
-      WEBHTML = WEBHTML + "ARDID:" + String(arduinoID, DEC) + "; snsType:"+(String) s->snsType+"; snsID:"+ (String) s->snsID + "; SnsName:"+ (String) s->snsName + "; LastRead:"+(String) s->timeRead+"; LastSend:"+(String) s->timeLogged + "; snsVal:"+(String) s->snsValue + "; UpperLim:"+(String) Prefs.SNS_LIMIT_MAX[j] + "; LowerLim:"+(String) Prefs.SNS_LIMIT_MIN[j] + "; Flag:"+(String) bitRead(s->Flags,0) + "; Monitored: " + (String) bitRead(s->Flags,1) + "\n";
-    }
-    server.send(400, "text/plain", WEBHTML);   // Send HTTP status 200 (Ok) and send some text to the browser/client
-  } else {
-    server.send(400, "text/plain", "That sensor was not found");   // Send HTTP status 400 as error
+  
+  // Use this device's MAC address (since it received the message)
+  uint64_t deviceMAC = ESP.getEfuseMac();
+  
+  uint8_t snsType = server.arg("snsType").toInt();
+  uint8_t snsID = server.arg("snsID").toInt();
+  
+  // Find the sensor using the new framework
+  int16_t sensorIndex = DeviceStore.findSensor(deviceMAC, snsType, snsID);
+  
+  if (sensorIndex < 0) {
+    WEBHTML = "Error: Sensor not found for Type: " + String(snsType) + ", ID: " + String(snsID);
+    server.send(404, "text/plain", WEBHTML);
+    return;
   }
+  
+  // Check if sensor index is valid
+  if (sensorIndex >= SENSORNUM) {
+    server.send(400, "text/plain", "Error: Sensor index out of range");
+    return;
+  }
+  
+  // Get the sensor and check if it's set
+  SnsType* s = DeviceStore.getSensorBySnsIndex(sensorIndex);
+  if (!s || !s->IsSet) {
+    WEBHTML = "Error: Sensor not initialized for Type: " + String(snsType) + ", ID: " + String(snsID);
+    server.send(400, "text/plain", WEBHTML);
+    return;
+  }
+  
+  // Get optional threshold and interval parameters - default to current values from Prefs
+  // Note: limits and pollingInt are stored in Prefs, sendingInt is in both Prefs and sensor
+  double limitUpper = Prefs.SNS_LIMIT_MAX[sensorIndex];
+  double limitLower = Prefs.SNS_LIMIT_MIN[sensorIndex];
+  uint16_t pollingInt = Prefs.SNS_INTERVAL_POLL[sensorIndex];
+  uint16_t sendingInt = s->SendingInt;  // Get from sensor, not Prefs
+  
+  // Only update if new values are provided
+  if (server.hasArg("UPPER")) {
+    limitUpper = server.arg("UPPER").toDouble();
+  }
+  if (server.hasArg("LOWER")) {
+    limitLower = server.arg("LOWER").toDouble();
+  }
+  if (server.hasArg("POLLINGINT")) {
+    pollingInt = server.arg("POLLINGINT").toInt();
+  }
+  if (server.hasArg("SENDINGINT")) {
+    sendingInt = server.arg("SENDINGINT").toInt();
+  }
+  
+  // Update both Prefs and sensor values
+  Prefs.SNS_LIMIT_MIN[sensorIndex] = limitLower;
+  Prefs.SNS_LIMIT_MAX[sensorIndex] = limitUpper;
+  Prefs.SNS_INTERVAL_POLL[sensorIndex] = pollingInt;
+  Prefs.SNS_INTERVAL_SEND[sensorIndex] = sendingInt;
+  
+  // Update the sensor's SendingInt in DeviceStore
+  s->SendingInt = sendingInt;
+  
+  Prefs.isUpToDate = false;
+  
+  // Recheck sensor flags with new thresholds
+  checkSensorValFlag(s);
+  
+  // Build response
+  WEBHTML += dateify() + "\n";
+  WEBHTML += "MAC:" + String((unsigned long)(deviceMAC >> 32), HEX) + String((unsigned long)(deviceMAC & 0xFFFFFFFF), HEX);
+  WEBHTML += "; snsType:" + String(s->snsType);
+  WEBHTML += "; snsID:" + String(s->snsID);
+  WEBHTML += "; SnsName:" + String(s->snsName);
+  WEBHTML += "; LastRead:" + String(s->timeRead);
+  WEBHTML += "; LastSend:" + String(s->timeLogged);
+  WEBHTML += "; snsVal:" + String(s->snsValue);
+  WEBHTML += "; UpperLim:" + String(Prefs.SNS_LIMIT_MAX[sensorIndex]);
+  WEBHTML += "; LowerLim:" + String(Prefs.SNS_LIMIT_MIN[sensorIndex]);
+  WEBHTML += "; PollingInt:" + String(Prefs.SNS_INTERVAL_POLL[sensorIndex]);
+  WEBHTML += "; SendingInt:" + String(Prefs.SNS_INTERVAL_SEND[sensorIndex]);
+  WEBHTML += "; Flag:" + String(bitRead(s->Flags, 0));
+  WEBHTML += "; Monitored:" + String(bitRead(s->Flags, 1)) + "\n";
+  
+  server.send(200, "text/plain", WEBHTML);
 }
 
 void handleReboot() {
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+  
   WEBHTML = "Rebooting in 10 sec";
   serverTextClose(200, false);  //This returns to the main page
   delay(10000);
@@ -500,16 +544,15 @@ void handleReboot() {
 
 void handleRoot() {
 
+  // Update server status timestamp
+  I.lastServerStatusUpdate = I.currentTime;
+
 #ifdef _DEBUG
   Serial.println("Hit handleroot.");
 #endif
 
-#ifdef  ARDID
-  byte arduinoID = ARDID;
-#else
-  byte arduinoID = WiFi.localIP()[3];
-
-#endif
+  // Use device MAC address instead of ARDID
+  uint64_t deviceMAC = ESP.getEfuseMac();
 
 String WEBHTML = "<!DOCTYPE html><html>\n";
 
@@ -526,8 +569,8 @@ WEBHTML += (String) "body {  font-family: arial, sans-serif; }\n";
 WEBHTML += "</style></head>\n";
 WEBHTML += "<body>";
 
-WEBHTML +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WiFi.localIP().toString() + "<br>\nARDID:" + String(arduinoID, DEC) + "<br></h2>\n";
-WEBHTML += "<p>Started on: " + (String) dateify(ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
+WEBHTML +=  "<h2>Arduino: " + (String) ARDNAME + "<br>\nIP:" + WiFi.localIP().toString() + "<br>\nMAC:" + String((unsigned long)(deviceMAC >> 32), HEX) + String((unsigned long)(deviceMAC & 0xFFFFFFFF), HEX) + "<br></h2>\n";
+WEBHTML += "<p>Started on: " + (String) dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn") + "<br>\n";
 WEBHTML += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"mm/dd/yyyy hh:nn:ss") + "<br>\n";
 
 #ifdef _USE32
@@ -634,24 +677,7 @@ WEBHTML += "<br>-----------------------<br>\n";
   #endif
   WEBHTML += "<br>-----------------------<br>\n";
 #endif
-/* do not do this. Use sensor charts instead
 
-  #ifdef _USEBARPRED
-    WEBHTML += "<p>";
-    WEBHTML += "Hourly_air_pressures (most recent [top] entry was ";
-    WEBHTML +=  (String) dateify(LAST_BAR_READ);
-    WEBHTML += "):<br>\n";
-
-    for (byte j=0;j<24;j++)  {
-      WEBHTML += "     ";
-      WEBHTML += String(BAR_HX[j],DEC);
-      WEBHTML += "<br>\n"; 
-    }
-  WEBHTML += "</p>\n";
-
-
-  #endif
-  */ 
 
   WEBHTML =WEBHTML  + "<script>\n";
 
@@ -745,7 +771,7 @@ WEBHTML += "<br>-----------------------<br>\n";
 
 
 void handleCONFIG() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -797,7 +823,7 @@ void handleCONFIG() {
 
 
 void handleCONFIG_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Process form submissions and update editable fields
   if (server.hasArg("GLOBAL_TIMEZONE_OFFSET")) {
@@ -821,7 +847,7 @@ void handleCONFIG_POST() {
 
 
 void handleWiFiConfig() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML = "";
   serverTextHeader();
 
@@ -903,7 +929,7 @@ void addWiFiConfigForm() {
 
 
 void handleWiFiConfig_POST() { //updated code
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
 
 
   tft.clear();
@@ -963,26 +989,6 @@ void handleWiFiConfig_POST() { //updated code
 }
 
 
-void handleWiFiConfig_RESET() {
-  LAST_WEB_REQUEST = I.currentTime;
-  
-  // Clear WiFi credentials and LMK key
-  memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
-  memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
-  memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
-  Prefs.HAVECREDENTIALS = false;
-  Prefs.isUpToDate = false;
-  
-  
-  // Redirect back to WiFi config page
-  server.sendHeader("Location", "/WiFiConfig");
-  server.send(302, "text/plain", "WiFi configuration and LMK key reset. Please reconfigure.");
-  // Disconnect from current WiFi
-  WiFi.disconnect();
-
-}
-
-
 
 
 
@@ -1004,7 +1010,7 @@ void setupServerRoutes() {
   server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
   server.on("/UPDATEALLSENSORREADS", handleUpdateAllSensorReads);               
   server.on("/UPDATESENSORREAD",handleUpdateSensorRead);
-  server.on("/SETTHRESH", handleSetThreshold);               
+  server.on("/SETTHRESH", HTTP_POST, handleSetThreshold);               
   server.on("/UPDATESENSORPARAMS", handleUpdateSensorParams);
   server.on("/NEXTSNS", handleNext);
   server.on("/LASTSNS", handleLast);

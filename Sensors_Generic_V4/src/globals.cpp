@@ -24,7 +24,6 @@ double batteryArray[48] = {0};
 double LAST_BAR=0;
 #endif
 
-uint32_t LAST_WEB_REQUEST = 0;
 extern String WEBHTML;
 
 

@@ -752,7 +752,7 @@ int peak_to_peak(int pin, int ms) {
 
 bool ReadData(struct SnsType *P) {
   
-  time_t t=now();
+  // Use I.currentTime instead of local time_t t variable
   byte nsamps; //only used for some sensors
   double val;
   bitWrite(P->Flags,0,0);
@@ -944,9 +944,9 @@ bool ReadData(struct SnsType *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < t) {
+          if (LAST_BAR_READ+60*60 < I.currentTime) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = t;          
+            LAST_BAR_READ = I.currentTime;          
           }
         #endif
 
@@ -1052,9 +1052,9 @@ bool ReadData(struct SnsType *P) {
             P->limitLower = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < t) {
+          if (LAST_BAR_READ+60*60 < I.currentTime) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = t;          
+            LAST_BAR_READ = I.currentTime;          
           }
         #endif
       #endif
