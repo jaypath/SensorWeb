@@ -6,8 +6,8 @@
 #include <header.hpp>
 #include <sensors.hpp>
 #include <server.hpp>
-#include "BootSecure.hpp"
-#include "../../GLOBAL_LIBRARY/globals.hpp"
+#include "../../GLOBAL_LIBRARY/BootSecure.hpp"
+#include "globals.hpp"
 #include "../../GLOBAL_LIBRARY/Devices.hpp"
 #include "../../GLOBAL_LIBRARY/utility.hpp"
 #include "../../GLOBAL_LIBRARY/timesetup.hpp"
@@ -407,15 +407,7 @@ OldTime[3] = day();
   #ifdef _DEBUG
   Serial.println( "set up HTML server... ");
   #endif
-  server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-  server.on("/UPDATEALLSENSORREADS", handleUPDATEALLSENSORREADS);               
-  server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
-  server.on("/SETTHRESH", handleSETTHRESH);               
-  server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
-  server.on("/NEXTSNS", handleNEXT);
-  server.on("/LASTSNS", handleLAST);
-  server.on("/REBOOT", handleREBOOT);
-  server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call
+
   server.begin();
   
   #ifdef _DEBUG
