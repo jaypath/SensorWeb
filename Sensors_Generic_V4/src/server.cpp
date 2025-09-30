@@ -445,7 +445,7 @@ byte   arduinoID = ARDID;
 byte arduinoID = WiFi.localIP()[3];
 #endif
 
-jspxx
+jspxx - converrt to post
 
   for (k=0;k<server.args();k++) {
     if ((String)server.argName(k) == (String)"LOGID") breakLOGID(server.arg(k),&arduinoID,&snsType,&snsNum);
