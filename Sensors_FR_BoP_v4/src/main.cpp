@@ -245,6 +245,9 @@ bool initConnectivity() {
   
   #ifdef _DEBUG
     Serial.println("Connectivity initialized");
+    Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+    Serial.printf("Prefs.status: %d\n", Prefs.status);
+    Serial.printf("HAVECREDENTIALS: %s\n", Prefs.HAVECREDENTIALS ? "true" : "false");
   #endif
   
   return true;
@@ -590,6 +593,8 @@ void initServer() {
   
   #ifdef _DEBUG
     Serial.println("HTML server started!");
+    Serial.printf("Server IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Server port: 80\n");
   #endif
   
   #ifdef _USESSD1306

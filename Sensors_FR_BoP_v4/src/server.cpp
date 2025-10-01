@@ -78,6 +78,7 @@ void initHVAC(void){
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
+    Prefs.status = 1; // Set status to indicate WiFi is connected
     return true;
   }
 

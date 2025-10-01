@@ -328,30 +328,30 @@ void Animation_type::LED_animation_defaults(byte anim) {
   this->animation_style = anim;
   switch (anim) {
     case 1: //wave clockwise
-      sin_T = 1500; //in other words, T, ms to move through one wavelength
-      sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-      MaxBrightness = 15; //sin amp
-      MinBrightness=5; 
+      this->sin_T = 1500; //in other words, T, ms to move through one wavelength
+      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->MaxBrightness = 15; //sin amp
+      this->MinBrightness=5; 
       break;
     case 2: //wave counter-clockwise
-      sin_T = 1500; //in other words, T, ms to move through one wavelength
-      sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-      MaxBrightness = 10; //sin amp
-      MinBrightness=1; 
+      this->sin_T = 1500; //in other words, T, ms to move through one wavelength
+      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->MaxBrightness = 10; //sin amp
+      this->MinBrightness=1; 
       break;
     case 3: //pulse
-      sin_T = 30000; //in other words, T ms to move through one wavelength
-      sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-      MaxBrightness = 10; //sin amp
-      MinBrightness=5; 
+      this->sin_T = 30000; //in other words, T ms to move through one wavelength
+      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->MaxBrightness = 10; //sin amp
+      this->MinBrightness=5; 
       break;
     case 4: //const
-      MaxBrightness = 5;
-      MinBrightness = 5;
+      this->MaxBrightness = 5;
+      this->MinBrightness = 5;
       break;
     case 5: //random gaussian
-      MaxBrightness = 50;
-      MinBrightness = 5;
+      this->MaxBrightness = 50;
+      this->MinBrightness = 5;
         
       break;
   }
