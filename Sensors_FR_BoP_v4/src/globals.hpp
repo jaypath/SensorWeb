@@ -1,6 +1,5 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
-#define GLOBALS_HPP_INCLUDED
 
   //automatically detect arduino type
   #if defined (ARDUINO_ARCH_ESP8266)
@@ -14,14 +13,13 @@
   #endif
 
 
-//#define _USETFT
+//#define _USEWIRE //activate this to use i2c
+  //#define _USETFT
 #define _USESERIAL
 //#define _USEWEATHER
 //#define _USEBATTERY
 //#define _USEGSHEET
 //#define _USESDCARD
-#define _USELED 12
-
 
 #define MYNAME "FRBoP"
 #define NUMDEVICES 50 //how many should I store
@@ -34,28 +32,15 @@
 
   #include <Arduino.h>
   #include <String.h>
-  #include "timesetup.hpp"
-  #include "utility.hpp"
-  #include "server.hpp"
-  #include "BootSecure.hpp"
-  #include "AddESPNOW.hpp"
-  #include "Devices.hpp"
   #include <SPI.h>
-  #ifdef _USELED
-    #include "LEDGraphics.hpp"
-  #endif
   #ifdef _USETFT
-    #include "graphics.hpp"
     #include <LovyanGFX.hpp>
   #endif
   #ifdef _USEWEATHER
-    #include "Weather_Optimized.hpp"
   #endif
   #ifdef _USESDCARD
-    #include "SDCard.hpp"
   #endif
   #ifdef _USEGSHEET
-    #include "GsheetUpload.hpp"
   #endif
 
   #include <esp_task_wdt.h>
@@ -65,13 +50,55 @@
 
 
 #ifdef _ISPERIPHERAL
-  const uint8_t SENSORTYPES[SENSORNUM] = {3}; //can have zeros for unused sensors, but must init all to the correct sensortypes
-  #define MONITORINGSTATES         {1} //for monitored, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
-  #define OUTSIDESTATES            {0} //from R to L each bit represents a sensor, 1 means outside, 0 means not outside
-  #define INTERVAL_POLL            {300} //seconds between polls
-  #define INTERVAL_SEND            {1200} //seconds between sends
-  #define LIMIT_MAX                {600} //store max values for each sensor in NVS
-  #define LIMIT_MIN                {50} //store min values for each sensor in NVS
+//note that extra values here will be considered an error.
+/*
+  #define SENSORTYPES              {3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //list of each sensorytype in order. can have zeros for unused sensors, but must init all to the correct sensortypes
+  #define MONITORINGSTATES         {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
+  #define OUTSIDESTATES            {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each element indicates outside state for the ith sensor, with 1 means outside, 0 means not outside
+  #define INTERVAL_POLL            {300,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30} //each ith value is the seconds between polls
+  #define INTERVAL_SEND            {1200,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120} //each ith value is the seconds between sends
+  #define LIMIT_MAX                {550,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each ith value is the max  for each sensor in NVS
+  #define LIMIT_MIN                {50,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each ith value is the min values for each sensor in NVS
+*/
+#define SENSORTYPES              {3} //can have zeros for unused sensors, but must init all to the correct sensortypes
+#define MONITORINGSTATES         {1} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
+#define OUTSIDESTATES            {0} //each element indicates outside state for the ith sensor, with 1 means outside, 0 means not outside
+#define INTERVAL_POLL            {300} //each ith value is the seconds between polls
+#define INTERVAL_SEND            {1200} //each ith value is the seconds between sends
+#define LIMIT_MAX                {550} //each ith value is the max  for each sensor in NVS
+#define LIMIT_MIN                {50} //each ith value is the min values for each sensor in NVS
+
+
+  #define _USELED 12 //uncomment this to use an LED
+
+   //uncomment the devices attached!
+  //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
+    //#define _USEDHT 1 //specify DHT pin
+    //#define _USEAHT 1 //specify AHT I2C
+    //#define _USEAHTADA 0x38 // with bmp combined
+    //#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
+    //#define _USEBME 1 //specify BME I2C
+    //#define _USEBME680_BSEC 1 //specify BME680 I2C with BSEC
+    //#define _USEBME680 1 //specify BME680 I2C
+    //#define _USEPOWERPIN 12 //specify the pin being used for power
+    //#define _USESOILMODULE A0 //specify the pin being read for soil moisture
+    #define _USESOILRES 33//use soil resistnace, pin and power specified later
+    //#define _USESOILCAP 1 //specify soil capacitance sensor pin
+    //#define _USEBARPRED 1 //specify barometric pressure prediction
+    //#define _USEHCSR04 1 //distance
+    //#define _USETFLUNA 1 // distance
+    //#define _USESSD1306  1
+    //#define _USELIBATTERY  A0 //set to the pin that is analogin
+    //#define _USESLABATTERY  A0 //set to the pin that is analogin
+    //#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
+    //#define _USELEAK 1 //specify the pin being used for leak detection
+    //binary switches
+    //#define _CHECKAIRCON 1
+    //#define _CHECKHEAT 1 //check which lines are charged to provide heat
+    //#define _USERELAY 6 //specify the pin being used for relay, or the mux address if using mux
+    //#define _USEMUX //use analog input multiplexor to allow for >6 inputs
+    //#define _USECALIBRATIONMODE 6 //testing mode
+
   //#define _ISHVAC 1
   /*sens types
 //0 - not defined
@@ -97,10 +124,10 @@
 20  - BME680 gas sensor
 21 - human present (mmwave)
 50 - any binary, 1=yes/true/on
-51 = any on/off switch
+51 = any on/off switch/relay (for example, relay on at 5v)
 52 = any yes/no switch
-53 = any 3 way switch
-54 = 
+53 = total heating time (use for a multizone system)
+54 = any ac on/off switch (for example, 24v driven relay)
 55 - heat on/off {requires N DIO Pins}
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
@@ -117,52 +144,28 @@
 */
 
 
-  //uncomment the devices attached!
-  //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
-    //#define _USEDHT 1 //specify DHT pin
-    //#define _USEAHT 1 //specify AHT I2C
-    //#define _USEAHTADA 0x38 // with bmp combined
-    //#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
-    //#define _USEBME 1 //specify BME I2C
-    //#define _USEBME680_BSEC 1 //specify BME680 I2C with BSEC
-    //#define _USEBME680 1 //specify BME680 I2C
-    //#define _USEPOWERPIN 12 //specify the pin being used for power
-    //#define _USESOILMODULE A0 //specify the pin being read for soil moisture
-    #define _USESOILRES 33 //use soil resistnace, pin and power specified later
-    //#define _USESOILCAP 1 //specify soil capacitance sensor pin
-    //#define _USEBARPRED 1 //specify barometric pressure prediction
-    //#define _USEHCSR04 1 //distance
-    //#define _USETFLUNA 1 // distance
-    //#define _USESSD1306  1
-    //#define _USELIBATTERY  A0 //set to the pin that is analogin
-    //#define _USESLABATTERY  A0 //set to the pin that is analogin
-    //#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-    //#define _USELEAK 1 //specify the pin being used for leak detection
-    //binary switches
-    //#define _CHECKAIRCON 1
-    //#define _CHECKHEAT 1 //check which lines are charged to provide heat
-    //#define _USEMUX //use analog input multiplexor to allow for >6 inputs
-    //#define _USECALIBRATIONMODE 6 //testing mode
-
+ 
 
   #ifdef _ISPERIPHERAL
+
+    #ifdef _USEMUX
+      //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
+      //36 is first pin from EN, and the rest are consecutive
+      const uint8_t MUXPINS[5] = {32,33,25,26,36}; //DIO pins to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin). So 36 will be Analog and 32 will be s0...            
+    #endif
+
     #ifdef _ISHVAC
-    
-    
         #ifdef _CHECKAIRCON 
         //const uint8_t DIO_INPUTS=2; //two pins assigned
-        const uint8_t DIOPINS[4] = {35,34,39,36}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out
+        const uint8_t ACPINS[4] = {35,34,39,36}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out
         #endif
 
         #ifdef _CHECKHEAT
         //  const uint8_t DIO_INPUTS=6; //6 sensors
           #ifdef _USEMUX
-            //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
-            //36 is first pin from EN, and the rest are consecutive
-            const uint8_t DIOPINS[5] = {32,33,25,26,36}; //first 4 lines are DIO to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin). So 36 will be Analog and 32 will be s0...
-
+            const uint8_t HEATPINS[5] = {0,1,2,3,4,5}; //what are the mux addresses of heat zones?
           #else
-            const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
+            const uint8_t HEATPINS[6] = {36, 39, 34, 35,32,33}; //what are the pins of heat zones? ADC bank 1, starting from pin next to EN
           #endif
           const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
 
@@ -345,6 +348,7 @@ typedef enum {
     #endif
 
     #ifdef _ISPERIPHERAL
+    uint32_t SENSORIDS[SENSORNUM] = {255}; //the ids will be (snstype<<8 + snsID). The ID corresponds to the index in the devicesensors array., and the ith sensorIDS will reflect the ith sns limits
     double SNS_LIMIT_MAX[SENSORNUM] = LIMIT_MAX; //store max values for each sensor in NVS
     double SNS_LIMIT_MIN[SENSORNUM] = LIMIT_MIN; //store min values for each sensor in NVS
     uint8_t SNS_MONITORED[SENSORNUM] = MONITORINGSTATES;
@@ -365,6 +369,7 @@ typedef enum {
       uint8_t wifiFailCount;
       time_t currentTime;
       uint8_t WiFiMode;
+      uint32_t lastServerStatusUpdate;
 
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
       
@@ -440,9 +445,10 @@ typedef enum {
       uint8_t isSoilDry;
       uint8_t isLeak;
 
-      uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
       #endif
-  
+
+      uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
+
       char lastError[76];
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;
@@ -466,7 +472,6 @@ struct DeviceVal {
   uint8_t ardID;//legacy from V1 and V2 used this to define ID. Now MAC is the ID. ArdID can still be some value, but can also be zero.
 };
 */
-
 
 
 #endif
@@ -517,3 +522,4 @@ struct DeviceVal {
  
 
 */
+#endif

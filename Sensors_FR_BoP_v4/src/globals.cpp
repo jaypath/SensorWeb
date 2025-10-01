@@ -1,5 +1,4 @@
 #include <globals.hpp>
-#include "Devices.hpp"
 
 #ifdef _USEWEATHER
 #include "Weather_Optimized.hpp"
@@ -7,6 +6,11 @@
 WeatherInfoOptimized WeatherData;  // Optimized weather class
 
 #endif
+
+#include "Devices.hpp"
+
+// Global instance
+Devices_Sensors Sensors;
 
 
 //initialize variables
@@ -24,7 +28,6 @@ double batteryArray[48] = {0};
 double LAST_BAR=0;
 #endif
 
-uint32_t LAST_WEB_REQUEST = 0;
 extern String WEBHTML;
 
 

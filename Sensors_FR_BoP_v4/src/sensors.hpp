@@ -2,11 +2,10 @@
 #define SENSORS_HPP
 
 #include <Arduino.h>
-#include <header.hpp>
-#include "../../GLOBAL_LIBRARY/timesetup.hpp"
-#include "../../GLOBAL_LIBRARY/Devices.hpp"
-
-#include <server.hpp>
+#include "globals.hpp"
+#include "timesetup.hpp"
+#include "Devices.hpp"
+#include "server.hpp"
 
 
 #ifdef _USEBME680
@@ -82,8 +81,6 @@
 #endif
 
 
-// SensorVal removed. Use DeviceStore's SnsType for all operations.
-
 
 #ifdef _WEBCHART
   struct SensorChart {
@@ -158,20 +155,12 @@ extern  Adafruit_BME280 bme; // I2C
 extern   SSD1306AsciiWire oled;
 #endif
 
-int inArray(int arrind[], int N, int value);
-bool ReadData(struct SnsType *P);
+int8_t ReadData(struct SnsType *P);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
-uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = B00000011, uint8_t flagsettings= B00000011, uint32_t MoreRecentThan=0);
-uint8_t countDev();
 void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);
-int16_t getIndexForSnsPtr(struct SnsType* P);
-void pushDoubleArray(double arr[], byte, double);
-void pushByteArray(byte arr[], byte, byte);
 int peak_to_peak(int pin, int ms = 50);
 
-// Migration helpers: keep DeviceStore in sync with local Sensors[]
-int16_t findLocalDevice();
 
 #ifdef _USESSD1306
 void redrawOled(void);

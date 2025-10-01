@@ -1,4 +1,4 @@
-#include <sensors.hpp>
+#include "sensors.hpp"
 
 /*sens types
 //0 - not defined
@@ -31,9 +31,10 @@
 55 - heat on/off {requires N DIO Pins}
 56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
 57 - a/c fan on/off
-58 - leak yes/no
+58 - 
 60 -  battery power
 61 - battery %
+70 - leak sensor 
 98 - clock
 99 = any numerical value
 100+ is a server type sensor, to which other sensors will send their data
@@ -46,12 +47,14 @@
 
 */
 
+extern Devices_Sensors Sensors;
+
 #if defined(_CHECKAIRCON) || defined(_CHECKHEAT) 
 uint8_t HVACSNSNUM = 0;
 #endif
 
 
-SensorVal Sensors[SENSORNUM]; //up to SENSORNUM sensors will be monitored
+// No local Sensors[] array; use Sensors exclusively
 
 #ifdef _USETFLUNA
 TFLunaType LocalTF;
@@ -140,78 +143,21 @@ TFLI2C tflI2C;
 
 
 
-//FUNCTIONS
-uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
-  //count sensors of type snstype [default is 0, meaning all sensortypes], flags that matter [default is 00000011 - which means that I only care about RMB1 and RMB2], what the flags should be [default is 00000011, which means I am looking for sensors that are flagged and monitored], and last logged more recently than this time [default is 0]
-  //special use case... is snsType == -1 then this is a special case where we will look for types 1, 4, 10, 14, 17, 3, 61 [temperatures from various sensors, battery%]
-  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
-
-byte count =0;
-int snsArr[10] = {0}; //this is for special cases
-
-if (snsType == -1) { //critical sensors, all types of sensors that raise a critical alert when flagged (so not heater on, ac on, etc)
-snsArr[0] = 1; 
-snsArr[1] = 4;
-snsArr[2] = 10;
-snsArr[3] = 14;
-snsArr[4] = 17;
-snsArr[5] = 3;
-snsArr[6] = 61;
-snsArr[7] = 70;
-snsArr[8] = -1;
-snsArr[9] = -1;
-} 
-
-if (snsType == -2) { //temperature sensors
-snsArr[0] = 1; 
-snsArr[1] = 4;
-snsArr[2] = 10;
-snsArr[3] = 14;
-snsArr[4] = 17;
-snsArr[5] = -1;
-snsArr[6] = -1;
-snsArr[7] = -1;
-snsArr[8] = -1;
-snsArr[9] = -1;
-} 
-
-if (snsType == -3) { //hvac sensors (these are non critical sensors)
-snsArr[0] = 55; 
-snsArr[1] = 56;
-snsArr[2] = 57;
-snsArr[3] = -1; 
-snsArr[4] = -1;
-snsArr[5] = -1;
-snsArr[6] = -1;
-snsArr[7] = -1;
-snsArr[8] = -1;
-snsArr[9] = -1;
-} 
-
-
-
-  for (byte j = 0; j<SENSORNUM; j++) {
-    if (snsType==0 || (snsType<0 && inArray(snsArr,10,Sensors[j].snsType)>=0) || Sensors[j].snsType == snsType) 
-      if ((Sensors[j].Flags & flagsthatmatter ) == (flagsthatmatter & flagsettings)) {
-        if (Sensors[j].LastReadTime> MoreRecentThan) count++;
-      }
-  }
-
-  return count;
-}
-
 
 
 void setupSensors() {
-/*
-          Sensors[i].snsPin=_USEDHT; //this is the pin to read/write from - not always used
-          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME); //sensor name
-            Sensors[i].limitUpper = 88; //upper limit of normal
-            Sensors[i].limitLower = 20; //lower limit of normal
-          Sensors[i].PollingInt=120; //how often to check this sensor, in seconds
-          Sensors[i].SendingInt=2*60; //how often to send data from this sensor. nte that value will be sent regardless if flag status changes, so can set to arbitrarily high value if you only want to send when flag status changes
-*/
+/* legacy template removed; Sensors is now the source of truth */
+
+int16_t myDevID = Sensors.findMe();
+
+int16_t monitored_sns[] = MONITORINGSTATES;
+int16_t outside_sns[] = OUTSIDESTATES;
+int16_t interval_poll[] = INTERVAL_POLL;
+int16_t interval_send[] = INTERVAL_SEND;
+int16_t limit_max[] = LIMIT_MAX;
+int16_t limit_min[] = LIMIT_MIN;
+byte sensortypes[] = SENSORTYPES;
+
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
 //init hvachx 
@@ -252,442 +198,224 @@ void setupSensors() {
 
 //double sc_multiplier = 0;
 //int sc_offset;
-uint16_t  sc_interval; 
-
 
 
   for (byte i=0;i<SENSORNUM;i++) {
-    Sensors[i].snsType=SENSORTYPES[i];
-    Sensors[i].snsID=find_sensor_count(Sensors[i].snsType); 
+    uint8_t stype = sensortypes[i];
+    if (stype == 0) continue;
+    uint8_t flags = 0;
+    bitWrite(flags,7,1);
+    if (monitored_sns[i]) bitWrite(flags,1,1);
+    else bitWrite(flags,1,0);
 
-
-    Sensors[i].Flags = 0;
-    //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed status since prior read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified
-    bitWrite(Sensors[i].Flags,7,1); //default sensors to monitored level
-    if (bitRead(MONITORED_SNS,i)) bitWrite(Sensors[i].Flags,1,1);
-    else bitWrite(Sensors[i].Flags,1,0);
     
-    if (bitRead(OUTSIDE_SNS,i)) bitWrite(Sensors[i].Flags,2,1);
-    else bitWrite(Sensors[i].Flags,2,0);
+    if (outside_sns[i]) bitWrite(flags,2,1);
+    else bitWrite(flags,2,0);
 
-    switch (Sensors[i].snsType) {
+    if (Prefs.SNS_LIMIT_MAX[i]==0) {
+      Prefs.SNS_LIMIT_MAX[i]=limit_max[i]; Prefs.SNS_LIMIT_MIN[i]=limit_min[i];
+    }
+    if (Prefs.SNS_INTERVAL_POLL[i]==0) {
+      Prefs.SNS_INTERVAL_POLL[i]=interval_poll[i];
+    }
+    if (Prefs.SNS_INTERVAL_SEND[i]==0) {
+      Prefs.SNS_INTERVAL_SEND[i]=interval_send[i];
+    }
+
+
+    switch (stype) {
       case 1: //DHT temp
       {
-        //sc_multiplier = 1;
-        //sc_offset=100;
-        sc_interval=60*30;//seconds 
-
         #ifdef DHTTYPE
-          Sensors[i].snsPin=_USEDHT;
-          snprintf(Sensors[i].snsName,31,"%s_T", ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 20;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=2*60;          
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(MYNAME+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
         break;
       }
       case 2: //DHT RH
        {
 
-        //sc_multiplier = 1;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
-//        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         #ifdef DHTTYPE
-          Sensors[i].snsPin=_USEDHT;
-          snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 95;
-            Sensors[i].limitLower = 10;
-          }
-          else {
-            Sensors[i].limitUpper = 65;
-            Sensors[i].limitLower = 25;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          Sensors[i].PollingInt=2*60;
-          Sensors[i].SendingInt=5*60;
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(MYNAME+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
         break;
        }
       case 3: //soil
         {
-          //sc_multiplier = 100; //divide by 100
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
         #ifdef _USESOILCAP
-          Sensors[i].snsPin=SOILPIN; //input, usually A0
-          snprintf(Sensors[i].snsName,31,"%s_soil",ARDNAME);
-          Sensors[i].limitUpper = 290;
-          Sensors[i].limitLower = 25;
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=600;
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(MYNAME+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
         #ifdef _USESOILRES
           pinMode(_USESOILRES,OUTPUT);  
-
-          Sensors[i].snsPin=SOILPIN;
-          snprintf(Sensors[i].snsName,31,"%s_soilR",ARDNAME);
-          Sensors[i].limitUpper = SOILR_MAX;
-          Sensors[i].limitLower = 0;
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=60*60;
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), stype, 0, String(MYNAME+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
 
         break;
         }
       case 4: //AHT temp
         {
-          //sc_multiplier = 1;
-        //sc_offset=100;
-        sc_interval=60*30;//seconds 
-
         #if defined(_USEAHT) || defined(_USEAHTADA)
-          Sensors[i].snsPin=0;
-          snprintf(Sensors[i].snsName,31,"%s_AHT_T",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 20;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-          Sensors[i].PollingInt=5*60;
-          Sensors[i].SendingInt=5*60;
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          int16_t si = Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 4, 0, String(MYNAME+String("_AHT_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
         break;
         }
       case 5: //aht rh
         {
-          //sc_multiplier = 1;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
-       // bitWrite(Sensors[i].Flags,7,0); //not a "critically monitored" sensor, ie do not alarm if sensor expires
-
         #if defined(_USEAHT) || defined(_USEAHTADA)
-          Sensors[i].snsPin=0;
-          snprintf(Sensors[i].snsName,31,"%s_AHT_RH",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 95;
-            Sensors[i].limitLower = 10;
-          }
-          else {
-            Sensors[i].limitUpper = 65;
-            Sensors[i].limitLower = 25;
-            // bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=10*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 5, 0, String(MYNAME+String("_AHT_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         #endif
         break;
         }
 
       case 7: //dist
         {
-          //sc_multiplier = 1;
-        //sc_offset=50;
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0; //not used
-        snprintf(Sensors[i].snsName,31,"%s_Dist",ARDNAME);
-        Sensors[i].limitUpper = 2000;
-        Sensors[i].limitLower = -1001;
-        Sensors[i].PollingInt=60;
-        Sensors[i].SendingInt=120;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        bitWrite(flags,7,0);
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 7, 0, String(MYNAME+String("_Dist")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 9: //BMP pres
         {
-          //sc_multiplier = .5; //[multiply by 2]
-        //sc_offset=-950; //now range is <100, so multiplier of .5 is ok
-        //bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        sc_interval=60*60;//seconds 
-        Sensors[i].snsPin=0; //i2c
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 9, 0, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 10: //BMP temp
         {
-          //sc_multiplier = 1;
-        //sc_offset=50;
-        sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMP_t",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 25;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-            bitWrite(Sensors[i].Flags,1,0); //not monitored
-          }
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 10, 0, String(MYNAME+String("_BMP_t")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 11: //BMP alt
         {
-          //sc_multiplier = 1;
-        //sc_offset=0;
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=60000;
-        Sensors[i].SendingInt=60000;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 11, 0, String(MYNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 12: //Bar prediction
         {
-          //sc_multiplier = 1;
-        //sc_offset=10; //to eliminate neg numbs
-        sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_Pred",ARDNAME);
-        Sensors[i].limitUpper = 0;
-        Sensors[i].limitLower = 0; //anything over 0 is an alarm
-        Sensors[i].PollingInt=60*60;
-        Sensors[i].SendingInt=60*60;
-        bitWrite(Sensors[i].Flags,3,1); //calculated
-        bitWrite(Sensors[i].Flags,4,1); //predictive
+        bitWrite(flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        bitWrite(flags,3,1); bitWrite(flags,4,1);
+        
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 12, 0, String(MYNAME+String("_Pred")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 13: //BME pres
         {
-          //sc_multiplier = .5;
-        //sc_offset=-950; //now range is <100, so multiply by 2
-       // bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        sc_interval=60*60;//seconds 
-        Sensors[i].snsPin=0; //i2c
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1022; //normal is 1013
-        Sensors[i].limitLower = 1009;
-        Sensors[i].PollingInt=30*60;
-        Sensors[i].SendingInt=60*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 13, 0, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 14: //BMEtemp
         {
-          //sc_multiplier = 1;
-        //sc_offset=100;
-        sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMEt",ARDNAME);
-          if (bitRead(OUTSIDE_SNS,i)) {
-            Sensors[i].limitUpper = 88;
-            Sensors[i].limitLower = 25;
-          }
-          else {
-            Sensors[i].limitUpper = 80;
-            Sensors[i].limitLower = 60;
-          }
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 14, 0, String(MYNAME+String("_BMEt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 15: //bme rh
         {
-          //sc_multiplier = 1;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_BMErh",ARDNAME);
-        if (bitRead(OUTSIDE_SNS,i)) {
-          Sensors[i].limitUpper = 95;
-          Sensors[i].limitLower = 10;
-        }
-        else {
-          Sensors[i].limitUpper = 65;
-          Sensors[i].limitLower = 25;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-        }
-        Sensors[i].PollingInt=120;
-        Sensors[i].SendingInt=5*60;
+        bitWrite(flags,7,0);
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 15, 0, String(MYNAME+String("_BMErh")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 16: //bme alt
         {
-          //sc_multiplier = 1;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
+        Prefs.SENSORIDS[i] = stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_alt",ARDNAME);
-        Sensors[i].limitUpper = 100;
-        Sensors[i].limitLower = -5;
-        Sensors[i].PollingInt=15*60*60;
-        Sensors[i].SendingInt=15*60*60;
+        bitWrite(flags,7,0);
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 16, 0, String(MYNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 17: //bme680
         {
-          //sc_multiplier = 1;
-        //sc_offset=50;
-        sc_interval=60*30;//seconds 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_T",ARDNAME);
-        if (bitRead(OUTSIDE_SNS,i)) {
-          Sensors[i].limitUpper = 88;
-          Sensors[i].limitLower = 25;
-        }
-        else {
-          Sensors[i].limitUpper = 80;
-          Sensors[i].limitLower = 60;
-        }
-        Sensors[i].PollingInt=15*60;
-        Sensors[i].SendingInt=15*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 17, 0, String(MYNAME+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 18: //bme680
         {
-
-             //sc_multiplier = 1;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
-        bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_RH",ARDNAME);
-        if (bitRead(OUTSIDE_SNS,i)) {
-          Sensors[i].limitUpper = 95;
-          Sensors[i].limitLower = 10;
-        }
-        else {
-          Sensors[i].limitUpper = 65;
-          Sensors[i].limitLower = 25;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-        }
-        Sensors[i].PollingInt=15*60;
-        Sensors[i].SendingInt=15*60;
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 18, 0, String(MYNAME+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 19: //bme680
         {
-          //sc_multiplier = .5;
-        //sc_offset=-950; //now range is <100, so multiply by 2
-        sc_interval=60*60;//seconds 
-     //   bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_hPa",ARDNAME);
-        Sensors[i].limitUpper = 1020;
-        Sensors[i].limitLower = 1012;
-        Sensors[i].PollingInt=60*60;
-        Sensors[i].SendingInt=60*60;
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 19, 0, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
         break;
         }
       case 20: //bme680
         {
-          //sc_multiplier = 1;
-        //sc_offset=00;
-        sc_interval=60*30;//seconds 
+        Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 20, 0, String(MYNAME+String("_VOC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
+        Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        Sensors[i].snsPin=0;
-        snprintf(Sensors[i].snsName,31,"%s_VOC",ARDNAME);
-        Sensors[i].limitUpper = 1000;
-        Sensors[i].limitLower = 50;
-        Sensors[i].PollingInt=1*60;
-        Sensors[i].SendingInt=1*60;
         break;
         }
 
       #if defined(_CHECKAIRCON) 
-        case 50: //HVAC time - this is the total time. Note that sensor pin is not used
+        case 53: //HVAC time - this is the total time. Note that sensor pin is not used
          {
+          bitWrite(flags,3,1);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-          sc_interval=60*30;//seconds 
-
-          snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
-      
-          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300; 
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 50, 0, String(MYNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
           
           break;
          }
       #endif
 
       #if defined(_CHECKHEAT) 
-        case 50: //HVAC time - this is the total time. Note that sensor pin is not used
+        case 53: //HVAC time - this is the total time. Note that sensor pin is not used
          {
 
-          sc_interval=60*30;//seconds 
 
-          snprintf(Sensors[i].snsName,31,"%s_Total",ARDNAME);
-          /*
-          #ifdef _USEMUX
-            
-          #else
-            Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
-            pinMode(Sensors[i].snsPin, INPUT);
-          #endif
-          */
-          Sensors[i].limitUpper = 1440; //maximum is 24*60 minutes, which is one day (essentially upper and lower limit are not used here)
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=60;
-          Sensors[i].SendingInt=300; 
-          bitWrite(Sensors[i].Flags,3,1); //calculated
+          bitWrite(flags,3,1);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 50, 0, String(MYNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
           
           break;
          }
 
-        case 51: //heat, gas valve
+        case 54: //ac, gas valve
         {
-          //sc_multiplier = 4096/256;
-        //sc_offset=0;
-          sc_interval=60*30;//seconds 
-
-          snprintf(Sensors[i].snsName,31,"%s_GAS",ARDNAME);
-          #ifdef _USEMUX
-            Sensors[i].snsPin=0; //the DIO configuration to select this channel            
-          #else
-            //undefined. gas is not measured if notusing mux
-          #endif
-          Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30; //short poll int given that gas may not be on often 
-          Sensors[i].SendingInt=600; 
+          pinMode(_USERELAY, INPUT);
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 51, 0, String(MYNAME+String("_GAS")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          
           break;
         }
         case 55: //heat
         {
-          //sc_multiplier = 4096/256;
-        //sc_offset=0;
-        sc_interval=60*30;//seconds 
+          //need to count how many heat zones have been added so far
+          int16_t HZindex = Sensors.countSensors(55,myDevID); //returns a 1-based index. this will be the snsID
 
-          snprintf(Sensors[i].snsName,31,"%s_%s",ARDNAME,HEATZONE[Sensors[i].snsID-1]);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+          String heatName = String(MYNAME) + "_" + String(HEATZONE[HZindex]); //no HZindex-1 because we are using a 1-based index
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 55, HZindex, heatName.c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
           #ifdef _USEMUX
-            Sensors[i].snsPin=Sensors[i].snsID; //the DIO configuration to select this channel. For heat zones, will be 1 - zone number                        
           #else
-            Sensors[i].snsPin=DIOPINS[Sensors[i].snsID-1];
-            pinMode(Sensors[i].snsPin, INPUT);
+            pinMode(HEATPINS[HZindex], INPUT);
           #endif
-          Sensors[i].limitUpper = 100; //this is the difference needed in the analog read of the induction sensor to decide if device is powered. Here the units are in adc units
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=120;
-          Sensors[i].SendingInt=600; 
           break;
         }
       #endif
@@ -696,30 +424,15 @@ uint16_t  sc_interval;
       #ifdef _CHECKAIRCON
         case 56: //aircon compressor
           {
-            //sc_multiplier = 4096/256;
-          //sc_offset=0;
-          sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=DIOPINS[2];
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_comp",ARDNAME);
-          Sensors[i].limitUpper = 700;
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30;
-          Sensors[i].SendingInt=300;
+            Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+            Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 56, 0, String(MYNAME+String("_comp")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
           break;
           }
         case 57: //aircon fan
           {
-            //sc_multiplier = 4096/256;
-          //sc_offset=0;
-          sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=DIOPINS[3];
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_fan",ARDNAME);
-          Sensors[i].limitUpper = 700;
-          Sensors[i].limitLower = -1;
-          Sensors[i].PollingInt=30;
-          Sensors[i].SendingInt=300;
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 57, 0, String(MYNAME+String("_fan")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
           break;
           }
           
@@ -727,131 +440,47 @@ uint16_t  sc_interval;
       case 70: //leak
         {
           #ifdef _USELEAK
-          sc_interval=60*60;//seconds 
-          Sensors[i].snsPin=_LEAKPIN;
-          pinMode(Sensors[i].snsPin,INPUT);
-          pinMode(_LEAKDIO,OUTPUT);
-          digitalWrite(_LEAKDIO, LOW);
-          snprintf(Sensors[i].snsName,31,"%s_leak",ARDNAME);
-          Sensors[i].limitUpper = 0.5;
-          Sensors[i].limitLower = -0.5;
-          Sensors[i].PollingInt=10*60;
-          Sensors[i].SendingInt=10*60;
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 70, 0, String(MYNAME+String("_leak")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
           #endif
           break;
         }
 
       case 60: //battery
         {
-          #ifdef _USELIBATTERY
-          //sc_multiplier = .01;
-          //sc_offset=-3.1;
-          sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=_USELIBATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
-          Sensors[i].limitUpper = 4.3;
-          Sensors[i].limitLower = 3.7;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-
-          
-        #endif
-        #ifdef _USESLABATTERY
-          //sc_multiplier = .01;
-          //sc_offset=-3.1;
-          sc_interval=60*30;//seconds 
-          Sensors[i].snsPin=_USESLABATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bat",ARDNAME);
-          Sensors[i].limitUpper = 12.89;
-          Sensors[i].limitLower = 12.23;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
-        #endif
+          bitWrite(flags,1,0);
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 60, 0, String(MYNAME+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         break;
         }
       case 61: //battery percent
         {
-          #ifdef _USELIBATTERY
-          //sc_multiplier = 1;
-          //sc_offset=0;
-          sc_interval=60*30;//seconds 
-
-          Sensors[i].snsPin=_USELIBATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
-          Sensors[i].limitUpper = 105;
-          Sensors[i].limitLower = 10;
-          Sensors[i].PollingInt=1*60;
-          Sensors[i].SendingInt=5*60;
-          bitWrite(Sensors[i].Flags,3,1); //calculated
-
-        #endif
-        #ifdef _USESLABATTERY
-          //sc_multiplier = 1;
-          //sc_offset=0;
-          sc_interval=60*60;//seconds 
-
-          Sensors[i].snsPin=_USESLABATTERY;
-          pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_bpct",ARDNAME);
-          Sensors[i].limitUpper = 100;
-          Sensors[i].limitLower = 50;
-          Sensors[i].PollingInt=60*60;
-          Sensors[i].SendingInt=60*60;
-          bitWrite(Sensors[i].Flags,3,1); //calculated
-
-        #endif
+          
+          bitWrite(flags,3,1);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 61, 0, String(MYNAME+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         break;
         }
       case 90: //Sleep info
         {
-          sc_interval=60*30;//seconds 
-          bitWrite(Sensors[i].Flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-
-          Sensors[i].snsPin=0;
-          //pinMode(Sensors[i].snsPin, INPUT);
-          snprintf(Sensors[i].snsName,31,"%s_sleep",ARDNAME);
-          Sensors[i].limitUpper = 14400;
-          Sensors[i].limitLower = 0;
-          Sensors[i].PollingInt=10*60; //these don't matter
-          Sensors[i].SendingInt=10*60; //these don't matter
-          bitWrite(Sensors[i].Flags,3,1); //calculated
-          bitWrite(Sensors[i].Flags,1,0); //not monitored
+          bitWrite(flags,7,0); bitWrite(flags,3,1); bitWrite(flags,1,0);
+          Prefs.SENSORIDS[i] = myDevID<<16 + stype<<8 + Sensors.countSensors(stype); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          Sensors.addSensor(ESP.getEfuseMac(), (uint32_t)WiFi.localIP(), 90, 0, String(MYNAME+String("_sleep")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], flags, MYNAME);
         
         break;
         }
 
     }
 
-        
-    Sensors[i].snsValue=0;
-    Sensors[i].LastReadTime=0;
-    Sensors[i].LastSendTime=0;  
-    #ifdef _WEBCHART
-      for (byte j=0;j<_WEBCHART;j++) {
-        if (Sensors[i].snsType==SENSORS_TO_CHART[j]) {
-          SensorCharts[j].snsType = Sensors[i].snsType;
-          SensorCharts[j].snsNum = i;
-          //SensorCharts[j].offset = sc_offset;
-          //SensorCharts[j].multiplier = sc_multiplier;
-          for (byte k=0; k<_NUMWEBCHARTPNTS; k++)     SensorCharts[j].values[k] = 0;
-          SensorCharts[j].interval = sc_interval;
-          SensorCharts[j].lastRead = 0;
-        }
-      }
-    #endif
 
   }
 
 
 
+
   #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
-//init hvachx 
+  //init hvachx 
 
   //count hvac sensors
   HVACSNSNUM=0;
@@ -864,28 +493,25 @@ uint16_t  sc_interval;
   }
 
   #if defined(_USEMUX) && defined(_CHECKHEAT)
-    pinMode(DIOPINS[0],OUTPUT);
-    pinMode(DIOPINS[1],OUTPUT);
-    pinMode(DIOPINS[2],OUTPUT);
-    pinMode(DIOPINS[3],OUTPUT);
-    pinMode(DIOPINS[4],INPUT);
-    digitalWrite(DIOPINS[0],LOW);
-    digitalWrite(DIOPINS[1],LOW);
-    digitalWrite(DIOPINS[2],LOW);
-    digitalWrite(DIOPINS[3],LOW);
-    #ifdef _DEBUG
-      Serial.println("dio configured");
-    #endif
+    pinMode(HEATPINS[0],OUTPUT);
+    pinMode(HEATPINS[1],OUTPUT);
+    pinMode(HEATPINS[2],OUTPUT);
+    pinMode(HEATPINS[3],OUTPUT);
+    pinMode(HEATPINS[4],INPUT);
+    digitalWrite(HEATPINS[0],LOW);
+    digitalWrite(HEATPINS[1],LOW);
+    digitalWrite(HEATPINS[2],LOW);
+    digitalWrite(HEATPINS[3],LOW);
 
   #endif
 
   #if defined(_CHECKAIRCON)
-    pinMode(DIOPINS[2],OUTPUT);
-    pinMode(DIOPINS[3],OUTPUT);
-    pinMode(DIOPINS[0],INPUT);
-    pinMode(DIOPINS[1],INPUT);
-    digitalWrite(DIOPINS[2],LOW);
-    digitalWrite(DIOPINS[3],LOW);    
+    pinMode(ACPINS[0],OUTPUT);
+    pinMode(ACPINS[1],OUTPUT);
+    pinMode(ACPINS[2],INPUT);
+    pinMode(ACPINS[3],INPUT);
+    digitalWrite(ACPINS[2],LOW);
+    digitalWrite(ACPINS[3],LOW);    
   #endif
 
 
@@ -923,14 +549,27 @@ int peak_to_peak(int pin, int ms) {
 
 
 
-bool ReadData(struct SensorVal *P) {
-  
-  time_t t=now();
+int8_t ReadData(struct SnsType *P) {
+  //return -1 if not my sensor, 0 if not time to read, 1 if read successful
+
+  //is this my sensor?
+  if (P->deviceIndex != Sensors.findMe()) return -1;
+
+  //may need the index to the Prefs sensor
+  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID);
+
+
+  //is it time to read?
+  if (!(P->timeRead==0 || P->timeRead>I.currentTime || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < I.currentTime || I.currentTime - P->timeRead >60*60*24 )) return 0;
+
+
+  // Use I.currentTime instead of local time_t t variable
   byte nsamps; //only used for some sensors
   double val;
   bitWrite(P->Flags,0,0);
 
-  P->LastsnsValue = P->snsValue;
+  double LastsnsValue = P->snsValue;
+
   
   switch (P->snsType) {
     case 1: //DHT temp
@@ -955,7 +594,7 @@ bool ReadData(struct SensorVal *P) {
       {
         #ifdef _USESOILCAP
         //soil moisture v1.2
-        val = analogRead(P->snsPin);
+        val = analogRead(SOILPIN);
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
         val =  (int) ((-0.28571*val+228.5714)*100); //round value
         P->snsValue =  val/100;
@@ -970,8 +609,8 @@ bool ReadData(struct SensorVal *P) {
         digitalWrite(_USESOILRES, HIGH);
         delay(100); //wait X ms for reading to settle
         for (byte ii=0;ii<nsamps;ii++) {                  
-          val += analogRead(P->snsPin);
-          delay(10);
+          val += analogRead(SOILPIN);
+          delay(1);
         }
           digitalWrite(_USESOILRES, LOW);
         val=val/nsamps;
@@ -992,7 +631,7 @@ bool ReadData(struct SensorVal *P) {
         #ifdef _USESOILRESOLD
         //soil moisture by stainless steel wire (Resistance)        
         digitalWrite(_USESOILRES, HIGH);
-        val = analogRead(P->snsPin);
+        val = analogRead(SOILPIN);
         digitalWrite(_USESOILRES, LOW);
         //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
         //so R_soil = R_fixed * (3.3/Vsoil -1)
@@ -1112,14 +751,14 @@ bool ReadData(struct SensorVal *P) {
           //adjust critical values based on history, if available
           if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
             //pressure is low, but rising
-            P->limitLower = 1000;
+            Prefs.SNS_LIMIT_MIN[prefs_index] = 1000;
           } else {
-            P->limitLower = 1009;
+            Prefs.SNS_LIMIT_MIN[prefs_index] = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < t) {
+          if (LAST_BAR_READ+60*60 < I.currentTime) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = t;          
+            LAST_BAR_READ = I.currentTime;          
           }
         #endif
 
@@ -1220,14 +859,14 @@ bool ReadData(struct SensorVal *P) {
           //adjust critical values based on history, if available
           if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
             //pressure is low, but rising
-            P->limitLower = 1000;
+            Prefs.SNS_LIMIT_MIN[prefs_index] = 1000;
           } else {
-            P->limitLower = 1009;
+            Prefs.SNS_LIMIT_MIN[prefs_index] = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < t) {
+          if (LAST_BAR_READ+60*60 < I.currentTime) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = t;          
+            LAST_BAR_READ = I.currentTime;          
           }
         #endif
       #endif
@@ -1289,12 +928,12 @@ bool ReadData(struct SensorVal *P) {
 
     #if defined(_CHECKHEAT) 
 
-      case 50: //total HVAC time        
+      case 53: //total HVAC time        
         {
-          if (countFlagged(-3,0b00000001,0b00000001,0)>0) P->snsValue += P->PollingInt/60; //number of minutes HVAC multizone systems were on
+          if (P.countFlagged(-3,0b00000001,0b00000001,0)>0) P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC multizone systems were on
 
         #ifndef _USECALIBRATIONMODE
-          //note that for heat and ac, the total time (case 50) accounts for slot 0 and the heat or cool elements take the following slots
+          //note that for heat and ac, the total time (case 53) accounts for slot 0 and the heat or cool elements take the following slots
           if (HVACHX[0].lastRead+HVACHX[0].interval <= P->LastReadTime) {
             pushDoubleArray(HVACHX[0].values,_HVACHXPNTS,P->snsValue);
             HVACHX[0].lastRead = P->LastReadTime;
@@ -1305,60 +944,40 @@ bool ReadData(struct SensorVal *P) {
         break;
         }
 
-    #ifdef _USEMUX
-      case 51: //heat - gas valve
+      case 54: //heat - gas valve
         {
-          //gas only measured if using mux
-          /*
-          DIOPINS were initialized in setup...
-          DIOPINS[0] - mux DIO selector 0
-          DIOPINS[1] - mux DIO selector 1
-          DIOPINS[2] - mux DIO selector 2
-          DIOPINS[3] - mux DIO selector 3
-          DIOPINS[4] - MUX read out
-          P->snsPin //this is the DIO settings for the mux
-          */
+          byte snspin = _USERELAY;
 
-         //select MUX
+          //can use the mux, as long as _USERELAY is set correctly.
+          #ifndef _USEMUX
+            pinMode(snspin, INPUT);
+          #endif
 
 
           //take n measurements, and average
           val=0;
           nsamps=1; //number of samples to average
 
-          //set the MUX channel
-          byte bitval = 0;
-          #ifdef _DEBUG
-            Serial.print ("gas byte array: ");
-            #endif
-          for (byte j=0;j<4;j++) {
-            bitval = bitRead(P->snsPin,j);
-            #ifdef _DEBUG
-            Serial.print (bitval);
-            #endif
-            if (bitval==0) digitalWrite(DIOPINS[j],LOW);
-            else digitalWrite(DIOPINS[j],HIGH);
-          }
-          #ifdef _DEBUG
-            Serial.println (" was the bit array of chans 1-4.");
-            #endif
+          #ifdef _USEMUX
+            //set the MUX channel to snspin
+            digitalWrite(MUXPINS[0],bitRead(snspin,0));
+            digitalWrite(MUXPINS[1],bitRead(snspin,1));
+            digitalWrite(MUXPINS[2],bitRead(snspin,2));
+            digitalWrite(MUXPINS[3],bitRead(snspin,3));
 
-          wait_ms(50); //provide time for channel switch and charge capacitors
+            wait_ms(50); //provide time for channel switch and charge capacitors
 
-            val = peak_to_peak(DIOPINS[4],50); 
+            //read values from the mux and find p2p
+            val = peak_to_peak(MUXPINS[4],50); //50 ms is 3 clock cycles at 60 Hz
+          #else
+            //use the DIO pins directly
+            val = peak_to_peak(snspin,50);
+          #endif
 
-//          for (byte j=0;j<nsamps;j++) {
-  //          val += peak_to_peak(DIOPINS[4],50);
-    //      }
-      //    val = val/nsamps; //average
-           #ifdef _DEBUG
-            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
-            #endif
-
-          if (val > P->limitUpper)           P->snsValue += (double) P->PollingInt/60; //snsvalue is the number of minutes the system was on
+          if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
 
           #ifndef _USECALIBRATIONMODE
-            //note that for heat, the total time (case 50) accounts for slot 0 
+            //note that for heat, the total time (case 50) accounts for slot 0 , gas  takes 1, zones take id + 1
             if (HVACHX[1].lastRead+HVACHX[1].interval <= P->LastReadTime) {
               pushDoubleArray(HVACHX[1].values,_HVACHXPNTS,P->snsValue);
               HVACHX[1].lastRead = P->LastReadTime;
@@ -1366,74 +985,40 @@ bool ReadData(struct SensorVal *P) {
           #endif  
         break;
         }
-      #endif
     
       case 55: //heat
         {
         //take n measurements, and average
         val=0;
         nsamps=1; //number of samples to average
+        byte snspin = HEATPINS[P->snsID];
 
         #ifdef _USEMUX
-          //set the MUX channel
-          byte bitval = 0;
-
-          #ifdef _DEBUG
-            Serial.printf ("%s byte array: ", P->snsName);
-            #endif
-          for (byte j=0;j<4;j++) {
-            bitval = bitRead(P->snsPin,j);
-            #ifdef _DEBUG
-            Serial.print (bitval);
-            #endif
-            if (bitval==0) digitalWrite(DIOPINS[j],LOW);
-            else digitalWrite(DIOPINS[j],HIGH);
-          }
-          #ifdef _DEBUG
-            Serial.println (" was the bit array of chans 1-4.");
-            #endif
+          //set the MUX channel to snspin
+          digitalWrite(MUXPINS[0],bitRead(snspin,0));
+          digitalWrite(MUXPINS[1],bitRead(snspin,1));
+          digitalWrite(MUXPINS[2],bitRead(snspin,2));
+          digitalWrite(MUXPINS[3],bitRead(snspin,3));
 
           wait_ms(50); //provide time for channel switch and charge capacitors
 
-        val = peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles. 
-        
-//          for (byte j=0;j<nsamps;j++) {
-  //          val += peak_to_peak(DIOPINS[4],50); //50 ms is 3 clock cycles
-    //      }
-      //    val = val/nsamps; //average
-
-           #ifdef _DEBUG
-            Serial.printf ("%s reading: %d\n", P->snsName, (int) val);
-            #endif
-        
-
-          if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
-          
-          #ifndef _USECALIBRATIONMODE
-            //note that for heat, the total time (case 50) accounts for slot 0 , gas (case 51) takes 1, so these take id + 1
-            if (HVACHX[P->snsID+1].lastRead+HVACHX[P->snsID+1].interval <= P->LastReadTime) {
-              pushDoubleArray(HVACHX[P->snsID+1].values,_HVACHXPNTS,P->snsValue);
-              HVACHX[P->snsID+1].lastRead = P->LastReadTime;
-            }
-          #endif
+          //read values from the mux and find p2p
+          val = peak_to_peak(MUXPINS[4],50); //50 ms is 3 clock cycles at 60 Hz
         #else
-
-          for (byte j=0;j<nsamps;j++) {
-            val += peak_to_peak(P->snsPin,50);
-          }
-          val = val/nsamps; //average
-          
-          if (val > P->limitUpper)           P->snsValue += P->PollingInt/60; //snsvalue is the number of minutes the system was on
-
-          #ifndef _USECALIBRATIONMODE
-            //note that for heat, the total time (case 50) accounts for slot 0 and the heat elements take the following slots
-            if (HVACHX[P->snsID].lastRead+HVACHX[P->snsID].interval <= P->LastReadTime) {
-              pushDoubleArray(HVACHX[P->snsID].values,_HVACHXPNTS,P->snsValue);
-              HVACHX[P->snsID].lastRead = P->LastReadTime;
-            }
-          #endif
+          //use the DIO pins directly
+          val = peak_to_peak(snspin,50);
         #endif
-  
+
+        if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
+
+            
+        #ifndef _USECALIBRATIONMODE
+          //note that for heat, the total time (case 50) accounts for slot 0 , gas  takes 1, so these take id + 1
+          if (HVACHX[P->snsID+1].lastRead+HVACHX[P->snsID+1].interval <= P->LastReadTime) {
+            pushDoubleArray(HVACHX[P->snsID+1].values,_HVACHXPNTS,P->snsValue);
+            HVACHX[P->snsID+1].lastRead = P->LastReadTime;
+          }
+        #endif
         break;
         }
     #endif
@@ -1445,12 +1030,12 @@ bool ReadData(struct SensorVal *P) {
         //if the fan is off, the NC pins of relay will be connected and I can read a digital high
         //if fan is on, pin will be low
         //turn on the voltage DIO to the compressor
-        pinMode(DIOPINS[2],OUTPUT);
-        pinMode(DIOPINS[0],INPUT);
-        digitalWrite(DIOPINS[2],HIGH);
+        pinMode(ACPINS[2],OUTPUT);
+        pinMode(ACPINS[0],INPUT);
+        digitalWrite(ACPINS[2],HIGH);
         delay(10);
-        if (digitalRead(DIOPINS[0]) == LOW)           P->snsValue += (double) P->PollingInt/60; //snsvalue is the number of minutes the ac was on
-        digitalWrite(DIOPINS[2],LOW);
+        if (digitalRead(ACPINS[0]) == LOW)           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
+        digitalWrite(ACPINS[2],LOW);
 
 
         if (HVACHX[1].lastRead+HVACHX[1].interval <= P->LastReadTime) {
@@ -1465,12 +1050,12 @@ bool ReadData(struct SensorVal *P) {
         //assumes you are using a fan relay to switch on
         //if the fan is off, the NC pins of relay will be connected and I can read a digital high
         //turn on the voltage DIO to the fan
-        pinMode(DIOPINS[3],OUTPUT);
-        pinMode(DIOPINS[1],INPUT);
-        digitalWrite(DIOPINS[3],HIGH);
+        pinMode(ACPINS[3],OUTPUT);
+        pinMode(ACPINS[1],INPUT);
+        digitalWrite(ACPINS[3],HIGH);
         delay(10);
-        if (digitalRead(DIOPINS[1]) == LOW)           P->snsValue += (double) P->PollingInt/60; //snsvalue is the number of minutes the ac was on
-        digitalWrite(DIOPINS[3],LOW);
+        if (digitalRead(ACPINS[1]) == LOW)           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
+        digitalWrite(ACPINS[3],LOW);
 
 
 
@@ -1501,11 +1086,11 @@ bool ReadData(struct SensorVal *P) {
         {
           #ifdef _USELIBATTERY
           //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
-          P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( 1,1,  _USELIBATTERY, 3.3, 3); //if R1=R2 then the divider is 50%
           
         #endif
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          P->snsValue = readVoltageDivider( 100,  6,  _USESLABATTERY, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
           
         #endif
 
@@ -1516,7 +1101,7 @@ bool ReadData(struct SensorVal *P) {
         {
           //_USEBATPCNT
         #ifdef _USELIBATTERY
-          P->snsValue = readVoltageDivider( 1,1,  P->snsPin, 3.3, 3); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( 1,1,  _USELIBATTERY, 3.3, 3); //if R1=R2 then the divider is 50%
 
           #define VOLTAGETABLE 21
           static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
@@ -1533,7 +1118,7 @@ bool ReadData(struct SensorVal *P) {
         #endif
 
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( 100,  6,  P->snsPin, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          P->snsValue = readVoltageDivider( 100,  6,  _USESLABATTERY, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
 
           #define VOLTAGETABLE 11
           static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
@@ -1559,13 +1144,13 @@ bool ReadData(struct SensorVal *P) {
     
   }
   checkSensorValFlag(P); //sets isFlagged
-  P->LastReadTime = t; //localtime
+  P->timeRead = I.currentTime; //localtime
 
   #ifdef _WEBCHART
     for (byte k=0;k<_WEBCHART;k++) {
       if (SensorCharts[k].snsType == P->snsType) {
-        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->LastReadTime) {
-          SensorCharts[k].lastRead = P->LastReadTime;
+        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->timeRead) {
+          SensorCharts[k].lastRead = P->timeRead;
           //byte tmpval = (byte) ((double) (P->snsValue + SensorCharts[k].offset) / SensorCharts[k].multiplier );
 
           pushDoubleArray(SensorCharts[k].values,_NUMWEBCHARTPNTS,P->snsValue);
@@ -1578,97 +1163,31 @@ bool ReadData(struct SensorVal *P) {
   
 
 
-return true;
-}
-
-byte find_limit_sensortypes(String snsname, byte snsType,bool highest){
-  //returns nidex to sensorval for the entry that is flagged and highest for sensor with name like snsname and type like snsType
-byte cnt = find_sensor_count(snsType);
-byte j = 255;
-byte ind = 255;
-double snsVal;
-if (highest) snsVal=-99999;
-else snsVal = 99999;
-bool newind = false;
-  for (byte i=1;i<=cnt;i++) {
-    newind = false;
-    j = find_sensor_name(snsname,snsType,i);
-    if (j!=255) {
-      if (highest) { 
-        if (snsVal<Sensors[j].snsValue) newind = true;
-      } else {
-        if (snsVal>Sensors[j].snsValue) newind = true;
-      }
-
-      if (newind) {
-        snsVal = Sensors[j].snsValue;
-        ind=j;
-      }
-    }
-  }
-
-  return ind;
-
+return 1;
 }
 
 
-byte find_sensor_count(byte snsType) {
-//find the number of sensors associated with sensor havign snsname 
-byte cnt =0;
-  for (byte j=0; j<SENSORNUM;j++) {
 
-    if (Sensors[j].snsType == snsType) cnt++;
-
-  }
-
-  return cnt;
-}
-
-byte find_sensor_type(byte snsType,byte snsID) {
-  //return the first sensor that is of specified type
-  //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
-  //returns 255 if no such sensor found
-  String temp;
-  for (byte j=0; j<SENSORNUM;j++) {
-    if (snsID==255) {
-      if (Sensors[j].snsType == snsType) return j;
-    } else {
-      if (Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
-    }
-  }
-  return 255;
-}
-
-
-byte find_sensor_name(String snsname,byte snsType,byte snsID) {
-  //return the first sensor that has fieldname within its name
-  //set snsID to 255 to ignore this field (this is an optional field, if not specified then find first snstype for fieldname)
-  //returns 255 if no such sensor found
-  String temp;
-
-  if (snsname=="") snsname = ARDNAME;
-  for (byte j=0; j<SENSORNUM;j++) {
-    temp = Sensors[j].snsName; 
-
-    if (snsID==255) {
-      if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType) return j;
-    } else {
-      if (temp.indexOf(snsname)>-1 && Sensors[j].snsType == snsType && Sensors[j].snsID == snsID) return j;
-    }
-  }
-  return 255;
-}
-
-bool checkSensorValFlag(struct SensorVal *P) {
+bool checkSensorValFlag(struct SnsType *P) {
   //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
   //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
   
-  bool lastflag = false;
+  bool lastflag = bitRead(P->Flags,0);
   bool thisflag = false;
+
+  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID);
+
+  double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
+  double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
 
   if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
     lastflag = bitRead(P->Flags,0); //this is the last flag status
-    if (P->LastsnsValue <  P->snsValue) { //currently flagged
+    // Note: LastsnsValue field removed in new SnsType structure
+    // HVAC logic simplified - just check current value against limits
+    
+
+    
+    if (P->snsValue > limitUpper || P->snsValue < limitLower) { //currently flagged
       bitWrite(P->Flags,0,1); //currently flagged
       bitWrite(P->Flags,5,1); //value is high
       if (lastflag) {
@@ -1689,14 +1208,13 @@ bool checkSensorValFlag(struct SensorVal *P) {
     }
   }
 
-  if (P->LastsnsValue>P->limitUpper || P->LastsnsValue<P->limitLower) lastflag = true;
 
-  if (P->snsValue>P->limitUpper || P->snsValue<P->limitLower) {
+  if (P->snsValue>limitUpper || P->snsValue<limitLower) {
     thisflag = true;
     bitWrite(P->Flags,0,1);
 
     //is it too high? write bit 5
-    if (P->snsValue>P->limitUpper) bitWrite(P->Flags,5,1);
+    if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1);
     else bitWrite(P->Flags,5,0);
   } 
 
@@ -1712,82 +1230,6 @@ bool checkSensorValFlag(struct SensorVal *P) {
 
 }
 
-uint8_t findSensor(byte snsType, byte snsID) {
-  for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsID == snsID && Sensors[j].snsType == snsType) return j; 
-  }
-  return 255;  
-}
-
-uint16_t findOldestDev() {
-  int oldestInd = 0;
-  int  i=0;
-  for (i=0;i<SENSORNUM;i++) {
-    if (Sensors[oldestInd].LastReadTime == 0) oldestInd = i;
-    else if (Sensors[i].LastReadTime< Sensors[oldestInd].LastReadTime && Sensors[i].LastReadTime >0) oldestInd = i;
-  }
-  if (Sensors[oldestInd].LastReadTime == 0) oldestInd = 255; //some arbitrarily large number that will never be seen...
-
-  return oldestInd;
-}
-
-void initSensor(int k) {
-  //special cases... k>255 then expire any sensor that is older than k mimnutes
-  //k<0 then init ALL sensors
-  time_t t=now();
-  if (k<-255)  {
-    for (byte i=0;i<SENSORNUM;i++) initSensor(i); //init all sensors
-  }
-    
-  if (k>255) { //init all sensors that are this old in unixtime minutes
-    for (byte i=0;i<SENSORNUM;i++)  {
-      if (Sensors[i].snsID>0 && Sensors[i].LastSendTime>0 && (uint32_t) (t-Sensors[i].LastSendTime)>(uint32_t) k*60)  {//convert to seconds
-        //remove N hour old values 
-        initSensor(i);
-      }
-    }
-  }
-  if (k<0) return; //cannot deciper this
-  if (k>=SENSORNUM) return; //cannot deciper this
-
-  sprintf(Sensors[k].snsName,"");
-  Sensors[k].snsID = 255; //this is an impossible value for ID, as 0 is valid
-  Sensors[k].snsType = 0;
-  Sensors[k].snsValue = 0;
-  Sensors[k].PollingInt = 0;
-  Sensors[k].SendingInt = 0;
-  Sensors[k].LastReadTime = 0;
-  Sensors[k].LastSendTime = 0;  
-  Sensors[k].Flags =0; 
-}
-
-
-uint8_t countDev() {
-  uint8_t c = 0;
-  for (byte j=0;j<SENSORNUM;j++)  {
-    if (Sensors[j].snsType > 0) c++; 
-  }
-  return c;
-}
-
-void pushByteArray(byte arr[], byte N, byte value) {
-  for (byte i = N-1; i > 0 ; i--) {
-    arr[i] = arr[i-1];
-  }
-  arr[0] = value;
-
-  return ;
-}
-
-void pushDoubleArray(double arr[], byte N, double value) { //array variable, size of array, value to push
-  for (byte i = N-1; i > 0 ; i--) {
-    arr[i] = arr[i-1];
-  }
-  arr[0] = value;
-
-  return ;
-
-}
 
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN) {
   /*
@@ -1830,9 +1272,12 @@ void redrawOled() {
   oled.printf("[%u] %d:%02d\n",WiFi.localIP()[3],hour(),minute());
 
   byte j=0;
-  while (j<SENSORNUM) {
+  while (j<Sensors.getNumSensors()) {
     for (byte jj=0;jj<2;jj++) {
-      oled.printf("%d.%d=%d%s",Sensors[j].snsType,Sensors[j].snsID,(int) Sensors[j].snsValue, (bitRead(Sensors[j].Flags,0)==1)?"! ":" ");
+      SnsType* s = Sensors.getSensorBySnsIndex(j);
+      if (s) {
+        oled.printf("%d.%d=%d%s",s->snsType,s->snsID,(int) s->snsValue, (bitRead(s->Flags,0)==1)?"! ":" ");
+      }
       j++;
     }
     oled.println("");    
@@ -1842,15 +1287,5 @@ void redrawOled() {
 }
 
 #endif
-
-
-int inArray(int arr[], int N, int value) {
-  //returns index to the integer array of length N holding value, or -1 if not found
-
-for (int i = 0; i < N-1 ; i++)   if (arr[i]==value) return i;
-return -1;
-
-
-}
 
 

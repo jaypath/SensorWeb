@@ -2,10 +2,11 @@
 #define UTILITY_HPP
 
 #include <Arduino.h>
-#include "globals.hpp"
+
 #ifdef _USESDCARD
 #include "SDCard.hpp"
 #endif
+
 #include "Devices.hpp"
 #include "timesetup.hpp"
 
@@ -26,6 +27,7 @@ int inArrayBytes(byte arr[], int N, byte value,bool returncount=false);
 int inArray(int arr[], int N, int value,bool returncount=false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 void pushDoubleArray(double arr[], byte N, double value);
+void pushByteArray(byte arr[], byte N, byte value);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 char* strPad(char* str, char* pad, byte L);
 bool stringToLong(String s, uint32_t* val);
@@ -44,7 +46,6 @@ bool compareMAC(byte *MAC1,byte *MAC2);
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest);
 int16_t findSnsOfType(byte snstype, bool newest = false);
 uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
-uint8_t countDev();
 void checkHeat(void);
 uint8_t findSensorByName(String snsname, uint8_t snsType=0, uint8_t snsID = 0);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);

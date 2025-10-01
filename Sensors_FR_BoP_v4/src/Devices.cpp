@@ -1,9 +1,8 @@
 #include "Devices.hpp"
+#include "globals.hpp"
 #include "utility.hpp"
 #include <TimeLib.h>
 
-// Global instance
-Devices_Sensors Sensors;
 
 // Constructor
 Devices_Sensors::Devices_Sensors() {
@@ -537,16 +536,45 @@ bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
 
 // Helper functions for expiration checking
 uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
-    if (index < 0 || index >= NUMSENSORS || index >= numSensors) {
+    if (index < 0 || index >= NUMSENSORS ) {
+        //index is invalid
         return 1;
     }
     if (!sensors[index].IsSet) {
-        return 2;
+            
+            return 2; //not set 
+        
     }
     if (sensors[index].expired) {
-        return 3;
+        
+            return 3; //expired 
+        
     }
-    return 0;
+    return 0; //valid
+}
+
+uint16_t Devices_Sensors::isSensorIndexValid(int16_t index, bool ismine) {
+    //checks if the sensor index is VALID
+    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
+    if (index < 0 || index >= NUMSENSORS ) {
+        //index is invalid
+        return 0;
+    }
+    if (sensors[index].expired) {
+        if (ismine==true && isMySensor(index)) {
+            return 3; //expired and is mine
+        } else {
+            return 4; //expired and not mine
+        }
+    }
+    if (sensors[index].IsSet) {
+        if (ismine==true && isMySensor(index)) {
+            return 1; // set and is mine
+        } else {
+            return 2; //set and not mine
+        }
+    }
+    return 0; //valid
 }
 
 byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
@@ -577,7 +605,7 @@ byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, b
     SnsType* sensor = &sensors[index];
     uint16_t sendint = sensor->SendingInt;
     if (sendint==0) sendint = 300; //default to 5 minutes
-    uint32_t expirationTime = sensor->timeLogged + sendint * 3; // 3x sending interval
+    uint32_t expirationTime = sensor->timeLogged + sendint * 2; // 2x sending interval
     
     if (currentTime > expirationTime) {
         if (onlyCritical && !bitRead(sensor->Flags, 7)) {
@@ -630,4 +658,32 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
 
 
     return false;
+}
+
+int16_t Devices_Sensors::findMe() {
+    //returns -1 if I am not found (that's a problem), or the index to devices for me
+    return findDevice(ESP.getEfuseMac());
+}
+
+int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID) {
+    //this always references me as the device
+    //returns -1 if no Prefsindex found, otherwise the idnex to Prefs values 
+    int16_t devID = findMe();
+    if (devID == -1) return -1;
+    
+    //get prefs index for this sensor
+    uint32_t sensorID = devID<<16 + snsType<<8 + snsID;
+    int16_t prefs_index = -1;
+    for (byte i=0;i<NUMSENSORS;i++) {
+        if (Prefs.SENSORIDS[i] == sensorID) {        
+            return i;
+        }
+    }    
+    return -1;
+
+}
+
+bool Devices_Sensors::isMySensor(int16_t index) {
+    if (isSensorIndexInvalid(index)!=0) return false;
+    return sensors[index].deviceIndex == findMe();
 }

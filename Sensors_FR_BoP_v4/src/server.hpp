@@ -4,11 +4,10 @@
 #define NUMSERVERS 3
 
 #include <Arduino.h>
-#include <header.hpp>
-#include <sensors.hpp>
-#include <timesetup.hpp>
-#include "ArduinoOTA.h"
 
+#include "globals.hpp"
+#include "sensors.hpp"
+#include "utility.hpp"
 //Server requests time out after 2 seconds
 #define TIMEOUT_TIME 2000
 
@@ -24,15 +23,17 @@
   #include <WiFi.h> //esp32
   #include <WebServer.h>
   #include <HTTPClient.h>
+  #include "BootSecure.hpp"
   extern WebServer server;
   extern WiFiClient wfclient;
   extern HTTPClient http;
 #endif
 
 
-extern bool KiyaanServer;
-extern struct SensorVal Sensors[SENSORNUM];
-extern time_t ALIVESINCE;
+extern Devices_Sensors Sensors;
+
+extern struct STRUCT_PrefsH Prefs;
+extern struct STRUCT_CORE I;
 
 struct IP_TYPE {
   uint32_t IP;
@@ -41,17 +42,7 @@ struct IP_TYPE {
 
 extern IP_TYPE SERVERIP[NUMSERVERS];
 
-struct WiFi_type {
-  uint32_t DHCP;  // 4 bytes
-  uint32_t GATEWAY; // 4 bytes
-  uint32_t DNS; // 4 bytes
-  uint32_t DNS2; // 4 bytes
-  uint32_t SUBNET; // 4 bytes
-  uint32_t MYIP; // 4 bytes
-  uint8_t status;
-};
-
-extern WiFi_type WIFI_INFO;
+// Use shared Prefs instead of legacy WiFi_type
 
 //extern const char HTTP_OK_response_header[60];
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
@@ -67,21 +58,34 @@ void onWiFiEvent(WiFiEvent_t event);
 #endif
 
 bool Server_Message(String URL, String* payload, int* httpCode);
-void handleREBOOT(void);
+void handleReboot(void);
 void handleRoot(void);
 void handleNotFound(void);
-void handleSETTHRESH(void);
-void handleUPDATESENSORPARAMS(void);
-void handleUPDATEALLSENSORREADS(void);
-void handleUPDATESENSORREAD(void);
-void handleNEXT(void);
-void handleLAST(void);
-bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
-char* strPad(char* str, char* pad, byte L);
-bool SendData(struct SensorVal*);
-void Byte2Bin(uint8_t value, char* output, bool invert = false);
-bool inIndex(byte lookfor,byte used[],byte arraysize);
-void connectWiFi();
-bool wait_ms(uint16_t ms);
+void handleSetThreshold(void);
+void handleUpdateSensorParams(void);
+void handleUpdateAllSensorReads(void);
+void handleUpdateSensorRead(void);
+void handleNext(void);
+void handleLast(void);
+void handleWiFiConfig_RESET(void);
+void handleWiFiConfig(void);
+void handleWiFiConfig_POST(void);
+void handleCONFIG(void);
+void handleCONFIG_POST(void);
 
+void serverTextHeader();
+void serverTextClose(int htmlcode, bool asHTML);
+void addWiFiConfigForm();
+
+bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
+bool SendData(struct SnsType*);
+
+int16_t connectWiFi();
+bool wait_ms(uint16_t ms);
+static String urlEncode(const String& s);
+static String macToHexNoSep();
+void APStation_Mode();
+void startSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
+String generateAPSSID();
+void setupServerRoutes();
 #endif

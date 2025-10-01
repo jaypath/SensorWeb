@@ -5,9 +5,6 @@
 #include <WiFi.h>
 #include "globals.hpp"
 
-// Constants
-#define SENSORNUM NUMSENSORS
-
 //sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
 
@@ -30,6 +27,7 @@ struct SnsType {
     int16_t deviceIndex;    // Index to parent device
     uint8_t snsType;        // Sensor type (temperature, humidity, etc.)
     uint8_t snsID;          // Sensor ID
+    int8_t snsPin;         // Sensor pin. note this is only on the local sensor, not on server. Negative value means not a pin.
     char snsName[30];       // Sensor name
     double snsValue;        // Current sensor value
     uint32_t timeRead;      // Time sensor was read
@@ -68,6 +66,7 @@ public:
     uint32_t getDeviceIPByDevIndex(int16_t devindex);
     uint32_t getDeviceIPBySnsIndex(int16_t snsindex);
     uint8_t getNumDevices();
+    uint8_t getNumSensors();
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
     bool isDeviceInit(int16_t devindex);
@@ -81,7 +80,6 @@ public:
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t snsID);
     SnsType* getSensorBySnsIndex(int16_t snsindex);
-    uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
     void initSensor(int16_t index);
     
@@ -112,15 +110,18 @@ public:
     byte checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical);
     byte checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical);
     
-    // Legacy compatibility functions (now removed)
-    // All SensorVal-based functions have been eliminated
+    //peripheral specific functions
+    int16_t findMe();
+    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID); //get the preferences index for this sensor
+    bool isMySensor(int16_t index);
+    uint16_t isSensorIndexValid(int16_t index, bool ismine);
 };
 
 // Global instance
 extern Devices_Sensors Sensors;
 extern STRUCT_CORE I;
 
-
+extern STRUCT_PrefsH Prefs;
 
 // All device IP addresses are now stored as uint32_t.
 
