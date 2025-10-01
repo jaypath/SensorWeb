@@ -1,0 +1,853 @@
+#define _DEBUG
+
+#include <Arduino.h>
+#include <Wire.h>
+
+#include <header.hpp>
+#include <sensors.hpp>
+#include <server.hpp>
+#include "../../GLOBAL_LIBRARY/BootSecure.hpp"
+#include "globals.hpp"
+#include "../../GLOBAL_LIBRARY/Devices.hpp"
+#include "../../GLOBAL_LIBRARY/utility.hpp"
+#include "../../GLOBAL_LIBRARY/timesetup.hpp"
+#if defined(_USE32)
+#include "../../GLOBAL_LIBRARY/AddESPNOW.hpp"
+#endif
+
+#ifdef _USELED
+#include "LEDGraphics.hpp"
+#endif
+
+
+#ifdef _USE8266 
+  //static const uint8_t A0   = A0;
+  // static const uint8_t D0   = 16;
+  // static const uint8_t D1   = 5;
+  // static const uint8_t D2   = 4;
+  // static const uint8_t D3   = 0;
+  // static const uint8_t D4   = 2;
+  // static const uint8_t D5   = 14;
+  // static const uint8_t D6   = 12;
+  // static const uint8_t D7   = 13;
+  // static const uint8_t D8   = 15;
+  // static const uint8_t SDA   = 4;
+  // static const uint8_t SCL  = 5;
+  static const uint8_t LED   = 2;
+#endif
+//8266... I think they're the same. If not, then use nodemcu or wemos
+#ifdef _USE32
+/*
+  static const uint8_t TX = 1;
+  static const uint8_t RX = 3;
+  static const uint8_t SDA = 21;
+  static const uint8_t SCL = 22;
+
+  static const uint8_t SS    = 5;
+  static const uint8_t MOSI  = 23;
+  static const uint8_t MISO  = 19;
+  static const uint8_t SCK   = 18;
+  //need to define pin labeled outputs...
+  static const uint8_t LED   = 2; //this is true for dev1 board... may be wrong for others
+  */
+#endif
+
+
+
+//#define NODEMCU
+  /*
+  SDA -> D2 -> 4
+  SCL -> D1 -> 5
+  SPI SCLK -> D5 ->14
+  SPI MISO -> D6 -> 12
+  SPI MOSI -> D7 -> 13
+  SPI CS -> D8 -> 15
+  */
+//#define WEMOS
+  /*
+  SDA -> D2 -> 4
+  SCL -> D1 -> 5
+  SPI SCLK -> D5
+  SPI MISO -> D6
+  SPI MOSI -> D7
+  SPI CS -> D8
+  */
+
+  
+
+#ifdef _USE8266
+  #include "LittleFS.h"
+
+  #define FileSys LittleFS
+
+#endif
+#ifdef _USE32
+  #include "SPIFFS.h" 
+  #include "FS.h"
+  #define FILESYS SPIFFS
+  #define FORMAT_FS_IF_FAILED false
+#endif
+
+
+#define FileSys LittleFS
+#define BG_COLOR 0xD69A
+
+
+//wellesley, MA
+#define LAT 42.307614
+#define LON -71.299288
+
+//gen global types
+
+
+//gen unions
+union convertULONG {
+  char str[4];
+  unsigned long val;
+};
+union convertINT {
+  char str[2];
+  int16_t val;
+};
+
+
+
+//globals
+#ifdef _USEBARPRED
+  double BAR_HX[24];
+  char WEATHER[24] = "Steady";
+  uint32_t LAST_BAR_READ; //last pressure reading in BAR_HX
+#endif
+
+
+byte OldTime[5] = {0,0,0,0,0};
+
+//function declarations
+
+
+#ifdef _USELOWPOWER
+
+uint16_t SleepCounter = 0;
+// Write 16 bit int to RTC memory with checksum, return true if verified OK
+// Slot 0-127
+// (C) Turo Heikkinen 2019
+bool writeRtcMem(uint16_t *inVal, uint8_t slot = 0) {
+  uint32_t valToStore = *inVal | ((*inVal ^ 0xffff) << 16); //Add checksum
+  uint32_t valFromMemory;
+  if (ESP.rtcUserMemoryWrite(slot, &valToStore, sizeof(valToStore)) &&
+      ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
+      valToStore == valFromMemory) {
+        return true;
+  }
+  return false;
+}
+
+// Read 16 bit int from RTC memory, return true if checksum OK
+// Only overwrite variable, if checksum OK
+// Slot 0-127
+// (C) Turo Heikkinen 2019
+bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
+  uint32_t valFromMemory;
+  if (ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
+      ((valFromMemory >> 16) ^ (valFromMemory & 0xffff)) == 0xffff) {
+        *inVal = valFromMemory;
+        return true;
+  }
+  return false;
+}
+
+#endif
+
+// ==================== SETUP HELPER FUNCTIONS ====================
+
+/**
+ * @brief Initialize system - boot secure, serial, and copy sensor configs
+ */
+void initSystem() {
+  #ifdef _DEBUG
+    Serial.begin(115200);
+    Serial.println("Begin Setup");
+  #endif
+
+  #ifdef _USE32
+    // Load preferences securely from NVS (ESP32 only)
+    BootSecure bs;
+    int8_t boot_status = bs.setup();
+    #ifdef _DEBUG
+      Serial.printf("BootSecure setup status: %d\n", boot_status);
+    #endif
+
+    // Copy persisted per-sensor config into DeviceStore metadata (intervals are used at runtime)
+    for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+      SnsType* s = DeviceStore.getSensorBySnsIndex(si);
+      if (!s) continue;
+      s->SendingInt = Prefs.SNS_INTERVAL_SEND[si];
+      // Polling and limits are used by ReadData/checks; keep in Prefs and reference via indices
+    }
+  #endif
+  
+  #ifdef _DEBUG
+    Serial.println("System initialized");
+  #endif
+}
+
+/**
+ * @brief Initialize WiFi, I2C, and ESPNOW
+ */
+bool initConnectivity() {
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.print("WiFi Starting.");
+  #endif
+  
+  Prefs.status = 0;
+  connectWiFi(); //this is done async if 32, so can continue processing
+
+  Wire.begin(); 
+  Wire.setClock(400000L);
+  #ifdef _DEBUG
+    Serial.println("wire ok");
+  #endif
+
+  #if defined(_USE32)
+    initESPNOW();
+  #endif
+
+  #ifdef _USE32
+    // By now wifi should have connected, but wait for it if not
+    if (Prefs.status == 0) {
+      do {
+        #ifdef _USESSD1306
+          oled.print(".");
+        #endif
+        #ifdef _DEBUG
+          Serial.print(".");
+        #endif
+        delay(200);
+      } while (Prefs.status == 0);
+    }
+  #endif
+  
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("WiFi OK");
+  #endif
+  
+  #ifdef _DEBUG
+    Serial.println("Connectivity initialized");
+  #endif
+  
+  return true;
+}
+
+/**
+ * @brief Initialize display (OLED)
+ */
+void initDisplay() {
+  #ifdef _USESSD1306
+    #ifdef _DEBUG
+      Serial.println("oled begin");
+    #endif
+    
+    #if INCLUDE_SCROLLING == 0
+      #error INCLUDE_SCROLLING must be non-zero. Edit SSD1306Ascii.h
+    #elif INCLUDE_SCROLLING == 1
+      // Scrolling is not enable by default for INCLUDE_SCROLLING set to one.
+      oled.setScrollMode(SCROLL_MODE_AUTO);
+    #else  // INCLUDE_SCROLLING
+      // Scrolling is enable by default for INCLUDE_SCROLLING greater than one.
+    #endif
+
+    #if RST_PIN >= 0
+      oled.begin(_OLEDTYPE, I2C_OLED, RST_PIN);
+    #else // RST_PIN >= 0
+      oled.begin(_OLEDTYPE, I2C_OLED);
+    #endif // RST_PIN >= 0
+    
+    #ifdef _OLEDINVERT
+      oled.ssd1306WriteCmd(SSD1306_SEGREMAP); // colAddr 0 mapped to SEG0 (RESET)
+      oled.ssd1306WriteCmd(SSD1306_COMSCANINC); // Scan from COM0 to COM[N –1], normal (RESET)
+    #endif
+
+    oled.setFont(System5x7);
+    oled.set1X();
+    oled.clear();
+    oled.setCursor(0,0);
+    
+    #ifdef _DEBUG
+      Serial.println("Display initialized");
+    #endif
+  #endif
+}
+
+/**
+ * @brief Initialize hardware sensors (BME, BMP, DHT, etc.)
+ */
+void initHardwareSensors() {
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("Sns setup.");
+  #endif
+
+  #ifdef _USEBME680_BSEC
+    iaqSensor.begin(BME68X_I2C_ADDR_LOW, Wire);
+    String output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
+    Serial.println(output);
+    checkIaqSensorStatus();
+
+    bsec_virtual_sensor_t sensorList[13] = {
+      BSEC_OUTPUT_IAQ,
+      BSEC_OUTPUT_STATIC_IAQ,
+      BSEC_OUTPUT_CO2_EQUIVALENT,
+      BSEC_OUTPUT_BREATH_VOC_EQUIVALENT,
+      BSEC_OUTPUT_RAW_TEMPERATURE,
+      BSEC_OUTPUT_RAW_PRESSURE,
+      BSEC_OUTPUT_RAW_HUMIDITY,
+      BSEC_OUTPUT_RAW_GAS,
+      BSEC_OUTPUT_STABILIZATION_STATUS,
+      BSEC_OUTPUT_RUN_IN_STATUS,
+      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
+      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
+      BSEC_OUTPUT_GAS_PERCENTAGE
+    };
+
+    iaqSensor.updateSubscription(sensorList, 13, BSEC_SAMPLE_RATE_LP);
+    checkIaqSensorStatus();
+  #endif
+
+  #ifdef _USEBME680
+    while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
+      #ifdef _DEBUG
+        Serial.println("-  Unable to find BME680. Trying again in 5 seconds.\n");
+      #endif
+      delay(5000);
+    }
+    BME680.setOversampling(TemperatureSensor, Oversample16);
+    BME680.setOversampling(HumiditySensor, Oversample16);
+    BME680.setOversampling(PressureSensor, Oversample16);
+    BME680.setIIRFilter(IIR4);
+    BME680.setGas(320, 150);  // 320°c for 150 milliseconds
+  #endif
+
+  #ifdef DHTTYPE
+    #ifdef _DEBUG
+      Serial.printf("dht begin\n");
+    #endif
+    dht.begin();
+  #endif
+
+  #ifdef _USEBMP
+    #ifdef _DEBUG
+      Serial.println("bmp begin");
+    #endif
+    byte retry = 0;
+    byte trybmp = _USEBMP;
+    
+    while (bmp.begin(trybmp) != true && retry < 20) {
+      #ifdef _DEBUG
+        Serial.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);
+      #endif
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);          
+      #endif
+
+      if (retry == 10) { // Try swapping address
+        if (trybmp == 0x76) trybmp = 0x77;
+        else trybmp = 0x76;
+      }
+
+      delay(250);
+      retry++;
+    }
+
+    /* Default settings from datasheet. */
+    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
+                    Adafruit_BMP280::SAMPLING_X2,
+                    Adafruit_BMP280::SAMPLING_X16,
+                    Adafruit_BMP280::FILTER_X16,
+                    Adafruit_BMP280::STANDBY_MS_500);
+  #endif
+  
+  #ifdef _USEBME
+    #ifdef _DEBUG
+      Serial.printf("bme begin\n");
+    #endif
+    
+    byte retry = 0;
+    while (!bme.begin() && retry < 20) {
+      #ifdef _USESSD1306
+        oled.println("BME failed.");
+        delay(500);
+        oled.clear();
+        oled.setCursor(0,0);
+        delay(500);
+      #else
+        digitalWrite(LED, HIGH);
+        delay(500);
+        digitalWrite(LED, LOW);
+        delay(500);
+      #endif
+      retry++;
+    }
+
+    /* Default settings from datasheet. */
+    bme.setSampling(Adafruit_BME280::MODE_NORMAL,
+                    Adafruit_BME280::SAMPLING_X2,
+                    Adafruit_BME280::SAMPLING_X16,
+                    Adafruit_BME280::FILTER_X16,
+                    Adafruit_BME280::STANDBY_MS_500);
+  #endif
+
+  // Initialize barometric prediction globals
+  #ifdef _USEBARPRED
+    for (byte ii = 0; ii < 24; ii++) {
+      BAR_HX[ii] = -1;
+    }
+    LAST_BAR_READ = 0;
+  #endif
+  
+  // Initialize AHT sensor
+  #if defined(_USEAHT) || defined(_USEAHTADA)
+    retry = 0;
+    while (aht.begin() != true && retry < 10) {
+      #ifdef _DEBUG
+        Serial.printf("AHT not connected. Retry number %d\n", retry);
+      #endif
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("No aht x%d!", retry);          
+      #endif
+      delay(250);
+      retry++;
+    }
+  #endif
+
+  // Call sensor-specific setup
+  setupSensors();
+  
+  #ifdef _DEBUG
+    Serial.println("Hardware sensors initialized");
+  #endif
+}
+
+/**
+ * @brief Initialize time using NTP
+ */
+bool initTime() {
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("start time.");
+  #endif
+
+  // Set time (setupTime calls timeClient.begin() internally)
+  setupTime(); // Initialize time and DST (shared)
+
+  I.ALIVESINCE = now();
+  OldTime[0] = 100; // Arbitrary seconds that will trigger a second update
+  OldTime[1] = 61;  // Arbitrary seconds that will trigger a second update
+  OldTime[2] = hour();
+  OldTime[3] = day();
+  
+  I.currentTime = now();
+  
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("Time OK");
+  #endif
+  
+  #ifdef _DEBUG
+    Serial.println("Time initialized");
+  #endif
+  
+  return true;
+}
+
+/**
+ * @brief Initialize OTA (Over-The-Air updates)
+ */
+void initOTA() {
+  #ifndef _USELOWPOWER
+    #ifdef _USESSD1306
+      oled.clear();
+      oled.setCursor(0,0);
+      oled.println("OTA Starting.");
+    #endif
+    
+    #ifdef _DEBUG
+      Serial.println("setuptime done. OTA next.");
+    #endif
+
+    // Hostname defaults to esp8266-[ChipID]
+    ArduinoOTA.setHostname(ARDNAME);
+
+    ArduinoOTA.onStart([]() {
+      #ifdef _DEBUG
+        Serial.println("OTA started...");
+      #endif
+      #ifdef _USESSD1306
+        oled.clear();
+        oled.setCursor(0,0);
+        oled.printf("OTA data incoming...\n");
+      #endif
+      #ifdef _USELED
+        // Set all LEDs to green to indicate OTA start
+        for (byte j = 0; j < LEDCOUNT; j++) {
+          LEDARRAY[j] = (uint32_t) 0 << 16 | 255 << 8 | 0; // green
+        }
+        FastLED.show();
+      #endif
+    });
+    
+    ArduinoOTA.onEnd([]() {
+      #ifdef _DEBUG
+        Serial.println("OTA End");
+      #endif
+    });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      #ifdef _DEBUG
+        Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+      #endif
+      #ifdef _USESSD1306
+        if ((int)(progress) % 10 == 0) oled.print(".");   
+      #endif
+      #ifdef _USELED
+        // Show OTA progress on LEDs as a filling bar
+        for (byte j = 0; j < LEDCOUNT; j++) {
+          LEDARRAY[LEDCOUNT - j - 1] = 0;
+          if (j <= (double) LEDCOUNT * progress / total) {
+            LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+          }
+        }
+        FastLED.show();
+      #endif
+    });
+    
+    ArduinoOTA.onError([](ota_error_t error) {
+      #ifdef _DEBUG
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+      #endif
+      #ifdef _USESSD1306
+        oled.clear();
+        oled.setCursor(0,0);
+        String strbuff = "Error[%u]: " + String(error) + " ";
+        oled.print(strbuff);
+        if (error == OTA_AUTH_ERROR) oled.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) oled.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) oled.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) oled.println("Receive Failed");
+        else if (error == OTA_END_ERROR) oled.println("End Failed");
+      #endif
+    });
+    
+    ArduinoOTA.begin();
+    
+    #ifdef _USESSD1306
+      oled.clear();
+      oled.setCursor(0,0);
+      oled.println("OTA OK.");      
+    #endif
+    
+    #ifdef _DEBUG
+      Serial.println("OTA initialized");
+    #endif
+  #endif
+}
+
+/**
+ * @brief Initialize web server and routes
+ */
+void initServer() {
+  #ifdef _DEBUG
+    Serial.println("set up HTML server...");
+  #endif
+
+  setupServerRoutes(); // Set up all server routes
+  server.begin();
+  
+  #ifdef _DEBUG
+    Serial.println("HTML server started!");
+  #endif
+  
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.setCursor(0,0);
+    oled.println("Server OK");
+  #endif
+}
+
+// ==================== ESPNOW HELPER FUNCTIONS ====================
+
+/**
+ * @brief Handle periodic ESPNow presence broadcast (every N minutes).
+ * @param interval Broadcast interval in minutes (e.g., 5 for every 5 minutes)
+ */
+void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
+  if (minute() % interval == 0 && I.lastESPNOW_TIME != I.currentTime) {        
+    // ESPNow does not require WiFi connection; always broadcast
+    broadcastServerPresence();
+  }
+}
+
+/**
+ * @brief Store core data (Prefs and Screen Info) to NVS/SD when needed
+ */
+void handleStoreCoreData() {
+  if (!Prefs.isUpToDate) { 
+    Prefs.isUpToDate = true;
+    BootSecure::setPrefs();        
+  }
+
+  #ifdef _USESDCARD
+  if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if more than 5 minutes since last store
+    I.isUpToDate = true;
+    storeScreenInfoSD();
+  }
+  #endif
+}
+
+// ==================== MAIN SETUP FUNCTION ====================
+
+void setup()
+{
+  // Initialize system (boot secure, serial, prefs)
+  initSystem();
+  
+  // Initialize display (OLED)
+  initDisplay();
+  
+  // Initialize connectivity (WiFi, I2C, ESPNOW)
+  initConnectivity();
+  
+  // Initialize time
+  initTime();
+  
+  // Initialize OTA
+  initOTA();
+  
+  // Initialize server and routes
+  initServer();
+  
+  // Initialize hardware sensors (BME, BMP, DHT, etc.)
+  initHardwareSensors();
+
+  // Initialize LED strip (if enabled)
+  #ifdef _USELED
+    FastLED.addLeds<WS2813, _USELED, GRB>(LEDARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
+    LEDs.LED_animation_defaults(1);
+    LEDs.LEDredrawRefreshMS = 20;
+    LEDs.LED_set_color(255, 255, 255, 255, 255, 255); // default is white
+    #ifdef _DEBUG
+      Serial.println("LED strip initialized");
+    #endif
+  #endif
+
+  #ifdef _USESSD1306
+    oled.clear();
+    oled.printf("SETUP COMPLETE\n");
+  #endif
+  
+  #ifdef _DEBUG
+    Serial.println("Setup complete!");
+  #endif
+}
+
+
+void loop() {
+  esp_task_wdt_reset();
+
+  updateTime();
+  
+  ArduinoOTA.handle();
+  server.handleClient();
+  
+  // Update LED animations (if enabled)
+  #ifdef _USELED
+    LEDs.LED_update();
+  #endif
+  
+  // Note: I.currentTime is updated by updateTime()
+
+  #ifdef _USELOWPOWER
+
+         #ifdef _DEBUG
+    Serial.printf("Checking for low power state.\n");
+       #endif
+
+
+
+    /*
+    uint16_t rtc_temp; 
+
+    for (byte rtcind=0;rtcind<4;rtcind++) {
+      if (!readRtcMem(&rtc_temp,rtcind+1)) {
+        rtc_temp = OldTime[rtcind];
+        writeRtcMem(&rtc_temp,rtcind+1);
+      } else {
+        OldTime[rtcind] = rtc_temp;
+      }
+    }
+
+
+    if (!readRtcMem(&SleepCounter,0))     writeRtcMem(&SleepCounter,0);
+    else {
+      SleepCounter++;
+      writeRtcMem(&SleepCounter,0);
+    }
+    */
+
+      //read and send everything now if sleep was long enough
+        for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+          SensorVal temp{};
+          if (!buildSensorValFromDeviceStore(si, &temp)) continue;
+                   #ifdef _DEBUG
+          Serial.printf( "Going to attempt read and write sensor index %d (type %u id %u)\n", si, temp.snsType, temp.snsID );
+       #endif
+          ReadData(&temp);
+          applySensorValToDeviceStore(si, &temp);
+          SendData(&temp);
+          applySensorValToDeviceStore(si, &temp);
+        }
+
+                   #ifdef _DEBUG
+        Serial.printf( "Entering sleep.\n");
+       #endif
+      //  Serial.flush();
+      
+      ESP.deepSleep(_USELOWPOWER, WAKE_RF_DEFAULT);
+//will awaken with a soft reset, no need to do anything else
+
+  #endif
+
+  #ifdef _USECALIBRATIONMODE
+    if (millis()%10000==0) checkHVAC();
+  #endif
+
+
+  if (OldTime[0] != second()) {
+    OldTime[0] = second();
+    //do stuff every second
+    
+    #ifdef _DEBUG
+      Serial.printf( ".");
+    #endif
+
+    for (int16_t si = 0; si < DeviceStore.getNumSensors(); ++si) {
+      SensorVal temp{};
+      if (!buildSensorValFromDeviceStore(si, &temp)) continue;
+      bool goodread = false;
+
+      if (temp.LastReadTime==0 || temp.LastReadTime>I.currentTime || temp.LastReadTime + temp.PollingInt < I.currentTime || I.currentTime - temp.LastReadTime >60*60*24 ) goodread = ReadData(&temp);
+      
+      if (goodread == true) {
+        if (temp.LastSendTime ==0 || temp.LastSendTime>I.currentTime || temp.LastSendTime + temp.SendingInt < I.currentTime || bitRead(temp.Flags,6) /* isflagged changed since last read*/ || I.currentTime - temp.LastSendTime >60*60*24) SendData(&temp);
+      }
+
+      applySensorValToDeviceStore(si, &temp);
+    }
+
+  }
+  
+  if (OldTime[1] != minute()) {
+    
+    if (Prefs.status==0) {
+      WiFi.reconnect(); //try restarting wifi
+      
+      // If WiFi is still down and we have a known server, request WiFi password via ESPNOW
+      if (WiFi.status() != WL_CONNECTED && I.LAST_ESPNOW_SERVER_MAC != 0) {
+        static uint32_t lastPwdRequestMinute = 0;
+        if (minute() != lastPwdRequestMinute) { // Only request once per minute
+          lastPwdRequestMinute = minute();
+          uint8_t serverMAC[6];
+          uint64ToMAC(I.LAST_ESPNOW_SERVER_MAC, serverMAC);
+          requestWiFiPassword(serverMAC, nullptr);
+          #ifdef _DEBUG
+          Serial.printf("WiFi down - requesting password via ESPNOW from server MAC: %s\n", MACToString(serverMAC).c_str());
+          #endif
+        }
+      }
+    }
+
+    OldTime[1] = minute();
+
+    #ifdef _DEBUG
+    Serial.printf("\nTime is %s\n", dateify(I.currentTime,"hh:nn:ss"));
+    #endif
+
+    // Handle periodic ESPNOW broadcasts (every 10 minutes for sensors)
+    handleESPNOWPeriodicBroadcast(10);
+    
+    // Store core data to NVS/SD when needed
+    handleStoreCoreData();
+    
+    #ifdef _USESSD1306
+      redrawOled();
+    #endif
+
+  }
+
+
+  if (OldTime[2] != hour()) {
+      
+  
+    #ifdef _DEBUG
+    Serial.printf( "\nNew hour... TimeUpdate running. \n");
+    #endif
+  
+    checkDST();
+
+    //expire 24 hour old readings handled via DeviceStore timestamps
+
+    OldTime[2] = hour();
+
+  }
+  
+  if (OldTime[3] != day()) {
+    //once per day
+    #ifdef REBOOTDAILY
+      ESP.restart();
+    #endif
+
+    OldTime[3] = day();
+
+    checkDST();
+
+    //reset heat and ac values
+    #ifdef _DEBUG
+      Serial.printf("\nNew day... ");
+    #endif
+
+
+
+    #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+
+      #ifdef _DEBUG
+        Serial.printf( "Reset HVACs...\n");
+      #endif
+      initHVAC();
+
+    #endif
+
+
+    #ifdef _DEBUG
+      Serial.printf("\n");
+
+    #endif
+
+  } 
+}

@@ -260,7 +260,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     }
     
     if (msg.msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
-        // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV)
+        // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV, payload[32..39] = nonce)
         ESPNOW_type resp = {};
         resp.senderMAC = Prefs.PROCID;
         resp.senderIP = Prefs.MYIP;
@@ -272,6 +272,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         uint16_t outlen = 0;
                         BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
         memcpy(resp.payload, encrypted, (outlen < 48) ? outlen : 48);
+        
+        // Echo nonce back from request to response for replay attack prevention
+        memcpy(resp.payload + 32, msg.payload + 32, 8);
         
         if (!sendESPNOW(resp)) {
             storeError("ESPNow: Failed to send WiFi password response");
@@ -363,6 +366,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             memset(I.TEMP_AES, 0, 32);
             I.TEMP_AES_TIME = 0;
             I.TEMP_AES_MAC = 0;
+            memset(I.WIFI_RECOVERY_NONCE, 0, 8);
             I.isUpToDate = false;
             storeError("WiFi KEY REQUIRED: MAC mismatch or expired");
             return;
@@ -370,6 +374,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         // Zero out old TEMP_AES and TEMP_AES_TIME
         memset(I.TEMP_AES, 0, 32);
         I.TEMP_AES_TIME = 0;
+        memset(I.WIFI_RECOVERY_NONCE, 0, 8);
         I.isUpToDate = false;
         // Send a new type 2 message to the same MAC
         uint8_t mac[6] = {0};
@@ -382,9 +387,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         // Zero TEMP_AES and TEMP_AES_TIME for security
         memset(I.TEMP_AES, 0, 32);
         I.TEMP_AES_TIME = 0;
-        I.isUpToDate = false;
-
         I.TEMP_AES_MAC = 0;
+        memset(I.WIFI_RECOVERY_NONCE, 0, 8);
+        I.isUpToDate = false;
         
     }
     return ;
