@@ -64,7 +64,7 @@ bool decryptESPNOWMessage(ESPNOW_type& msg);
 bool broadcastServerPresence();
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
-void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len);
+void OnDataRecv(const uint8_t *recv_info, const uint8_t *incomingData, int len);
 
 // --- Utility for server list packing ---
 void packServerList(uint8_t* payload, const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count);

@@ -155,7 +155,7 @@ extern  Adafruit_BME280 bme; // I2C
 extern   SSD1306AsciiWire oled;
 #endif
 
-int8_t ReadData(struct SnsType *P);
+int8_t ReadData(struct SnsType *P, bool forceRead=false);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);

@@ -32,8 +32,10 @@ static String macToHexNoSep() {
 }
 
  String generateAPSSID() {
+  uint64_t mac64;
+  mac64 = ESP.getEfuseMac();
   uint8_t mac[6];
-  WiFi.macAddress(mac);
+  uint64ToMAC(mac64, mac);
   char ssid[20];
   snprintf(ssid, sizeof(ssid), "SensorNet-%02X%02X%02X", mac[3], mac[4], mac[5]);
   return String(ssid);
@@ -144,6 +146,13 @@ void APStation_Mode() {
   
   // Add delay before starting server
   delay(500);
+
+  //add server routes temporarily
+  server.on("/", handleRoot);
+  server.on("/WiFiConfig", handleWiFiConfig);
+  server.on("/WiFiConfig_POST", handleWiFiConfig_POST);
+  server.on("/WiFiConfig_RESET", handleWiFiConfig_RESET);
+
   server.begin(); //start server
 
 
@@ -184,6 +193,7 @@ void APStation_Mode() {
     
  
   controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
+
    
 }
 
@@ -258,7 +268,8 @@ bool isGood = false;
       httpCode = (int) http.POST(body);
       String payload = http.getString();
       http.end();
-
+      SerialPrint("httpCode: " + (String) httpCode,false);
+      SerialPrint("payload: " + payload,true);
       if (httpCode == 200) { isGood = true; }
     }
   }
@@ -387,9 +398,13 @@ void handleUpdateSensorRead() {
   I.lastServerStatusUpdate = I.currentTime;
   
   int16_t j = server.arg("SensorNum").toInt();
+
+  SerialPrint("j: " + (String) j,true);
   SnsType* s = Sensors.getSensorBySnsIndex(j);
   if (s && s->IsSet) {
-    ReadData(s);
+    ReadData(s, true);
+    SerialPrint("ReadData(s) done",false);
+    SerialPrint(" new value: " + (String) s->snsValue,true);
     SendData(s);
   }
 
@@ -412,7 +427,7 @@ WEBHTML += (String) dateify() + "\n";
 for (int16_t k=0; k<Sensors.getNumSensors(); k++) {
   SnsType* s = Sensors.getSensorBySnsIndex(k);
   if (!s || s->IsSet == false) continue;
-  ReadData(s);
+  ReadData(s, true);
   WEBHTML +=  "Sensor " + (String) s->snsName + " data sent to at least 1 server: " + SendData(s) + "\n";
 }
   server.send(200, "text/plain", "Status...\n" + WEBHTML);   // Send HTTP status 200 (Ok) and send some text to the browser/client
@@ -529,13 +544,18 @@ void handleReboot() {
 
 void handleRoot() {
 
+
+  if (Prefs.HAVECREDENTIALS==false) {
+    SerialPrint("Prefs.HAVECREDENTIALS==false, redirecting to WiFiConfig");
+    //redirect to WiFi config page
+    server.sendHeader("Location", "/WiFiConfig");
+    serverTextClose(302,false);
+    return;
+  }
+  
   // Update server status timestamp
   I.lastServerStatusUpdate = I.currentTime;
-
-#ifdef _DEBUG
-  Serial.println("Hit handleroot.");
-#endif
-
+  
   // Use device MAC address instead of ARDID
   uint64_t deviceMAC = ESP.getEfuseMac();
 
@@ -552,6 +572,10 @@ WEBHTML += (String) "<style> table {  font-family: arial, sans-serif;  border-co
 WEBHTML += (String) "input[type='text'] { font-family: arial, sans-serif; font-size: 10px; }\n";
 WEBHTML += (String) "body {  font-family: arial, sans-serif; }\n";
 WEBHTML += "</style></head>\n";
+
+
+
+
 WEBHTML += "<body>";
 
 WEBHTML +=  "<h2>Arduino: " + (String) MYNAME + "<br>\nIP:" + WiFi.localIP().toString() + "<br>\nMAC:" + String((unsigned long)(deviceMAC >> 32), HEX) + String((unsigned long)(deviceMAC & 0xFFFFFFFF), HEX) + "<br></h2>\n";
@@ -564,6 +588,7 @@ WEBHTML += "Current time: " + (String) now() + " = " +  (String) dateify(now(),"
 #ifdef _USE8266
   WEBHTML += "Free Stack: " + (String) ESP.getFreeContStack() + "<br>\n";
 #endif
+WEBHTML += "Num Sensors: " + (String) Sensors.getNumSensors() + "<br>\n";
 WEBHTML += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 WEBHTML += "</p>\n";
 WEBHTML += "<br>-----------------------<br>\n";
@@ -572,7 +597,8 @@ WEBHTML += "<br>-----------------------<br>\n";
 
   byte used[SENSORNUM];
   for (byte j=0;j<SENSORNUM;j++)  used[j] = 255;
-  for (int16_t si = 0; si < Sensors.getNumSensors(); ++si)  {
+  for (int16_t si = 0; si < Sensors.getNumSensors(); si++)  {
+
     if (Sensors.isMySensor(si)<=0) continue;
     SnsType* s = Sensors.getSensorBySnsIndex(si);
     WEBHTML += "<form action=\"/UPDATESENSORPARAMS\" method=\"GET\" id=\"frm_SNS" + (String) si + "\"><input form=\"frm_SNS"+ (String) si + "\"  id=\"SNS" + (String) si + "\" type=\"hidden\" name=\"SensorNum\" value=\"" + (String) si + "\"></form>\n";
@@ -895,7 +921,7 @@ void handleWiFiConfig() {
 void addWiFiConfigForm() {
   // WiFi configuration form
   WEBHTML = WEBHTML + "<h3>Configure WiFi</h3>";
-  WEBHTML = WEBHTML + "<form id=\"wifiForm\" method=\"POST\" action=\"/WiFiConfig\">";
+  WEBHTML = WEBHTML + "<form id=\"wifiForm\" method=\"POST\" action=\"/WiFiConfig_POST\">";
   WEBHTML = WEBHTML + "<p><label for=\"ssid\">SSID:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"ssid\" name=\"ssid\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"password\">Password:</label><br>";
@@ -918,6 +944,8 @@ void addWiFiConfigForm() {
 void handleWiFiConfig_POST() { //updated code
   I.lastServerStatusUpdate = I.currentTime;
 
+
+  SerialPrint("Updating Wifi Settings...",true);
 #ifdef _USETFT
   tft.clear();
   tft.setCursor(0, 0);
@@ -1010,7 +1038,7 @@ void setupServerRoutes() {
   server.on("/REBOOT", handleReboot);
   server.on("/ResetWiFi", handleWiFiConfig_RESET);
   server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
-  server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
+  server.on("/WiFiConfig_POST", HTTP_POST, handleWiFiConfig_POST);
   server.on("/CONFIG", HTTP_GET, handleCONFIG);
   server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
 

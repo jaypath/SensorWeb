@@ -549,7 +549,7 @@ int peak_to_peak(int pin, int ms) {
 
 
 
-int8_t ReadData(struct SnsType *P) {
+int8_t ReadData(struct SnsType *P, bool forceRead) {
   //return -1 if not my sensor, 0 if not time to read, 1 if read successful
 
   //is this my sensor?
@@ -560,7 +560,7 @@ int8_t ReadData(struct SnsType *P) {
 
 
   //is it time to read?
-  if (!(P->timeRead==0 || P->timeRead>I.currentTime || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < I.currentTime || I.currentTime - P->timeRead >60*60*24 )) return 0;
+  if (forceRead==false && !(P->timeRead==0 || P->timeRead>I.currentTime || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < I.currentTime || I.currentTime - P->timeRead >60*60*24 )) return 0;
 
 
   // Use I.currentTime instead of local time_t t variable

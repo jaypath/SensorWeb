@@ -1,4 +1,4 @@
-#define _DEBUG
+//#define _DEBUG
 
 #include "globals.hpp"
 #include <ArduinoOTA.h>
@@ -513,7 +513,7 @@ void initOTA() {
       #ifdef _USELED
         // Set all LEDs to green to indicate OTA start
         for (byte j = 0; j < LEDCOUNT; j++) {
-          LEDARRAY[j] = (uint32_t) 0 << 16 | 255 << 8 | 0; // green
+          LEDARRAY[j] = (uint32_t) 0 << 16 | 26 << 8 | 0; // green at 10% brightness
         }
         FastLED.show();
       #endif
@@ -638,14 +638,20 @@ void handleStoreCoreData() {
 
 void setup()
 {
+  #ifdef _USESERIAL
+    Serial.begin(115200);
+  #endif
+  
+  SerialPrint("Begin Setup",true);
   // Initialize system (boot secure, serial, prefs)
   initSystem();
   
   // Initialize display (OLED)
   initDisplay();
   
-  // Initialize connectivity (WiFi, I2C, ESPNOW)
-  initConnectivity();
+  SerialPrint("Init Connectivity",true);
+    // Initialize connectivity (WiFi, I2C, ESPNOW) - do this after so server routes are known to softap
+    initConnectivity();
   
   // Initialize time
   initTime();
@@ -655,7 +661,8 @@ void setup()
   
   // Initialize server and routes
   initServer();
-  
+
+
   // Initialize hardware sensors (BME, BMP, DHT, etc.)
   initHardwareSensors();
 
@@ -728,8 +735,10 @@ void loop() {
         for (int16_t si = 0; si < Sensors.getNumSensors(); ++si) {
           if (Sensors.isMySensor(si) == false) continue; //not valid/not mine
           SnsType* temp = Sensors.getSensorBySnsIndex(si);
-
           ReadData(&temp);
+            
+          
+
           SendData(&temp);
           
         }
@@ -753,9 +762,6 @@ void loop() {
     OldTime[0] = second();
     //do stuff every second
     
-    #ifdef _DEBUG
-      Serial.printf( ".");
-    #endif
 
     for (int16_t si = 0; si < Sensors.getNumSensors(); ++si) {
       
@@ -763,8 +769,16 @@ void loop() {
 
       SnsType* temp = Sensors.getSensorBySnsIndex(si);
 
-       ReadData(temp);
-
+       if (ReadData(temp)>0) {
+        
+        //SerialPrint("ReadData: temp->snsType: " + (String) temp->snsType,true);
+        #ifdef _USELED
+        if (temp->snsType == 3) { // soil sensor
+          SerialPrint("LED_set_color_soil: temp->snsType: " + (String) temp->snsType,true);
+            LEDs.LED_set_color_soil(temp);
+        }
+        #endif
+       }
        SendData(temp);
       
     }

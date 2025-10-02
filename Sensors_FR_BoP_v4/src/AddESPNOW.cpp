@@ -230,8 +230,9 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 }
 
 // --- ESPNow Receive Callback ---
-void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len) {
-    const uint8_t * mac = recv_info->src_addr;
+void OnDataRecv(const uint8_t *recv_info, const uint8_t *incomingData, int len) {
+    uint8_t mac[6] = {0};
+    memcpy(mac, recv_info, 6);
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
         I.lastESPNOW_STATE = -2;

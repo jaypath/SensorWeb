@@ -55,10 +55,6 @@ void Animation_type::LED_update(void) {
   }
 
 
-  #ifdef _DEBUG
-    Serial.printf("global color is %d to %d. LED0 color is %d, 10 %d, 20 %d, 30 %d, 40 %d\n",this->color1,this->color2,LEDARRAY[0],LEDARRAY[10],LEDARRAY[20],LEDARRAY[30],LEDARRAY[40]);
-  #endif
-
   FastLED.show();
 
 }
@@ -170,8 +166,8 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
   // Get the sensor limits from Prefs
   int16_t prefs_index = Sensors.getPrefsIndex(sns->snsType, sns->snsID);
   double limitUpper = Prefs.SNS_LIMIT_MAX[prefs_index];
-  byte  snspct = (byte) (100*((double)sns->snsValue / limitUpper)); 
-  byte snslim = 0;
+  uint16_t  snspct =  (100*((double)sns->snsValue / limitUpper)); 
+  uint16_t snslim = 0;
   byte animStylestep = 0;
 
   do {
@@ -326,11 +322,18 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
 
 void Animation_type::LED_animation_defaults(byte anim) {
   this->animation_style = anim;
+  
+  // Initialize LED_BASE and LED_TIMING arrays to prevent garbage values
+  for (byte i = 0; i < LEDCOUNT; i++) {
+    this->LED_BASE[i] = 0; // Initialize to black
+    this->LED_TIMING[i] = 0; // Initialize timing array
+  }
+  
   switch (anim) {
     case 1: //wave clockwise
       this->sin_T = 1500; //in other words, T, ms to move through one wavelength
       this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
-      this->MaxBrightness = 15; //sin amp
+      this->MaxBrightness = 10; //sin amp - 10% brightness
       this->MinBrightness=5; 
       break;
     case 2: //wave counter-clockwise

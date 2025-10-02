@@ -144,7 +144,7 @@ uint32_t Devices_Sensors::getDeviceIPByDevIndex(int16_t devindex) {
 
 uint8_t Devices_Sensors::getNumDevices() {
     numDevices = 0;
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
         if (devices[i].IsSet) {
             numDevices++;
         }
@@ -154,7 +154,7 @@ uint8_t Devices_Sensors::getNumDevices() {
 
 uint8_t Devices_Sensors::getNumSensors() {
     numSensors = 0;
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet) {
             numSensors++;
         }
