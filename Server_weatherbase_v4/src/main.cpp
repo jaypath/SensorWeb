@@ -305,18 +305,29 @@ void setup() {
 
     tft.printf("Init Wifi... \n");
     SerialPrint("Init Wifi... ",false);
-    tft.printf("Wifi... ");   
     SerialPrint("start server routes... ");
     initServerRoutes();
     SerialPrint("Server routes OK",true);
 
-    while (connectWiFi()<0) {
-        displaySetupProgress( false);
-        tft.clear();
-        tft.setCursor(0, 0);
-        tft.printf("Wifi... ");    
-        delay(10000); //do not flood wifi        
-    } 
+    if (Prefs.HAVECREDENTIALS) {
+
+        if (connectWiFi()<0) {
+            //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
+            SerialPrint("Failed to connect to Wifi",true);
+            if (connectWiFi()>-10000 && connectWiFi()<0) {
+                tft.clear();
+                tft.setCursor(0, 0);
+                tft.printf("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ");    
+                Prefs.HAVECREDENTIALS = false;
+                BootSecure::setPrefs();        
+                delay(60000); //do not flood wifi        
+                controlledReboot("Wifi failed too many times", RESET_WIFI, true);
+            }        
+        } 
+    } else {
+        SerialPrint("No credentials, starting AP Station Mode",true);
+        APStation_Mode();
+    }
     displaySetupProgress( true);
     SerialPrint("Wifi OK",true);
 
@@ -604,6 +615,9 @@ void loop() {
     }
     if (OldTime[3] != weekday()) {
         OldTime[3] = weekday();
+        checkTimezoneUpdate();
+        I.ESPNOW_SENDS = 0;
+        I.ESPNOW_RECEIVES = 0;
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();

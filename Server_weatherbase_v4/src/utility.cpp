@@ -49,6 +49,9 @@ void initScreenFlags(bool completeInit) {
   I.oldScreenNum = 0;
   I.lastStoreCoreDataTime = 0;
 
+  I.ESPNOW_SENDS = 0;
+  I.ESPNOW_RECEIVES = 0;
+
   I.lastHeaderTime=0; //last time header was drawn
   I.lastWeatherTime=0; //last time weather was drawn
   I.lastCurrentConditionTime=0; //last time current condition was drawn
@@ -56,8 +59,7 @@ void initScreenFlags(bool completeInit) {
   I.lastFutureConditionTime=0; //last time future condition was drawn
   I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
   
-  I.DSTOFFSET = 0;
-  I.GLOBAL_TIMEZONE_OFFSET = -18000;
+  // Timezone is now managed entirely through Prefs
   
   I.localBatteryLevel=0;
 
@@ -257,7 +259,7 @@ byte checkExpiration(int i, time_t t, bool onlyCritical) {
 }
 
 uint8_t countDev() {
-  return Sensors.countDev();
+  return Sensors.getNumDevices();
 }
 
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest) {

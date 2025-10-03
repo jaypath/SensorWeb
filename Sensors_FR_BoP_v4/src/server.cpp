@@ -1,5 +1,5 @@
 #include "server.hpp"
-
+#include <ArduinoJson.h>
 
 //this server
 #ifdef _USE8266
@@ -18,6 +18,9 @@ byte CURRENTSENSOR_WEB = 1;
 extern STRUCT_PrefsH Prefs;
 
 extern Devices_Sensors Sensors;
+
+
+bool RegistrationCompleted = false;
 
 #ifdef _USE8266
 #include <ESP8266HTTPClient.h>
@@ -80,7 +83,10 @@ void initHVAC(void){
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
-    Prefs.status = 1; // Set status to indicate WiFi is connected
+    if (Prefs.status <= 0) {
+      Prefs.status = 1; // Set status to indicate WiFi is connected
+      Prefs.isUpToDate = false;
+    }
     return true;
   }
 
@@ -152,6 +158,8 @@ void APStation_Mode() {
   server.on("/WiFiConfig", handleWiFiConfig);
   server.on("/WiFiConfig_POST", handleWiFiConfig_POST);
   server.on("/WiFiConfig_RESET", handleWiFiConfig_RESET);
+  server.on("/TimezoneSetup", handleTimezoneSetup);
+  server.on("/TimezoneSetup_POST", handleTimezoneSetup_POST);
 
   server.begin(); //start server
 
@@ -175,7 +183,8 @@ void APStation_Mode() {
 
     uint32_t startTime = millis();
     const uint32_t timeoutMs = 600000; // 10 minute timeout
-    
+    RegistrationCompleted = false;
+
     do {
       server.handleClient(); //check if user has set up WiFi
             
@@ -191,8 +200,27 @@ void APStation_Mode() {
 
     } while (Prefs.HAVECREDENTIALS == false );
     
- 
-  controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
+    // Only reboot if we have credentials but registration is not completed
+    if ( RegistrationCompleted == false) {
+      // User has submitted WiFi credentials but hasn't completed timezone setup
+      // Continue running the server to allow timezone configuration
+      #ifdef _USETFT
+      tft.println("WiFi credentials saved. Please configure timezone settings.");
+      tft.println("Server will continue running for timezone setup...");
+      #endif
+      
+      // Keep the server running indefinitely until timezone setup is complete
+      while (RegistrationCompleted == false) {
+        server.handleClient();
+        delay(50);
+      }
+    }
+    
+    #ifdef _USETFT
+    tft.println("Rebooting with updated credentials...");
+    delay(5000);
+    #endif
+    controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
 
    
 }
@@ -774,6 +802,18 @@ WEBHTML += "<br>-----------------------<br>\n";
   WEBHTML += "function sortTable(col) {\nvar table, rows, switching, i, x, y, shouldSwitch;\ntable = document.getElementById(\"Logs\");\nswitching = true;\nwhile (switching) {\nswitching = false;\nrows = table.rows;\nfor (i = 1; i < (rows.length - 1); i++) {\nshouldSwitch = false;\nx = rows[i].getElementsByTagName(\"TD\")[col];\ny = rows[i + 1].getElementsByTagName(\"TD\")[col];\nif (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {\nshouldSwitch = true;\nbreak;\n}\n}\nif (shouldSwitch) {\nrows[i].parentNode.insertBefore(rows[i + 1], rows[i]);\nswitching = true;\n}\n}\n}\n";
   WEBHTML += "</script>\n ";
 
+  // Navigation links to other pages
+  WEBHTML += "<br><br><div style=\"text-align: center; padding: 20px; border-top: 2px solid #ddd; margin-top: 20px;\">";
+  WEBHTML += "<h3>Navigation</h3>";
+  WEBHTML += "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML += "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Timezone Setup</a> ";
+  WEBHTML += "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML += "<br><br>";
+  WEBHTML += "<a href=\"/UPDATEALLSENSORREADS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Update All Sensors</a> ";
+  WEBHTML += "<a href=\"/ResetWiFi\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF5722; color: white; text-decoration: none; border-radius: 4px;\">Reset WiFi</a> ";
+  WEBHTML += "<a href=\"/REBOOT\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\">Reboot Device</a> ";
+  WEBHTML += "</div>";
+
   WEBHTML += "</body>\n</html>\n";
 
 
@@ -803,11 +843,7 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
 
   // Editable fields from STRUCT_CORE I in specified order
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GLOBAL_TIMEZONE_OFFSET</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"GLOBAL_TIMEZONE_OFFSET\" value=\"" + (String) I.GLOBAL_TIMEZONE_OFFSET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DSTOFFSET</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"DSTOFFSET\" value=\"" + (String) I.DSTOFFSET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  // Note: Timezone settings are now managed through Prefs and the /TimezoneSetup page
   
   
   WEBHTML = WEBHTML + "</div>";
@@ -823,6 +859,7 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Timezone Setup</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
  
   WEBHTML = WEBHTML + "</div>";
@@ -839,12 +876,7 @@ void handleCONFIG_POST() {
   I.lastServerStatusUpdate = I.currentTime;
   
   // Process form submissions and update editable fields
-  if (server.hasArg("GLOBAL_TIMEZONE_OFFSET")) {
-    I.GLOBAL_TIMEZONE_OFFSET = server.arg("GLOBAL_TIMEZONE_OFFSET").toInt();
-  }
-  if (server.hasArg("DSTOFFSET")) {
-    I.DSTOFFSET = server.arg("DSTOFFSET").toInt();
-  }
+  // Timezone settings are now managed through Prefs and the /TimezoneSetup page
   
   
   
@@ -867,12 +899,22 @@ void handleWiFiConfig() {
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " WiFi Configuration</h2>";
   
+  // Check for error messages
+  if (server.hasArg("error")) {
+    String error = server.arg("error");
+    if (error == "connection_failed") {
+      WEBHTML = WEBHTML + "<div style=\"background-color: #ffebee; color: #c62828; padding: 15px; margin: 10px 0; border: 1px solid #ef5350; border-radius: 4px;\">";
+      WEBHTML = WEBHTML + "<strong>Connection Failed:</strong> WiFi credentials are incorrect. Please check your SSID and password and try again.";
+      WEBHTML = WEBHTML + "</div>";
+    }
+  }
+  
   // Display current WiFi status and configuration
   WEBHTML = WEBHTML + "<h3>Current WiFi Status</h3>";
 
   if (!Prefs.HAVECREDENTIALS) {
     WEBHTML = WEBHTML + "<p>Wifi credentials are not set, and are required.</p>";
-    WEBHTML = WEBHTML + "<p>Set your address for weather lookup (weather information will be matched to the address provided).<br></p>";
+    WEBHTML = WEBHTML + "<p>After connecting to WiFi, the system will automatically detect your timezone information.</p>";
   }
 
   WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
@@ -929,38 +971,280 @@ void addWiFiConfigForm() {
   WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Local Security Key (up to 16 chars) - must be same for all devices:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
 
-  
+  // Disconnection notice
+  WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin: 10px 0; border-radius: 4px;\">";
+  WEBHTML = WEBHTML + "<strong>Important:</strong> After submitting WiFi credentials, there will be a brief disconnection as the device connects to your WiFi network. ";
+  WEBHTML = WEBHTML + "Once submitted, a 'Check Timezone' button will appear to proceed to timezone configuration.";
+  WEBHTML = WEBHTML + "</div>";
 
-  //hidden field for BLOB is needed for old encryption code
-//  WEBHTML = WEBHTML + "<input type=\"hidden\" id=\"BLOB\" name=\"BLOB\">";
-//  WEBHTML = WEBHTML + "<input type=\"button\" value=\"Update WiFi Configuration\" onclick=\"submitEncryptedForm()\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  // Status and action buttons
+  WEBHTML = WEBHTML + "<div id=\"statusSection\" style=\"margin: 20px 0;\">";
+  WEBHTML = WEBHTML + "<div id=\"statusMessage\" style=\"padding: 10px; margin: 10px 0; border-radius: 4px; display: none;\"></div>";
+  WEBHTML = WEBHTML + "<input type=\"submit\" id=\"submitButton\" value=\"Connect WiFi and Configure\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" id=\"timezoneButton\" style=\"display: none; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; margin-left: 10px;\">Check Timezone</a>";
+  WEBHTML = WEBHTML + "</div>";
 
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Update WiFi Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
+
+  // Add JavaScript for form submission handling
+  WEBHTML = WEBHTML + R"===(<script>
+  function showStatus(message, isError = false) {
+    const statusDiv = document.getElementById('statusMessage');
+    statusDiv.textContent = message;
+    statusDiv.style.display = 'block';
+    statusDiv.style.backgroundColor = isError ? '#ffebee' : '#e8f5e8';
+    statusDiv.style.color = isError ? '#c62828' : '#2e7d32';
+    statusDiv.style.border = isError ? '1px solid #f44336' : '1px solid #4CAF50';
+  }
+
+  function showTimezoneButton() {
+    // Hide submit button and show timezone button
+    document.getElementById('submitButton').style.display = 'none';
+    document.getElementById('timezoneButton').style.display = 'inline-block';
+    showStatus('WiFi credentials submitted successfully! Click "Check Timezone" to configure timezone settings.', false);
+  }
+
+  // Override form submission to handle the process
+  document.getElementById('wifiForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    showStatus('Submitting WiFi credentials...', false);
+    
+    // Submit the form normally
+    const formData = new FormData(this);
+    
+    fetch('/WiFiConfig', {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => {
+      if (response.ok) {
+        // WiFi credentials submitted successfully
+        showTimezoneButton();
+      } else {
+        showStatus('Failed to submit WiFi credentials. Please try again.', true);
+      }
+    })
+    .catch(error => {
+      // Network error - this might be expected during WiFi transition
+      showStatus('WiFi credentials submitted. If WiFi connection succeeds, you can proceed to timezone configuration.', false);
+      showTimezoneButton();
+    });
+  });
+  </script>)===";
+}
+
+// Function to get timezone information from worldtimeapi.org
+bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
+  WiFiClient client;
+  HTTPClient http;
+  
+  SerialPrint("Fetching timezone information from worldtimeapi.org...", true);
+  
+  if (http.begin(client, "http://worldtimeapi.org/api/ip")) {
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      String payload = http.getString();
+      SerialPrint("Timezone API response: " + payload, true);
+      
+      // Parse JSON response
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, payload);
+      
+      if (!error) {
+        // Extract timezone information
+        String utc_offset_str = doc["raw_offset"]; //note that raw offset does not include the dst offset, and is already in seconds
+        bool dst = doc["dst"];
+        String dst_from = doc["dst_from"];
+        String dst_until = doc["dst_until"];
+        
+        /*
+        // Parse UTC offset (format: "+05:00" or "-04:00")
+        if (utc_offset_str.length() >= 6) {
+          int hours = utc_offset_str.substring(1, 3).toInt();
+          int minutes = utc_offset_str.substring(4, 6).toInt();
+          *utc_offset = (utc_offset_str[0] == '-' ? -1 : 1) * (hours * 3600 + minutes * 60);
+        }
+        */
+        *utc_offset = utc_offset_str.toInt();
+        *dst_enabled = dst;
+        
+        // Parse DST start and end dates (format: "2025-03-09T07:00:00+00:00")
+        if (dst_from.length() >= 10) {
+          *dst_start_month = dst_from.substring(5, 7).toInt();
+          *dst_start_day = dst_from.substring(8, 10).toInt();
+        }
+        
+        if (dst_until.length() >= 10) {
+          *dst_end_month = dst_until.substring(5, 7).toInt();
+          *dst_end_day = dst_until.substring(8, 10).toInt();
+        }
+        
+        http.end();
+        return true;
+      } else {
+        SerialPrint("JSON parsing failed: " + String(error.c_str()), true);
+      }
+    } else {
+      SerialPrint("HTTP request failed with code: " + String(httpCode), true);
+    }
+    http.end();
+  } else {
+    SerialPrint("Failed to begin HTTP request", true);
+  }
+  
+  return false;
+}
+
+void handleTimezoneSetup() {
+  I.lastServerStatusUpdate = I.currentTime;
+  WEBHTML = "";
+  serverTextHeader();
+
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>Timezone Configuration</h2>";
+  
+  // Get timezone information
+  int32_t utc_offset = 0;
+  bool dst_enabled = false;
+  uint8_t dst_start_month = 3, dst_start_day = 9;
+  uint8_t dst_end_month = 11, dst_end_day = 2;
+  
+  if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<strong>Timezone detected successfully!</strong><br>";
+    WEBHTML = WEBHTML + "Please review and confirm the timezone information below.";
+    WEBHTML = WEBHTML + "</div>";
+  } else {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #fff3e0; color: #ef6c00; padding: 15px; margin: 10px 0; border: 1px solid #ff9800; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<strong>Warning:</strong> Could not automatically detect timezone. Using default values. Please verify and adjust as needed.";
+    WEBHTML = WEBHTML + "</div>";
+    // Set default values (Eastern Time)
+    utc_offset = -5 * 3600; // -5 hours in seconds
+    dst_enabled = true;
+    dst_start_month = 3; dst_start_day = 9;
+    dst_end_month = 11; dst_end_day = 2;
+  }
+  
+  WEBHTML = WEBHTML + "<h3>Detected Timezone Information</h3>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/TimezoneSetup_POST\">";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;\">";
+  
+  // UTC Offset
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>UTC Offset (seconds):</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"utc_offset\" value=\"" + String(utc_offset) + "\" style=\"width: 100%; padding: 8px;\"></div>";
+  
+  // DST Enabled
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>Daylight Saving Time:</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><select name=\"dst_enabled\" style=\"width: 100%; padding: 8px;\">";
+  WEBHTML = WEBHTML + "<option value=\"0\"" + (dst_enabled ? "" : " selected") + ">Disabled</option>";
+  WEBHTML = WEBHTML + "<option value=\"1\"" + (dst_enabled ? " selected" : "") + ">Enabled</option>";
+  WEBHTML = WEBHTML + "</select></div>";
+  
+  // DST Start Month
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>DST Start Month:</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_start_month\" value=\"" + String(dst_start_month) + "\" min=\"1\" max=\"12\" style=\"width: 100%; padding: 8px;\"></div>";
+  
+  // DST Start Day
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>DST Start Day:</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_start_day\" value=\"" + String(dst_start_day) + "\" min=\"1\" max=\"31\" style=\"width: 100%; padding: 8px;\"></div>";
+  
+  // DST End Month
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>DST End Month:</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_end_month\" value=\"" + String(dst_end_month) + "\" min=\"1\" max=\"12\" style=\"width: 100%; padding: 8px;\"></div>";
+  
+  // DST End Day
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><strong>DST End Day:</strong></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_end_day\" value=\"" + String(dst_end_day) + "\" min=\"1\" max=\"31\" style=\"width: 100%; padding: 8px;\"></div>";
+  
+  WEBHTML = WEBHTML + "</div>";
+  
+  WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Save Configuration and Reboot\" style=\"padding: 15px 30px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  WEBHTML = WEBHTML + "<p><em>Note: The system will reboot after saving the configuration to apply the new timezone settings.</em></p>";
+  
+  WEBHTML = WEBHTML + "</body></html>";
+  serverTextClose(200, true);
+}
+
+void handleTimezoneSetup_POST() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  SerialPrint("Saving timezone configuration...", true);
+  
+  // Update timezone settings
+  if (server.hasArg("utc_offset")) {
+    Prefs.TimeZoneOffset = server.arg("utc_offset").toInt();
+  }
+  if (server.hasArg("dst_enabled")) {
+    Prefs.DST = server.arg("dst_enabled").toInt();
+    if (Prefs.DST) {
+      Prefs.DSTOffset = 3600;
+    } else {
+      Prefs.DSTOffset = 0;
+    }
+  }
+  if (server.hasArg("dst_start_month")) {
+    Prefs.DSTStartMonth = server.arg("dst_start_month").toInt();
+  }
+  if (server.hasArg("dst_start_day")) {
+    Prefs.DSTStartDay = server.arg("dst_start_day").toInt();
+  }
+  if (server.hasArg("dst_end_month")) {
+    Prefs.DSTEndMonth = server.arg("dst_end_month").toInt();
+  }
+  if (server.hasArg("dst_end_day")) {
+    Prefs.DSTEndDay = server.arg("dst_end_day").toInt();
+  }
+  
+  // Mark prefs as needing update
+  Prefs.isUpToDate = false;
+  
+  // Save prefs to NVS
+  #ifdef _USE32
+  BootSecure::setPrefs();
+  #endif
+  
+  SerialPrint("Timezone configuration saved. Rebooting...", true);
+  
+  // Show confirmation page
+  WEBHTML = "";
+  serverTextHeader();
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<h2>Configuration Saved</h2>";
+  WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
+  WEBHTML = WEBHTML + "<strong>Success!</strong> Timezone configuration has been saved. The device will reboot in 5 seconds...";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<p>UTC Offset: " + String(Prefs.TimeZoneOffset) + " seconds</p>";
+  WEBHTML = WEBHTML + "<p>DST Enabled: " + String(Prefs.DST ? "Yes" : "No") + "</p>";
+  if (Prefs.DST) {
+    WEBHTML = WEBHTML + "<p>DST Start: Month " + String(Prefs.DSTStartMonth) + ", Day " + String(Prefs.DSTStartDay) + "</p>";
+    WEBHTML = WEBHTML + "<p>DST End: Month " + String(Prefs.DSTEndMonth) + ", Day " + String(Prefs.DSTEndDay) + "</p>";
+  }
+  WEBHTML = WEBHTML + "<script>setTimeout(function(){ window.location.href = '/'; }, 5000);</script>";
+  WEBHTML = WEBHTML + "</body></html>";
+  serverTextClose(200, true);
+  
+  // Set registration completed flag to exit APStation_Mode loop
+  RegistrationCompleted = true;
   
 }
 
 
-void handleWiFiConfig_POST() { //updated code
+void handleWiFiConfig_POST() {
   I.lastServerStatusUpdate = I.currentTime;
+  
+  SerialPrint("Processing WiFi request...", true);
 
-
-  SerialPrint("Updating Wifi Settings...",true);
-#ifdef _USETFT
-  tft.clear();
-  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);
-  tft.setTextFont(2);
-  tft.printf("Updating Wifi Settings...\n");
-#endif
-
-  if (server.hasArg("ssid") && server.hasArg("password") && server.hasArg("lmk_key")) {
-    String ssid = server.arg("ssid");
-    String password = server.arg("password");
-    String lmk_key = server.arg("lmk_key");
-    
-    
+  String ssid = server.arg("ssid");
+  String password = server.arg("password");
+  String lmk_key = server.arg("lmk_key");
+  String address = server.arg("address");
+  
+  // Save WiFi credentials and ESPNow key
+  if (ssid.length() > 0) {
     if (lmk_key.length() > 16) {
       lmk_key = lmk_key.substring(0, 16);
     } 
@@ -972,31 +1256,37 @@ void handleWiFiConfig_POST() { //updated code
     snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
     Prefs.HAVECREDENTIALS = true;
     Prefs.isUpToDate = false;
-  
   }
 
+  // Try to connect to WiFi - note that we are already in  mixed AP+STA mode
+  WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+  delay(250);
 
-  if (connectWiFi()>0) {
-    Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
-
-  } else {    
-    server.sendHeader("Location", "/WiFiConfig");
-    server.send(302, "text/plain", "Failed to connect to wifi, manual reboot required.");
+  if (WiFi.status()) {
+    // WiFi connection successful
+    Prefs.MYIP = (uint32_t) WiFi.localIP();
+    Prefs.status = 1; // Mark WiFi as connected
+    
+    // Reset WiFi failure count since we successfully connected
+    I.wifiFailCount = 0;
+    
+    SerialPrint("WiFi connected successfully!", true);
+    
+    // Note: Weather address handling is not implemented in this project
+    SerialPrint("WiFi connection established", true);
+    // Save prefs to NVS
+    #ifdef _USE32
+    BootSecure::setPrefs();
+    #endif
+    
+    // Return success response (no redirect - let user click "Check Timezone" button)
+    server.send(200, "text/plain", "WiFi credentials submitted successfully!");
+  } else {
+    // WiFi connection failed, redirect back to config page
+    SerialPrint("WiFi connection failed!", true);
+    server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
+    server.send(302, "text/plain", "WiFi connection failed. Please check credentials and try again.");
   }
-
-    server.sendHeader("Location", "/WiFiConfig");
-    server.send(302, "text/plain", "WiFi configuration updated successfully and saved to NVS. Attempting to connect...");
-
-  
-    //force prefs to save here
-#ifdef _USETFT
-  tft.println("Prefs updated, rebooting");
-#endif
-  delay(3000);
-
-  //controlled reboot will store prefs and reboot
-  controlledReboot("Wifi credentials updated",RESETCAUSE::RESET_NEWWIFI,true);
-  
 }
 
 
@@ -1039,6 +1329,8 @@ void setupServerRoutes() {
   server.on("/ResetWiFi", handleWiFiConfig_RESET);
   server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
   server.on("/WiFiConfig_POST", HTTP_POST, handleWiFiConfig_POST);
+  server.on("/TimezoneSetup", HTTP_GET, handleTimezoneSetup);
+  server.on("/TimezoneSetup_POST", HTTP_POST, handleTimezoneSetup_POST);
   server.on("/CONFIG", HTTP_GET, handleCONFIG);
   server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
 

@@ -109,11 +109,12 @@ bool updateTime() {
 
   if ( timeClient.update()) {  //returns false if not time to update
     setTime(timeClient.getEpochTime());
-//    configTime(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET, 0, "time.nist.gov"); //configure the ESP32 time to match the NTP server
+    
+    // Check DST and update offset accordingly
+    checkDST();
 
     isgood = true;
   }
-
 
   I.currentTime=now();    
   return isgood;
@@ -122,57 +123,42 @@ bool updateTime() {
 void checkDST(void) {
   
  
-#ifdef _DEBUG
-  Serial.printf("checkDST: Starting time EST is: %s\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
-#endif
 
-  //check if time offset is EST (-5h) or EDT (-4h)
-  int m=month(I.currentTime);
-  int y=year(I.currentTime);
+  SerialPrint((String) "checkDST: Starting time is: " + dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss") + "\n", true);
 
-  if (m > 3 && m < 11) {
-    // Summer months (April through October) - DST is in effect
-    I.DSTOFFSET = 3600;
-  } else if (m == 3) {
-    // March - DST starts on second Sunday at 2 AM
-    // Find the second Sunday of March
-    time_t march1 = makeUnixTime(y-2000, 3, 1, 2, 0, 0); // March 1st at 2 AM
-    int firstSunday = 1 + (8 - weekday(march1)) % 7; // Days to add to get to first Sunday
-    if (firstSunday == 8) firstSunday = 1; // If March 1st is already Sunday
+
+  // Calculate total timezone offset based on Prefs
+  int32_t totalOffset = Prefs.TimeZoneOffset; // Start with base timezone offset
+
+  // Check if DST is enabled in user's locale
+  if (Prefs.DST == 1) {
+    // DST is enabled, check if we're currently in DST period
+    int m = month(I.currentTime);
+    int d = day(I.currentTime);
+    int y = year(I.currentTime);
     
-    time_t secondSunday = makeUnixTime(y-2000, 3, firstSunday + 7, 2, 0, 0); // Second Sunday at 2 AM
+    // Check if current date is within DST period
+    bool inDST = false;
     
-    if (I.currentTime >= secondSunday) {
-      I.DSTOFFSET = 3600; // DST is in effect
-    } else {
-      I.DSTOFFSET = 0; // Still in standard time
+    // Check if we're after DST start date
+    if (m > Prefs.DSTStartMonth || (m == Prefs.DSTStartMonth && d >= Prefs.DSTStartDay)) {
+      // Check if we're before DST end date
+      if (m < Prefs.DSTEndMonth || (m == Prefs.DSTEndMonth && d < Prefs.DSTEndDay)) {
+        inDST = true;
+      }
     }
     
-  } else if (m == 11) {
-    // November - DST ends on first Sunday at 2 AM
-    // Find the first Sunday of November
-    time_t nov1 = makeUnixTime(y-2000, 11, 1, 2, 0, 0); // November 1st at 2 AM
-    int firstSunday = 1 + (8 - weekday(nov1)) % 7; // Days to add to get to first Sunday
-    if (firstSunday == 8) firstSunday = 1; // If November 1st is already Sunday
+    if (inDST)       totalOffset = Prefs.TimeZoneOffset + Prefs.DSTOffset; // Add 1 hour for DST
     
-    time_t firstSundayTime = makeUnixTime(y-2000, 11, firstSunday, 2, 0, 0); // First Sunday at 2 AM
-    
-    if (I.currentTime < firstSundayTime) {
-      I.DSTOFFSET = 3600; // Still in DST
-    } else {
-      I.DSTOFFSET = 0; // Back to standard time
-    }
   }
 
-  timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET);
+  timeClient.setTimeOffset(totalOffset);
   timeClient.forceUpdate();
   setTime(timeClient.getEpochTime());
-   I.currentTime = now();
+  I.currentTime = now();
 
 
-  #ifdef _DEBUG
-    Serial.printf("checkDST: Ending time is: %s (DST offset: %ld seconds)\n\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"), DSTOFFSET);
-  #endif
+  SerialPrint((String) "checkDST: Ending time is: " + dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss") + " (Total offset: " + totalOffset + " seconds)\n", true);
 }
 
 
@@ -246,7 +232,9 @@ char* dateify(time_t t, String dateformat) {
 
 bool setupTime(void) {
     timeClient.begin();
-    timeClient.setTimeOffset(I.GLOBAL_TIMEZONE_OFFSET+I.DSTOFFSET);
+    
+    // Initialize with base timezone offset from Prefs
+    timeClient.setTimeOffset(Prefs.TimeZoneOffset);
 
     byte i=0;
     
@@ -258,11 +246,94 @@ bool setupTime(void) {
     setTime(timeClient.getEpochTime());
     I.currentTime = now();
 
-
     checkDST(); //this also sets timelib, so no need to call settime separately
 
-
     return true;
+}
+
+
+
+// Function to periodically check and update timezone information
+void checkTimezoneUpdate() {
+  // Check once per day (86400 seconds = 24 hours)
+  
+  // Only check if we have WiFi connection and enough time has passed
+  if (Prefs.isUpToDate==false || WifiStatus()==false ) {
+      return;
+  }
+  
+  SerialPrint("Checking for timezone updates...", true);
+  
+  // Get current timezone information from API
+  int32_t new_utc_offset = 0;
+  bool new_dst_enabled = false;
+  uint8_t new_dst_start_month = 3, new_dst_start_day = 9;
+  uint8_t new_dst_end_month = 11, new_dst_end_day = 2;
+  
+  // Call the getTimezoneInfo function from server.cpp
+  extern bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day);
+  
+  if (getTimezoneInfo(&new_utc_offset, &new_dst_enabled, &new_dst_start_month, &new_dst_start_day, &new_dst_end_month, &new_dst_end_day)) {
+      bool needsUpdate = false;
+      
+      // Check if any timezone settings have changed
+      if (Prefs.TimeZoneOffset != new_utc_offset) {
+          SerialPrint("UTC offset changed from " + String(Prefs.TimeZoneOffset) + " to " + String(new_utc_offset), true);
+          Prefs.TimeZoneOffset = new_utc_offset;
+          needsUpdate = true;
+      }
+      
+      if (Prefs.DST != (new_dst_enabled ? 1 : 0)) {
+          SerialPrint("DST setting changed from " + String(Prefs.DST) + " to " + String(new_dst_enabled ? 1 : 0), true);
+          Prefs.DST = new_dst_enabled ? 1 : 0;
+          if (Prefs.DST) {
+              Prefs.DSTOffset = 3600;
+          } else {
+              Prefs.DSTOffset = 0;
+          }
+          needsUpdate = true;
+      }
+      
+      if (Prefs.DSTStartMonth != new_dst_start_month) {
+          SerialPrint("DST start month changed from " + String(Prefs.DSTStartMonth) + " to " + String(new_dst_start_month), true);
+          Prefs.DSTStartMonth = new_dst_start_month;
+          needsUpdate = true;
+      }
+      
+      if (Prefs.DSTStartDay != new_dst_start_day) {
+          SerialPrint("DST start day changed from " + String(Prefs.DSTStartDay) + " to " + String(new_dst_start_day), true);
+          Prefs.DSTStartDay = new_dst_start_day;
+          needsUpdate = true;
+      }
+      
+      if (Prefs.DSTEndMonth != new_dst_end_month) {
+          SerialPrint("DST end month changed from " + String(Prefs.DSTEndMonth) + " to " + String(new_dst_end_month), true);
+          Prefs.DSTEndMonth = new_dst_end_month;
+          needsUpdate = true;
+      }
+      
+      if (Prefs.DSTEndDay != new_dst_end_day) {
+          SerialPrint("DST end day changed from " + String(Prefs.DSTEndDay) + " to " + String(new_dst_end_day), true);
+          Prefs.DSTEndDay = new_dst_end_day;
+          needsUpdate = true;
+      }
+      
+      if (needsUpdate) {
+          // Mark prefs as needing to be saved
+          Prefs.isUpToDate = false;
+          
+          
+          SerialPrint("Timezone information updated and saved to preferences", true);
+          
+          // Update the time client with new offset
+          checkDST(); // Recalculate DST with new settings
+      } else {
+          SerialPrint("Timezone information is up to date", true);
+      }
+  } else {
+      SerialPrint("Failed to fetch timezone information from API", true);
+  }
+  
 }
 
 

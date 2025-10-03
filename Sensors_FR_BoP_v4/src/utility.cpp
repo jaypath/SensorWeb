@@ -56,11 +56,6 @@ void initScreenFlags(bool completeInit) {
   }
   I.lastStoreCoreDataTime = 0;
 
-  
-  I.DSTOFFSET = 0;
-  I.GLOBAL_TIMEZONE_OFFSET = -18000;
-  
-
   I.lastESPNOW_TIME=0;
   I.lastESPNOW_STATE=0;
   I.lastResetTime=I.currentTime;

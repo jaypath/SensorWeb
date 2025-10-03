@@ -11,11 +11,14 @@ extern WiFiUDP ntpUDP;
 extern NTPClient timeClient;
 extern char DATESTRING[];
 extern STRUCT_CORE I;
+extern STRUCT_PrefsH Prefs;
 
 
 void checkDST(void);
 bool updateTime();
 bool setupTime(void);
+void checkTimezoneUpdate(void);
+
 String fcnDOW(time_t t, bool caps=false);
 char* dateify(time_t t = 0, String dateformat = "mm/dd/yyyy hh:nn:ss");
 

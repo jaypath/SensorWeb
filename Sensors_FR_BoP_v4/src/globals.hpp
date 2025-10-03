@@ -328,6 +328,13 @@ typedef enum {
     uint32_t LASTBOOTTIME;
     uint8_t MyType; //see end of this file for types
     char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
+    uint32_t TimeZoneOffset; //offset from UTC in seconds, on standard time rather than daylight time
+    uint8_t DST; //0 = no DST, 1 = DST
+    uint16_t DSTOffset; //offset from UTC in seconds, on standard time rather than daylight time
+    uint8_t DSTStartMonth; //month of DST start
+    uint8_t DSTStartDay; //day of DST start
+    uint8_t DSTEndMonth; //month of DST end
+    uint8_t DSTEndDay; //day of DST end
 
     STRUCT_KEYS KEYS;
 
@@ -419,6 +426,8 @@ typedef enum {
       uint64_t TEMP_AES_MAC; // expected server MAC for WiFi PW response
       time_t lastESPNOW_TIME;
       int8_t lastESPNOW_STATE; //-2 if receive failure, -1 if send failure, 0 if indeterminate, 1 if send success, 2 if receive success
+      uint16_t ESPNOW_SENDS; //number of ESPNow sends since midnight
+      uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
       uint64_t LAST_ESPNOW_SERVER_MAC; // MAC of last server (type 100) seen in broadcast
       uint32_t LAST_ESPNOW_SERVER_IP;
       uint32_t LAST_ESPNOW_SERVER_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
@@ -452,10 +461,6 @@ typedef enum {
       char lastError[76];
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;
-  
-  
-      int16_t GLOBAL_TIMEZONE_OFFSET;
-      int16_t DSTOFFSET;
   };
   
 

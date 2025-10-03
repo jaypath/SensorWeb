@@ -70,12 +70,15 @@ void handleLast(void);
 void handleWiFiConfig_RESET(void);
 void handleWiFiConfig(void);
 void handleWiFiConfig_POST(void);
+void handleTimezoneSetup(void);
+void handleTimezoneSetup_POST(void);
 void handleCONFIG(void);
 void handleCONFIG_POST(void);
 
 void serverTextHeader();
 void serverTextClose(int htmlcode, bool asHTML);
 void addWiFiConfigForm();
+bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day);
 
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);
 bool SendData(struct SnsType*);

@@ -227,10 +227,11 @@ String ESPNowError(esp_err_t result) {
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (status == ESP_NOW_SEND_SUCCESS) {
         I.lastESPNOW_TIME = I.currentTime;
-        I.lastESPNOW_STATE = 1;
+        I.lastESPNOW_STATE = 1; //mesage sent successfully
+        I.ESPNOW_SENDS++;
         I.isUpToDate = false;
     } else {
-        I.lastESPNOW_STATE = -1;
+        I.lastESPNOW_STATE = -1; //message send failed
         I.lastESPNOW_TIME = I.currentTime;
         storeError("ESPNow: Failed to send data");
     }
@@ -240,7 +241,7 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
-        I.lastESPNOW_STATE = -2;
+        I.lastESPNOW_STATE = -2; //message received but too short
         I.lastESPNOW_TIME = I.currentTime;
         return;
     }
@@ -251,7 +252,8 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     I.LAST_ESPNOW_SERVER_IP = msg.senderIP;
     I.LAST_ESPNOW_SERVER_TIME = I.currentTime;
     I.isUpToDate = false;
-    I.lastESPNOW_STATE = 2;
+    I.lastESPNOW_STATE = 2; //message received and processed
+    I.ESPNOW_RECEIVES++;
     I.lastESPNOW_TIME = I.currentTime;
 
 

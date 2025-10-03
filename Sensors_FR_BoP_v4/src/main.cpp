@@ -845,9 +845,17 @@ void loop() {
       ESP.restart();
     #endif
 
+    // Check for timezone updates once per day
+    checkTimezoneUpdate();
+
     OldTime[3] = day();
 
     checkDST();
+    //check timezone update
+    checkTimezoneUpdate();
+    
+    I.ESPNOW_SENDS = 0;
+    I.ESPNOW_RECEIVES = 0;
 
     //reset heat and ac values
     #ifdef _DEBUG

@@ -802,11 +802,19 @@ void fcnDrawStatus() {
     tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last LAN Msg Time: %s\n",(I.lastESPNOW_TIME!=0)?dateify(I.lastESPNOW_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last LAN Msg State: %s\n",(I.lastESPNOW_STATE==2)?"Receive Success":((I.lastESPNOW_STATE==1)?"Send Success":((I.lastESPNOW_STATE==0)?"Indeterminate":((I.lastESPNOW_STATE==-1)?"Send Fail":((I.lastESPNOW_STATE==-2)?"Receive Fail": "Unknown")))));
+    tft.printf("LAN Messages Sent since 00:00: %d\n",I.ESPNOW_SENDS);
+    tft.printf("LAN Messages Received since 00:00: %d\n",I.ESPNOW_RECEIVES);
     tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Error: %s\n",I.lastError);
     tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
     tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
-    tft.printf("DST Offset: %d\n",I.DSTOFFSET);
+    tft.printf("Timezone: %ld (DST: %s)\n", Prefs.TimeZoneOffset, Prefs.DST ? "Yes" : "No");
+    //if DST is enabled, print the DST offset and date of DST start and end
+    if (Prefs.DST) {
+      tft.printf("DST Offset: %ld sec\n", Prefs.DSTOffset);
+      tft.printf("DST Start: %d/%d\n", Prefs.DSTStartMonth, Prefs.DSTStartDay);
+      tft.printf("DST End: %d/%d\n", Prefs.DSTEndMonth, Prefs.DSTEndDay);
+    }
     tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
     tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
     tft.printf("Local Battery Level: %d\n",I.localBatteryLevel);
