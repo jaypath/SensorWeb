@@ -155,7 +155,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
-    Prefs.MYIP =  WiFi.localIP()[0]<<24 + WiFi.localIP()[1]<<16 + WiFi.localIP()[2]<<8 + WiFi.localIP()[3];
+    Prefs.MYIP =   IPToUint32(WiFi.localIP()); //fixes the inverted endianness
 
     return true;
   }
@@ -470,15 +470,16 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender IP: " + (String) IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP) + "<br>";
-  I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[80]=0; //just in case
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Payload: " + (String) (char*) I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE + "<br>";
+  I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //just in case
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Payload: " + (String) I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message State: " + (String) ((I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown"))))) + "<br>";
   WEBHTML = WEBHTML + "<br>";      
   WEBHTML = WEBHTML + "Last LAN Outgoing Message Type: " + (String)  I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "<br>";
   WEBHTML = WEBHTML + "Last LAN Outgoing Message Sent at: " +  (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last LAN Outgoing Message To MAC: " + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "<br>";
-  I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[80]=0; //just in case
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message Payload: " + (String) (char*) I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD + "<br>";
+  I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[63]=0; //just in case
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message Payload: " + (String) I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD + "<br>";
   WEBHTML = WEBHTML + "Last LAN Outgoing Message State: " + (String) ((I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown"))) + "<br>";
   WEBHTML = WEBHTML + "<br>";      
   WEBHTML = WEBHTML + "LAN Messages Sent today: " + (String) I.ESPNOW_SENDS + "<br>";
@@ -490,7 +491,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "GSheets enabled: " + (String) GSheetInfo.useGsheet + "<br>";
   WEBHTML += "Last GSheets upload time: " + (String) (GSheetInfo.lastGsheetUploadTime ? dateify(GSheetInfo.lastGsheetUploadTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML += "Last GSheets success (-2=error, -1=not ready, 0=waiting, 1=success): " + (String) GSheetInfo.lastGsheetUploadSuccess + "<br>";
+  WEBHTML += "Last GSheets status: " + (String) ((GSheetInfo.lastGsheetUploadSuccess==-2)?"error":((GSheetInfo.lastGsheetUploadSuccess==-1)?"not ready":((GSheetInfo.lastGsheetUploadSuccess==0)?"waiting":((GSheetInfo.lastGsheetUploadSuccess==1)?"success":"unknown")))) + "<br>";
   WEBHTML += "Last GSheets fail count: " + (String) GSheetInfo.uploadGsheetFailCount + "<br>";
   WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
   WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";

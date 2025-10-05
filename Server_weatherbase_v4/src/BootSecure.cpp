@@ -108,7 +108,6 @@ bool BootSecure::setPrefs() {
     uint8_t tempPrefs[p_length];
     memset(tempPrefs, 0, p_length);
     uint16_t outlen = 0;
-    Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
     Prefs.isUpToDate = true;
     if (BootSecure::encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)BOOTKEY, tempPrefs, &outlen, 32) != 0) {
         p.end();

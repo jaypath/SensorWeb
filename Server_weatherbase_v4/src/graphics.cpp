@@ -808,14 +808,14 @@ void fcnDrawStatus() {
     tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown")))));
     tft.printf("Last LAN Msg Sender: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC!=0)?MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC).c_str():"???");
     tft.printf("Last LAN Msg Sender IP: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP!=0)?IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP).c_str():"???");
-    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD!=0)?(char*)I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD:"???");
+    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD!=0)?I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD:"???");
     tft.printf("\n");
     
     tft.printf("Last LAN Msg Time: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TIME!=0)?dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_OUTGOINGMSG_TYPE);
     tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown")));
     tft.printf("Last LAN Msg To MAC: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC!=0)?MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC).c_str():"???");
-    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD!=0)?(char*)I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD:"???");
+    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD!=0)?I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD:"???");
     tft.printf("\n");
     
     tft.printf("LAN Messages Sent since 00:00: %d\n",I.ESPNOW_SENDS);

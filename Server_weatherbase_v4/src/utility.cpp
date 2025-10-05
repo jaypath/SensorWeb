@@ -66,6 +66,7 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
   I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=0;
   I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
+  I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE=MYTYPE;
   memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
   I.ESPNOW_LAST_INCOMINGMSG_TIME=0;
   I.ESPNOW_LAST_INCOMINGMSG_STATE=0;
@@ -536,19 +537,19 @@ void uint64ToMAC(uint64_t mac64, byte* macArray) {
 }
 
 // Convert 6-byte array to uint64_t MAC
-uint64_t MACToUint64(byte* macArray) {
+uint64_t MACToUint64(const uint8_t* macArray) {
     uint64_t mac64 = 0;
     memcpy(&mac64, macArray, 6);
     return mac64;
 }
 
-String MACToString(uint64_t mac64) {
+String MACToString(const uint64_t mac64) {
   byte macArray[6];
   uint64ToMAC(mac64, macArray);
   return ArrayToString(macArray, 6,':',true);
 }
 
-String MACToString(uint8_t* mac) {
+String MACToString(const uint8_t* mac) {
   
   return ArrayToString(mac, 6,':',true);
 }
@@ -572,7 +573,7 @@ bool isMACSet(byte *m, bool doReset) {
 }
 
 
-String ArrayToString(uint8_t* Arr, byte len, char separator, bool asHex) {
+String ArrayToString(const uint8_t* Arr, byte len, char separator, bool asHex) {
 
   String output = "";
   char holder[10] = "";
@@ -636,3 +637,9 @@ bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin) {
   }
   
 }
+
+uint32_t IPToUint32(IPAddress ip) {
+  return (ip[0]<<24) + (ip[1]<<16) + (ip[2]<<8) + ip[3];
+} 
+
+

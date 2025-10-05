@@ -344,8 +344,9 @@ typedef enum {
     uint32_t ESPNOW_LAST_INCOMINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
       uint64_t ESPNOW_LAST_INCOMINGMSG_FROM_MAC; // MAC of last ESPnow message sender
       uint32_t ESPNOW_LAST_INCOMINGMSG_FROM_IP;
+      uint8_t ESPNOW_LAST_INCOMINGMSG_FROM_TYPE; // type of last ESPnow message sender
       uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of last ESPnow message sender
-      uint8_t ESPNOW_LAST_INCOMINGMSG_PAYLOAD[80]; // payload of last ESPnow message received
+      char ESPNOW_LAST_INCOMINGMSG_PAYLOAD[64]; // text portion of payload of last ESPnow message received
       
     
     //for messages sent
@@ -354,7 +355,7 @@ typedef enum {
     uint32_t ESPNOW_LAST_OUTGOINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
       uint64_t ESPNOW_LAST_OUTGOINGMSG_TO_MAC; // MAC of last ESPnow message sender
       uint8_t ESPNOW_LAST_OUTGOINGMSG_TYPE; // type of last ESPnow message sender
-      uint8_t ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[80]; // payload of last ESPnow message received
+      char  ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[64]; //text portion of payload of last ESPnow message received
 
       uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
       uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
