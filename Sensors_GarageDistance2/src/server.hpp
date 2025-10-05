@@ -74,6 +74,7 @@ void handleSETTHRESH(void);
 void handleUPDATESENSORPARAMS(void);
 void handleUPDATEALLSENSORREADS(void);
 void handleUPDATESENSORREAD(void);
+void handleUpdateLocalTF(void);
 void handleNEXT(void);
 void handleLAST(void);
 bool breakLOGID(String logID,byte* ardID,byte* snsID,byte* snsNum);

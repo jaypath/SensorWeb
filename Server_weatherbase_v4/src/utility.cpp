@@ -63,8 +63,19 @@ void initScreenFlags(bool completeInit) {
   
   I.localBatteryLevel=0;
 
-  I.lastESPNOW_TIME=0;
-  I.lastESPNOW_STATE=0;
+  I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
+  I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=0;
+  I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
+  memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
+  I.ESPNOW_LAST_INCOMINGMSG_TIME=0;
+  I.ESPNOW_LAST_INCOMINGMSG_STATE=0;
+
+  I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC=0;
+  I.ESPNOW_LAST_OUTGOINGMSG_TYPE=0;
+  memset(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD,0,80);
+  I.ESPNOW_LAST_OUTGOINGMSG_TIME=0;
+  I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
+
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;
   I.wifiFailCount=0;
@@ -456,6 +467,10 @@ String IPToString(uint32_t ip) {
            String((ip >> 16) & 0xFF) + "." +
            String((ip >> 8) & 0xFF) + "." +
            String(ip & 0xFF);
+}
+
+String IPToString(byte* ip) {
+  return ArrayToString(ip,4,'.',false);
 }
 
  uint32_t StringToIP(String str) {

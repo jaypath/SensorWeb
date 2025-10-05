@@ -466,9 +466,8 @@ currentLine += "Current time: " + (String) now() + " = " +  (String) dateify(now
 #endif
 currentLine += "<a href=\"/UPDATEALLSENSORREADS\">Update all sensors</a><br>\n";
 currentLine += "</p>\n";
+
 currentLine += "<br>-----------------------<br>\n";
-
-
 
   byte used[SENSORNUM];
   for (byte j=0;j<SENSORNUM;j++)  {
@@ -548,6 +547,62 @@ currentLine += "<br>-----------------------<br>\n";
 
 
   currentLine += "</p>\n";
+
+currentLine += "<br>-----------------------<br>\n";
+
+// LocalTF Configuration Table
+currentLine += "<h3>TFLuna Distance Sensor Configuration</h3>\n";
+currentLine += "<form action=\"/UPDATELOCALTF\" method=\"POST\">\n";
+currentLine += "<table style=\"width:70%; border-collapse: collapse; margin-bottom: 20px;\">\n";
+currentLine += "<tr><th style=\"border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;\">Parameter</th>";
+currentLine += "<th style=\"border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;\">Value</th>";
+currentLine += "<th style=\"border: 1px solid #ddd; padding: 8px; background-color: #f2f2f2;\">Description</th></tr>\n";
+
+// REFRESH_RATE
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">REFRESH_RATE</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"refresh_rate\" value=\"" + String(LocalTF.REFRESH_RATE) + "\" min=\"10\" max=\"1000\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Refresh rate in milliseconds (10-1000ms, TFLuna max 100Hz)</td>";
+currentLine += "</tr>\n";
+
+// BASEOFFSET
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">BASEOFFSET</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"baseoffset\" value=\"" + String(LocalTF.BASEOFFSET) + "\" min=\"0\" max=\"255\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Zero point offset from mounting location to measurement reference  (value in cm)</td>";
+currentLine += "</tr>\n";
+
+// ZONE_SHORTRANGE
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">ZONE_SHORTRANGE</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"zone_shortrange\" value=\"" + String(LocalTF.ZONE_SHORTRANGE) + "\" min=\"0\" max=\"255\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Distance from BASEOFFSET to change from ft to inches (value in cm)</td>";
+currentLine += "</tr>\n";
+
+// ZONE_GOLDILOCKS
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">ZONE_GOLDILOCKS</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"zone_goldilocks\" value=\"" + String(LocalTF.ZONE_GOLDILOCKS) + "\" min=\"0\" max=\"255\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Distance from BASEOFFSET for perfect parking zone  (value in cm)</td>";
+currentLine += "</tr>\n";
+
+// ZONE_CRITICAL
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">ZONE_CRITICAL</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"zone_critical\" value=\"" + String(LocalTF.ZONE_CRITICAL) + "\" min=\"0\" max=\"255\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Distance from BASEOFFSET for critical/too close zone  (value in cm)</td>";
+currentLine += "</tr>\n";
+
+// MIN_DIST_CHANGE
+currentLine += "<tr>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px; font-weight: bold;\">MIN_DIST_CHANGE</td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\"><input type=\"number\" name=\"min_dist_change\" value=\"" + String(LocalTF.MIN_DIST_CHANGE) + "\" min=\"1\" max=\"100\" style=\"width: 100px;\"></td>";
+currentLine += "<td style=\"border: 1px solid #ddd; padding: 8px;\">Minimum distance change to register movement  (value in cm)</td>";
+currentLine += "</tr>\n";
+
+currentLine += "</table>\n";
+currentLine += "<button type=\"submit\" style=\"background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;\">Update TFLuna Configuration</button>\n";
+currentLine += "</form>\n";
 
 
 #if defined(_WEBCHART) || defined(_CHECKHEAT) || defined(_CHECKAIRCON)
@@ -665,6 +720,59 @@ currentLine += "<br>-----------------------<br>\n";
   server.send(200, "text/html", currentLine);   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
 
+
+void handleUpdateLocalTF() {
+#ifdef _DEBUG
+  Serial.println("Hit handleUpdateLocalTF.");
+#endif
+
+  // Update LocalTF parameters from form data
+  if (server.hasArg("refresh_rate")) {
+    LocalTF.REFRESH_RATE = server.arg("refresh_rate").toInt();
+    if (LocalTF.REFRESH_RATE < 10) LocalTF.REFRESH_RATE = 10;
+    if (LocalTF.REFRESH_RATE > 1000) LocalTF.REFRESH_RATE = 1000;
+  }
+  
+  if (server.hasArg("baseoffset")) {
+    LocalTF.BASEOFFSET = server.arg("baseoffset").toInt();
+    if (LocalTF.BASEOFFSET > 255) LocalTF.BASEOFFSET = 255;
+  }
+  
+  if (server.hasArg("zone_shortrange")) {
+    LocalTF.ZONE_SHORTRANGE = server.arg("zone_shortrange").toInt();
+    if (LocalTF.ZONE_SHORTRANGE > 255) LocalTF.ZONE_SHORTRANGE = 255;
+  }
+  
+  if (server.hasArg("zone_goldilocks")) {
+    LocalTF.ZONE_GOLDILOCKS = server.arg("zone_goldilocks").toInt();
+    if (LocalTF.ZONE_GOLDILOCKS > 255) LocalTF.ZONE_GOLDILOCKS = 255;
+  }
+  
+  if (server.hasArg("zone_critical")) {
+    LocalTF.ZONE_CRITICAL = server.arg("zone_critical").toInt();
+    if (LocalTF.ZONE_CRITICAL > 255) LocalTF.ZONE_CRITICAL = 255;
+  }
+  
+  if (server.hasArg("min_dist_change")) {
+    LocalTF.MIN_DIST_CHANGE = server.arg("min_dist_change").toInt();
+    if (LocalTF.MIN_DIST_CHANGE < 1) LocalTF.MIN_DIST_CHANGE = 1;
+    if (LocalTF.MIN_DIST_CHANGE > 100) LocalTF.MIN_DIST_CHANGE = 100;
+  }
+
+#ifdef _DEBUG
+  Serial.println("LocalTF parameters updated:");
+  Serial.println("REFRESH_RATE: " + String(LocalTF.REFRESH_RATE));
+  Serial.println("BASEOFFSET: " + String(LocalTF.BASEOFFSET));
+  Serial.println("ZONE_SHORTRANGE: " + String(LocalTF.ZONE_SHORTRANGE));
+  Serial.println("ZONE_GOLDILOCKS: " + String(LocalTF.ZONE_GOLDILOCKS));
+  Serial.println("ZONE_CRITICAL: " + String(LocalTF.ZONE_CRITICAL));
+  Serial.println("MIN_DIST_CHANGE: " + String(LocalTF.MIN_DIST_CHANGE));
+#endif
+
+  // Redirect back to root page
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "TFLuna configuration updated successfully!");
+}
 
 void handleNotFound(){
   server.send(404, "text/plain", "Arduino says 404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request

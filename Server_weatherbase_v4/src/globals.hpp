@@ -9,7 +9,7 @@
 #define _USEGSHEET
 #define _USESDCARD
 
-#define MYNAME "Pleasant Weather Server"
+#define MYNAME "Pleasant Backup Server"
 #define NUMDEVICES 50
 #define NUMSENSORS 100
 #define MYTYPE 100
@@ -335,13 +335,27 @@ typedef enum {
       uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
       uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
       uint64_t TEMP_AES_MAC; // expected server MAC for WiFi PW response
-      time_t lastESPNOW_TIME;
-      int8_t lastESPNOW_STATE; //-2 if receive failure, -1 if send failure, 0 if indeterminate, 1 if send success, 2 if receive success
-      uint16_t ESPNOW_SENDS; //number of ESPNow sends since midnight
-      uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
-      uint64_t LAST_ESPNOW_SERVER_MAC; // MAC of last server (type 100) seen in broadcast
-      uint32_t LAST_ESPNOW_SERVER_IP;
-      uint32_t LAST_ESPNOW_SERVER_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
+      
+      
+      
+    //for messages received
+    uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
+    uint8_t ESPNOW_LAST_INCOMINGMSG_STATE; //-1 if receive failure, 0 if indeterminate, 1 if send success
+    uint32_t ESPNOW_LAST_INCOMINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
+      uint64_t ESPNOW_LAST_INCOMINGMSG_FROM_MAC; // MAC of last ESPnow message sender
+      uint32_t ESPNOW_LAST_INCOMINGMSG_FROM_IP;
+      uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of last ESPnow message sender
+      uint8_t ESPNOW_LAST_INCOMINGMSG_PAYLOAD[80]; // payload of last ESPnow message received
+      
+    
+    //for messages sent
+    uint16_t ESPNOW_SENDS; //number of ESPNow sends since midnight
+    bool ESPNOW_LAST_OUTGOINGMSG_STATE; //-1 if send failure, 0 if indeterminate, 1 if send success
+    uint32_t ESPNOW_LAST_OUTGOINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
+      uint64_t ESPNOW_LAST_OUTGOINGMSG_TO_MAC; // MAC of last ESPnow message sender
+      uint8_t ESPNOW_LAST_OUTGOINGMSG_TYPE; // type of last ESPnow message sender
+      uint8_t ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[80]; // payload of last ESPnow message received
+
       uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
       uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
       uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers

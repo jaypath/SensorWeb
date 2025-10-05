@@ -141,6 +141,7 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval);
  * @brief Initialize the Gsheet uploader 
  */
 void initGsheetHandler() {
+    if (!GSheetInfo.useGsheet) return;
     SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
     SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
     
@@ -398,17 +399,24 @@ void setup() {
     initOTA();
 
     #ifdef _USEGSHEET
-    tft.print("Initializing Gsheet... ");
-    initGsheetHandler();
-    if (GSheet.ready()) {
+    if (GSheetInfo.useGsheet) {
+        tft.print("Initializing Gsheet... ");
+        initGsheetHandler();
+        if (GSheet.ready()) {
+            tft.setTextColor(TFT_GREEN);
+            tft.printf("OK.\n");
+            tft.setTextColor(FG_COLOR);
+        } else {
+            tft.setTextColor(TFT_RED);
+            tft.printf("FAILED.\n");
+            tft.setTextColor(FG_COLOR);
+            storeError("Gsheet initialization failed");
+        }
+    }
+    else {
         tft.setTextColor(TFT_GREEN);
-        tft.printf("OK.\n");
+        tft.printf("Skipping Gsheet initialization.\n");
         tft.setTextColor(FG_COLOR);
-    } else {
-        tft.setTextColor(TFT_RED);
-        tft.printf("FAILED.\n");
-        tft.setTextColor(FG_COLOR);
-        storeError("Gsheet initialization failed");
     }
     #endif
 
@@ -439,7 +447,7 @@ void setup() {
  * @brief Handle periodic ESPNow server presence broadcast (every 5 minutes).
  */
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
-    if (minute() % interval == 0 && I.lastESPNOW_TIME!=I.currentTime) {        
+    if (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime) {        
         // ESPNow does not require WiFi connection; always broadcast
         broadcastServerPresence();
     }
@@ -622,12 +630,6 @@ void loop() {
     if (OldTime[0] != second()) {
         OldTime[0] = second();
 
-        if (I.LAST_ESPNOW_SERVER_TIME > 0) {
-            I.LAST_ESPNOW_SERVER_TIME = 0;
-            Sensors.addDevice(I.LAST_ESPNOW_SERVER_MAC, I.LAST_ESPNOW_SERVER_IP, "Server");
-            I.LAST_ESPNOW_SERVER_MAC = 0;
-            I.LAST_ESPNOW_SERVER_IP = 0;
-        }
 
         fcnDrawScreen();
         if (I.screenChangeTimer > 0) I.screenChangeTimer--;

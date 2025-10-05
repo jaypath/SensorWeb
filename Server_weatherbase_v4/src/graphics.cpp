@@ -797,17 +797,36 @@ void fcnDrawStatus() {
   if (I.ScreenNum==2) {
     tft.setTextFont(1);
     tft.println("Status");
+    tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
+    tft.printf("Device IP: %s\n",WiFi.localIP().toString().c_str());
     tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last LAN Msg Time: %s\n",(I.lastESPNOW_TIME!=0)?dateify(I.lastESPNOW_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last LAN Msg State: %s\n",(I.lastESPNOW_STATE==2)?"Receive Success":((I.lastESPNOW_STATE==1)?"Send Success":((I.lastESPNOW_STATE==0)?"Indeterminate":((I.lastESPNOW_STATE==-1)?"Send Fail":((I.lastESPNOW_STATE==-2)?"Receive Fail": "Unknown")))));
+    tft.printf("-----------------------\n");
+    tft.printf("Last LAN Msg Time: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_TIME!=0)?dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_INCOMINGMSG_TYPE);
+    tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown")))));
+    tft.printf("Last LAN Msg Sender: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC!=0)?MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC).c_str():"???");
+    tft.printf("Last LAN Msg Sender IP: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP!=0)?IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP).c_str():"???");
+    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD!=0)?(char*)I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD:"???");
+    tft.printf("\n");
+    
+    tft.printf("Last LAN Msg Time: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TIME!=0)?dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
+    tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_OUTGOINGMSG_TYPE);
+    tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown")));
+    tft.printf("Last LAN Msg To MAC: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC!=0)?MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC).c_str():"???");
+    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD!=0)?(char*)I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD:"???");
+    tft.printf("\n");
+    
     tft.printf("LAN Messages Sent since 00:00: %d\n",I.ESPNOW_SENDS);
     tft.printf("LAN Messages Received since 00:00: %d\n",I.ESPNOW_RECEIVES);
+    tft.printf("-----------------------\n");
+    
     tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Error: %s\n",I.lastError);
     tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
     tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
+    tft.printf("-----------------------\n");
     tft.printf("Timezone: %ld (DST: %s)\n", Prefs.TimeZoneOffset, Prefs.DST ? "Yes" : "No");
     //if DST is enabled, print the DST offset and date of DST start and end
     if (Prefs.DST) {
@@ -815,6 +834,7 @@ void fcnDrawStatus() {
       tft.printf("DST Start: %d/%d\n", Prefs.DSTStartMonth, Prefs.DSTStartDay);
       tft.printf("DST End: %d/%d\n", Prefs.DSTEndMonth, Prefs.DSTEndDay);
     }
+    tft.printf("-----------------------\n");
     tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
     tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
     tft.printf("Local Battery Level: %d\n",I.localBatteryLevel);

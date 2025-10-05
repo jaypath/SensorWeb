@@ -447,6 +447,7 @@ OldTime[3] = day();
   server.on("/UPDATESENSORREAD",handleUPDATESENSORREAD);
   server.on("/SETTHRESH", handleSETTHRESH);               
   server.on("/UPDATESENSORPARAMS", handleUPDATESENSORPARAMS);
+  server.on("/UPDATELOCALTF", HTTP_POST, handleUpdateLocalTF);  // Handle TFLuna configuration updates
   server.on("/NEXTSNS", handleNEXT);
   server.on("/LASTSNS", handleLAST);
   server.on("/REBOOT", handleREBOOT);

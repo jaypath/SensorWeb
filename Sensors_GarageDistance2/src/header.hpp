@@ -20,11 +20,11 @@ const byte ASSIGNEDIP[4] = {0,168,68,95}; //assign here if this sensor has a ded
 
 
 #define ARDNAME "Garage" //unique name
-#define SENSORNUM 3 //be sure this matches SENSORTYPES //max is 8
+#define SENSORNUM 4 //be sure this matches SENSORTYPES //max is 8
 
-const uint8_t SENSORTYPES[SENSORNUM] = {4,5,7}; //max is 8
+const uint8_t SENSORTYPES[SENSORNUM] = {4,5,7,9}; //max is 8
 
-const uint8_t MONITORED_SNS = B00000011;; //from R to L each bit represents a sensor, 255 means all sensors are monitored
+const uint8_t MONITORED_SNS = B00001011;; //from R to L each bit represents a sensor, 255 means all sensors are monitored
 const uint8_t OUTSIDE_SNS = 0; //from R to L each bit represents a sensor, 255 means all sensors are outside
 
 

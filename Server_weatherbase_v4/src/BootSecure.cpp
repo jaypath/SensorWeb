@@ -148,7 +148,7 @@ int8_t BootSecure::encrypt(const unsigned char* input, uint16_t inputlength, cha
     mbedtls_aes_free(&aes);
     BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 int8_t BootSecure::decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength, uint8_t keylength) {
@@ -164,7 +164,7 @@ int8_t BootSecure::decrypt(unsigned char* input, char* key, unsigned char* outpu
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, datalength - 16, iv, input + 16, output);
     mbedtls_aes_free(&aes);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 // --- AES-CBC with provided IV (no IV prepended/extracted) ---
@@ -190,7 +190,7 @@ int8_t BootSecure::encryptWithIV(const unsigned char* input, uint16_t inputlengt
     mbedtls_aes_free(&aes);
     BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 int8_t BootSecure::decryptWithIV(unsigned char* input, char* key, uint8_t* iv, unsigned char* output, uint16_t datalength, uint8_t keylength) {
@@ -206,7 +206,7 @@ int8_t BootSecure::decryptWithIV(unsigned char* input, char* key, uint8_t* iv, u
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, datalength, iv_copy, input, output);
     mbedtls_aes_free(&aes);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 void BootSecure::zeroize(void* buf, size_t len) {

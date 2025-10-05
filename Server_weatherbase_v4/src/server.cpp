@@ -72,6 +72,7 @@ void base64_decode(const char* input, uint8_t* output) {
 
 //server
 String WEBHTML;
+byte CURRENT_DEVICE_VIEWER = 0;  // Track current device in device viewer
 
 extern STRUCT_PrefsH Prefs;
 //extern bool requestWiFiPassword(const uint8_t* serverMAC);
@@ -79,6 +80,8 @@ extern STRUCT_PrefsH Prefs;
 
 String getCert(String filename) 
 {
+  //certificate should be in the SD card
+  
 
   File f = SD.open(filename, FILE_READ);
   String s="";
@@ -152,6 +155,8 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
+    Prefs.MYIP =  WiFi.localIP()[0]<<24 + WiFi.localIP()[1]<<16 + WiFi.localIP()[2]<<8 + WiFi.localIP()[3];
+
     return true;
   }
 
@@ -191,6 +196,7 @@ int16_t connectWiFi() {
   if (Prefs.HAVECREDENTIALS) {
     retries = tryWifi(250);
     if (retries>0) return retries;
+    Prefs.isUpToDate = false;
   }
 
   if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
@@ -460,10 +466,23 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "Last LAN Message: " +  (String) (I.lastESPNOW_TIME ? dateify(I.lastESPNOW_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Message State: " + (String) I.lastESPNOW_STATE + "<br>";
-  WEBHTML = WEBHTML + "LAN Messages Sent since 00:00: " + (String) I.ESPNOW_SENDS + "<br>";
-  WEBHTML = WEBHTML + "LAN Messages Received since 00:00: " + (String) I.ESPNOW_RECEIVES + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender IP: " + (String) IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP) + "<br>";
+  I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[80]=0; //just in case
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Payload: " + (String) (char*) I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message State: " + (String) ((I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown"))))) + "<br>";
+  WEBHTML = WEBHTML + "<br>";      
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message Type: " + (String)  I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message Sent at: " +  (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message To MAC: " + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "<br>";
+  I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[80]=0; //just in case
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message Payload: " + (String) (char*) I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Outgoing Message State: " + (String) ((I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown"))) + "<br>";
+  WEBHTML = WEBHTML + "<br>";      
+  WEBHTML = WEBHTML + "LAN Messages Sent today: " + (String) I.ESPNOW_SENDS + "<br>";
+  WEBHTML = WEBHTML + "LAN Messages Received today: " + (String) I.ESPNOW_RECEIVES + "<br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -492,6 +511,11 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
 
   WEBHTML = WEBHTML + "</font>---------------------<br>";      
+
+  // Device viewer link under server status section
+  WEBHTML = WEBHTML + "<br><div style=\"text-align: center; padding: 10px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 10px; padding: 15px 25px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold;\">Device Viewer</a>";
+  WEBHTML = WEBHTML + "</div>";
 
   // Navigation links to other config pages
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
@@ -1173,6 +1197,63 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   
+  // Device Name Configuration
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  
+  // showTheseFlags - 8 individual checkboxes for each bit
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">showTheseFlags (Display Settings)</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px;\">";
+  
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit0\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 0) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 0 (Set for flagged only)</label>";
+  
+  // Bit 1 - Set for expired only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit1\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 1) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 1 (Set for expired only)</label>";
+  
+  // Bit 2 - Set for soil dry only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit2\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 2) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 2 (soil dry)</label>";
+  
+  // Bit 3 - Set for leak only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit3\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 3) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 3 (leak)</label>";
+  
+  // Bit 4 - Set for temperature only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit4\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 4) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 4 (temperature)</label>";
+  
+  // Bit 5 - Set for humidity only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit5\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 5) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 5 (humidity)</label>";
+  
+  // Bit 6 - Set for pressure only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit6\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 6) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 6 (pressure)</label>";
+  
+  // Bit 7 - Set for battery only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit7\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 7) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 7 (battery)</label>";
+
+  // Bit 8 - Set for HVAC only
+  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit8\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 8) ? " checked" : "") + ">";
+  WEBHTML = WEBHTML + "Bit 8 (HVAC)</label>";
+  
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"margin-top: 8px; font-size: 12px; color: #666;\">Current value: " + String(I.showTheseFlags) + " (0x" + String(I.showTheseFlags, HEX) + ")</div>";
+  WEBHTML = WEBHTML + "</div>";
+  
   WEBHTML = WEBHTML + "</div>";
   
   // Submit button
@@ -1239,11 +1320,38 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorCode</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastErrorCode + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANMessage</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastESPNOW_TIME  ?  dateify(I.lastESPNOW_TIME ) : "???")+ "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME  ?  dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME ) : "???")+ "</div>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANMessageState</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastESPNOW_STATE + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageState</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_STATE + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageType</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageFromMAC</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageFromIP</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME  ?  dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME ) : "???")+ "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageState</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_STATE + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageType</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageToMAC</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">LAN Messages Received since 00:00</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_RECEIVES + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">LAN Messages Sent since 00:00</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_SENDS + "</div>";
 
   // Remaining non-editable fields from I in order of appearance
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
@@ -1252,7 +1360,7 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsSinceLast</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
 
-  #ifdef _USETFT
+  #ifdef _USETFTdddd
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.CLOCK_Y + "</div>";
   
@@ -1578,6 +1686,42 @@ void handleCONFIG_POST() {
   if (server.hasArg("cycleWeatherMinutes")) {
     I.cycleWeatherMinutes = server.arg("cycleWeatherMinutes").toInt();
   }
+  
+  // Process device name
+  if (server.hasArg("deviceName")) {
+    String newDeviceName = server.arg("deviceName");
+    if (newDeviceName.length() > 0 && newDeviceName.length() <= 32) {
+      snprintf((char*)Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", newDeviceName.c_str());
+      Prefs.isUpToDate = false; // Mark as needing to be saved
+    }
+  }
+  
+  // Process showTheseFlags checkboxes - reconstruct byte from individual bits
+  I.showTheseFlags = 0; // Start with all bits cleared
+  if (server.hasArg("flag_bit0")) {
+    bitSet(I.showTheseFlags, 0);
+  }
+  if (server.hasArg("flag_bit1")) {
+    bitSet(I.showTheseFlags, 1);
+  }
+  if (server.hasArg("flag_bit2")) {
+    bitSet(I.showTheseFlags, 2);
+  }
+  if (server.hasArg("flag_bit3")) {
+    bitSet(I.showTheseFlags, 3);
+  }
+  if (server.hasArg("flag_bit4")) {
+    bitSet(I.showTheseFlags, 4);
+  }
+  if (server.hasArg("flag_bit5")) {
+    bitSet(I.showTheseFlags, 5);
+  }
+  if (server.hasArg("flag_bit6")) {
+    bitSet(I.showTheseFlags, 6);
+  }
+  if (server.hasArg("flag_bit7")) {
+    bitSet(I.showTheseFlags, 7);
+  }
 
 //check for invalid values
 if (I.cycleHeaderMinutes < 1) {
@@ -1895,7 +2039,6 @@ void handleWiFiConfig_POST() {
 
   if (WiFi.status()) {
     // WiFi connection successful
-    Prefs.MYIP = (uint32_t) WiFi.localIP();
     Prefs.status = 1; // Mark WiFi as connected
     
     // Reset WiFi failure count since we successfully connected
@@ -3496,6 +3639,286 @@ void handleUPDATETIMEZONE_POST() {
   RegistrationCompleted = true;  
 }
 
+// ==================== DEVICE VIEWER FUNCTIONS ====================
+
+void handleDeviceViewer() {
+    LAST_WEB_REQUEST = I.currentTime;
+    WEBHTML = "";
+    serverTextHeader();
+    
+    WEBHTML = WEBHTML + "<body>";
+    WEBHTML = WEBHTML + "<h2>Device Viewer</h2>";
+    
+    // Check for status messages from ping operations
+    if (server.hasArg("ping")) {
+        String pingStatus = server.arg("ping");
+        if (pingStatus == "success") {
+            WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Success:</strong> Ping request sent successfully to the device.";
+            WEBHTML = WEBHTML + "</div>";
+        } else if (pingStatus == "failed") {
+            WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Error:</strong> Failed to send ping request to the device.";
+            WEBHTML = WEBHTML + "</div>";
+        }
+    }
+    
+    // Check for status messages from delete operations
+    if (server.hasArg("delete")) {
+        String deleteStatus = server.arg("delete");
+        if (deleteStatus == "success") {
+            String deviceName = server.hasArg("device") ? server.arg("device") : "Unknown";
+            String sensorCount = server.hasArg("sensors") ? server.arg("sensors") : "0";
+            WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Success:</strong> Device '" + deviceName + "' and " + sensorCount + " associated sensors have been deleted.";
+            WEBHTML = WEBHTML + "</div>";
+        }
+    }
+    
+    if (server.hasArg("error")) {
+        String errorType = server.arg("error");
+        if (errorType == "no_devices") {
+            WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; color: #856404; padding: 15px; margin: 10px 0; border: 1px solid #ffeaa7; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Warning:</strong> No devices available to ping.";
+            WEBHTML = WEBHTML + "</div>";
+        } else if (errorType == "device_not_found") {
+            WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Error:</strong> Device not found.";
+            WEBHTML = WEBHTML + "</div>";
+        }
+    }
+    
+    // Reset to first device if no devices exist
+    if (Sensors.getNumDevices() == 0) {
+        WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; color: #856404; padding: 15px; margin: 10px 0; border: 1px solid #ffeaa7; border-radius: 4px;\">";
+        WEBHTML = WEBHTML + "<strong>No devices found.</strong> No devices are currently registered in the system.";
+        WEBHTML = WEBHTML + "</div>";
+        WEBHTML = WEBHTML + "<br><a href=\"/\" style=\"display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Main</a>";
+        WEBHTML = WEBHTML + "</body></html>";
+        serverTextClose(200, true);
+        return;
+    }
+    
+    // Ensure current device index is valid
+    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+        CURRENT_DEVICE_VIEWER = 0;
+    }
+    
+    // Get current device
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    if (!device) {
+        WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+        WEBHTML = WEBHTML + "<strong>Error:</strong> Could not retrieve device information.";
+        WEBHTML = WEBHTML + "</div>";
+        WEBHTML = WEBHTML + "<br><a href=\"/\" style=\"display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Main</a>";
+        WEBHTML = WEBHTML + "</body></html>";
+        serverTextClose(200, true);
+        return;
+    }
+    
+    // Device information header
+    WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICE_VIEWER + 1) + " of " + String(Sensors.getNumDevices()) + "</h3>";
+    WEBHTML = WEBHTML + "</div>";
+    
+    // Device details
+    WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
+    WEBHTML = WEBHTML + "<h4>Device Information</h4>";
+    WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold; width: 30%;\">Device Name:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devName) + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + String(IPToString(device->IP)) + "\" target=\"_blank\">" + String(IPToString(device->IP)) + "</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Seen:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeLogged ? dateify(device->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Data:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeRead ? dateify(device->timeRead, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Sending Interval:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->SendingInt) + " seconds</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Status:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->expired ? "Expired" : "Active") + "</td></tr>";
+    WEBHTML = WEBHTML + "</table>";
+    WEBHTML = WEBHTML + "</div>";
+    
+    // Count sensors for this device
+    uint8_t sensorCount = 0;
+    for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
+        SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+        if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
+            sensorCount++;
+        }
+    }
+    
+    WEBHTML = WEBHTML + "<div style=\"background-color: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #2196f3;\">";
+    WEBHTML = WEBHTML + "<h4>Sensors (" + String(sensorCount) + " total)</h4>";
+    
+    if (sensorCount == 0) {
+        WEBHTML = WEBHTML + "<p>No sensors found for this device.</p>";
+    } else {
+        // Sensor table
+        WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse; margin-top: 10px;\">";
+        WEBHTML = WEBHTML + "<tr style=\"background-color: #2196f3; color: white;\">";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor Name</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type Name</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor ID</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Value</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Logged</th>";
+        WEBHTML = WEBHTML + "</tr>";
+        
+        // Add sensor rows
+        for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
+            SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+            if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
+                // Determine sensor type name
+                String typeName = "Unknown";
+                if (Sensors.isSensorOfType(i, "temperature")) typeName = "Temperature";
+                else if (Sensors.isSensorOfType(i, "humidity")) typeName = "Humidity";
+                else if (Sensors.isSensorOfType(i, "pressure")) typeName = "Pressure";
+                else if (Sensors.isSensorOfType(i, "battery")) typeName = "Battery";
+                else if (Sensors.isSensorOfType(i, "HVAC")) typeName = "HVAC";
+                else if (Sensors.isSensorOfType(i, "soil")) typeName = "Soil";
+                else if (Sensors.isSensorOfType(i, "leak")) typeName = "Leak";
+                else if (Sensors.isSensorOfType(i, "human")) typeName = "Human";
+                else if (Sensors.isSensorOfType(i, "server")) typeName = "Server";
+                
+                WEBHTML = WEBHTML + "<tr>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsType) + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + typeName + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsID) + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsValue, 2) + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->timeLogged ? dateify(sensor->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td>";
+                WEBHTML = WEBHTML + "</tr>";
+            }
+        }
+        WEBHTML = WEBHTML + "</table>";
+    }
+    WEBHTML = WEBHTML + "</div>";
+    
+    // Navigation buttons
+    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">Previous Device</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Next Device</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Ping Device</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete Device</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Back to Main</a>";
+    WEBHTML = WEBHTML + "</div>";
+    
+    WEBHTML = WEBHTML + "</body></html>";
+    serverTextClose(200, true);
+}
+
+void handleDeviceViewerNext() {
+    LAST_WEB_REQUEST = I.currentTime;
+    
+    if (Sensors.getNumDevices() > 0) {
+        CURRENT_DEVICE_VIEWER = (CURRENT_DEVICE_VIEWER + 1) % Sensors.getNumDevices();
+    }
+    
+    server.sendHeader("Location", "/DEVICEVIEWER");
+    server.send(302, "text/plain", "Redirecting to next device...");
+}
+
+void handleDeviceViewerPrev() {
+    LAST_WEB_REQUEST = I.currentTime;
+    
+    if (Sensors.getNumDevices() > 0) {
+        if (CURRENT_DEVICE_VIEWER == 0) {
+            CURRENT_DEVICE_VIEWER = Sensors.getNumDevices() - 1;
+        } else {
+            CURRENT_DEVICE_VIEWER--;
+        }
+    }
+    
+    server.sendHeader("Location", "/DEVICEVIEWER");
+    server.send(302, "text/plain", "Redirecting to previous device...");
+}
+
+void handleDeviceViewerPing() {
+    LAST_WEB_REQUEST = I.currentTime;
+    
+    // Check if we have any devices
+    if (Sensors.getNumDevices() == 0) {
+        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.send(302, "text/plain", "No devices available to ping.");
+        return;
+    }
+    
+    // Ensure current device index is valid
+    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+        CURRENT_DEVICE_VIEWER = 0;
+    }
+    
+    // Get current device
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    if (!device) {
+        server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
+        server.send(302, "text/plain", "Device not found.");
+        return;
+    }
+    
+    // Convert uint64_t MAC to uint8_t array for 
+    uint8_t targetMAC[6];
+    uint64ToMAC(device->MAC, targetMAC);
+    
+    // Send ping request
+    bool success = sendPingRequest(targetMAC);
+    
+    if (success) {
+        server.sendHeader("Location", "/DEVICEVIEWER?ping=success");
+        server.send(302, "text/plain", "Ping sent successfully.");
+    } else {
+        server.sendHeader("Location", "/DEVICEVIEWER?ping=failed");
+        server.send(302, "text/plain", "Failed to send ping.");
+    }
+}
+
+void handleDeviceViewerDelete() {
+    LAST_WEB_REQUEST = I.currentTime;
+    
+    // Check if we have any devices
+    if (Sensors.getNumDevices() == 0) {
+        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.send(302, "text/plain", "No devices available to delete.");
+        return;
+    }
+    
+    // Ensure current device index is valid
+    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+        CURRENT_DEVICE_VIEWER = 0;
+    }
+    
+    // Get current device
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    if (!device) {
+        server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
+        server.send(302, "text/plain", "Device not found.");
+        return;
+    }
+    
+    // Store device name for confirmation message
+    String deviceName = String(device->devName);
+    uint8_t deletedSensors = 0;
+    
+    // Delete all sensors associated with this device
+    for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
+        SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+        if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
+            sensor->IsSet = false;
+            deletedSensors++;
+        }
+    }
+    
+    // Delete the device itself
+    device->IsSet = false;
+    
+    // Adjust current device index if needed
+    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+        CURRENT_DEVICE_VIEWER = 0;
+    }
+    
+    // Redirect back to device viewer with success message
+    server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
+    server.send(302, "text/plain", "Device and sensors deleted successfully.");
+}
+
 void setupServerRoutes() {
     // Main routes
     server.on("/", handleRoot);
@@ -3554,7 +3977,13 @@ void setupServerRoutes() {
     server.on("/SDCARD_DELETE_ERRORLOG", HTTP_POST, handleSDCARD_DELETE_ERRORLOG);
     server.on("/SDCARD_DELETE_TIMESTAMPS", HTTP_POST, handleSDCARD_DELETE_TIMESTAMPS);
     server.on("/SDCARD_DELETE_GSHEET", HTTP_POST, handleSDCARD_DELETE_GSHEET);
-
+    
+    // Device viewer routes
+    server.on("/DEVICEVIEWER", HTTP_GET, handleDeviceViewer);
+    server.on("/DEVICEVIEWER_NEXT", HTTP_GET, handleDeviceViewerNext);
+    server.on("/DEVICEVIEWER_PREV", HTTP_GET, handleDeviceViewerPrev);
+    server.on("/DEVICEVIEWER_PING", HTTP_GET, handleDeviceViewerPing);
+    server.on("/DEVICEVIEWER_DELETE", HTTP_GET, handleDeviceViewerDelete);
 
     // 404 handler
     server.onNotFound(handleNotFound);

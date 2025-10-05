@@ -54,6 +54,7 @@ byte checkExpiration(int i, time_t t=0,bool onlycritical=true);
 // --- IP address conversion utilities ---
 String ArrayToString(byte* Arr, byte len, char separator= '.', bool asHex = false);
 String IPToString(uint32_t ip);
+String IPToString(byte* ip);
 String IPbytes2String(byte* IP,byte len=4);
 uint32_t StringToIP(String str);
 bool IPString2ByteArray(String IPstr,byte* IP);

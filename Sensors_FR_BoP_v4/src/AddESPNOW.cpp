@@ -219,13 +219,13 @@ String ESPNowError(esp_err_t result) {
 // --- ESPNow Send Callback ---
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (status == ESP_NOW_SEND_SUCCESS) {
-        I.lastESPNOW_TIME = I.currentTime;
-        I.lastESPNOW_STATE = 1;
+        I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
+        I.ESPNOW_LAST_OUTGOINGMSG_STATE = 1;
         I.ESPNOW_SENDS++;
         I.isUpToDate = false;
     } else {
-        I.lastESPNOW_STATE = -1;
-        I.lastESPNOW_TIME = I.currentTime;
+        I.ESPNOW_LAST_OUTGOINGMSG_STATE = -1;
+        I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
         storeError("ESPNow: Failed to send data");
     }
 }
@@ -236,20 +236,24 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
     memcpy(mac, recv_info->src_addr, 6);
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
-        I.lastESPNOW_STATE = -2;
-        I.lastESPNOW_TIME = I.currentTime;
+        I.ESPNOW_LAST_INCOMINGMSG_STATE = -2;
+        I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
         return;
     }
     ESPNOW_type msg;
     memcpy(&msg, incomingData, sizeof(msg));
     
-    I.LAST_ESPNOW_SERVER_MAC = msg.senderMAC;
-    I.LAST_ESPNOW_SERVER_IP = msg.senderIP;
-    I.LAST_ESPNOW_SERVER_TIME = I.currentTime;
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = msg.senderMAC;
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_IP = msg.senderIP;
+    I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
+    I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg.msgType;
     I.isUpToDate = false;
-    I.lastESPNOW_STATE = 2;
+    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2;
     I.ESPNOW_RECEIVES++;
-    I.lastESPNOW_TIME = I.currentTime;
+    I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
+
+
+    memcpy(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, msg.payload, 80);
 
 
     if (msg.msgType>0) {

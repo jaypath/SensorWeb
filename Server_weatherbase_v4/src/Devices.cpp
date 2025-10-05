@@ -367,9 +367,9 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
     uint16_t count = 0;
     
     if (snsType == -1000) {
-        
         //use I.showTheseFlags to count the number of sensors that match the flags
-        if (bitRead(I.showTheseFlags, 0) == 0) {//everything is good
+
+        if (bitRead(I.showTheseFlags, 0) == 0) {//count everything that is flagged
             return numSensors;
         } 
         //has to be flagged or expired
@@ -407,6 +407,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         if (!sensors[i].IsSet) continue;
         
         // Check sensor type filter
+        if (snsType != 0) { //special case for all sensors
         if (snsType > 0 && sensors[i].snsType != snsType) continue;
         if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
         if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
@@ -414,6 +415,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
         if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
+        }
         if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;
         
         // Check flags

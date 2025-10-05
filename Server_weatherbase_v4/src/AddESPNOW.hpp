@@ -27,12 +27,14 @@ constexpr uint8_t ESPNOW_MSG_SERVER_LIST          = 1;   // Private: payload con
 constexpr uint8_t ESPNOW_MSG_WIFI_PW_REQUEST      = 2;   // Targeted: request for WiFi password, payload = 16-byte one-time key
 constexpr uint8_t ESPNOW_MSG_WIFI_PW_RESPONSE     = 3;   // Private: response to type 2, payload = encrypted WiFi password
 constexpr uint8_t ESPNOW_MSG_WIFI_KEY_REQUIRED    = 4;   // Private: indicates new WiFi key required, may trigger new type 2 or 128
+constexpr uint8_t ESPNOW_MSG_PING_RESPONSE_REQUIRED    = 5;   // Private: ping the recipient and demand a ping response
+constexpr uint8_t ESPNOW_MSG_PING_RESPONSE_SUCCESS    = 6;   // Private: ping response received
 constexpr uint8_t ESPNOW_MSG_TERMINATE            = 128; // Private: terminate communication, delete peer
 constexpr uint8_t ESPNOW_MSG_GENERAL_ENCRYPTED    = 255; // Private: general encrypted message, which will be nx128 bits + 128 bit IV
 
 // --- ESPNow Message Struct ---
 struct ESPNOW_type {
-    uint64_t  senderMAC;      // Sender's MAC address
+    uint8_t  senderMAC[6];      // Sender's MAC address
     uint32_t senderIP;          // Sender's IP address (uint32_t)
     uint8_t  senderType;        // Device type (>=100 = server, <100 = sensor)
     uint8_t  targetMAC[6];      // Target MAC address (all 0xFF for broadcast). in byte format for ESPNOW
@@ -60,6 +62,7 @@ bool encryptESPNOWMessage(ESPNOW_type& msg);
 bool decryptESPNOWMessage(ESPNOW_type& msg);
 bool broadcastServerPresence();
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
+bool sendPingRequest(const uint8_t* targetMAC);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
 

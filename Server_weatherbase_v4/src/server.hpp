@@ -129,6 +129,11 @@ void handleREBOOT_DEBUG();
 void handleSDCARD_DELETE_ERRORLOG();
 void handleSDCARD_DELETE_TIMESTAMPS();
 void handleSDCARD_DELETE_GSHEET();
+void handleDeviceViewer();
+void handleDeviceViewerNext();
+void handleDeviceViewerPrev();
+void handleDeviceViewerPing();
+void handleDeviceViewerDelete();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 bool SendData(struct SensorVal*);
 
