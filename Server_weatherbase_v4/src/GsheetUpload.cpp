@@ -310,7 +310,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
             if (device && device->IsSet && sensor->timeLogged > sensor->lastCloudUploadTime && sensor->lastCloudUploadTime < I.currentTime-(GSheetInfo.uploadGsheetIntervalMinutes*60)) { //only upload if the last upload was more than the interval minutes ago and the last read time is greater than the last upload time
                 valueRange.add("majorDimension", "ROWS");
                 valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC); //DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement
-                valueRange.set("values/[" + (String) rowInd + "]/[1]", IPToString(device->IP));
+                valueRange.set("values/[" + (String) rowInd + "]/[1]", device->IP.toString());
                 valueRange.set("values/[" + (String) rowInd + "]/[2]", (String) sensor->snsType + "." + (String) sensor->snsID); 
                 valueRange.set("values/[" + (String) rowInd + "]/[3]", (String) sensor->snsName);
                 valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) sensor->timeLogged);

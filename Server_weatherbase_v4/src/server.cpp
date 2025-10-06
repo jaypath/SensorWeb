@@ -155,7 +155,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
-    Prefs.MYIP =   IPToUint32(WiFi.localIP()); //fixes the inverted endianness
+    Prefs.MYIP =   WiFi.localIP(); //fixes the inverted endianness
 
     return true;
   }
@@ -260,6 +260,8 @@ void APStation_Mode() {
     RegistrationCompleted = false;
     
     do {
+      //reset the watchdog timer
+      esp_task_wdt_reset();
       m=millis();
       //draw the timeout left at the botton right of the screen
       #ifdef _USETFT
@@ -355,7 +357,7 @@ void handleREQUESTUPDATE() {
   // Get the device IP for the specified sensor
   DevType* device = Sensors.getDeviceBySnsIndex(j);
   if (device) {
-    String URL = IPToString(device->IP) + "/UPDATEALLSENSORREADS";
+    String URL = device->IP.toString() + "/UPDATEALLSENSORREADS";
     Server_Message(URL, payload, httpCode);
   }
 
@@ -469,7 +471,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender IP: " + (String) IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP) + "<br>";
+  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender IP: " + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString() + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE + "<br>";
   I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //just in case
   WEBHTML = WEBHTML + "Last LAN Incoming Message Payload: " + (String) I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD + "<br>";
@@ -569,7 +571,7 @@ void rootTableFill(byte j) {
   SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
   if (sensor) {
 
-    WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) IPToString(Sensors.getDeviceIPBySnsIndex(j)) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) IPToString(Sensors.getDeviceIPBySnsIndex(j)) + "</a></td>";
+    WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "</a></td>";
     WEBHTML = WEBHTML + "<td>" + (String) MACToString(Sensors.getDeviceMACBySnsIndex(j)) + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
@@ -972,7 +974,7 @@ void handlePost() {
     String responseMsg = "";
     String senderIP = "";
     uint64_t deviceMAC = 0;
-    uint32_t deviceIP = 0;
+    IPAddress deviceIP = IPAddress(0,0,0,0);
 
     int16_t sensorIndex = -1;
 
@@ -1001,8 +1003,7 @@ void handlePost() {
             } else {
               if (doc["ip"].is<JsonVariantConst>()) {
                 String ipStr = doc["ip"];
-                deviceIP = IPAddress().fromString(ipStr);
-              }
+                deviceIP = deviceIP.fromString(ipStr);              }
               if (doc["mac"].is<JsonVariantConst>()) {
                 String macStr = doc["mac"];
                 //mac should be 12 hex digits
@@ -1031,7 +1032,7 @@ void handlePost() {
                   }
               } else {
                 deviceMAC=0;
-                deviceIP=0;
+                deviceIP=IPAddress(0,0,0,0);
                 snsType = 0;
                 SerialPrint("Invalid JSON message format",true);
                 responseMsg = "Invalid JSON message format";
@@ -1056,7 +1057,7 @@ void handlePost() {
                   deviceMAC = strtoull(argValue.c_str(), NULL, 16);
               } else if (argName == "IP") {
                 argValue.replace(",",""); //remove unneeded erroneous commas //this was an error in the old code
-                deviceIP = StringToIP(argValue);              
+                deviceIP = deviceIP.fromString(argValue);              
               } else if (argName == "logID") { //legacy code, still used by some devices
                   ardID = breakString(&argValue,".",true).toInt(); //this is a legacy field, not used anymore
                   snsType = breakString(&argValue,".",true).toInt();
@@ -1082,16 +1083,16 @@ void handlePost() {
               }
           }
           
-          if (deviceMAC==0 && deviceIP!=0) deviceMAC = IPToMACID(deviceIP);
-          if (deviceMAC==0 && deviceIP==0) {
+          if (deviceMAC==0 && deviceIP!=IPAddress(0,0,0,0)) deviceMAC = IPToMACID(deviceIP);
+          if (deviceMAC==0 && deviceIP==IPAddress(0,0,0,0)) {
             snsType = 0;
             SerialPrint("No MAC or IP provided",true);
             responseMsg = "No MAC or IP provided";
           }
-          if (snsType == 0 || snsName.length() == 0 || (deviceIP==0 && deviceMAC==0)) {
+          if (snsType == 0 || snsName.length() == 0 || (deviceIP==IPAddress(0,0,0,0) && deviceMAC==0)) {
             snsType = 0;
             deviceMAC = 0;
-            deviceIP = 0;
+            deviceIP = IPAddress(0,0,0,0);
             SerialPrint("sensor missing critical elements, skipping.\n");
             responseMsg = "Missing required fields: snsType and varName";
           }  
@@ -1106,8 +1107,9 @@ void handlePost() {
     timeLogged = I.currentTime; //always set timelogged to current time, regardless of what is sent
 
     bool addToSD = false;
-    if ((deviceMAC!=0 || deviceIP!=0) && snsType!=0 ) {
-
+    if ((deviceMAC!=0 || deviceIP!=IPAddress(0,0,0,0)) && snsType!=0 ) {
+      if (devName.length() > 0) Sensors.addDevice(deviceMAC, deviceIP, devName.c_str());
+      else Sensors.addDevice(deviceMAC, deviceIP, "");
         sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
         if (sensorIndex < 0) {
           SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
@@ -1334,7 +1336,7 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</div>";
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageFromIP</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP) + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString() + "</div>";
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageTime</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME  ?  dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME ) : "???")+ "</div>";
@@ -1778,10 +1780,14 @@ void handleCONFIG_DELETE() {
   deleteFiles("GsheetInfo.dat", "/Data");
   deleteFiles("WeatherData.dat", "/Data");
   deleteFiles("DevicesSensors.dat", "/Data");
-  
+
+  //flush Prefs
+  BootSecure::flushPrefs();  
   // Redirect back to the configuration page with a success message
   server.sendHeader("Location", "/CONFIG");
   server.send(302, "text/plain", "SD card contents deleted. Redirecting...");
+
+  controlledReboot("User Request",RESET_USER);
 }
 
 void handleWiFiConfig() {
@@ -2071,188 +2077,7 @@ void handleWiFiConfig_POST() {
   }
 }
 
-//this is the old decryption code using blob
-/* 
-void handleWiFiConfig_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
-  
-//  tft.clear();
-//  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);
-  tft.printf("Received encrypted data... parsing\n");
 
-  delay(3000);
-  
-
-  // Check if we have the encrypted BLOB
-  if (server.hasArg("BLOB")) {
-    String encryptedBlob = server.arg("BLOB");
-    
-    // Decode base64
-    int decodedLength = base64_dec_len(encryptedBlob.c_str(), encryptedBlob.length());
-    uint8_t* decodedData = new uint8_t[decodedLength];
-    base64_decode(encryptedBlob.c_str(), decodedData);
-    
-    // Debug: Check if data length is valid for AES decryption
-    if (decodedLength < 32 || (decodedLength % 16) != 0) {
-        SerialPrint("ERROR: Invalid data length for AES decryption. Length: " + String(decodedLength) + " (must be >= 32 and multiple of 16)",true);
-        server.sendHeader("Location", "/WiFiConfig");
-        server.send(302, "text/plain", "Invalid encrypted data format.");
-        delete[] decodedData;
-        return;
-    }
-
-    // Decrypt the data using BootSecure functions
-    uint8_t* decryptedData = new uint8_t[decodedLength];
-    memset(decryptedData, 0, decodedLength); // Initialize to zero
-    // Debug: Check key length
-    
-    int8_t decryptResult = BootSecure::decrypt(decodedData, (char*)WIFI_CONFIG_KEY, decryptedData, decodedLength);
-    
-      
-    // Calculate actual decrypted data length (excluding IV)
-    uint16_t decryptedLength = decodedLength - 16; // Remove IV
-    
-    // Find the actual data length by looking for the last non-zero byte
-    uint16_t actualDataLength = 0;
-    for (int i = decryptedLength - 1; i >= 0; i--) {
-        if (decryptedData[i] != 0) {
-            actualDataLength = i + 1;
-            break;
-        }
-    }
-    
-    // Ensure null termination
-    if (actualDataLength < decodedLength) {
-        decryptedData[actualDataLength] = '\0';
-    }
-    
-    // Create a clean string from the actual data length
-    String decryptedString = String((char*)decryptedData, actualDataLength);
-    
-
-    if (decryptResult == 0 && actualDataLength > 0) {
-      // Decryption successful, parse the data
-      // Expected format: SSID|PASSWORD|LMK_KEY|CRC
-      int pos1 = decryptedString.indexOf('|');
-      int pos2 = decryptedString.indexOf('|', pos1 + 1);
-      int pos3 = decryptedString.indexOf('|', pos2 + 1);
-      
-      if (pos1 > 0 && pos2 > pos1 && pos3 > pos2) {
-        String ssid = decryptedString.substring(0, pos1);
-        String password = decryptedString.substring(pos1 + 1, pos2);
-        String lmk_key = decryptedString.substring(pos2 + 1, pos3);
-        
-        if (lmk_key.length() > 16) {
-          lmk_key = lmk_key.substring(0, 16);
-        } 
-        if (lmk_key.length() < 16) {
-          lmk_key = lmk_key + String(16 - lmk_key.length(), '0'); //pad short keys with 0s
-        } 
-
-        String crc = decryptedString.substring(pos3 + 1);
-        
-        // Debug: Print CRC values and string details
-        SerialPrint("Received CRC string: '" + crc + "'",true);
-        SerialPrint("CRC string length: " + String(crc.length()),true);
-        SerialPrint("Data for CRC calculation: '" + decryptedString.substring(0, pos3) + "'",true);
-        
-        // Debug: Show hex representation of CRC string
-        SerialPrint("CRC string hex: ",false);
-        for (int i = 0; i < crc.length() && i < 20; i++) {
-            SerialPrint(String(crc.charAt(i), HEX) + " ",false);
-        }
-        SerialPrint("",true);
-        
-        // Verify CRC using BootSecure CRC calculator
-        uint16_t calculatedCRC = BootSecure::CRCCalculator((uint8_t*)decryptedString.substring(0, pos3).c_str(), pos3);
-        uint16_t receivedCRC = crc.toInt();
-                
-        if (calculatedCRC == receivedCRC) {
-          // CRC is valid, update Prefs
-          tft.println("CRC is valid, updating Prefs");
-          strncpy((char*)Prefs.WIFISSID, ssid.c_str(), sizeof(Prefs.WIFISSID) - 1);
-          Prefs.WIFISSID[sizeof(Prefs.WIFISSID) - 1] = '\0';
-          
-          strncpy((char*)Prefs.WIFIPWD, password.c_str(), sizeof(Prefs.WIFIPWD) - 1);
-          Prefs.WIFIPWD[sizeof(Prefs.WIFIPWD) - 1] = '\0';
-          
-          strncpy((char*)Prefs.KEYS.ESPNOW_KEY, lmk_key.c_str(), sizeof(Prefs.KEYS.ESPNOW_KEY) - 1);
-          Prefs.KEYS.ESPNOW_KEY[sizeof(Prefs.KEYS.ESPNOW_KEY) - 1] = '\0';
-          
-          // Mark Prefs as needing update and save to NVS
-          Prefs.isUpToDate = false;
-          Prefs.HAVECREDENTIALS = true;
-
-          //attempt to reconnect to wifi
-          if (connectWiFi()) {
-            
-            Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
-            tft.println("Wifi connected");
-              //check if we have weather data
-            if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
-              tft.print("Attempting geocordinate lookup from address...");
-              String street = server.arg("street");
-              String city = server.arg("city");
-              String state = server.arg("state");
-              String zipcode = server.arg("zipcode");
-              if (handlerForWeatherAddress(street, city, state, zipcode)) {
-                tft.println(" OK!");
-              } else {
-                tft.printf(String(" FAILED!\nLog in to this device at\n" + WiFi.localIP().toString() + "\nto update location!\n").c_str());
-              }
-            }
-            
-            if (!BootSecure::setPrefs()) SerialPrint("Prefs update failed");
-            delay(3000);
-            // Save to NVS using BootSecure
-            server.sendHeader("Location", "/TimezoneSetup");
-            server.send(302, "text/plain", "WiFi configuration updated successfully. Redirecting to timezone setup...");
-          } else {
-            tft.printf("Failed to connect to wifi, returning to config page.");
-            if (!BootSecure::setPrefs()) SerialPrint("Prefs update failed");
-            delay(3000);
-            server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
-            server.send(302, "text/plain", "WiFi connection failed. Please check your credentials and try again.");
-          }
-        
-
-        } else {
-          server.sendHeader("Location", "/WiFiConfig");
-          server.send(302, "text/plain", "CRC validation failed. Configuration not updated.");
-        }
-      } else {
-        server.sendHeader("Location", "/WiFiConfig");
-        server.send(302, "text/plain", "Invalid data format. Configuration not updated.");
-      }
-    } else {
-      tft.println("Decryption failed. Configuration not updated.");
-      SerialPrint("Decryption failed. Configuration not updated.",true);
-      delay(10000);
-      server.sendHeader("Location", "/WiFiConfig");
-      server.send(302, "text/plain", "Decryption failed. Configuration not updated.");
-    }
-    
-    // Clean up
-    BootSecure::zeroize(decodedData, decodedLength);
-    BootSecure::zeroize(decryptedData, decodedLength);
-    delete[] decodedData;
-    delete[] decryptedData;
-
-      //force prefs to save here
-      tft.println("Prefs updated, rebooting");
-      delay(3000);
-      controlledReboot("Wifi credentials updated",RESETCAUSE::RESET_NEWWIFI,true);
-    
-
-  } else {
-    // No BLOB provided, redirect back
-    server.sendHeader("Location", "/WiFiConfig");
-    server.send(302, "text/plain", "No encrypted data provided. Please try again.");
-  }
-}
-*/
 
 void handleWiFiConfig_RESET() {
   LAST_WEB_REQUEST = I.currentTime;
@@ -2352,6 +2177,7 @@ void handleTimezoneSetup() {
 
 void handleTimezoneSetup_POST() {
   LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USETFT
   
   tft.clear();
   tft.setCursor(0, 0);
@@ -2359,7 +2185,7 @@ void handleTimezoneSetup_POST() {
   tft.setTextSize(1);
   tft.setTextFont(2);
   tft.printf("Saving timezone settings...\n");
-  
+  #endif
   if (server.hasArg("utc_offset_seconds") && 
       server.hasArg("dst_enabled") && server.hasArg("dst_start_month") && 
       server.hasArg("dst_start_day") && server.hasArg("dst_end_month") && 
@@ -2389,14 +2215,19 @@ void handleTimezoneSetup_POST() {
     Prefs.isUpToDate = false;
     if (!BootSecure::setPrefs()) {
       SerialPrint("Failed to save timezone settings to NVS", true);
+      #ifdef _USETFT
       tft.printf("Failed to save timezone settings!\n");
       delay(3000);
+      #endif
     } else {
       SerialPrint("Timezone settings saved successfully", true);
+      #ifdef _USETFT
       tft.printf("Timezone settings saved!\n");
       tft.printf("Rebooting in 3 seconds...\n");
       delay(3000);
-      controlledReboot("Timezone settings saved successfully", RESET_TIME);
+      #endif
+      controlledReboot("Timezone settings saved successfully", RESET_TIME,true);
+      SerialPrint("Rebooting failed...", true);
     }
     
     // Redirect to main page
@@ -3728,7 +3559,7 @@ void handleDeviceViewer() {
     WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold; width: 30%;\">Device Name:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devName) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + String(IPToString(device->IP)) + "\" target=\"_blank\">" + String(IPToString(device->IP)) + "</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Seen:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeLogged ? dateify(device->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Data:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeRead ? dateify(device->timeRead, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
@@ -3882,7 +3713,7 @@ void handleDeviceViewerDelete() {
     }
     
     // Ensure current device index is valid
-    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+    if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
         CURRENT_DEVICE_VIEWER = 0;
     }
     
@@ -3896,28 +3727,21 @@ void handleDeviceViewerDelete() {
     
     // Store device name for confirmation message
     String deviceName = String(device->devName);
-    uint8_t deletedSensors = 0;
-    
-    // Delete all sensors associated with this device
-    for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
-        SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-        if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
-            sensor->IsSet = false;
-            deletedSensors++;
-        }
-    }
-    
-    // Delete the device itself
-    device->IsSet = false;
+    uint8_t deletedSensors = Sensors.initDevice(CURRENT_DEVICE_VIEWER);
     
     // Adjust current device index if needed
-    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
+    if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
         CURRENT_DEVICE_VIEWER = 0;
     }
     
     // Redirect back to device viewer with success message
-    server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
-    server.send(302, "text/plain", "Device and sensors deleted successfully.");
+    if (device->IsSet) {
+        server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
+        server.send(302, "text/plain", "Device and sensors deleted successfully.");
+      } else {
+        server.sendHeader("Location", "/DEVICEVIEWER?error=delete_failed");
+        server.send(302, "text/plain", "Failed to delete device.");
+    }
 }
 
 void setupServerRoutes() {

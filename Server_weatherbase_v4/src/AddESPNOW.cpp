@@ -167,7 +167,7 @@ bool sendESPNOW(ESPNOW_type& msg) {
     bool isBroadcast = true;
 
     uint64ToMAC(Prefs.PROCID, msg.senderMAC);
-    msg.senderIP = IPToUint32(WiFi.localIP());
+    msg.senderIP = WiFi.localIP();
     msg.senderType = MYTYPE;
 
 
@@ -275,23 +275,21 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
     if (msg.msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
         // Received broadcast alive message (type 1) 
-        if (msg.senderType >= 100) {
-            //payload contains server name
-            //add the server to device list
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+8, 0, 0, msg.senderType); //remove "server: " from the server name
             
-            snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Server: %s", (char*) msg.payload);
-            
-            I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
-            Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+8); //remove "server: " from the server name
-            return;
-        }
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Server: %s", (char*) msg.payload);
+        
+        I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
+        return;
     }
+
+    
     if (msg.msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
         // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV, payload[32..39] = nonce)
         ESPNOW_type resp = {};
         uint64ToMAC(Prefs.PROCID, resp.senderMAC);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "WiFi request from %s", MACToString(MACToUint64(msg.senderMAC)).c_str());
-        resp.senderIP = IPToUint32(WiFi.localIP());
+        resp.senderIP = WiFi.localIP();
         resp.senderType = MYTYPE;
         memcpy(resp.targetMAC, msg.senderMAC, 6);
         resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
@@ -416,7 +414,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         memcpy(&originalSendTime, msg.payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping recv: %s", (char*)msg.payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+11); //remove "ping recv: " from the server name
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+11, 0, 0, msg.senderType); //remove "ping recv: " from the server name
         
         
         // Prepare ping response (type 6) with current unix timestamp
@@ -447,7 +445,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         memcpy(&responseTime, msg.payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping response: %s", (char*)msg.payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+15); //remove "ping response: " from the server name
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+15, 0, 0, msg.senderType); //remove "ping response: " from the server name
         
         #ifdef _DEBUG
         SerialPrint("ESPNow: Received ping response from " + MACToString(msg.senderMAC) + " at time " + String(responseTime), true);
@@ -470,7 +468,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
 //at present I do not offer a type 0 message, so all messages are encrypted
 // --- Broadcast Server Presence (Type 1) ---
-bool broadcastServerPresence() {
+bool broadcastServerPresence(bool broadcastPeripheral) {
+
+    if (MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, unless peripherals specifically request it
 
     ESPNOW_type msg = {};
 

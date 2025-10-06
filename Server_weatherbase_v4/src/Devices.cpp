@@ -35,28 +35,29 @@ bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
 }
 
 // Device management functions
-int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devName, uint32_t sendingInt, uint8_t flags) {
+int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devName, uint32_t sendingInt, uint8_t flags, uint8_t devType) {
     // Check if device already exists
     int16_t existingIndex = findDevice(MAC);
     if (existingIndex >= 0) {
         // Update existing device
         DevType* device = &devices[existingIndex];
-        device->IP = IP;
+        if (IP != IPAddress(0,0,0,0)) device->IP = IP;
         device->timeLogged = now();
         device->timeRead = I.currentTime;
         if (devName) {
             strncpy(device->devName, devName, sizeof(device->devName) - 1);
             device->devName[sizeof(device->devName) - 1] = '\0';
         }
-        device->Flags = flags;
-        device->SendingInt = sendingInt;
+        if (flags != 0) device->Flags = flags;
+        if (sendingInt != 0)         device->SendingInt = sendingInt;
         device->expired = false;
         device->IsSet = 1;
+        if (devType != 0) device->devType = devType;
         return existingIndex;
     }
     
     // Find empty slot
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices + 10; i++) {
+    for (int16_t i = 0; i < NUMDEVICES; i++) {
         if (!devices[i].IsSet) {
             devices[i].MAC = MAC;
             devices[i].IP = IP;
@@ -70,9 +71,10 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devNam
                 devices[i].devName[0] = '\0';
             }
             devices[i].Flags = flags;
-            devices[i].SendingInt = sendingInt;
+            if (sendingInt == 0)         devices[i].SendingInt = 3600;
+            else            devices[i].SendingInt = sendingInt;
             devices[i].expired = false;
-            
+            devices[i].devType = devType;
             if (i >= numDevices) {
                 numDevices = i + 1;
             }
@@ -84,7 +86,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, uint32_t IP, const char* devNam
 }
 
 int16_t Devices_Sensors::findDevice(uint64_t MAC) {
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
         if (devices[i].IsSet && devices[i].MAC == MAC) {
             return i;
         }
@@ -92,8 +94,8 @@ int16_t Devices_Sensors::findDevice(uint64_t MAC) {
     return -1;
 }
 
-int16_t Devices_Sensors::findDevice(uint32_t IP) {
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
+int16_t Devices_Sensors::findDevice(IPAddress IP) {
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
         if (devices[i].IsSet && devices[i].IP == IP) {
             return i;
         }
@@ -102,45 +104,45 @@ int16_t Devices_Sensors::findDevice(uint32_t IP) {
 }
 
 DevType* Devices_Sensors::getDeviceBySnsIndex(int16_t snsindex) {
-    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceByDevIndex(sensors[snsindex].deviceIndex);
     }
     return nullptr;
 }
 
 DevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
-    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+    if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
         return &devices[devindex];
     }
     return nullptr;
 }
 
 uint64_t Devices_Sensors::getDeviceMACBySnsIndex(int16_t snsindex) {
-    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceMACByDevIndex(sensors[snsindex].deviceIndex);
     }
     return 0;
 }
 
 uint64_t Devices_Sensors::getDeviceMACByDevIndex(int16_t devindex) {
-    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+    if (devindex >= 0 && devindex < NUMDEVICES && devices[devindex].IsSet) {
         return devices[devindex].MAC;
     }
     return 0;
 }
 
-uint32_t Devices_Sensors::getDeviceIPBySnsIndex(int16_t snsindex) {
-    if (snsindex >= 0 && snsindex < NUMSENSORS && snsindex < numSensors && sensors[snsindex].IsSet) {
+IPAddress Devices_Sensors::getDeviceIPBySnsIndex(int16_t snsindex) {
+    if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceIPByDevIndex(sensors[snsindex].deviceIndex);
     }
-    return 0;
+    return IPAddress(0,0,0,0);
 }
 
-uint32_t Devices_Sensors::getDeviceIPByDevIndex(int16_t devindex) {
-    if (devindex >= 0 && devindex < NUMDEVICES && devindex < numDevices && devices[devindex].IsSet) {
+IPAddress Devices_Sensors::getDeviceIPByDevIndex(int16_t devindex) {
+    if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
         return devices[devindex].IP;
     }
-    return 0;
+    return IPAddress(0,0,0,0);
 }
 
 uint8_t Devices_Sensors::getNumDevices() {
@@ -166,7 +168,7 @@ uint8_t Devices_Sensors::getNumSensors() {
 uint8_t Devices_Sensors::countSensors(uint8_t snsType,int16_t devIndex) {
     //returns the number of sensors of the given type
     uint8_t count = 0;
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet && sensors[i].snsType == snsType) {
             if (devIndex == -1 || sensors[i].deviceIndex == devIndex) count++;
         }
@@ -177,7 +179,7 @@ uint8_t Devices_Sensors::countSensors(uint8_t snsType,int16_t devIndex) {
 uint8_t Devices_Sensors::countDev(uint8_t devType) {
     //returns the number of devices of the given type
     uint8_t count = 0;
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
         if (devices[i].IsSet && devices[i].devType == devType) {
             count++;
         }
@@ -186,18 +188,41 @@ uint8_t Devices_Sensors::countDev(uint8_t devType) {
 }
 
 bool Devices_Sensors::isDeviceInit(int16_t index) {
-    return (index >= 0 && index < NUMDEVICES && index < numDevices && devices[index].IsSet);
+    return (index >= 0 && index < NUMDEVICES  && devices[index].IsSet);
 }
 
-void Devices_Sensors::initDevice(int16_t index) {
-    if (index >= 0 && index < NUMDEVICES && index < numDevices) {
+int16_t  Devices_Sensors::initDevice(int16_t index) {
+    if (index < 0 || index >= NUMDEVICES) {
+        return -3;
+    }
+    byte sensorsinitialized = 0;
+
+    if (devices[index].IsSet == 0) return -1;
+    
+    if (findMe() == index) {
+        return -2;
+    }
+
+    //initialize all sensors attached to this device
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+        if (sensors[i].IsSet && sensors[i].deviceIndex == index) {
+            sensors[i].IsSet = 0;
+            sensors[i].expired = false;
+            sensorsinitialized++;
+        }
+    }
+
+    //initialize the device
+    if (index >= 0 && index < NUMDEVICES ) {
         devices[index].IsSet = 0;
         devices[index].expired = false;
     }
+
+    return sensorsinitialized;
 }
 
 // Sensor management functions
-int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
+int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                                   uint32_t sendingInt, uint8_t flags, const char* devName) {
     // Find or create device
@@ -224,7 +249,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_
     }
     
     // Find empty slot
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors + 20; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) {
             sensors[i].deviceIndex = deviceIndex;
             sensors[i].snsType = snsType;
@@ -262,7 +287,7 @@ int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t
         return -1;
     }
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet && sensors[i].deviceIndex == deviceIndex && 
             sensors[i].snsType == snsType && sensors[i].snsID == snsID) {
             return i;
@@ -272,13 +297,13 @@ int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t
     return -1;
 }
 
-int16_t Devices_Sensors::findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t snsID) {
+int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID) {
     int16_t deviceIndex = findDevice(deviceIP);
     if (deviceIndex < 0) {
         return -1;
     }
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet && sensors[i].deviceIndex == deviceIndex && 
             sensors[i].snsType == snsType && sensors[i].snsID == snsID) {
             return i;
@@ -289,7 +314,7 @@ int16_t Devices_Sensors::findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t 
 }
 
 SnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
-    if (index >= 0 && index < NUMSENSORS && index < numSensors && sensors[index].IsSet) {
+    if (index >= 0 && index < NUMSENSORS  && sensors[index].IsSet) {
         return &sensors[index];
     }
     return nullptr;
@@ -301,7 +326,7 @@ bool Devices_Sensors::isSensorInit(int16_t index) {
 }
 
 void Devices_Sensors::initSensor(int16_t index) {
-    if (index >= 0 && index < NUMSENSORS && index < numSensors) {
+    if (index >= 0 && index < NUMSENSORS ) {
         sensors[index].IsSet = 0;
         sensors[index].expired = false;
         sensors[index].deviceIndex = -1;
@@ -313,7 +338,7 @@ int16_t Devices_Sensors::findOldestDevice() {
     int16_t oldestIndex = -1;
     uint32_t oldestTime = 0xFFFFFFFF;
     
-    for (int16_t i = 0; i < NUMDEVICES && i < numDevices; i++) {
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
         if (devices[i].IsSet && devices[i].timeLogged < oldestTime) {
             oldestTime = devices[i].timeLogged;
             oldestIndex = i;
@@ -327,7 +352,7 @@ int16_t Devices_Sensors::findOldestSensor() {
     int16_t oldestIndex = -1;
     uint32_t oldestTime = 0xFFFFFFFF;
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet && sensors[i].timeLogged < oldestTime) {
             oldestTime = sensors[i].timeLogged;
             oldestIndex = i;
@@ -339,7 +364,7 @@ int16_t Devices_Sensors::findOldestSensor() {
 
 byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index >= 0) {
-        if (index < NUMSENSORS && index < numSensors) {
+        if (index < NUMSENSORS ) {
             if (sensors[index].IsSet) {
                 return checkExpirationSensor(index, currentTime, onlyCritical);
             }
@@ -350,7 +375,7 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
     // Check all devices and sensors
     byte expiredCount = 0;
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (sensors[i].IsSet) {
             expiredCount += checkExpirationSensor(i, currentTime, onlyCritical);
         }
@@ -403,7 +428,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
     }
     
     //count the number of sensors that match the flags
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         
         // Check sensor type filter
@@ -433,7 +458,7 @@ void Devices_Sensors::find_limit_sensortypes(String snsname, uint8_t snsType, ui
     *snsIndexHigh = 0;
     *snsIndexLow = 255;
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         if (sensors[i].snsType != snsType) continue;
         if (snsname != sensors[i].snsName) continue;
@@ -446,7 +471,7 @@ void Devices_Sensors::find_limit_sensortypes(String snsname, uint8_t snsType, ui
 uint8_t Devices_Sensors::find_sensor_count(String snsname, uint8_t snsType) {
     uint8_t count = 0;
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         if (sensors[i].snsType != snsType) continue;
         if (snsname == sensors[i].snsName) {
@@ -458,7 +483,7 @@ uint8_t Devices_Sensors::find_sensor_count(String snsname, uint8_t snsType) {
 }
 
 uint8_t Devices_Sensors::findSensorByName(String snsname, uint8_t snsType, uint8_t snsID) {
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         // Only compare snsType if snsType > 0
         if (snsType > 0 && sensors[i].snsType != snsType) continue;
@@ -475,7 +500,7 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
     
-    for (int16_t i = 0; i < NUMSENSORS && i < numSensors; i++) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         if (sensors[i].snsType != snstype) continue;
         
@@ -538,8 +563,33 @@ bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
 #endif
 
 // Helper functions for expiration checking
+uint16_t Devices_Sensors::isSensorIndexValid(int16_t index, bool ismine) {
+    //checks if the sensor index is VALID
+    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
+    if (index < 0 || index >= NUMSENSORS ) {
+        //index is invalid
+        return 0;
+    }
+    if (sensors[index].expired) {
+        if (ismine==true && isMySensor(index)) {
+            return 3; //expired and is mine
+        } else {
+            return 4; //expired and not mine
+        }
+    }
+    if (sensors[index].IsSet) {
+        if (ismine==true && isMySensor(index)) {
+            return 1; // set and is mine
+        } else {
+            return 2; //set and not mine
+        }
+    }
+    return 0; //valid
+}
+
+
 uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
-    if (index < 0 || index >= NUMSENSORS || index >= numSensors) {
+    if (index < 0 || index >= NUMSENSORS ) {
         return 1;
     }
     if (!sensors[index].IsSet) {
@@ -552,7 +602,7 @@ uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
 }
 
 byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
-    if (index < 0 || index >= NUMDEVICES || index >= numDevices || !devices[index].IsSet) {
+    if (index < 0 || index >= NUMDEVICES  || !devices[index].IsSet) {
         return 0;
     }
     
@@ -572,7 +622,7 @@ byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, b
 }
 
 byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical) {
-    if (index < 0 || index >= NUMSENSORS || index >= numSensors || !sensors[index].IsSet) {
+    if (index < 0 || index >= NUMSENSORS  || !sensors[index].IsSet) {
         return 0;
     }
     
@@ -633,3 +683,34 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
 
     return false;
 }
+
+int16_t Devices_Sensors::findMe() {
+    //returns -1 if I am not found (that's a problem), or the index to devices for me
+    return findDevice(ESP.getEfuseMac());
+}
+
+#ifdef _ISPERIPHERAL
+int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID) {
+    //this always references me as the device
+    //returns -1 if no Prefsindex found, otherwise the idnex to Prefs values 
+    int16_t devID = findMe();
+    if (devID == -1) return -1;
+    
+    //get prefs index for this sensor
+    uint32_t sensorID = devID<<16 + snsType<<8 + snsID;
+    int16_t prefs_index = -1;
+    for (byte i=0;i<NUMSENSORS;i++) {
+        if (Prefs.SENSORIDS[i] == sensorID) {        
+            return i;
+        }
+    }    
+    return -1;
+
+}
+#endif
+
+bool Devices_Sensors::isMySensor(int16_t index) {
+    if (isSensorIndexInvalid(index)!=0) return false;
+    return sensors[index].deviceIndex == findMe();
+}
+

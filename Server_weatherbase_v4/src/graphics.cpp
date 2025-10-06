@@ -743,7 +743,7 @@ void fcnDrawSensorInfo() {
     tft.printf("Max: %.02f\n",maxv);
 
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.printf("Device IP: %s\n",IPToString(Sensors.getDeviceIPBySnsIndex(alarms[boxnum])).c_str());
+    tft.printf("Device IP: %s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
     tft.printf("Sns type: %d\n",sensor->snsType);
     tft.printf("Sns ID: %d\n",sensor->snsID);
     tft.printf("Sns name: %s\n",sensor->snsName);
@@ -807,7 +807,7 @@ void fcnDrawStatus() {
     tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_INCOMINGMSG_TYPE);
     tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown")))));
     tft.printf("Last LAN Msg Sender: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC!=0)?MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC).c_str():"???");
-    tft.printf("Last LAN Msg Sender IP: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP!=0)?IPToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP).c_str():"???");
+    tft.printf("Last LAN Msg Sender IP: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP!=IPAddress(0,0,0,0))?I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString().c_str():"???");
     tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD!=0)?I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD:"???");
     tft.printf("\n");
     
@@ -1420,7 +1420,7 @@ void displaySetupProgress(bool success) {
 void displayWiFiStatus(byte retries, bool success) {
   if (success) {
     tft.setTextColor(TFT_GREEN);
-    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %s\n",retries,IPToString(Prefs.MYIP).c_str(),MACToString(Prefs.PROCID).c_str());
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %s\n",retries,Prefs.MYIP.toString().c_str(),MACToString(Prefs.PROCID).c_str());
     tft.setTextColor(FG_COLOR);
   } else {
     tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);

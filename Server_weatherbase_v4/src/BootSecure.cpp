@@ -47,6 +47,16 @@ uint16_t BootSecure::CRCCalculator(uint8_t * data, uint16_t length) {
     return (sum2 << 8) | sum1;
 }
 
+void BootSecure::flushPrefs() {
+    Preferences p;
+    p.begin("STARTUP", true);
+    if (p.isKey("Boot")) {        
+        p.clear();
+    }
+    else
+    p.end();
+}
+
 int8_t BootSecure::getPrefs() {
     Preferences p;
     p.begin("STARTUP", true);

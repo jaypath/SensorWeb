@@ -165,6 +165,21 @@ bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
 /**
  * @brief Initialize system - boot secure, serial, and copy sensor configs
  */
+// Memory cleanup function
+void cleanupMemory() {
+  #ifdef _USE32
+  
+  
+  // Log memory status
+  size_t freeHeap = ESP.getFreeHeap();
+  size_t minFreeHeap = ESP.getMinFreeHeap();
+  
+  #ifdef _DEBUG
+  Serial.printf("Memory cleanup: Free=%d, MinFree=%d\n", freeHeap, minFreeHeap);
+  #endif
+  #endif
+}
+
 void initSystem() {
   #ifdef _DEBUG
     Serial.begin(115200);
@@ -178,6 +193,14 @@ void initSystem() {
     #ifdef _DEBUG
       Serial.printf("BootSecure setup status: %d\n", boot_status);
     #endif
+
+    SerialPrint("Prefs.MYIP: " + String(Prefs.MYIP),true);
+
+    if (Prefs.DEVICENAME[0] == 0) {
+        snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
+        Prefs.isUpToDate = false;        
+    }
+
 
     // Copy persisted per-sensor config into Sensors  (intervals are used at runtime)
     for (int16_t si = 0; si < Sensors.getNumSensors(); ++si) {
@@ -611,9 +634,9 @@ void initServer() {
  * @param interval Broadcast interval in minutes (e.g., 5 for every 5 minutes)
  */
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
-  if (minute() % interval == 0 && I.lastESPNOW_TIME != I.currentTime) {        
-    // ESPNow does not require WiFi connection; always broadcast
-    broadcastServerPresence();
+  if (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime) {        
+      // ESPNow does not require WiFi connection; always broadcast
+      broadcastServerPresence();
   }
 }
 
@@ -643,6 +666,13 @@ void setup()
   #endif
   
   SerialPrint("Begin Setup",true);
+  
+  #ifdef _USE32
+  // Initialize watchdog timer for ESP32
+  esp_task_wdt_init(30, true); // 30 second timeout, panic on timeout
+  esp_task_wdt_add(NULL); // Add current task to watchdog
+  #endif
+  
   // Initialize system (boot secure, serial, prefs)
   initSystem();
   
@@ -761,51 +791,105 @@ void loop() {
   if (OldTime[0] != second()) {
     OldTime[0] = second();
     //do stuff every second
-    
+
 
     for (int16_t si = 0; si < Sensors.getNumSensors(); ++si) {
       
       if (Sensors.isMySensor(si) == false) continue; //not valid/not mine
 
       SnsType* temp = Sensors.getSensorBySnsIndex(si);
+      if (!temp) {
+        SerialPrint("ERROR: Invalid sensor pointer at index " + String(si), true);
+        continue;
+      }
 
-       if (ReadData(temp)>0) {
-        
-        //SerialPrint("ReadData: temp->snsType: " + (String) temp->snsType,true);
-        #ifdef _USELED
-        if (temp->snsType == 3) { // soil sensor
-          SerialPrint("LED_set_color_soil: temp->snsType: " + (String) temp->snsType,true);
-            LEDs.LED_set_color_soil(temp);
-        }
-        #endif
-       }
-       SendData(temp);
+      // Reset watchdog before sensor operations
+      esp_task_wdt_reset();
       
+      try {
+        int readResult = ReadData(temp);
+        if (readResult > 0) {
+          //SerialPrint("ReadData: temp->snsType: " + (String) temp->snsType,true);
+          #ifdef _USELED
+          if (temp->snsType == 3) { // soil sensor
+            SerialPrint("LED_set_color_soil: temp->snsType: " + (String) temp->snsType,true);
+            LEDs.LED_set_color_soil(temp);
+          }
+          #endif
+        }
+        
+        // Reset watchdog before sending data
+        esp_task_wdt_reset();
+        
+        bool sendResult = SendData(temp);
+        if (!sendResult && readResult > 0) {
+          // Only log if we had new data but failed to send
+          SerialPrint("WARNING: Failed to send data for sensor " + String(temp->snsName), true);
+        }
+      } catch (...) {
+        SerialPrint("ERROR: Exception in sensor processing for index " + String(si), true);
+        // Continue with next sensor instead of crashing
+      }
     }
 
   }
   
   if (OldTime[1] != minute()) {
-    
+
+    if (I.makeBroadcast) {
+      broadcastServerPresence(true);
+      I.makeBroadcast = false;
+    }
+
     if (Prefs.status==0) {
       WiFi.reconnect(); //try restarting wifi
       
+      #ifdef _USEESPNOWFORWIFI
       // If WiFi is still down and we have a known server, request WiFi password via ESPNOW
-      if (WiFi.status() != WL_CONNECTED && I.LAST_ESPNOW_SERVER_MAC != 0) {
+      if (WiFi.status() != WL_CONNECTED && I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC != 0) {
         static uint32_t lastPwdRequestMinute = 0;
         if (minute() != lastPwdRequestMinute) { // Only request once per minute
           lastPwdRequestMinute = minute();
           uint8_t serverMAC[6];
-          uint64ToMAC(I.LAST_ESPNOW_SERVER_MAC, serverMAC);
+          uint64ToMAC(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC, serverMAC);
           requestWiFiPassword(serverMAC, nullptr);
           #ifdef _DEBUG
           Serial.printf("WiFi down - requesting password via ESPNOW from server MAC: %s\n", MACToString(serverMAC).c_str());
           #endif
         }
       }
+      #endif
     }
 
     OldTime[1] = minute();
+
+    if (OldTime[1]%10==0) {
+    
+      // Force memory cleanup
+      cleanupMemory();
+      
+      #ifdef _USE32
+      size_t freeHeap = ESP.getFreeHeap();
+      size_t minFreeHeap = ESP.getMinFreeHeap();
+      
+      #ifdef _DEBUG
+      Serial.printf("Memory: Free=%d, MinFree=%d\n", freeHeap, minFreeHeap);
+      #endif
+      
+      // If memory is critically low, restart
+      if (freeHeap < 10000) { // Less than 10KB free
+        SerialPrint("CRITICAL: Low memory detected, restarting system", true);
+        delay(1000);
+        ESP.restart();
+      }
+      
+      // If minimum free heap is very low, log warning
+      if (minFreeHeap < 5000) { // Less than 5KB minimum
+        SerialPrint("WARNING: Memory fragmentation detected", true);
+      }
+      #endif
+    
+    }
 
     #ifdef _DEBUG
     Serial.printf("\nTime is %s\n", dateify(I.currentTime,"hh:nn:ss"));

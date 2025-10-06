@@ -30,6 +30,13 @@ Messages will use the ESPNOW_type struct for their transmission
 */
 
 #include "AddESPNOW.hpp"
+#include "utility.hpp"
+#include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
+#ifdef _USETFT
+#include "graphics.hpp"
+#endif
+
+
 
 
 namespace {
@@ -159,10 +166,16 @@ esp_err_t delESPNOWPeer(uint64_t macad) {
 bool sendESPNOW(ESPNOW_type& msg) {
     bool isBroadcast = true;
 
+    uint64ToMAC(Prefs.PROCID, msg.senderMAC);
+    msg.senderIP = IPToUint32(WiFi.localIP());
+    msg.senderType = MYTYPE;
+
+
+    I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
     if (msg.msgType>0) {
         if (isValidLMKKey()) {
             // Encrypt the message
-            encryptESPNOWMessage(msg);
+            encryptESPNOWMessage(msg, 80);
         } else {
             storeError("ESPNow: LMK not valid, message cannot be encrypted");
             return false;
@@ -190,7 +203,8 @@ bool sendESPNOW(ESPNOW_type& msg) {
         
         return false;
     }
-
+    I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
+    I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
     SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
 
     return true;
@@ -220,58 +234,71 @@ String ESPNowError(esp_err_t result) {
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (status == ESP_NOW_SEND_SUCCESS) {
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
-        I.ESPNOW_LAST_OUTGOINGMSG_STATE = 1;
+        I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64((byte*) mac_addr);        
+        I.ESPNOW_LAST_OUTGOINGMSG_STATE = 1; //mesage sent successfully
         I.ESPNOW_SENDS++;
         I.isUpToDate = false;
     } else {
-        I.ESPNOW_LAST_OUTGOINGMSG_STATE = -1;
+        I.ESPNOW_LAST_OUTGOINGMSG_STATE = -1; //message send failed
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
         storeError("ESPNow: Failed to send data");
     }
 }
 
 // --- ESPNow Receive Callback ---
-void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len) {
-    uint8_t mac[6] = {0};
-    memcpy(mac, recv_info->src_addr, 6);
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
-        I.ESPNOW_LAST_INCOMINGMSG_STATE = -2;
+        I.ESPNOW_LAST_INCOMINGMSG_STATE = -2; //message received but too short
         I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
         return;
     }
     ESPNOW_type msg;
     memcpy(&msg, incomingData, sizeof(msg));
     
-    I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = msg.senderMAC;
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = MACToUint64(msg.senderMAC);
     I.ESPNOW_LAST_INCOMINGMSG_FROM_IP = msg.senderIP;
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE = msg.senderType;
     I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
     I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg.msgType;
     I.isUpToDate = false;
-    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2;
+    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2; //message received and processed
     I.ESPNOW_RECEIVES++;
     I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
 
 
-    memcpy(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, msg.payload, 80);
-
-
     if (msg.msgType>0) {
-        decryptESPNOWMessage(msg);
+        decryptESPNOWMessage(msg, 80);
     }
-    
+    msg.payload[63]=0; //null terminate the server name, juts in case
+
+
+    if (msg.msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
+        // Received broadcast alive message (type 1) 
+        if (msg.senderType >= 100) {
+            //payload contains server name
+            //add the server to device list
+            
+            snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Server: %s", (char*) msg.payload);
+            
+            I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
+            Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+8, 0, 0, msg.senderType); //remove "server: " from the server name
+            return;
+        }
+    }
     if (msg.msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
         // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV, payload[32..39] = nonce)
         ESPNOW_type resp = {};
-        resp.senderMAC = Prefs.PROCID;
-        resp.senderIP = Prefs.MYIP;
+        uint64ToMAC(Prefs.PROCID, resp.senderMAC);
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "WiFi request from %s", MACToString(MACToUint64(msg.senderMAC)).c_str());
+        resp.senderIP = IPToUint32(WiFi.localIP());
         resp.senderType = MYTYPE;
-        uint64ToMAC(msg.senderMAC, resp.targetMAC);
+        memcpy(resp.targetMAC, msg.senderMAC, 6);
         resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
         // Encrypt password using provided key and IV
         uint8_t encrypted[48] = {0};
         uint16_t outlen = 0;
-                        BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
+        BootSecure::encryptWithIV((const unsigned char*)Prefs.WIFIPWD, 32, (char*)msg.payload, msg.payload+16, encrypted, &outlen);
         memcpy(resp.payload, encrypted, (outlen < 48) ? outlen : 48);
         
         // Echo nonce back from request to response for replay attack prevention
@@ -291,10 +318,9 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
         }
         // Check MAC match
         bool macMatch = true;
-        if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
-        
-        decryptESPNOWMessage(msg); //decrypt the message using the ESPNOW_KEY
-        
+        if (I.TEMP_AES_MAC != MACToUint64(msg.senderMAC)) macMatch = false;
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 50, "WiFi credentials received");
+       
         // Check nonce
         bool nonceMatch = true;
         for (int i = 0; i < 8; ++i) {
@@ -360,7 +386,7 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
             valid = true;
         }
         bool macMatch = true;
-        if (I.TEMP_AES_MAC != msg.senderMAC) macMatch = false;
+        if (I.TEMP_AES_MAC != MACToUint64(msg.senderMAC)) macMatch = false;
         
         if (!valid || !macMatch) {
             storeError("WiFi KEY REQUIRED: MAC mismatch or expired");
@@ -382,6 +408,51 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
         uint64ToMAC(I.TEMP_AES_MAC, mac);
         requestWiFiPassword(mac, nullptr);
     }
+    else if (msg.msgType== ESPNOW_MSG_PING_RESPONSE_REQUIRED) {
+        // Received ping request (type 5) - payload contains a uint32_t unix timestamp followed by the server name
+        // The payload has already been decrypted by decryptESPNOWMessage above
+        uint32_t originalSendTime;
+
+        memcpy(&originalSendTime, msg.payload, 4);
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping recv: %s", (char*)msg.payload + 4);
+        I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+11, 0, 0, msg.senderType); //remove "ping recv: " from the server name
+        
+        
+        // Prepare ping response (type 6) with current unix timestamp
+        ESPNOW_type resp = {};
+
+        memcpy(resp.targetMAC, msg.senderMAC, 6);
+        resp.msgType = ESPNOW_MSG_PING_RESPONSE_SUCCESS;
+        
+        // Put current unix timestamp in payload (will be encrypted by sendESPNOW)
+        memcpy(resp.payload, &I.currentTime, 4);
+        memcpy(resp.payload + 4, Prefs.DEVICENAME, 30);
+        resp.payload[34]=0; //null terminate the server name, juts in case
+        snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping response to %s", (char*)msg.payload + 4);
+        
+        if (!sendESPNOW(resp)) {
+            storeError("ESPNow: Failed to send ping response");
+            return;
+        }
+        
+        #ifdef _DEBUG
+        SerialPrint("ESPNow: Sent ping response to " + MACToString(msg.senderMAC), true);
+        #endif
+    }
+    else if (msg.msgType== ESPNOW_MSG_PING_RESPONSE_SUCCESS) {
+        // Received ping response (type 6) - payload contains encrypted unix timestamp
+        // The payload has already been decrypted by decryptESPNOWMessage above
+        uint32_t responseTime;
+        memcpy(&responseTime, msg.payload, 4);
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping response: %s", (char*)msg.payload + 4);
+        I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+15, 0, 0, msg.senderType); //remove "ping response: " from the server name
+        
+        #ifdef _DEBUG
+        SerialPrint("ESPNow: Received ping response from " + MACToString(msg.senderMAC) + " at time " + String(responseTime), true);
+        #endif
+    }
     else if (msg.msgType== ESPNOW_MSG_TERMINATE) {
         // Terminate communication, delete peer if needed
         delESPNOWPeer(msg.senderMAC);
@@ -391,6 +462,7 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
         I.TEMP_AES_MAC = 0;
         memset(I.WIFI_RECOVERY_NONCE, 0, 8);
         I.isUpToDate = false;
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "MSG TERMINATED for %s", MACToString(msg.senderMAC).c_str());
         
     }
     return ;
@@ -398,18 +470,18 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
 
 //at present I do not offer a type 0 message, so all messages are encrypted
 // --- Broadcast Server Presence (Type 1) ---
-bool broadcastServerPresence() {
+bool broadcastServerPresence(bool broadcastPeripheral) {
+
+    if (MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, unless peripherals specifically request it
 
     ESPNOW_type msg = {};
-    msg.senderMAC = Prefs.PROCID;
-    msg.senderIP = Prefs.MYIP;
-    msg.senderType = MYTYPE;
 
     memset(msg.targetMAC, 0xFF, sizeof(msg.targetMAC));
     msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
-    memset(msg.payload, 0, 60);
-
-
+    memset(msg.payload, 0, 80);
+    memcpy(msg.payload, Prefs.DEVICENAME, 30);
+    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server presence to all");
+    
     return sendESPNOW(msg);
 }
 
@@ -419,9 +491,6 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     // If user provided a list, use it
     if (serverMACs && serverIPs && count > 0) {
         ESPNOW_type msg = {};
-        msg.senderMAC = Prefs.PROCID;
-        msg.senderIP = Prefs.MYIP;
-        msg.senderType = MYTYPE;
         memset(msg.targetMAC, 0xFF, 6);
         msg.msgType = ESPNOW_MSG_SERVER_LIST;
         packServerList(msg.payload, serverMACs, serverIPs, count);
@@ -444,13 +513,11 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
         }
     }
     ESPNOW_type msg = {};
-    msg.senderMAC = Prefs.PROCID;
-    msg.senderIP = Prefs.MYIP;
-    msg.senderType = MYTYPE;
+
     memset(msg.targetMAC, 0xFF, 6);
     msg.msgType = ESPNOW_MSG_SERVER_LIST;
     packServerList(msg.payload, macs, ips, found);
-    
+    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server list to all");
     return sendESPNOW(msg);
 }
 
@@ -466,9 +533,8 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
     I.TEMP_AES_TIME = (uint32_t)time(nullptr);
     // Prepare ESPNow message
     ESPNOW_type msg = {};
-    msg.senderMAC = Prefs.PROCID;
-    msg.senderIP = Prefs.MYIP;
-    msg.senderType = MYTYPE;
+
+
     msg.msgType = ESPNOW_MSG_WIFI_PW_REQUEST;
     memcpy(msg.payload, I.TEMP_AES, 32); // key+IV
     // Add nonce if provided
@@ -512,23 +578,49 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
         memset(I.TEMP_AES, 0, 32);
         I.TEMP_AES_TIME = 0;
         I.TEMP_AES_MAC = 0;
-
+        snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "WiFi PW failed to  %s", MACToString(destMAC).c_str());
     }
+    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "WiFi PW request to %s", MACToString(destMAC).c_str());
     return ok;
 }
-  
 
+// --- Send Ping Request (Type 5) ---
+bool sendPingRequest(const uint8_t* targetMAC) {
+    // Prepare ping request message (type 5) with current unix timestamp
+    ESPNOW_type msg = {};
 
-bool encryptESPNOWMessage(ESPNOW_type& msg) {
+    memcpy(msg.targetMAC, targetMAC, 6);
+    msg.msgType = ESPNOW_MSG_PING_RESPONSE_REQUIRED;
+    
+    // Encrypt current unix timestamp followed by the server name in payload
+    uint32_t currentTime = (uint32_t)I.currentTime;
+    memcpy(msg.payload, &currentTime, sizeof(uint32_t));
+    memcpy(msg.payload + sizeof(uint32_t), Prefs.DEVICENAME, 30);
+    msg.payload[34]=0; //null terminate the server name, juts in case
+    
+    bool ok = sendESPNOW(msg);
+    if (!ok) {
+        snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request failed to %s", MACToString(targetMAC).c_str());
+        storeError("ESPNow: Failed to send ping request");
+    }
+    
+    #ifdef _DEBUG
+    SerialPrint("ESPNow: Sent ping request to " + MACToString(targetMAC), true);
+    #endif
+    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request to %s", MACToString(targetMAC).c_str());
+    return ok;
+}
+
+bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
     // Encrypt the message using stored ESPNOW_KEY
     //user must know that the message must be 64 bytes or less (so that the encrypted message is 64 bytes + 16 bytes for the IV)
     //returns 1 if successful, 0 if encryption failed, -1 if payload is too large
 
-    uint8_t encrypted[80] = {0};
+    uint8_t encrypted[msglen] = {0};
     uint16_t outlen = 0;
 
 
-    int8_t ret = BootSecure::encrypt((const unsigned char*)msg.payload, 64, (char*)Prefs.KEYS.ESPNOW_KEY, encrypted, &outlen,16);
+    int8_t ret = BootSecure::encrypt((const unsigned char*)msg.payload, msglen-16, (char*)Prefs.KEYS.ESPNOW_KEY, encrypted, &outlen,16);
     if (ret == -2) {
         storeError("ESPNow: Invalid key");
         return false;
@@ -537,18 +629,18 @@ bool encryptESPNOWMessage(ESPNOW_type& msg) {
         storeError("ESPNow: Failed to encrypt message");
         return false;
     }
-    memcpy(msg.payload, encrypted, (outlen < 80) ? outlen : 80);
+    memcpy(msg.payload, encrypted, (outlen < msglen) ? outlen : msglen);
 
     return true;
 }
 
-bool decryptESPNOWMessage(ESPNOW_type& msg) {
-    // Decrypt the message using stored ESPNOW_KEY
+bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
+    // Decrypt the message payload using stored ESPNOW_KEY
     //returns 1 if successful, 0 if decryption failed, -1 if payload is too large
-    uint8_t decrypted[80] = {0};
+    uint8_t decrypted[msglen] = {0};
     uint16_t outlen = 0;
     
-    int8_t ret = BootSecure::decrypt((unsigned char*)msg.payload, (char*)Prefs.KEYS.ESPNOW_KEY, decrypted, 80,16);
+    int8_t ret = BootSecure::decrypt((unsigned char*)msg.payload, (char*)Prefs.KEYS.ESPNOW_KEY, decrypted, msglen,16);
     if (ret == -2) {
         storeError("ESPNow: Invalid key");
         return false;
@@ -557,9 +649,12 @@ bool decryptESPNOWMessage(ESPNOW_type& msg) {
         storeError("ESPNow: Failed to decrypt message");
         return false;
     }
-    uint8_t tempmsg[80] = {0};
-    memcpy(tempmsg, decrypted, (outlen < 80) ? outlen : 80);
-    memcpy(msg.payload, tempmsg, 80);
+    // Calculate actual decrypted length (input length minus 16 bytes for IV)
+    uint16_t actualDecryptedLen = msglen - 16; // Assuming msglen bytes input, 16 bytes IV
+    uint8_t tempmsg[actualDecryptedLen] = {0};
+    memcpy(tempmsg, decrypted, actualDecryptedLen);
+    memcpy(msg.payload, tempmsg, msglen);
+    msg.payload[actualDecryptedLen]=0; //null terminate the message, juts in case
     return true;
 
 }

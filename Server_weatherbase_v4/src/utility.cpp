@@ -49,9 +49,6 @@ void initScreenFlags(bool completeInit) {
   I.oldScreenNum = 0;
   I.lastStoreCoreDataTime = 0;
 
-  I.ESPNOW_SENDS = 0;
-  I.ESPNOW_RECEIVES = 0;
-
   I.lastHeaderTime=0; //last time header was drawn
   I.lastWeatherTime=0; //last time weather was drawn
   I.lastCurrentConditionTime=0; //last time current condition was drawn
@@ -63,8 +60,11 @@ void initScreenFlags(bool completeInit) {
   
   I.localBatteryLevel=0;
 
+  I.ESPNOW_SENDS = 0;
+  I.ESPNOW_RECEIVES = 0;
+
   I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
-  I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=0;
+  I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=IPAddress(0,0,0,0);
   I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
   I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE=MYTYPE;
   memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
@@ -463,72 +463,19 @@ String getRebootDebugInfo() {
 }
 
 // --- IP address conversion utilities ---
-String IPToString(uint32_t ip) {
-    return String((ip >> 24) & 0xFF) + "." +
-           String((ip >> 16) & 0xFF) + "." +
-           String((ip >> 8) & 0xFF) + "." +
-           String(ip & 0xFF);
-}
 
-String IPToString(byte* ip) {
-  return ArrayToString(ip,4,'.',false);
-}
-
- uint32_t StringToIP(String str) {
-    int parts[4] = {0};
-    uint32_t ip = 0;
-
-    for (int i = 3; i >=0; i--)  {
-      parts[i] = breakString(&str,".",true).toInt();
-      ip += parts[i]<<(i*8);
-    }
-
-    return ip;
-}
-
-
-uint32_t IPToUint32(byte* ip) {
-  return (ip[3]<<24) + (ip[2]<<16) + (ip[1]<<8) + ip[0];
-}
-
-void uint32toIP(uint32_t ip32, byte* ip) {
-  ip[3] = (ip32>>24) & 0xFF;
-  ip[2] = (ip32>>16) & 0xFF;
-  ip[1] = (ip32>>8) & 0xFF;
-  ip[0] = (ip32) & 0xFF;
-}
-
-String IPbytes2String(byte* IP,byte len) {
-  return ArrayToString(IP,len);
-}
-
-bool IPString2ByteArray(String IPstr,byte* IP) {
-  //parse IP string like "192.168.1.1" into byte array
-  String temp = IPstr;
-  String token;
-  byte i=0;
-  
-  while (temp.length()>0 && i<4) {
-    token = breakString(&temp,".",true);
-    if (token.length()>0) {
-      IP[i] = token.toInt();
-      i++;
-    }
-  }
-  
-  return (i==4);
-}
-
-uint64_t IPToMACID(uint32_t ip) {
+uint64_t IPToMACID(IPAddress ip) {
   //convert IP address to MAC ID
   //replace with 0x00000000FF000000 prefix if desired
-  return (uint64_t)ip;
+  uint32_t ip32 = IPToUint32(ip);
+  return (uint64_t)ip32;
+
 }
 
 uint64_t IPToMACID(byte* ip) {
   //wrapper for IPToMACID when ip is a byte array
 
-  return IPToMACID(IPToUint32(ip));
+  return IPToMACID(IPAddress(ip));
 }
 
 // Convert uint64_t MAC to 6-byte array

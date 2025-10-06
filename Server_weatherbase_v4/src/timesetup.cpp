@@ -234,7 +234,7 @@ bool setupTime(void) {
     timeClient.begin();
     
     // Initialize with base timezone offset from Prefs
-    timeClient.setTimeOffset(Prefs.TimeZoneOffset);
+    timeClient.setTimeOffset(Prefs.TimeZoneOffset + (Prefs.DST ? Prefs.DSTOffset : 0));
 
     byte i=0;
     

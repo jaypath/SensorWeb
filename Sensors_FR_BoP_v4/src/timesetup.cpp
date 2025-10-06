@@ -124,11 +124,12 @@ void checkDST(void) {
   
  
 
-  SerialPrint("checkDST: Starting time is: %s\n",dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss"));
-
+  SerialPrint("checkDST: Starting time is: " + String(dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss")),true);
+SerialPrint("Saved timezoneoffset is " + (String) Prefs.TimeZoneOffset,true);
 
   // Calculate total timezone offset based on Prefs
   int32_t totalOffset = Prefs.TimeZoneOffset; // Start with base timezone offset
+  if (Prefs.DST == 1)       totalOffset = Prefs.TimeZoneOffset + Prefs.DSTOffset; // Add 1 hour for DST
 
   // Check if DST is enabled in user's locale
   if (Prefs.DST == 1) {

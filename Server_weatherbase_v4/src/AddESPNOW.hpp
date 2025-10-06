@@ -62,7 +62,7 @@ esp_err_t delESPNOWPeer(uint64_t macad);
 bool sendESPNOW(const ESPNOW_type& msg);
 bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen=80);
 bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen=80);
-bool broadcastServerPresence();
+bool broadcastServerPresence(bool broadcastPeripheral=false);
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
 bool sendPingRequest(const uint8_t* targetMAC);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);

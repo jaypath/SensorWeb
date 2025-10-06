@@ -56,7 +56,7 @@ public:
     uint8_t numSensors;
     
     // Device management
-    int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);
+    int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0, uint8_t devType = 0);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(uint32_t IP);
     DevType* getDeviceByDevIndex(int16_t devindex);
@@ -70,7 +70,7 @@ public:
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
     bool isDeviceInit(int16_t devindex);
-    void initDevice(int16_t devindex);
+    int16_t initDevice(int16_t devindex);
     bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
     uint16_t isSensorIndexInvalid(int16_t index);

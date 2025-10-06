@@ -440,12 +440,6 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
    return index; //the last window is not complete, so we return the previous one
 }
 
-union ScreenInfoBytes {
-    STRUCT_CORE screendata;
-    uint8_t bytes[sizeof(STRUCT_CORE)];
-
-    ScreenInfoBytes() {};
-};
 
 // New functions for Devices_Sensors class
 
@@ -570,10 +564,7 @@ bool storeScreenInfoSD() {
     I.isUpToDate = true;
     I.lastStoreCoreDataTime = I.currentTime;
 
-    union ScreenInfoBytes D; 
-    D.screendata = I;
-
-    f.write(D.bytes,sizeof(STRUCT_CORE));
+    f.write((uint8_t*)&I,sizeof(STRUCT_CORE));
 
     f.close();
     
@@ -587,7 +578,8 @@ bool storeScreenInfoSD() {
 
 bool readScreenInfoSD() //read last screenInfo
 {
-    union ScreenInfoBytes D; 
+    
+
     String filename = "/Data/ScreenFlags.dat";
 
     File f = SD.open(filename, FILE_READ);
@@ -616,8 +608,7 @@ bool readScreenInfoSD() //read last screenInfo
     }
 
     while (f.available()) {
-        f.read(D.bytes,sizeof(STRUCT_CORE));
-        I = D.screendata;
+        f.read((uint8_t*)&I,sizeof(STRUCT_CORE));
     }
 
     f.close();

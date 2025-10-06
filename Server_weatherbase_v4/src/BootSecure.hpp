@@ -80,7 +80,7 @@ public:
     int8_t setup(); // Call once at boot. Returns 1 if secure, 0 if not, -1 if error no prefs found, -2 if PROCID mismatch
     bool isSecure() const { return secure; }
     static bool setPrefs(); // Save Prefs to encrypted storage
-
+    static void flushPrefs();
     // Optionally expose CRC and encryption helpers if needed elsewhere
     static uint16_t CRCCalculator(uint8_t * data, uint16_t length);
     static int8_t encrypt(const unsigned char* input, uint16_t inputlength, char* key, unsigned char* output,  uint16_t* outputlength, uint8_t keylength=16);

@@ -339,6 +339,10 @@ void setup() {
     } else {
         displaySetupProgress( false);
     }
+    delay(100);
+    tft.printf("Current time = %s\n", dateify(now(),"yyyy-mm-dd hh:nn:ss"));
+    SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
+    I.currentTime = now();
     I.ALIVESINCE = I.currentTime;
     
     // Check for unexpected reboot by comparing previous ALIVESINCE with current time
@@ -367,8 +371,8 @@ void setup() {
     }
     
     SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
-    SerialPrint("Prefs.MYIP: " + String(Prefs.MYIP),true);
-    SerialPrint("Prefs.MYIP.toInt(): " + String((uint32_t) Prefs.MYIP),true);
+    SerialPrint("Prefs.MYIP: " + Prefs.MYIP.toString(),true);
+    
     if (Prefs.DEVICENAME[0] == 0) {
         snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
         Prefs.isUpToDate = false;        
@@ -376,6 +380,12 @@ void setup() {
     WeatherData.lat = Prefs.LATITUDE;
     WeatherData.lon = Prefs.LONGITUDE;
 
+    //check if I am registered as a device
+    byte deviceIndex = Sensors.findMe();
+    if (deviceIndex == -1) {
+        SerialPrint("I am not registered as a device, registering...",true);
+        Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), MYNAME);
+    }
 
     tft.printf("Init server... ");
     server.begin();

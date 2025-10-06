@@ -248,7 +248,7 @@ typedef enum {
     uint32_t DNS; // 4 bytes
     uint32_t DNS2; // 4 bytes
     uint32_t SUBNET; // 4 bytes
-    uint32_t MYIP; // 4 bytes
+    IPAddress MYIP; // 4 bytes
     uint8_t status;
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
 
@@ -343,7 +343,7 @@ typedef enum {
     uint8_t ESPNOW_LAST_INCOMINGMSG_STATE; //-1 if receive failure, 0 if indeterminate, 1 if send success
     uint32_t ESPNOW_LAST_INCOMINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
       uint64_t ESPNOW_LAST_INCOMINGMSG_FROM_MAC; // MAC of last ESPnow message sender
-      uint32_t ESPNOW_LAST_INCOMINGMSG_FROM_IP;
+      IPAddress ESPNOW_LAST_INCOMINGMSG_FROM_IP;
       uint8_t ESPNOW_LAST_INCOMINGMSG_FROM_TYPE; // type of last ESPnow message sender
       uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of last ESPnow message sender
       char ESPNOW_LAST_INCOMINGMSG_PAYLOAD[64]; // text portion of payload of last ESPnow message received

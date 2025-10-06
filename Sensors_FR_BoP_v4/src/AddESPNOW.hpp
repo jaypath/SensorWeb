@@ -11,10 +11,7 @@
     #include "BootSecure.hpp"
     #include <string.h>
     #include <esp_system.h>
-
-    #ifdef _USETFT
-#include "graphics.hpp"
-#endif
+    #include "timesetup.hpp"
 
 
 extern STRUCT_PrefsH Prefs;
@@ -30,12 +27,15 @@ constexpr uint8_t ESPNOW_MSG_SERVER_LIST          = 1;   // Private: payload con
 constexpr uint8_t ESPNOW_MSG_WIFI_PW_REQUEST      = 2;   // Targeted: request for WiFi password, payload = 16-byte one-time key
 constexpr uint8_t ESPNOW_MSG_WIFI_PW_RESPONSE     = 3;   // Private: response to type 2, payload = encrypted WiFi password
 constexpr uint8_t ESPNOW_MSG_WIFI_KEY_REQUIRED    = 4;   // Private: indicates new WiFi key required, may trigger new type 2 or 128
+constexpr uint8_t ESPNOW_MSG_PING_RESPONSE_REQUIRED    = 5;   // Private: ping the recipient and demand a ping response
+constexpr uint8_t ESPNOW_MSG_PING_RESPONSE_SUCCESS    = 6;   // Private: ping response received
 constexpr uint8_t ESPNOW_MSG_TERMINATE            = 128; // Private: terminate communication, delete peer
 constexpr uint8_t ESPNOW_MSG_GENERAL_ENCRYPTED    = 255; // Private: general encrypted message, which will be nx128 bits + 128 bit IV
 
 // --- ESPNow Message Struct ---
+#pragma pack(push, 1)
 struct ESPNOW_type {
-    uint64_t  senderMAC;      // Sender's MAC address
+    uint8_t  senderMAC[6];      // Sender's MAC address
     uint32_t senderIP;          // Sender's IP address (uint32_t)
     uint8_t  senderType;        // Device type (>=100 = server, <100 = sensor)
     uint8_t  targetMAC[6];      // Target MAC address (all 0xFF for broadcast). in byte format for ESPNOW
@@ -49,6 +49,7 @@ struct ESPNOW_type {
     // for type 0: payload = none, just a broadcast of my presence
     // for type 128: payload = unused, this is a special message for the server to send to the sensor to terminate the connection
 };
+#pragma pack(pop)
 
 extern ESPNOW_type ESPNOWmsg;
 String ESPNowError(esp_err_t result) ;
@@ -59,12 +60,13 @@ esp_err_t addESPNOWPeer(uint8_t* macad);
 esp_err_t delESPNOWPeer(uint8_t* macad);
 esp_err_t delESPNOWPeer(uint64_t macad);
 bool sendESPNOW(const ESPNOW_type& msg);
-bool encryptESPNOWMessage(ESPNOW_type& msg);
-bool decryptESPNOWMessage(ESPNOW_type& msg);
-bool broadcastServerPresence();
+bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen=80);
+bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen=80);
+bool broadcastServerPresence(bool broadcastPeripheral=false);
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
+bool sendPingRequest(const uint8_t* targetMAC);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
-void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len);
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
 
 // --- Utility for server list packing ---
 void packServerList(uint8_t* payload, const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count);
@@ -80,5 +82,11 @@ bool isValidLMKKey();
 // --- Utility for encryption status reporting ---
 String getESPNOWEncryptionStatus();
 
+// --- ESPNow Message Encryption/Decryption ---
+bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen);
+bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen);
+
+// Generate AP SSID based on MAC address
+String generateAPSSID();
 
 #endif

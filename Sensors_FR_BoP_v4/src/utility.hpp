@@ -55,21 +55,23 @@ byte checkExpiration(int i, time_t t=0,bool onlycritical=true);
 
 
 // --- IP address conversion utilities ---
-String ArrayToString(byte* Arr, byte len, char separator= '.', bool asHex = false);
+String ArrayToString(const byte* Arr, byte len, char separator= '.', bool asHex = false);
 String IPToString(uint32_t ip);
 String IPbytes2String(byte* IP,byte len=4);
 uint32_t StringToIP(String str);
 bool IPString2ByteArray(String IPstr,byte* IP);
 uint32_t IPToUint32(byte* ip);
 void uint32toIP(uint32_t ip32, byte* ip);
+uint32_t IPToUint32(IPAddress ip);
+
 uint64_t IPToMACID(uint32_t ip);
 uint64_t IPToMACID(byte* ip);
 
 // --- MAC address conversion utilities ---
 void uint64ToMAC(uint64_t mac64, byte* macArray);
 uint64_t MACToUint64(byte* macArray);
-String MACToString(uint64_t mac64);
-String MACToString(uint8_t* mac); //wrapper for ip2string
+String MACToString(const uint64_t mac64);
+String MACToString(const uint8_t* mac); //wrapper for ip2string
 
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);

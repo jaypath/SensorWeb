@@ -35,11 +35,6 @@
 #endif
 
 
-struct IP_TYPE {
-  uint32_t IP;
-  int server_status;
-};
-
 
 //declared as global constants
 extern STRUCT_CORE I;

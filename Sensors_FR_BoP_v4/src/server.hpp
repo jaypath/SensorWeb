@@ -8,6 +8,7 @@
 #include "globals.hpp"
 #include "sensors.hpp"
 #include "utility.hpp"
+
 //Server requests time out after 2 seconds
 #define TIMEOUT_TIME 2000
 
@@ -70,6 +71,15 @@ void handleLast(void);
 void handleWiFiConfig_RESET(void);
 void handleWiFiConfig(void);
 void handleWiFiConfig_POST(void);
+void handleSetup(void);
+void handleSetup_POST(void);
+void handleDeviceViewer(void);
+void handleDeviceViewerNext(void);
+void handleDeviceViewerPrev(void);
+void handleDeviceViewerPing(void);
+void handleDeviceViewerDelete(void);
+void handleForceBroadcast(void);
+void handleStatus(void);
 void handleTimezoneSetup(void);
 void handleTimezoneSetup_POST(void);
 void handleCONFIG(void);
