@@ -101,13 +101,13 @@ public:
     int16_t findSnsOfType(uint8_t snstype, bool newest = false);
 
     //peripheral specific functions
-    int16_t findMe();
     #ifdef _ISPERIPHERAL
     int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID); //get the preferences index for this sensor
     #endif
+    int16_t findMyDeviceIndex();
     bool isMySensor(int16_t index);
-    
-    uint16_t isSensorIndexValid(int16_t index, bool ismine);
+    int16_t isDeviceIndexValid(int16_t index);
+    int16_t isSensorIndexValid(int16_t index);
     #ifdef _USESDCARD
     // Data storage
     bool setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten=0);

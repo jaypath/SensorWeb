@@ -51,7 +51,6 @@
 99 = any numerical value
 */
 
-#define _USESDCARD
 
 #include "globals.hpp"
 #include "utility.hpp"
@@ -190,7 +189,7 @@ void initSystem() {
             while (1) { delay(1000); }
         #endif
         tft.println("Prefs failed to load with error code: " + String(boot_status));
-        delay(5000);
+        delay(1000);
     }
 
 }
@@ -291,7 +290,10 @@ void setup() {
 
     #ifdef _USESERIAL
     Serial.begin(115200);
+    Serial.println("Serial started");
+    SerialPrint("SerialPrint started",true);
     #endif
+
 
     WEBHTML.reserve(20000);
 
@@ -318,11 +320,10 @@ void setup() {
             if (connectWiFi()>-10000 && connectWiFi()<0) {
                 tft.clear();
                 tft.setCursor(0, 0);
-                tft.printf("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ");    
+                tft.printf("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ");  
+                delay(30000);  
                 Prefs.HAVECREDENTIALS = false;
-                BootSecure::setPrefs();        
-                delay(60000); //do not flood wifi        
-                controlledReboot("Wifi failed too many times", RESET_WIFI, true);
+                APStation_Mode();
             }        
         } 
     } else {
@@ -381,10 +382,16 @@ void setup() {
     WeatherData.lon = Prefs.LONGITUDE;
 
     //check if I am registered as a device
-    byte deviceIndex = Sensors.findMe();
+    byte deviceIndex = Sensors.findMyDeviceIndex();
     if (deviceIndex == -1) {
-        SerialPrint("I am not registered as a device, registering...",true);
-        Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), MYNAME);
+        SerialPrint("I am not registered as a device, and could not register, so I cannot run...",true);
+        tft.clear();
+        tft.setCursor(0, 0);
+        tft.setTextColor(TFT_RED);
+        tft.printf("Unable to register as a device, so I cannot run...",true);
+        delay(10000);
+        controlledReboot("Unable to register myself as a device, so I cannot run...", RESET_UNKNOWN);
+        return;
     }
 
     tft.printf("Init server... ");
@@ -466,7 +473,10 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 void handleStoreCoreData() {
     if (!Prefs.isUpToDate) { 
         Prefs.isUpToDate = true;
-        BootSecure::setPrefs();        
+        BootSecure bootSecure;
+        if (bootSecure.setPrefs()<0) {
+            SerialPrint("Failed to store core data",true);
+        }
     }
 
     if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if more than 5 minutes since last store

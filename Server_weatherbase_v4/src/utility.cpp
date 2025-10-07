@@ -399,9 +399,14 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
 void storeCoreData() {
   //force core data to be stored to SD
   I.isUpToDate = true;
-  Prefs.isUpToDate = true;
-  BootSecure::setPrefs();
   storeScreenInfoSD();
+
+  if (Prefs.isUpToDate==false) {
+  Prefs.isUpToDate = true;
+  BootSecure bootSecure;
+  bootSecure.setPrefs();
+  }
+
 }
 
 
@@ -415,13 +420,7 @@ void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   storeCoreData();
   
   if (doreboot) {
-    #ifdef HAS_TFT
-    tft.clear();
-    tft.setCursor(0,0);
-    tft.setTextColor(TFT_RED);
-    tft.println("Controlled reboot in 1 second");
-    #endif 
-    
+    SerialPrint("Controlled reboot in 1 second", true);
     delay(1000);
     ESP.restart();
   }

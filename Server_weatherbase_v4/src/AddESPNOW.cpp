@@ -275,9 +275,9 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
     if (msg.msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
         // Received broadcast alive message (type 1) 
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+8, 0, 0, msg.senderType); //remove "server: " from the server name
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, (char*)msg.payload, 0, 0, msg.senderType); //remove "server: " from the server name
             
-        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Server: %s", (char*) msg.payload);
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg.payload);
         
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
         return;
@@ -348,8 +348,17 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
             storeError("WiFi PW response: Decryption failed");
             return;
         }
-        // Store WiFi password
-        bool pwdMatch = (memcmp(Prefs.WIFIPWD, decrypted, 64) == 0);
+        
+        if (strcmp((char*)decrypted, (char*)Prefs.WIFIPWD) == 0) {
+            //wifi password matches, so maybe WiFi is down. Proceed along typical routine
+            #ifdef _USETFT
+            screenWiFiDown();
+            #endif
+
+            APStation_Mode();
+            
+            return;
+        }
         memcpy(Prefs.WIFIPWD, decrypted, 64);
         Prefs.WIFIPWD[64] = 0;
         Prefs.HAVECREDENTIALS = true;
@@ -358,19 +367,10 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         I.TEMP_AES_TIME = 0;
         I.TEMP_AES_MAC = 0;
         memset(I.WIFI_RECOVERY_NONCE, 0, 8);
-        putWiFiCredentials();
-        // If password matches, WiFi may be down; enter AP mode and show message
-        if (pwdMatch) {
-            #ifdef _USETFT
-            screenWiFiDown();
-            #endif
-            WiFi.mode(WIFI_AP);
-            WiFi.softAP(generateAPSSID().c_str(), "S3nsor.N3t!");
-            delay(100);
-            WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
-            delay(300000); // 5 min
-            controlledReboot("WiFi may be down, AP fallback", RESET_WIFI, true);
-        }
+  
+        BootSecure bs;
+        bs.setPrefs();
+
         // Log success
         #ifdef _DEBUG
         Serial.println("[ESPNow] WiFi password updated from server response.");
@@ -414,7 +414,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         memcpy(&originalSendTime, msg.payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping recv: %s", (char*)msg.payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+11, 0, 0, msg.senderType); //remove "ping recv: " from the server name
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, (char*)msg.payload+4, 0, 0, msg.senderType); //remove "ping recv: " from the server name
         
         
         // Prepare ping response (type 6) with current unix timestamp
@@ -445,7 +445,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
         memcpy(&responseTime, msg.payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping response: %s", (char*)msg.payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD+15, 0, 0, msg.senderType); //remove "ping response: " from the server name
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, (char*)msg.payload+4, 0, 0, msg.senderType); //remove "ping response: " from the server name
         
         #ifdef _DEBUG
         SerialPrint("ESPNow: Received ping response from " + MACToString(msg.senderMAC) + " at time " + String(responseTime), true);

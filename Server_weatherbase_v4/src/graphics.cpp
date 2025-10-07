@@ -1,5 +1,6 @@
 #include "graphics.hpp"
 #include "globals.hpp"
+#include "BootSecure.hpp"
 
 
 
@@ -629,11 +630,11 @@ void fcnDrawScreen() {
       fcnDrawSensorScreen();
         I.oldScreenNum = I.ScreenNum;
     } else {
-      if ((I.ScreenNum==2 || I.ScreenNum==3) && I.oldScreenNum!=I.ScreenNum) { //draw config or confirm
+      if ((I.ScreenNum==2 || I.ScreenNum==3 || I.ScreenNum==4) && I.oldScreenNum!=I.ScreenNum) { //draw config or confirm
         fcnDrawStatus();
         I.oldScreenNum = I.ScreenNum;
       } else {
-        if (I.ScreenNum>3 && I.oldScreenNum!=I.ScreenNum) { //draw sensor info
+        if (I.ScreenNum>4 && I.oldScreenNum!=I.ScreenNum) { //draw sensor info
           fcnDrawSensorInfo();
           I.oldScreenNum = I.ScreenNum;
         }
@@ -757,6 +758,8 @@ void fcnDrawSensorInfo() {
       tft.setCursor(tft.width()-150,tft.height()-25);
       tft.printf("Sensor not found");
       tft.setTextColor(FG_COLOR,BG_COLOR);
+      I.ScreenNum=1;
+      I.screenChangeTimer = 30;
     }
 
 
@@ -842,25 +845,60 @@ void fcnDrawStatus() {
 
     tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
     tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-    tft.setCursor(25,tft.height()-25);
-    fcnPrintTxtCenter("Reset I",1,25,tft.height()-25);
-  } else {
-    //draw confirm screen
+    fcnPrintTxtCenter("Clear",1,25,tft.height()-25-5);
+    fcnPrintTxtCenter("Flags",1,25,tft.height()-15-5);
 
-    tft.setTextFont(2);
-    tft.printf("Are you sure?\n");
-    tft.setTextFont(1);
-    tft.printf("This will delete stored screen data\n");
-    tft.printf("and reset screen defaults.\n");
-    tft.printf("The device will reboot.\n");
-    tft.printf("This will not affect sensor data.\n");
-    tft.printf("Touch CONFIRM to continue.\n");
-    tft.printf("Touch anywhere else to abort.\n");
 
-    tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+    //add a button to the right of the reset I button
+    tft.fillRoundRect(54,tft.height()-50,50,50,10,TFT_LIGHTGREY);
     tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-    tft.setCursor(25,tft.height()-25);
-    fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
+    fcnPrintTxtCenter("Fctry",1,54+25,tft.height()-25-5);
+    fcnPrintTxtCenter("Reset",1,54+25,tft.height()-15-5);
+    
+    //add a next button to the right of fctry reset
+    tft.fillRoundRect(108,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+    fcnPrintTxtCenter("Next",1,108+25,tft.height()-25);
+
+
+  } else {
+    if (I.ScreenNum==3) {
+      //draw confirm screen
+
+      tft.setTextFont(2);
+      tft.printf("Are you sure?\n");
+      tft.setTextFont(1);
+      tft.printf("This will delete stored screen data\n");
+      tft.printf("and reset screen defaults.\n");
+      tft.printf("The device will reboot.\n");
+      tft.printf("This will not delete sensor data.\n");
+      tft.printf("Touch CONFIRM to continue.\n");
+      tft.printf("Touch anywhere else to abort.\n");
+
+      tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+      tft.setCursor(25,tft.height()-25);
+      fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
+    } else {
+      if (I.ScreenNum==4) {
+        tft.setTextFont(2);
+        tft.printf("Are you sure?\n");
+        tft.setTextFont(1);
+        tft.printf("This will clear all settings .\n");
+        tft.printf("to factory defaults.\n");
+        tft.printf("The device will reboot.\n");
+        tft.printf("This will not delete sensor data.\n");
+        tft.printf("Touch CONFIRM to continue.\n");
+        tft.printf("Touch anywhere else to abort.\n");
+  
+        tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
+        tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+        tft.setCursor(25,tft.height()-25);
+        fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
+  
+      }
+
+    }
   }
 
 }
@@ -1457,13 +1495,11 @@ void checkTouchScreen() {
       case 0:
         I.screenChangeTimer = 30;
         I.ScreenNum=1;
-        break; //do nothing
+        break; 
       case 1:
-        if ( I.touchY > tft.height()-50 && I.touchY < tft.height()) {
-          if(I.touchX > 0 && I.touchX < 52)           I.ScreenNum=0;
-          else if(I.touchX >= 52 && I.touchX < 104) I.ScreenNum=2;
-        } 
-        else {
+        I.screenChangeTimer = 30;
+        //touched previous screen button
+        if (I.touchY < tft.height()-50 ) {
           if (I.touchX > 0 && I.touchX < tft.width()) {
             //There are 8 rows and 6 cols, so MAXALARMS boxes
             //figure out the box number, starting from upper left and moving right and then down.
@@ -1471,14 +1507,15 @@ void checkTouchScreen() {
             I.ScreenNum=10+boxnum;
           }
         }
+        else if (I.touchX < 52 && I.touchY > tft.height()-50 && I.touchY < tft.height()) I.ScreenNum=0;        
+        else if(I.touchX > 52 && I.touchX < 104)           I.ScreenNum=2;
         break;
       case 2:
-        if (I.touchX < 50 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
+        if (I.touchY > tft.height()-50 && I.touchY < tft.height()) {
           I.screenChangeTimer = 30;
-          I.ScreenNum=3; //confirm deletion screen
-        } else {
-          I.screenChangeTimer = 30;
-          I.ScreenNum=0;
+          if (I.touchX < 50 && I.touchX > 0)  I.ScreenNum=3; //confirm deletion screen
+          else if (I.touchX > 52 && I.touchX < 104) I.ScreenNum=4; //confirm deletion screen
+          else if (I.touchX > 104 && I.touchX < 156) I.ScreenNum=0; 
         }
         break; 
       case 3:
@@ -1490,7 +1527,25 @@ void checkTouchScreen() {
           I.screenChangeTimer = 30;
           I.ScreenNum=0;
         }
-        break; //do nothing
+        break; 
+        case 4:
+          if (I.touchX < 50 && I.touchX > 0 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
+            deleteCoreStruct(); //delete the screen flags file              
+            BootSecure bootSecure;
+            if (!bootSecure.flushPrefs()) {
+              tft.setTextColor(TFT_RED);
+              tft.setCursor(0,tft.height()-75);
+              tft.println("Failed to reset settings");
+              tft.setTextColor(FG_COLOR);
+              delay(2000);
+            }
+            controlledReboot("Reset All",RESET_USER,true); //reset the device
+          } else {
+            I.screenChangeTimer = 30;
+            I.ScreenNum=0;
+          }
+          break;
+
       default:
         //displaying sensor info. any touch on this screen will return to sensor screen
         I.screenChangeTimer = 30;

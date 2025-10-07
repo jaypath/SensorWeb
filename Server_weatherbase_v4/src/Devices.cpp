@@ -187,9 +187,6 @@ uint8_t Devices_Sensors::countDev(uint8_t devType) {
     return count;
 }
 
-bool Devices_Sensors::isDeviceInit(int16_t index) {
-    return (index >= 0 && index < NUMDEVICES  && devices[index].IsSet);
-}
 
 int16_t  Devices_Sensors::initDevice(int16_t index) {
     if (index < 0 || index >= NUMDEVICES) {
@@ -199,7 +196,7 @@ int16_t  Devices_Sensors::initDevice(int16_t index) {
 
     if (devices[index].IsSet == 0) return -1;
     
-    if (findMe() == index) {
+    if (findMyDeviceIndex() == index) {
         return -2;
     }
 
@@ -563,28 +560,62 @@ bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
 #endif
 
 // Helper functions for expiration checking
-uint16_t Devices_Sensors::isSensorIndexValid(int16_t index, bool ismine) {
+bool Devices_Sensors::isDeviceInit(int16_t index) {
+//returns true if the device is set and initialized, false if index is out of bounds or device is not set
+
+    return (index >= 0 && index < NUMDEVICES  && devices[index].IsSet);
+}
+
+
+int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
+    //returns more info than isDeviceInit : -1 = not set, 0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
+    if (index < 0 || index >= NUMDEVICES ) {
+        return 0; //invalid index
+    }
+    if (devices[index].IsSet) {
+        
+        uint8_t ismine = findMyDeviceIndex();
+        if (index == ismine ) {
+            //check if expired
+            if (devices[index].expired) {
+                return 3; //expired and is mine
+            } else {
+                return 1; //set and is mine
+            }
+        } else {
+            if (devices[index].expired) {
+                return 4; //expired and not mine
+            } else {
+                return 2; //set and not mine
+            }
+        }
+    }
+    return -1; //not set, but valid
+}
+
+int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
     //checks if the sensor index is VALID
-    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
+    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine, 5 = not set
     if (index < 0 || index >= NUMSENSORS ) {
         //index is invalid
         return 0;
     }
-    if (sensors[index].expired) {
-        if (ismine==true && isMySensor(index)) {
-            return 3; //expired and is mine
-        } else {
-            return 4; //expired and not mine
-        }
-    }
     if (sensors[index].IsSet) {
-        if (ismine==true && isMySensor(index)) {
-            return 1; // set and is mine
+        if (isMySensor(index)) {
+            if (sensors[index].expired) {
+                return 3; //expired and is mine
+            } else {
+                return 1; //set and is mine
+            }
         } else {
-            return 2; //set and not mine
+            if (sensors[index].expired) {
+                return 4; //expired and not mine
+            } else {
+                return 2; //set and not mine
+            }
         }
     }
-    return 0; //valid
+    return -1; //not set, but valid
 }
 
 
@@ -684,16 +715,22 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
     return false;
 }
 
-int16_t Devices_Sensors::findMe() {
-    //returns -1 if I am not found (that's a problem), or the index to devices for me
-    return findDevice(ESP.getEfuseMac());
+int16_t Devices_Sensors::findMyDeviceIndex() {
+    //returns -1 if I am not found and could not be registered (that's a problem), or the index to devices for me
+    int16_t index = findDevice(ESP.getEfuseMac());
+    if (index == -1) {
+        SerialPrint("I am not registered as a device, registering...",true);
+        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), MYNAME);
+    }
+     
+    return index;
 }
 
 #ifdef _ISPERIPHERAL
 int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID) {
     //this always references me as the device
     //returns -1 if no Prefsindex found, otherwise the idnex to Prefs values 
-    int16_t devID = findMe();
+    int16_t devID = findMyDeviceIndex();
     if (devID == -1) return -1;
     
     //get prefs index for this sensor
@@ -711,6 +748,6 @@ int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID) {
 
 bool Devices_Sensors::isMySensor(int16_t index) {
     if (isSensorIndexInvalid(index)!=0) return false;
-    return sensors[index].deviceIndex == findMe();
+    return sensors[index].deviceIndex == findMyDeviceIndex();
 }
 

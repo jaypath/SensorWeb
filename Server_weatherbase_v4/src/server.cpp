@@ -155,7 +155,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
     I.WiFiMode = WIFI_STA;
-    Prefs.MYIP =   WiFi.localIP(); //fixes the inverted endianness
+    Prefs.MYIP =   WiFi.localIP(); 
 
     return true;
   }
@@ -248,7 +248,7 @@ void APStation_Mode() {
     tft.setTextColor(TFT_WHITE);
     tft.setTextFont(2);
     tft.setTextSize(1);
-    tft.printf("Setup Required. Please join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
+    tft.printf("Setup may be required \n(or wifi down). Please join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
                wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
     #endif
 
@@ -290,7 +290,7 @@ void APStation_Mode() {
         //if credentials are stored, but havecredentials was false, then try rebooting with those credentials
         if (Prefs.WIFISSID[0] != 0 && Prefs.WIFIPWD[0] != 0) {
           Prefs.HAVECREDENTIALS = true;
-          BootSecure::setPrefs();
+          Prefs.isUpToDate = false;
         }
         tft.println("Rebooting due to timeout...");
         delay(5000);
@@ -313,7 +313,13 @@ void APStation_Mode() {
       delay(50);
     }
   }
+
   
+  BootSecure bootSecure;
+  if (bootSecure.setPrefs()<0) {
+    SerialPrint("Failed to store core data",true);
+  }
+
   tft.println("Rebooting with updated credentials...");
   delay(5000);
   controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
@@ -602,7 +608,7 @@ void handlerForRoot(bool allsensors) {
   serverTextHeader();
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Main Page</h2>";
 
-  if (Prefs.HAVECREDENTIALS==true && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and no where in the US is at 0 for either
+  if (Prefs.HAVECREDENTIALS==true && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
 
 
 
@@ -1003,7 +1009,7 @@ void handlePost() {
             } else {
               if (doc["ip"].is<JsonVariantConst>()) {
                 String ipStr = doc["ip"];
-                deviceIP = deviceIP.fromString(ipStr);              }
+                 deviceIP.fromString(ipStr);              }
               if (doc["mac"].is<JsonVariantConst>()) {
                 String macStr = doc["mac"];
                 //mac should be 12 hex digits
@@ -1054,10 +1060,10 @@ void handlePost() {
               String argValue = server.arg(k);
               
               if (argName == "MAC") {
-                  deviceMAC = strtoull(argValue.c_str(), NULL, 16);
+                  deviceMAC = strtoull(argValue.c_str(), NULL, 16);//must be a uint64_t
               } else if (argName == "IP") {
                 argValue.replace(",",""); //remove unneeded erroneous commas //this was an error in the old code
-                deviceIP = deviceIP.fromString(argValue);              
+                 deviceIP.fromString(argValue);              
               } else if (argName == "logID") { //legacy code, still used by some devices
                   ardID = breakString(&argValue,".",true).toInt(); //this is a legacy field, not used anymore
                   snsType = breakString(&argValue,".",true).toInt();
@@ -1265,7 +1271,7 @@ void handleCONFIG() {
   
   // Reset button
   WEBHTML = WEBHTML + "<br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset to Defaults & Delete Stored Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset All Settings\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
   // Navigation links to other config pages
@@ -1780,15 +1786,33 @@ void handleCONFIG_DELETE() {
   deleteFiles("GsheetInfo.dat", "/Data");
   deleteFiles("WeatherData.dat", "/Data");
   deleteFiles("DevicesSensors.dat", "/Data");
-
+  BootSecure bootSecure;
   //flush Prefs
-  BootSecure::flushPrefs();  
-  // Redirect back to the configuration page with a success message
-  server.sendHeader("Location", "/CONFIG");
-  server.send(302, "text/plain", "SD card contents deleted. Redirecting...");
+  int8_t ret = bootSecure.flushPrefs();
+  if (ret < 0) {
+    SerialPrint("Failed to flush Prefs: " + String(ret), true);
+    
+    #ifdef _USETFT
+    tft.clear();
+    tft.setCursor(0, 0);
+    tft.printf("Failed to flush Prefs: %d\n", ret);
+    #endif
+    server.send(500, "text/plain", "Failed to flush Prefs");
 
+  } else {
+    SerialPrint("Prefs flushed", true);
+    #ifdef _USETFT
+    tft.clear();
+    tft.setCursor(0, 0);
+    tft.println("Prefs flushed");
+    
+    #endif
+  }
+  Prefs.isUpToDate = true; //this prevents prefs from updating in controlled reboot
   controlledReboot("User Request",RESET_USER);
+
 }
+
 
 void handleWiFiConfig() {
   LAST_WEB_REQUEST = I.currentTime;
@@ -2035,18 +2059,18 @@ void handleWiFiConfig_POST() {
     snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
     snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
     snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
-    Prefs.HAVECREDENTIALS = true;
-    Prefs.isUpToDate = false;
   }
 
   // Try to connect to WiFi - note that we are already in  mixed AP+STA mode
   tft.println("Attempting WiFi connection...");
   WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-  delay(250);
+  delay(2000); //allow wifi to connect
 
   if (WiFi.status()) {
     // WiFi connection successful
     Prefs.status = 1; // Mark WiFi as connected
+    Prefs.HAVECREDENTIALS = true;
+    Prefs.isUpToDate = false;
     
     // Reset WiFi failure count since we successfully connected
     I.wifiFailCount = 0;
@@ -2059,21 +2083,27 @@ void handleWiFiConfig_POST() {
       String city = server.arg("city");
       String state = server.arg("state");
       String zipcode = server.arg("zipcode");
-      handlerForWeatherAddress(street, city, state, zipcode);
+      if (handlerForWeatherAddress(street, city, state, zipcode)) {
+        SerialPrint("Obtained geolocation from address", true);
+        delay(1000);
+      } else {
+        #ifdef _USETFT
+        tft.setTextColor(TFT_RED);
+        tft.println("Geolocation from address failed, correct in settings later.");
+        tft.setTextColor(FG_COLOR);
+        #endif
+        SerialPrint("Geolocation from address failed, correct in settings later.", true);
+        delay(1000);
+      }
     }
-    tft.println("Address handler complete");
-    // Save prefs to NVS
-    #ifdef _USE32
-    BootSecure::setPrefs();
-    #endif
     
     // Return success response (no redirect - let user click "Check Timezone" button)
     server.send(200, "text/plain", "WiFi credentials submitted successfully!");
   } else {
     // WiFi connection failed, redirect back to config page
-    tft.println("WiFi connection failed!");
+    tft.println("WiFi connection failed, re-enter credentials");
     server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
-    server.send(302, "text/plain", "WiFi connection failed. Please check credentials and try again.");
+    server.send(404, "text/plain", "WiFi connection failed. Please check credentials and try again.");
   }
 }
 
@@ -2115,9 +2145,9 @@ void handleTimezoneSetup() {
   uint8_t dst_end_month = Prefs.DSTEndMonth;
   uint8_t dst_end_day = Prefs.DSTEndDay;
   
-  WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
   
-  if (Prefs.TimeZoneOffset == 0) {
+  if (Prefs.TimeZoneOffset == 0 && WifiStatus()) {
+    WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
     if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
       WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information detected successfully!</p>";
     } else {
@@ -2133,7 +2163,6 @@ void handleTimezoneSetup() {
   // Convert UTC offset to hours and minutes for display
   int32_t offset_seconds = utc_offset;
   
-  WEBHTML = WEBHTML + "<h3>Timezone Information</h3>";
   WEBHTML = WEBHTML + "<p><strong>UTC Offset:</strong> " + offset_seconds + "</p>";
   WEBHTML = WEBHTML + "<p><strong>DST Enabled:</strong> " + (dst_enabled ? "Yes" : "No") + "</p>";
   if (dst_enabled) {
@@ -2213,27 +2242,50 @@ void handleTimezoneSetup_POST() {
     
     // Mark Prefs as needing update and save to NVS
     Prefs.isUpToDate = false;
-    if (!BootSecure::setPrefs()) {
-      SerialPrint("Failed to save timezone settings to NVS", true);
+    BootSecure bootSecure;
+    int8_t ret = bootSecure.setPrefs();
+    SerialPrint("setPrefs returned: " + String(ret), true);
+    if (ret==-1) {
+      SerialPrint("Failed to encode Prefs", true);
       #ifdef _USETFT
-      tft.printf("Failed to save timezone settings!\n");
+      tft.setTextColor(TFT_RED);
+      tft.printf("Failed to encode settings!\n");
+      tft.setTextColor(FG_COLOR);
+      delay(3000);
+      #endif
+    } 
+    else if (ret==0) {
+      SerialPrint("Could not open Prefs", true);
+      #ifdef _USETFT
+      tft.printf("Could not open Prefs!\n");
       delay(3000);
       #endif
     } else {
-      SerialPrint("Timezone settings saved successfully", true);
       #ifdef _USETFT
       tft.printf("Timezone settings saved!\n");
-      tft.printf("Rebooting in 3 seconds...\n");
-      delay(3000);
+      tft.printf("Rebooting...\n");
       #endif
       controlledReboot("Timezone settings saved successfully", RESET_TIME,true);
-      SerialPrint("Rebooting failed...", true);
     }
+  
     
     // Redirect to main page
-    server.sendHeader("Location", "/");
-    server.send(302, "text/plain", "Timezone settings saved. Rebooting...");
+    server.sendHeader("Location", "/TimezoneSetup");
+    server.send(302, "text/plain", "Failed to save timezone data. Please try again.");
   } else {
+    tft.clear();
+    tft.setCursor(0, 0);
+    tft.setTextColor(TFT_RED);
+    tft.setTextSize(1);
+    tft.setTextFont(2);
+    if (!server.hasArg("UTC_OFFSET_SECONDS")) tft.println("No UTC offset seconds");
+    if (!server.hasArg("DST_ENABLED")) tft.println("No DST enabled");
+    if (!server.hasArg("DST_START_MONTH")) tft.println("No DST start month");
+    if (!server.hasArg("DST_START_DAY")) tft.println("No DST start day");
+    if (!server.hasArg("DST_END_MONTH")) tft.println("No DST end month");
+    if (!server.hasArg("DST_END_DAY")) tft.println("No DST end day");
+    tft.setTextColor(FG_COLOR);
+
     server.sendHeader("Location", "/TimezoneSetup");
     server.send(302, "text/plain", "Invalid timezone data. Please try again.");
   }
@@ -2250,7 +2302,12 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
   
   // Display current weather data
-  WEBHTML = WEBHTML + "<h3>Current Weather Information</h3>";
+  if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) {
+    WEBHTML = WEBHTML + "<h3>Current Weather Information</h3>";
+  } else {
+    WEBHTML = WEBHTML + "<p>Location not set, Weather data is not available.</p>";
+    WEBHTML = WEBHTML + "<p>Please set your location below (enter your address or lat/lon).</p>";
+  }
   WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
   WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
   WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Field</th>";
@@ -2515,19 +2572,33 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
   //assume data is valid   
   if (WifiStatus()) {
     // Lookup coordinates from complete address
-    
+    #ifdef _USETFT
+    tft.setTextColor(TFT_GREEN);
+    tft.println("Getting coordinates from address");
+    tft.setTextColor(FG_COLOR);
+    #endif
     if (WeatherData.getCoordinatesFromAddress(street, city, state, zipCode)) {
       
       // Force weather update with new coordinates
-      WeatherData.updateWeather(0);
-      return true;
+      //WeatherData.updateWeather(0);
+      if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) return true;
     } else {
+      #ifdef _USETFT
+      tft.setTextColor(TFT_RED);
+      tft.println("Failed to fetch coordinates from address");
+      tft.setTextColor(FG_COLOR);
+      #endif
       return false;
     }
   } else {
+    #ifdef _USETFT
+    tft.setTextColor(TFT_RED);
+    tft.println("WiFi is down, cannot fetch coordinates from address");
+    tft.setTextColor(FG_COLOR);
+    #endif
     return false;
   }
-
+    return false;
 
 }
 
@@ -3447,7 +3518,10 @@ void handleUPDATETIMEZONE_POST() {
   
   // Save prefs to NVS
   #ifdef _USE32
-  BootSecure::setPrefs();
+  BootSecure bootSecure;
+  if (bootSecure.setPrefs()<0) {
+    SerialPrint("Failed to store core data",true);
+  }
   #endif
   
   // Update time client with new settings
@@ -3531,9 +3605,21 @@ void handleDeviceViewer() {
         return;
     }
     
-    // Ensure current device index is valid
-    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
-        CURRENT_DEVICE_VIEWER = 0;
+    // Ensure there is at least 1 device in the queue, and I am in it!
+    uint16_t myDeviceIndex = Sensors.findMyDeviceIndex();
+    if (myDeviceIndex == -1) {
+        WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+        WEBHTML = WEBHTML + "<strong>Error:</strong> Could not retrieve device information.";
+        WEBHTML = WEBHTML + "</div>";
+        WEBHTML = WEBHTML + "<br><a href=\"/\" style=\"display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Main</a>";
+        WEBHTML = WEBHTML + "</body></html>";
+        serverTextClose(200, true);
+        return;
+    }
+
+    while (Sensors.isDeviceInit(CURRENT_DEVICE_VIEWER)==false) {
+        CURRENT_DEVICE_VIEWER++;
+        if (CURRENT_DEVICE_VIEWER >= NUMDEVICES ) CURRENT_DEVICE_VIEWER = 0;
     }
     
     // Get current device
@@ -3550,14 +3636,14 @@ void handleDeviceViewer() {
     
     // Device information header
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
-    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICE_VIEWER + 1) + " of " + String(Sensors.getNumDevices()) + "</h3>";
+    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICE_VIEWER + 1) + " of " + String(Sensors.getNumDevices()) + ((CURRENT_DEVICE_VIEWER == myDeviceIndex) ? " (this device)" : "") +"</h3>";
     WEBHTML = WEBHTML + "</div>";
     
     // Device details
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
     WEBHTML = WEBHTML + "<h4>Device Information</h4>";
     WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold; width: 30%;\">Device Name:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devName) + "</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold; width: 30%;\">Device Name:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devName) +  "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
