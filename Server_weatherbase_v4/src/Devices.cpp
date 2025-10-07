@@ -720,7 +720,7 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
     int16_t index = findDevice(ESP.getEfuseMac());
     if (index == -1) {
         SerialPrint("I am not registered as a device, registering...",true);
-        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), MYNAME);
+        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME);
     }
      
     return index;
