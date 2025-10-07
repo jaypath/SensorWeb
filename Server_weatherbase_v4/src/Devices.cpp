@@ -4,7 +4,7 @@
 
 // Global instance
 Devices_Sensors Sensors;
-
+extern STRUCT_PrefsH Prefs;
 // Constructor
 Devices_Sensors::Devices_Sensors() {
     numDevices = 0;
