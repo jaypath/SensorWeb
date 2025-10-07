@@ -221,9 +221,9 @@ int16_t  Devices_Sensors::initDevice(int16_t index) {
 // Sensor management functions
 int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                                  uint32_t sendingInt, uint8_t flags, const char* devName) {
+                                  uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType) {
     // Find or create device
-    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName);
+    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, 0, 0, devType);
     if (deviceIndex < 0) {
         storeError("Addsensor: Could not create device", ERROR_DEVICE_ADD);
         return -2; // Could not create device
@@ -720,7 +720,7 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
     int16_t index = findDevice(ESP.getEfuseMac());
     if (index == -1) {
         SerialPrint("I am not registered as a device, registering...",true);
-        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME);
+        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
     }
      
     return index;

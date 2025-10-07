@@ -77,7 +77,7 @@ public:
     uint16_t isSensorIndexInvalid(int16_t index);
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                     uint32_t sendingInt, uint8_t flags, const char* devName = "");
+                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     SnsType* getSensorBySnsIndex(int16_t snsindex);
