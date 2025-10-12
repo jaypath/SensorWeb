@@ -80,6 +80,7 @@ void handleDeviceViewerPing(void);
 void handleDeviceViewerDelete(void);
 void handleForceBroadcast(void);
 void handleStatus(void);
+void handleStandby(void);
 void handleTimezoneSetup(void);
 void handleTimezoneSetup_POST(void);
 void handleCONFIG(void);

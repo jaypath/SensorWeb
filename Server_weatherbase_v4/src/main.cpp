@@ -373,15 +373,7 @@ void setup() {
     
     SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
     SerialPrint("Prefs.MYIP: " + Prefs.MYIP.toString(),true);
-    
-    if (Prefs.DEVICENAME[0] == 0) {
-        snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
-        Prefs.isUpToDate = false;        
-    }
-    WeatherData.lat = Prefs.LATITUDE;
-    WeatherData.lon = Prefs.LONGITUDE;
 
-    //check if I am registered as a device
     byte deviceIndex = Sensors.findMyDeviceIndex();
     if (deviceIndex == -1) {
         SerialPrint("I am not registered as a device, and could not register, so I cannot run...",true);
@@ -393,6 +385,18 @@ void setup() {
         controlledReboot("Unable to register myself as a device, so I cannot run...", RESET_UNKNOWN);
         return;
     }
+    
+    if (Prefs.DEVICENAME[0] == 0) {
+        snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
+        Prefs.isUpToDate = false;        
+
+        //update my device name
+        Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+    }
+    WeatherData.lat = Prefs.LATITUDE;
+    WeatherData.lon = Prefs.LONGITUDE;
+
+    //check if I am registered as a device
 
     tft.printf("Init server... ");
     server.begin();
@@ -479,7 +483,7 @@ void handleStoreCoreData() {
         }
     }
 
-    if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if more than 5 minutes since last store
+    if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if out of date and more than 5 minutes since last store
         I.isUpToDate = true;
         storeScreenInfoSD();
     }

@@ -201,6 +201,7 @@ void APStation_Mode() {
   SerialPrint("- GET /DEVICEVIEWER_DELETE -> handleDeviceViewerDelete", true);
   SerialPrint("- GET /FORCEBROADCAST -> handleForceBroadcast", true);
   SerialPrint("- GET /STATUS -> handleStatus", true);
+  SerialPrint("- GET /Standby -> handleStandby", true);
 
   server.begin(); //start server
 

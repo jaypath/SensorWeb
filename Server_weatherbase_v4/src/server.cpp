@@ -327,6 +327,248 @@ void APStation_Mode() {
 }
 
 
+void handleSetup() {
+    I.lastServerStatusUpdate = I.currentTime;
+    WEBHTML = "";
+    serverTextHeader();
+    
+    WEBHTML = WEBHTML + "<body>";
+    WEBHTML = WEBHTML + "<style>";
+    WEBHTML = WEBHTML + ".standby-container { max-width: 800px; margin: 0 auto; padding: 20px; }";
+    WEBHTML = WEBHTML + ".status-box { background-color: #fff3cd; color: #856404; padding: 20px; margin: 20px 0; border: 2px solid #ffeaa7; border-radius: 8px; }";
+    WEBHTML = WEBHTML + ".success-box { background-color: #d4edda; color: #155724; padding: 20px; margin: 20px 0; border: 2px solid #c3e6cb; border-radius: 8px; }";
+    WEBHTML = WEBHTML + ".info-box { background-color: #d1ecf1; color: #0c5460; padding: 15px; margin: 15px 0; border: 1px solid #bee5eb; border-radius: 4px; }";
+    WEBHTML = WEBHTML + ".spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }";
+    WEBHTML = WEBHTML + "@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }";
+    WEBHTML = WEBHTML + "</style>";
+    
+    WEBHTML = WEBHTML + "<div class=\"standby-container\">";
+    WEBHTML = WEBHTML + "<h1>System Standby</h1>";
+    
+    // Get the cause parameter
+    String cause = server.hasArg("cause") ? server.arg("cause") : "unknown";
+    
+    if (cause == "WiFiConfig_RESET" || cause == "ResetAllSettings") {
+        // WiFi credentials have been reset
+        WEBHTML = WEBHTML + "<div class=\"status-box\">";
+        WEBHTML = WEBHTML + "<h2>WiFi Credentials Reset</h2>";
+        WEBHTML = WEBHTML + "<p><strong>The system WiFi credentials have been deleted.</strong></p>";
+        WEBHTML = WEBHTML + "</div>";
+        
+        WEBHTML = WEBHTML + "<div class=\"info-box\">";
+        WEBHTML = WEBHTML + "<h3>Next Steps:</h3>";
+        WEBHTML = WEBHTML + "<ol>";
+        WEBHTML = WEBHTML + "<li>Disconnect from your current WiFi network</li>";
+        WEBHTML = WEBHTML + "<li>Connect to the device's WiFi access point:</li>";
+        WEBHTML = WEBHTML + "<ul>";
+        
+        // Generate and display the AP SSID
+        String apSSID = generateAPSSID();
+        WEBHTML = WEBHTML + "<li><strong>SSID:</strong> " + apSSID + "</li>";
+        
+        // Get WiFi password from Prefs
+        String apPassword = "S3nsor.N3t!";
+        if (apPassword.length() > 0) {
+            WEBHTML = WEBHTML + "<li><strong>Password:</strong> " + apPassword + "</li>";
+        } else {
+            WEBHTML = WEBHTML + "<li><strong>Password:</strong> S3nsor.N3t!</li>";
+        }
+        
+        WEBHTML = WEBHTML + "</ul>";
+        WEBHTML = WEBHTML + "<li>Once connected, navigate to http://192.168.4.1</li>";
+        WEBHTML = WEBHTML + "<li>Re-enter your WiFi credentials on the configuration page</li>";
+        WEBHTML = WEBHTML + "</ol>";
+        WEBHTML = WEBHTML + "</div>";
+        
+        WEBHTML = WEBHTML + "<div style=\"text-align: center; margin-top: 30px;\">";
+        WEBHTML = WEBHTML + "<p><em>The system will  enter Access Point mode...</em></p>";
+        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
+        WEBHTML = WEBHTML + "</div>";
+//        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"10;url=/REBOOT\">";
+        WEBHTML = WEBHTML + "</div>"; // Close standby-container
+        WEBHTML = WEBHTML + "</body></html>";
+        serverTextClose(200, true);
+    
+        // Disconnect from current WiFi
+        WiFi.disconnect();
+        APStation_Mode();
+        return;
+    } 
+    else if (cause == "WiFiConfig_entered") {
+        // WiFi credentials have been entered, waiting for connection
+        WEBHTML = WEBHTML + "<div class=\"status-box\">";
+        WEBHTML = WEBHTML + "<h2>Connecting to WiFi...</h2>";
+        WEBHTML = WEBHTML + "<p>Please wait while the system connects to your WiFi network.</p>";
+        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
+        WEBHTML = WEBHTML + "</div>";
+        
+        // Check WiFi status
+        bool wifiConnected = WifiStatus();
+
+        if (WifiStatus()) {
+          WEBHTML = WEBHTML + "<p>WiFi is connected.</p>";
+        } else {
+          WEBHTML = WEBHTML + "<p>WiFi is not connected. Please connect to WiFi and try again.</p>";
+          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/WiFiConfig\">";
+          return;
+        }
+
+
+
+        delay(500);
+        if (wifiConnected) {
+            // WiFi is connected
+            WEBHTML = WEBHTML + "<div class=\"success-box\">";
+            WEBHTML = WEBHTML + "<h3>WiFi Connected Successfully!</h3>";
+            WEBHTML = WEBHTML + "<p>IP Address: <strong>" + WiFi.localIP().toString() + "</strong></p>";
+            WEBHTML = WEBHTML + "</div>";
+            
+            #ifdef _USEWEATHER
+            // Try to get location from address if needed
+        
+            bool locationFound = false;
+            
+            if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
+                String street = server.arg("street");
+                String city = server.arg("city");
+                String state = server.arg("state");
+                String zipcode = server.arg("zipcode");
+                
+                if (handlerForWeatherAddress(street, city, state, zipcode)) {
+                  addressMsg = "<div class=\"success-box\"><p>Location obtained from address: ";
+                  addressMsg += String(I.LATITUDE, 4) + ", " + String(I.LONGITUDE, 4) + "</p></div>";
+                  SerialPrint("Obtained geolocation from address", true);
+                } else {
+                  addressMsg = "<div class=\"info-box\"><p><strong>Note:</strong> Address lookup failed. ";
+                  addressMsg += "You can set your location in the Timezone Setup.</p></div>";
+                    SerialPrint("Geolocation from address failed, correct in settings later.", true);
+                }
+                
+                
+
+            } else {
+                addressMsg = "<div class=\"info-box\"><p><strong>Note:</strong> No address provided. ";
+                addressMsg += "You can set your location in the Timezone Setup.</p></div>";
+            }
+            #endif
+
+            WEBHTML = WEBHTML + addressMsg;
+            
+            WEBHTML = WEBHTML + "<div style=\"text-align: center; margin-top: 30px;\">";
+            WEBHTML = WEBHTML + "<h3>Next Step: Configure Timezone</h3>";
+            WEBHTML = WEBHTML + "<p>Please configure your timezone and location settings to complete the setup.</p>";
+            WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 15px 30px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 18px;\">Configure Timezone</a>";
+            WEBHTML = WEBHTML + "</div>";
+    
+            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
+    
+        } else {
+          //wifi failed to connect, reattempt connection
+          WEBHTML = WEBHTML + "<div class=\"info-box\">";
+          WEBHTML = WEBHTML + "<p>Status: <strong>Attempting to connect...</strong></p>";
+          WEBHTML = WEBHTML + "<p><em>This page will automatically refresh every 3 seconds.</em></p>";
+          WEBHTML = WEBHTML + "</div>";
+
+          String refreshUrl = "/Standby?cause=WiFiConfig_entered";
+          if (server.hasArg("street")) {
+              refreshUrl += "&street=" + urlEncode(server.arg("street"));
+          }
+          if (server.hasArg("city")) {
+              refreshUrl += "&city=" + urlEncode(server.arg("city"));
+          }
+          if (server.hasArg("state")) {
+              refreshUrl += "&state=" + urlEncode(server.arg("state"));
+          }
+          if (server.hasArg("zipcode")) {
+              refreshUrl += "&zipcode=" + urlEncode(server.arg("zipcode"));
+          }
+          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
+        }
+        
+      }
+      else if (cause == "TimezoneSetup_entered") {
+        // Timezone setup has been entered, waiting for connection
+        WEBHTML = WEBHTML + "<div class=\"status-box\">";
+        WEBHTML = WEBHTML + "<h2>Configuring Timezone...</h2>";
+        WEBHTML = WEBHTML + "<p>Please wait while the system configures your timezone.</p>";
+        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
+        WEBHTML = WEBHTML + "</div>";
+
+          // Get timezone information from API
+        int32_t utc_offset = Prefs.TimeZoneOffset;
+        bool dst_enabled = Prefs.DST;
+        uint8_t dst_start_month = Prefs.DSTStartMonth;
+        uint8_t dst_start_day = Prefs.DSTStartDay;
+        uint8_t dst_end_month = Prefs.DSTEndMonth;
+        uint8_t dst_end_day = Prefs.DSTEndDay;
+  
+  
+        if (!WifiStatus()) {
+          WEBHTML = WEBHTML + "<p>WiFi is not connected. Please connect to WiFi and try again.</p>";
+          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/WiFiConfig\">";
+        } 
+        
+        if (utc_offset == 0 ) {
+          WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
+          if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
+            WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information detected successfully!</p>";
+            //redirect to TimezoneSetup
+            String refreshUrl = "/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day);
+            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
+          } else {
+            WEBHTML = WEBHTML + "<p style=\"color: red;\">Failed to detect timezone information. Will try again in 3 seconds (or choose UseDefaults).</p>";
+            // Set some reasonable defaults
+            utc_offset = -18000; // EST (UTC-5)
+            dst_enabled = true;
+            dst_start_month = 3; dst_start_day = 10;
+            dst_end_month = 11; dst_end_day = 3;
+            WEBHTML = WEBHTML + "<p><a href=\"/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day) + "\">Use Defaults</a>.</p>";
+            //redirect to TimezoneSetup
+            String refreshUrl = "/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day);
+            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
+          }
+        }  else   WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information from stored data</p>";
+
+
+
+        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
+        
+
+      }
+
+      else if (cause == "Reboot") {
+        // System is rebooting
+        WEBHTML = WEBHTML + "<div class=\"status-box\">";
+        WEBHTML = WEBHTML + "<h2>System Rebooting...</h2>";
+        WEBHTML = WEBHTML + "<p>The system is restarting. Please wait.</p>";
+        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
+        WEBHTML = WEBHTML + "</div>";
+        
+        WEBHTML = WEBHTML + "<div class=\"info-box\">";
+        WEBHTML = WEBHTML + "<p><em>The system will be available in approximately 30 seconds.</em></p>";
+        WEBHTML = WEBHTML + "<p>If you are connected to the device's access point, you may need to reconnect to your regular WiFi network.</p>";
+        WEBHTML = WEBHTML + "</div>";
+ 
+        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"10;url=/REBOOT\">";
+      } 
+      else {
+
+            WEBHTML = WEBHTML + "<div class=\"info-box\">";
+            WEBHTML = WEBHTML + "<p>Status: <strong>Attempting to connect...</strong></p>";
+            WEBHTML = WEBHTML + "<p><em>This page will automatically refresh every 3 seconds.</em></p>";
+            WEBHTML = WEBHTML + "</div>";
+            
+            // Auto-refresh to check status
+            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
+        
+      }
+        
+    
+    WEBHTML = WEBHTML + "</div>"; // Close standby-container
+    WEBHTML = WEBHTML + "</body></html>";
+    serverTextClose(200, true);
+}
+
 void handleReboot() {
   WEBHTML = "Rebooting in 10 sec";
   serverTextClose(200, false);  //This returns to the main page
@@ -1615,7 +1857,7 @@ void handleGSHEET_POST() {
 }
 
 void handleGSHEET_UPLOAD_NOW() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   int8_t result = Gsheet_uploadData();
   String msg = "Triggered immediate upload. Result: " + String(result) + ", " + GsheetUploadErrorString();
   server.send(200, "text/plain", msg);
@@ -1838,8 +2080,13 @@ void handleWiFiConfig() {
 
   if (!Prefs.HAVECREDENTIALS) {
     WEBHTML = WEBHTML + "<p>Wifi credentials are not set, and are required.</p>";
-    WEBHTML = WEBHTML + "<p>Set your address for weather lookup (weather information will be matched to the address provided).<br></p>";
   }
+
+  #ifdef _USEWEATHER
+ if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) {
+  WEBHTML = WEBHTML + "<p>Set your address for weather lookup (weather information will be matched to the address provided).<br></p>";
+ }
+ #endif
 
   WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
   if (WiFi.status() == WL_CONNECTED) {
@@ -1955,8 +2202,13 @@ void addWiFiConfigForm() {
   WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Local Security Key (up to 16 chars) - must be same for all devices:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
 
+  #ifdef _USEWEATHER
   //add weather address lookup if no credentials
-  if (!Prefs.HAVECREDENTIALS) {
+  if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) {
+    WEBHTML = WEBHTML + "<p>Location not set! Weather will not work unless you set Latitude and Longitude (or enter address and I will look up your geolocation).<br></p>";
+  } else {
+    WEBHTML = WEBHTML + "<p>Location was already set! You can optionally enter a new address to change your geolocation.</p>";
+  }
   WEBHTML = WEBHTML + "<p><label for=\"street\">Street Address:</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"street\" name=\"street\" placeholder=\"123 Main St\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"city\">City:</label><br>";
@@ -1965,12 +2217,10 @@ void addWiFiConfigForm() {
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"state\" name=\"state\" pattern=\"[A-Za-z]{2}\" maxlength=\"2\" placeholder=\"MA\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"zipcode\">ZIP Code (5 digits):</label><br>";
   WEBHTML = WEBHTML + "<input type=\"text\" id=\"zipcode\" name=\"zipcode\" pattern=\"[0-9]{5}\" maxlength=\"5\" placeholder=\"12345\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  }
-
+  #endif
   // Disconnection notice
   WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin: 10px 0; border-radius: 4px;\">";
-  WEBHTML = WEBHTML + "<strong>Important:</strong> After submitting WiFi credentials, there will be a brief disconnection as the device connects to your WiFi network. ";
-  WEBHTML = WEBHTML + "Once submitted, a 'Check Timezone' button will appear to proceed to timezone configuration.";
+  WEBHTML = WEBHTML + "<strong>Important:</strong> After submitting data, there may be a brief disconnection as the device connects to your WiFi network. ";
   WEBHTML = WEBHTML + "</div>";
 
   // Status and action buttons
@@ -2014,57 +2264,86 @@ void addWiFiConfigForm() {
       body: formData
     })
     .then(response => {
-      if (response.ok) {
-        // WiFi credentials submitted successfully
-        showTimezoneButton();
+      if (response.status >= 200 && response.status < 300) {
+        if (response.status == 202) {
+          showStatus('WiFi credentials submitted successfully.', false); // WiFi credentials submitted successfully, no address check
+          showTimezoneButton();
+        } 
+        else if (response.status == 201) {
+          showStatus('WiFi credentials submitted successfully, but geolocation failed.', false); // WiFi credentials submitted successfully, but geolocation failed
+          
+        }
+        else {
+          showStatus('WiFi and address credentials submitted successfully.', false); // WiFi credentials submitted successfully,  address check
+          showTimezoneButton();
+        }
       } else {
         showStatus('Failed to submit WiFi credentials. Please try again.', true);
+        
       }
     })
     .catch(error => {
-      // Network error - this might be expected during WiFi transition
+      // Network error - this might be due to WiFi transition 
       showStatus('WiFi credentials submitted. If WiFi connection succeeds, you can proceed to timezone configuration.', false);
       showTimezoneButton();
     });
   });
   </script>)===";
   
-
 }
 
 
 void handleWiFiConfig_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
-  
+  I.lastServerStatusUpdate = I.currentTime;
+  int HTTPCode = 0;
+
+  #ifdef _USETFT
   tft.clear();
   tft.setCursor(0, 0);
   tft.setTextColor(TFT_WHITE);
   tft.setTextSize(1);
   tft.setTextFont(2);
   tft.printf("Processing WiFi request...\n");
+  #else
+  SerialPrint("Processing WiFi request from webpage...", true);
+  #endif
 
-  String ssid = server.arg("ssid");
-  String password = server.arg("password");
-  String lmk_key = server.arg("lmk_key");
-  String address = server.arg("address");
   
-  // Save WiFi credentials and ESPNow key
-  if (ssid.length() > 0) {
+  String ssid = Prefs.WIFISSID;
+  String password = Prefs.WIFIPWD;
+  String lmk_key = Prefs.KEYS.ESPNOW_KEY;
+
+  //do we need to update wifi credentials?
+  if (server.hasArg("ssid") && server.hasArg("password")) {
+    ssid = server.arg("ssid");
+    password = server.arg("password");
+    // Save WiFi credentials and ESPNow key
+    if ((ssid != Prefs.WIFISSID && ssid.length() > 0) || (password != Prefs.WIFIPWD && password.length() > 0))  {
+      //need to update wifi credentials
+      snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
+      snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
+      Prefs.HAVECREDENTIALS = true;
+      Prefs.isUpToDate = false;
+    }
+  }
+
+
+  if (server.hasArg("lmk_key")) {
+    lmk_key = server.arg("lmk_key");
     if (lmk_key.length() > 16) {
       lmk_key = lmk_key.substring(0, 16);
     } 
     if (lmk_key.length() < 16) {
       lmk_key = lmk_key + String(16 - lmk_key.length(), '0'); //pad short keys with 0s
     } 
-    snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
-    snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
     snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
+    Prefs.isUpToDate = false;
   }
 
   // Try to connect to WiFi - note that we are already in  mixed AP+STA mode
   tft.println("Attempting WiFi connection...");
   WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-  delay(2000); //allow wifi to connect
+  delay(1000); //allow wifi to connect
 
   if (WiFi.status()) {
     // WiFi connection successful
@@ -2072,24 +2351,27 @@ void handleWiFiConfig_POST() {
     Prefs.HAVECREDENTIALS = true;
     Prefs.isUpToDate = false;
     
+    Prefs.MYIP = WiFi.localIP(); //update this here just in case
     // Reset WiFi failure count since we successfully connected
     I.wifiFailCount = 0;
     
     tft.println("WiFi connected successfully!");
-    
+    HTTPCode = 200; //wifi connected
     // Handle weather address if provided
-    if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
+    if (server.hasArg("street") && serverr.arg != "" && server.hasArg("city") && server.arg != "" && server.hasArg("state") && server.arg != "" && server.hasArg("zipcode") && server.arg != "") {
       String street = server.arg("street");
       String city = server.arg("city");
       String state = server.arg("state");
       String zipcode = server.arg("zipcode");
       if (handlerForWeatherAddress(street, city, state, zipcode)) {
         SerialPrint("Obtained geolocation from address", true);
+        HTTPCode = 202; //geolocation obtained
         delay(1000);
       } else {
         #ifdef _USETFT
         tft.setTextColor(TFT_RED);
         tft.println("Geolocation from address failed, correct in settings later.");
+        HTTPCode = 201; //geolocation failed
         tft.setTextColor(FG_COLOR);
         #endif
         SerialPrint("Geolocation from address failed, correct in settings later.", true);
@@ -2098,19 +2380,19 @@ void handleWiFiConfig_POST() {
     }
     
     // Return success response (no redirect - let user click "Check Timezone" button)
-    server.send(200, "text/plain", "WiFi credentials submitted successfully!");
+    server.send(HTTPCode, "text/plain", "WiFi credentials submitted successfully!");
   } else {
     // WiFi connection failed, redirect back to config page
     tft.println("WiFi connection failed, re-enter credentials");
     server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
-    server.send(404, "text/plain", "WiFi connection failed. Please check credentials and try again.");
+    server.send(400, "text/plain", "WiFi connection failed. Please check credentials and try again.");
   }
 }
 
 
 
 void handleWiFiConfig_RESET() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Clear WiFi credentials and LMK key
   memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
@@ -2118,25 +2400,28 @@ void handleWiFiConfig_RESET() {
   memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
   Prefs.HAVECREDENTIALS = false;
   Prefs.isUpToDate = false;
-  
-  
-  // Redirect back to WiFi config page
-  server.sendHeader("Location", "/WiFiConfig");
-  server.send(302, "text/plain", "WiFi configuration and LMK key reset. Please reconfigure.");
 
-    // Disconnect from current WiFi
-    WiFi.disconnect();
+  //flush prefs
+  BootSecure bootSecure;
+   bootSecure.flushPrefs();
+
+
+   //redirect to wifi config page
+  server.sendHeader("Location", "/WiFiConfig");
+  server.send(200, "text/plain", "WiFi configuration and LMK key reset. Please reconfigure.");
+
 
 }
 
 void handleTimezoneSetup() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML = "";
   serverTextHeader();
 
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>Timezone Configuration</h2>";
   
+
   // Get timezone information from API
   int32_t utc_offset = Prefs.TimeZoneOffset;
   bool dst_enabled = Prefs.DST;
@@ -2144,6 +2429,25 @@ void handleTimezoneSetup() {
   uint8_t dst_start_day = Prefs.DSTStartDay;
   uint8_t dst_end_month = Prefs.DSTEndMonth;
   uint8_t dst_end_day = Prefs.DSTEndDay;
+
+  if (server.hasArg("utc_offset_seconds")) {
+    utc_offset = server.arg("utc_offset_seconds").toInt();
+  }
+  if (server.hasArg("dst_enabled")) {
+    dst_enabled = server.arg("dst_enabled").toInt();
+  }
+  if (server.hasArg("dst_start_month")) {
+    dst_start_month = server.arg("dst_start_month").toInt();
+  }
+  if (server.hasArg("dst_start_day")) {
+    dst_start_day = server.arg("dst_start_day").toInt();
+  }
+  if (server.hasArg("dst_end_month")) {
+    dst_end_month = server.arg("dst_end_month").toInt();
+  }
+  if (server.hasArg("dst_end_day")) {
+    dst_end_day = server.arg("dst_end_day").toInt();
+  }
   
   
   if (Prefs.TimeZoneOffset == 0 && WifiStatus()) {
@@ -2158,7 +2462,7 @@ void handleTimezoneSetup() {
       dst_start_month = 3; dst_start_day = 10;
       dst_end_month = 11; dst_end_day = 3;
     }
-  }  else   WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information from stored data</p>";
+  }  
   
   // Convert UTC offset to hours and minutes for display
   int32_t offset_seconds = utc_offset;
@@ -2205,7 +2509,7 @@ void handleTimezoneSetup() {
 }
 
 void handleTimezoneSetup_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   #ifdef _USETFT
   
   tft.clear();
@@ -2512,7 +2816,7 @@ void handleWeatherZip() {
 
 
 void handleWeatherAddress() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
 
   if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
     String street = server.arg("street");
@@ -3587,9 +3891,15 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; color: #856404; padding: 15px; margin: 10px 0; border: 1px solid #ffeaa7; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Warning:</strong> No devices available to ping.";
             WEBHTML = WEBHTML + "</div>";
-        } else if (errorType == "device_not_found") {
+        } 
+        else if (errorType == "device_not_found") {
             WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Error:</strong> Device not found.";
+            WEBHTML = WEBHTML + "</div>";
+        }
+        else if (errorType == "cannot_delete_myself") {
+            WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+            WEBHTML = WEBHTML + "<strong>Error:</strong> Cannot delete this device.";
             WEBHTML = WEBHTML + "</div>";
         }
     }
@@ -3791,12 +4101,15 @@ void handleDeviceViewerPing() {
 void handleDeviceViewerDelete() {
     LAST_WEB_REQUEST = I.currentTime;
     
+    
+    
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
         server.send(302, "text/plain", "No devices available to delete.");
         return;
     }
+
     
     // Ensure current device index is valid
     if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
@@ -3810,7 +4123,13 @@ void handleDeviceViewerDelete() {
         server.send(302, "text/plain", "Device not found.");
         return;
     }
-    
+
+    if (device->deviceIndex == Sensors.findMyDeviceIndex()) {
+      server.sendHeader("Location", "/DEVICEVIEWER?error=cannot_delete_myself");
+      server.send(302, "text/plain", "Cannot delete this device.");
+      return;
+  }
+
     // Store device name for confirmation message
     String deviceName = String(device->devName);
     uint8_t deletedSensors = Sensors.initDevice(CURRENT_DEVICE_VIEWER);
@@ -3840,6 +4159,8 @@ void setupServerRoutes() {
     server.on("/TIMEUPDATE", handleTIMEUPDATE);
     server.on("/REQUESTWEATHER", handleREQUESTWEATHER);
     server.on("/REBOOT", handleReboot);
+    server.on("/INITIALSETUP", HTTP_GET, handleSetup);
+    server.on("/INITIALSETUP", HTTP_POST, handleSetup_POST);
     server.on("/STATUS", handleSTATUS);
     server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
     server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
