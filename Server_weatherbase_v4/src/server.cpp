@@ -164,40 +164,47 @@ bool WifiStatus(void) {
   
 }
 
-int16_t tryWifi(uint16_t delayms ) {
+int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
   //return -1000 if no credentials, or connection attempts if success, or -1*number of attempts if failure
   int16_t retries = 0;
   int16_t i = 0;
-  if (Prefs.HAVECREDENTIALS) {
-      // Use station-only mode for normal operation
+
+  if (checkCredentials) {
+    if (Prefs.HAVECREDENTIALS) {
+      // force station-only mode for normal operation
       WiFi.mode(WIFI_STA);
       I.WiFiMode = WIFI_STA;
-    
-    for (i = 1; i < 51; i++) {
-      if (!WifiStatus()) {        
-        WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-        delay(delayms);
-      } else {
-        return i;
-      }
+    } else {
+      return -1000;
     }
+  }
+    
+  if (Prefs.WIFISSID == 0) return -1000;
 
-    if (!WifiStatus())       return -1*i;
-    else return i;
-  } else {
-    return -1000; //no credentials
+  for (i = 0; i < retryLimit; i++) {
+    if (!WifiStatus()) {        
+      WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+      delay(delayms);
+    } else {
+      Prefs.status = 1;
+      Prefs.MYIP = WiFi.localIP();
+      Prefs.HAVECREDENTIALS=true;
+      Prefs.isUpToDate = false;
+      I.wifiFailCount = 0;
+  
+      return i;
+    }
   }
 
+  if (!WifiStatus())       return -1*i;
+  else return i;
 }
 
 int16_t connectWiFi() {
   
   int16_t retries = 0;
-  if (Prefs.HAVECREDENTIALS) {
-    retries = tryWifi(250);
-    if (retries>0) return retries;
-    Prefs.isUpToDate = false;
-  }
+  retries = tryWifi(250,50,true);
+  if (WiFi.status() == WL_CONNECTED) return retries;
 
   if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
     SerialPrint("No credentials, starting AP Station Mode",true);
@@ -248,8 +255,11 @@ void APStation_Mode() {
     tft.setTextColor(TFT_WHITE);
     tft.setTextFont(2);
     tft.setTextSize(1);
+    if (Prefs.HAVECREDENTIALS) tft.printf("Failed to connect to %s.\n", Prefs.WIFISSID);
+    else tft.printf("No stored credentials.\n");
     tft.printf("Setup may be required \n(or wifi down). Please join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
                wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
+    
     #endif
 
     uint32_t m=millis();
@@ -327,253 +337,873 @@ void APStation_Mode() {
 }
 
 
-void handleSetup() {
-    I.lastServerStatusUpdate = I.currentTime;
-    WEBHTML = "";
-    serverTextHeader();
-    
-    WEBHTML = WEBHTML + "<body>";
-    WEBHTML = WEBHTML + "<style>";
-    WEBHTML = WEBHTML + ".standby-container { max-width: 800px; margin: 0 auto; padding: 20px; }";
-    WEBHTML = WEBHTML + ".status-box { background-color: #fff3cd; color: #856404; padding: 20px; margin: 20px 0; border: 2px solid #ffeaa7; border-radius: 8px; }";
-    WEBHTML = WEBHTML + ".success-box { background-color: #d4edda; color: #155724; padding: 20px; margin: 20px 0; border: 2px solid #c3e6cb; border-radius: 8px; }";
-    WEBHTML = WEBHTML + ".info-box { background-color: #d1ecf1; color: #0c5460; padding: 15px; margin: 15px 0; border: 1px solid #bee5eb; border-radius: 4px; }";
-    WEBHTML = WEBHTML + ".spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }";
-    WEBHTML = WEBHTML + "@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }";
-    WEBHTML = WEBHTML + "</style>";
-    
-    WEBHTML = WEBHTML + "<div class=\"standby-container\">";
-    WEBHTML = WEBHTML + "<h1>System Standby</h1>";
-    
-    // Get the cause parameter
-    String cause = server.hasArg("cause") ? server.arg("cause") : "unknown";
-    
-    if (cause == "WiFiConfig_RESET" || cause == "ResetAllSettings") {
-        // WiFi credentials have been reset
-        WEBHTML = WEBHTML + "<div class=\"status-box\">";
-        WEBHTML = WEBHTML + "<h2>WiFi Credentials Reset</h2>";
-        WEBHTML = WEBHTML + "<p><strong>The system WiFi credentials have been deleted.</strong></p>";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "<div class=\"info-box\">";
-        WEBHTML = WEBHTML + "<h3>Next Steps:</h3>";
-        WEBHTML = WEBHTML + "<ol>";
-        WEBHTML = WEBHTML + "<li>Disconnect from your current WiFi network</li>";
-        WEBHTML = WEBHTML + "<li>Connect to the device's WiFi access point:</li>";
-        WEBHTML = WEBHTML + "<ul>";
-        
-        // Generate and display the AP SSID
-        String apSSID = generateAPSSID();
-        WEBHTML = WEBHTML + "<li><strong>SSID:</strong> " + apSSID + "</li>";
-        
-        // Get WiFi password from Prefs
-        String apPassword = "S3nsor.N3t!";
-        if (apPassword.length() > 0) {
-            WEBHTML = WEBHTML + "<li><strong>Password:</strong> " + apPassword + "</li>";
-        } else {
-            WEBHTML = WEBHTML + "<li><strong>Password:</strong> S3nsor.N3t!</li>";
-        }
-        
-        WEBHTML = WEBHTML + "</ul>";
-        WEBHTML = WEBHTML + "<li>Once connected, navigate to http://192.168.4.1</li>";
-        WEBHTML = WEBHTML + "<li>Re-enter your WiFi credentials on the configuration page</li>";
-        WEBHTML = WEBHTML + "</ol>";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "<div style=\"text-align: center; margin-top: 30px;\">";
-        WEBHTML = WEBHTML + "<p><em>The system will  enter Access Point mode...</em></p>";
-        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
-        WEBHTML = WEBHTML + "</div>";
-//        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"10;url=/REBOOT\">";
-        WEBHTML = WEBHTML + "</div>"; // Close standby-container
-        WEBHTML = WEBHTML + "</body></html>";
-        serverTextClose(200, true);
-    
-        // Disconnect from current WiFi
-        WiFi.disconnect();
-        APStation_Mode();
-        return;
-    } 
-    else if (cause == "WiFiConfig_entered") {
-        // WiFi credentials have been entered, waiting for connection
-        WEBHTML = WEBHTML + "<div class=\"status-box\">";
-        WEBHTML = WEBHTML + "<h2>Connecting to WiFi...</h2>";
-        WEBHTML = WEBHTML + "<p>Please wait while the system connects to your WiFi network.</p>";
-        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
-        WEBHTML = WEBHTML + "</div>";
-        
-        // Check WiFi status
-        bool wifiConnected = WifiStatus();
-
-        if (WifiStatus()) {
-          WEBHTML = WEBHTML + "<p>WiFi is connected.</p>";
-        } else {
-          WEBHTML = WEBHTML + "<p>WiFi is not connected. Please connect to WiFi and try again.</p>";
-          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/WiFiConfig\">";
-          return;
-        }
-
-
-
-        delay(500);
-        if (wifiConnected) {
-            // WiFi is connected
-            WEBHTML = WEBHTML + "<div class=\"success-box\">";
-            WEBHTML = WEBHTML + "<h3>WiFi Connected Successfully!</h3>";
-            WEBHTML = WEBHTML + "<p>IP Address: <strong>" + WiFi.localIP().toString() + "</strong></p>";
-            WEBHTML = WEBHTML + "</div>";
-            
-            #ifdef _USEWEATHER
-            // Try to get location from address if needed
-        
-            bool locationFound = false;
-            
-            if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
-                String street = server.arg("street");
-                String city = server.arg("city");
-                String state = server.arg("state");
-                String zipcode = server.arg("zipcode");
-                
-                if (handlerForWeatherAddress(street, city, state, zipcode)) {
-                  addressMsg = "<div class=\"success-box\"><p>Location obtained from address: ";
-                  addressMsg += String(I.LATITUDE, 4) + ", " + String(I.LONGITUDE, 4) + "</p></div>";
-                  SerialPrint("Obtained geolocation from address", true);
-                } else {
-                  addressMsg = "<div class=\"info-box\"><p><strong>Note:</strong> Address lookup failed. ";
-                  addressMsg += "You can set your location in the Timezone Setup.</p></div>";
-                    SerialPrint("Geolocation from address failed, correct in settings later.", true);
-                }
-                
-                
-
-            } else {
-                addressMsg = "<div class=\"info-box\"><p><strong>Note:</strong> No address provided. ";
-                addressMsg += "You can set your location in the Timezone Setup.</p></div>";
-            }
-            #endif
-
-            WEBHTML = WEBHTML + addressMsg;
-            
-            WEBHTML = WEBHTML + "<div style=\"text-align: center; margin-top: 30px;\">";
-            WEBHTML = WEBHTML + "<h3>Next Step: Configure Timezone</h3>";
-            WEBHTML = WEBHTML + "<p>Please configure your timezone and location settings to complete the setup.</p>";
-            WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 15px 30px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 18px;\">Configure Timezone</a>";
-            WEBHTML = WEBHTML + "</div>";
-    
-            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
-    
-        } else {
-          //wifi failed to connect, reattempt connection
-          WEBHTML = WEBHTML + "<div class=\"info-box\">";
-          WEBHTML = WEBHTML + "<p>Status: <strong>Attempting to connect...</strong></p>";
-          WEBHTML = WEBHTML + "<p><em>This page will automatically refresh every 3 seconds.</em></p>";
-          WEBHTML = WEBHTML + "</div>";
-
-          String refreshUrl = "/Standby?cause=WiFiConfig_entered";
-          if (server.hasArg("street")) {
-              refreshUrl += "&street=" + urlEncode(server.arg("street"));
+// Helper function to URL encode strings
+String urlEncode(const String& str) {
+  String encoded = "";
+  for (unsigned int i = 0; i < str.length(); i++) {
+      char c = str.charAt(i);
+      if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+          encoded += c;
+      } else if (c == ' ') {
+          encoded += '+';
+      } else {
+          encoded += '%';
+          if (c < 16) {
+              encoded += '0';
           }
-          if (server.hasArg("city")) {
-              refreshUrl += "&city=" + urlEncode(server.arg("city"));
-          }
-          if (server.hasArg("state")) {
-              refreshUrl += "&state=" + urlEncode(server.arg("state"));
-          }
-          if (server.hasArg("zipcode")) {
-              refreshUrl += "&zipcode=" + urlEncode(server.arg("zipcode"));
-          }
-          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
-        }
-        
+          encoded += String(c, HEX);
       }
-      else if (cause == "TimezoneSetup_entered") {
-        // Timezone setup has been entered, waiting for connection
-        WEBHTML = WEBHTML + "<div class=\"status-box\">";
-        WEBHTML = WEBHTML + "<h2>Configuring Timezone...</h2>";
-        WEBHTML = WEBHTML + "<p>Please wait while the system configures your timezone.</p>";
-        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
-        WEBHTML = WEBHTML + "</div>";
+  }
+  return encoded;
+}
 
-          // Get timezone information from API
-        int32_t utc_offset = Prefs.TimeZoneOffset;
-        bool dst_enabled = Prefs.DST;
-        uint8_t dst_start_month = Prefs.DSTStartMonth;
-        uint8_t dst_start_day = Prefs.DSTStartDay;
-        uint8_t dst_end_month = Prefs.DSTEndMonth;
-        uint8_t dst_end_day = Prefs.DSTEndDay;
+
+// ==================== STREAMLINED SETUP SYSTEM ====================
+//
+// This section provides a modern, streamlined setup experience with:
+//
+// 1. HELPER FUNCTIONS - Reusable logic for WiFi, location, and timezone
+//    - connectToWiFi()              : Connect to WiFi network
+//    - lookupLocationFromAddress()  : Get coordinates from address
+//    - autoDetectTimezone()         : Auto-detect timezone settings
+//    - saveTimezoneSettings()       : Save timezone to preferences
+//
+// 2. API HANDLERS - RESTful JSON endpoints for AJAX calls
+//    - POST /api/wifi               : Connect to WiFi (returns JSON)
+//    - POST /api/location           : Lookup location (returns JSON)
+//    - GET  /api/timezone           : Auto-detect timezone (returns JSON)
+//    - POST /api/timezone           : Save timezone (returns JSON)
+//    - GET  /api/setup-status       : Get setup completion status (returns JSON)
+//
+// 3. SETUP WIZARD - Single-page guided setup interface
+//    - GET /InitialSetup            : Interactive wizard with 3 steps
+//      Step 1: WiFi Configuration
+//      Step 2: Location Setup (optional)
+//      Step 3: Timezone Configuration
+//
+// 4. LEGACY HANDLERS - Backward compatible (still functional)
+//    - handleWiFiConfig()           : Old WiFi config page
+//    - handleWiFiConfig_POST()      : Now uses helper functions
+//    - handleTimezoneSetup()        : Old timezone page
+//    - handleTimezoneSetup_POST()   : Now uses helper functions
+//    - handleWeatherAddress()       : Now uses helper functions
+//
+// Benefits:
+//   - Cleaner code separation
+//   - Better user experience with wizard interface
+//   - Reusable logic across handlers
+//   - Modern AJAX-based interactions
+//   - Backward compatibility maintained
+//
+// =====================================================================
+
+/**
+ * Helper: Connect to WiFi network
+ * Returns: true if connection successful, false otherwise
+ */
+bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key) {
+  if (ssid.length() == 0) {
+    SerialPrint("connectToWiFi: Empty SSID provided", true);
+    return false;
+  }
   
+  // Save credentials
+  snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
+  snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
   
-        if (!WifiStatus()) {
-          WEBHTML = WEBHTML + "<p>WiFi is not connected. Please connect to WiFi and try again.</p>";
-          WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/WiFiConfig\">";
-        } 
-        
-        if (utc_offset == 0 ) {
-          WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
-          if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
-            WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information detected successfully!</p>";
-            //redirect to TimezoneSetup
-            String refreshUrl = "/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day);
-            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
-          } else {
-            WEBHTML = WEBHTML + "<p style=\"color: red;\">Failed to detect timezone information. Will try again in 3 seconds (or choose UseDefaults).</p>";
-            // Set some reasonable defaults
-            utc_offset = -18000; // EST (UTC-5)
-            dst_enabled = true;
-            dst_start_month = 3; dst_start_day = 10;
-            dst_end_month = 11; dst_end_day = 3;
-            WEBHTML = WEBHTML + "<p><a href=\"/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day) + "\">Use Defaults</a>.</p>";
-            //redirect to TimezoneSetup
-            String refreshUrl = "/TimezoneSetup?utc_offset_seconds=" + String(utc_offset) + "&dst_enabled=" + String(dst_enabled) + "&dst_start_month=" + String(dst_start_month) + "&dst_start_day=" + String(dst_start_day) + "&dst_end_month=" + String(dst_end_month) + "&dst_end_day=" + String(dst_end_day);
-            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=" + refreshUrl + "\">";
-          }
-        }  else   WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information from stored data</p>";
+  // Save LMK key if provided
+  if (lmk_key.length() > 0) {
+    String padded_key = lmk_key;
+    if (padded_key.length() > 16) {
+      padded_key = padded_key.substring(0, 16);
+    } else if (padded_key.length() < 16) {
+      padded_key = padded_key + String("0000000000000000").substring(0, 16 - padded_key.length());
+    }
+    snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", padded_key.c_str());
+  }
+  
+  Prefs.HAVECREDENTIALS = true;
+  Prefs.isUpToDate = false;
+  
+  // Attempt WiFi connection
+  SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
-
-
-        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
-        
-
-      }
-
-      else if (cause == "Reboot") {
-        // System is rebooting
-        WEBHTML = WEBHTML + "<div class=\"status-box\">";
-        WEBHTML = WEBHTML + "<h2>System Rebooting...</h2>";
-        WEBHTML = WEBHTML + "<p>The system is restarting. Please wait.</p>";
-        WEBHTML = WEBHTML + "<div class=\"spinner\"></div>";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "<div class=\"info-box\">";
-        WEBHTML = WEBHTML + "<p><em>The system will be available in approximately 30 seconds.</em></p>";
-        WEBHTML = WEBHTML + "<p>If you are connected to the device's access point, you may need to reconnect to your regular WiFi network.</p>";
-        WEBHTML = WEBHTML + "</div>";
- 
-        WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"10;url=/REBOOT\">";
-      } 
-      else {
-
-            WEBHTML = WEBHTML + "<div class=\"info-box\">";
-            WEBHTML = WEBHTML + "<p>Status: <strong>Attempting to connect...</strong></p>";
-            WEBHTML = WEBHTML + "<p><em>This page will automatically refresh every 3 seconds.</em></p>";
-            WEBHTML = WEBHTML + "</div>";
-            
-            // Auto-refresh to check status
-            WEBHTML = WEBHTML + "<meta http-equiv=\"refresh\" content=\"3;url=/TimezoneSetup\">";
-        
-      }
-        
+  int retries = tryWifi(250,20,false);
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    SerialPrint("WiFi connected! IP: " + WiFi.localIP().toString(), true);
     
-    WEBHTML = WEBHTML + "</div>"; // Close standby-container
-    WEBHTML = WEBHTML + "</body></html>";
-    serverTextClose(200, true);
+    return true;
+  }
+  
+  SerialPrint("WiFi connection failed", true);
+  return false;
+}
+
+/**
+ * Helper: Lookup location coordinates from address
+ * Returns: true if lookup successful, false otherwise
+ */
+bool lookupLocationFromAddress(const String& street, const String& city, const String& state, const String& zipcode, double* lat, double* lon) {
+  // Validate inputs
+  if (street.length() == 0 || city.length() == 0 || state.length() != 2 || zipcode.length() != 5) {
+    SerialPrint("lookupLocationFromAddress: Invalid address parameters", true);
+    return false;
+  }
+  
+  // Validate ZIP code is numeric
+  for (int i = 0; i < 5; i++) {
+    if (!isdigit(zipcode.charAt(i))) {
+      SerialPrint("lookupLocationFromAddress: ZIP code must be numeric", true);
+      return false;
+    }
+  }
+  
+  // Check WiFi status
+  if (!WifiStatus()) {
+    SerialPrint("lookupLocationFromAddress: WiFi not connected", true);
+    return false;
+  }
+  
+  // Call existing handler function
+  bool result = handlerForWeatherAddress(street, city, state, zipcode);
+  
+  if (result && lat != nullptr && lon != nullptr) {
+    *lat = Prefs.LATITUDE;
+    *lon = Prefs.LONGITUDE;
+    Prefs.isUpToDate = false;
+    SerialPrint("Location lookup successful: " + String(*lat, 6) + ", " + String(*lon, 6), true);
+  }
+  
+  return result;
+}
+
+/**
+ * Helper: Auto-detect timezone from IP location
+ * Returns: true if detection successful, false otherwise
+ */
+bool autoDetectTimezone(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
+  if (!WifiStatus()) {
+    SerialPrint("autoDetectTimezone: WiFi not connected", true);
+    return false;
+  }
+  
+  // Call existing timezone detection function
+  bool result = getTimezoneInfo(utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
+  
+  if (result) {
+    SerialPrint("Timezone detected: UTC offset = " + String(*utc_offset), true);
+  } else {
+    SerialPrint("Timezone detection failed, using defaults", true);
+    // Set reasonable defaults (EST)
+    *utc_offset = -18000;
+    *dst_enabled = true;
+    *dst_start_month = 3;
+    *dst_start_day = 10;
+    *dst_end_month = 11;
+    *dst_end_day = 3;
+  }
+  
+  return result;
+}
+
+/**
+ * Helper: Save timezone settings to preferences
+ */
+void saveTimezoneSettings(int32_t utc_offset, bool dst_enabled, uint8_t dst_start_month, uint8_t dst_start_day, uint8_t dst_end_month, uint8_t dst_end_day) {
+  Prefs.TimeZoneOffset = utc_offset;
+  Prefs.DST = dst_enabled;
+  Prefs.DSTStartMonth = dst_start_month;
+  Prefs.DSTStartDay = dst_start_day;
+  Prefs.DSTEndMonth = dst_end_month;
+  Prefs.DSTEndDay = dst_end_day;
+  Prefs.isUpToDate = false;
+  
+  SerialPrint("Timezone settings saved: UTC offset = " + String(utc_offset), true);
+}
+
+// ==================== API HANDLERS (JSON RESPONSES) ====================
+
+/**
+ * API: Connect to WiFi
+ * POST /api/wifi
+ * Parameters: ssid, password, lmk_key (optional)
+ * Returns: JSON with status
+ */
+void apiConnectWiFi() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  String ssid = "";
+  String password = "";
+  String lmk_key = "";
+
+  
+  if (server.hasArg("ssid") ) {
+    ssid = server.arg("ssid");
+  }
+  if (server.hasArg("password")) {
+    password = server.arg("password");
+  }
+      
+  if (server.hasArg("lmk_key")) {
+    lmk_key = server.arg("lmk_key");
+  }
+
+    
+  if (ssid.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"SSID required\"}");
+    return;
+  }
+  
+  bool success = connectToWiFi(ssid, password, lmk_key);
+  
+  if (success) {
+    String json = "{\"success\":true,\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+    server.send(200, "application/json", json);
+  } else {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Connection failed\"}");
+  }
+}
+
+/**
+ * API: Lookup location from address
+ * POST /api/location
+ * Parameters: street, city, state, zipcode
+ * Returns: JSON with lat/lon
+ */
+void apiLookupLocation() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  String street = server.hasArg("street") ? server.arg("street") : "";
+  String city = server.hasArg("city") ? server.arg("city") : "";
+  String state = server.hasArg("state") ? server.arg("state") : "";
+  String zipcode = server.hasArg("zipcode") ? server.arg("zipcode") : "";
+  
+  double lat = 0, lon = 0;
+  bool success = lookupLocationFromAddress(street, city, state, zipcode, &lat, &lon);
+  
+  if (success) {
+    String json = "{\"success\":true,\"latitude\":" + String(lat, 6) + ",\"longitude\":" + String(lon, 6) + "}";
+    
+    server.send(200, "application/json", json);
+  } else {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Location lookup failed\"}");
+  }
+}
+
+/**
+ * API: Auto-detect timezone
+ * GET /api/timezone
+ * Returns: JSON with timezone info
+ */
+void apiDetectTimezone() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  int32_t utc_offset;
+  bool dst_enabled;
+  uint8_t dst_start_month, dst_start_day, dst_end_month, dst_end_day;
+  
+  bool success = autoDetectTimezone(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day);
+  
+  String json = "{\"success\":" + String(success ? "true" : "false") + 
+                ",\"utc_offset\":" + String(utc_offset) +
+                ",\"dst_enabled\":" + String(dst_enabled ? "true" : "false") +
+                ",\"dst_start_month\":" + String(dst_start_month) +
+                ",\"dst_start_day\":" + String(dst_start_day) +
+                ",\"dst_end_month\":" + String(dst_end_month) +
+                ",\"dst_end_day\":" + String(dst_end_day) + "}";
+  
+  server.send(200, "application/json", json);
+}
+
+/**
+ * API: Save timezone settings
+ * POST /api/timezone
+ * Parameters: utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day
+ * Returns: JSON with status
+ */
+void apiSaveTimezone() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  int32_t utc_offset = server.hasArg("utc_offset") ? server.arg("utc_offset").toInt() : 0;
+  bool dst_enabled = server.hasArg("dst_enabled") ? (server.arg("dst_enabled") == "true" || server.arg("dst_enabled") == "1") : false;
+  uint8_t dst_start_month = server.hasArg("dst_start_month") ? server.arg("dst_start_month").toInt() : 3;
+  uint8_t dst_start_day = server.hasArg("dst_start_day") ? server.arg("dst_start_day").toInt() : 10;
+  uint8_t dst_end_month = server.hasArg("dst_end_month") ? server.arg("dst_end_month").toInt() : 11;
+  uint8_t dst_end_day = server.hasArg("dst_end_day") ? server.arg("dst_end_day").toInt() : 3;
+  
+  saveTimezoneSettings(utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
+  
+  server.send(200, "application/json", "{\"success\":true}");
+}
+
+/**
+ * API: Get setup status
+ * GET /api/setup-status
+ * Returns: JSON with current setup completion status
+ */
+void apiGetSetupStatus() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  bool wifi_configured = Prefs.HAVECREDENTIALS && WifiStatus();
+  bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
+  bool timezone_configured = (Prefs.TimeZoneOffset != 0);
+  #ifdef _USEWEATHER
+  bool setup_complete = wifi_configured && timezone_configured && location_configured;
+  #else
+  bool setup_complete = wifi_configured && timezone_configured;
+  #endif
+  
+  String json = "{\"wifi_configured\":" + String(wifi_configured ? "true" : "false") +
+                ",\"wifi_connected\":" + String(WifiStatus() ? "true" : "false") +
+                ",\"location_configured\":" + String(location_configured ? "true" : "false") +
+                ",\"timezone_configured\":" + String(timezone_configured ? "true" : "false") +
+                ",\"setup_complete\":" + String(setup_complete ? "true" : "false");
+  
+  if (wifi_configured) {
+    json += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  }
+  if (location_configured) {
+    json += ",\"latitude\":" + String(Prefs.LATITUDE, 6) + ",\"longitude\":" + String(Prefs.LONGITUDE, 6);
+  }
+  if (timezone_configured) {
+    json += ",\"utc_offset\":" + String(Prefs.TimeZoneOffset);
+  }
+  
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
+
+/**
+ * API: Scan for WiFi networks
+ * GET /api/wifi-scan
+ * Returns: JSON array of available WiFi networks
+ */
+void apiScanWiFi() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  SerialPrint("Scanning for WiFi networks...", true);
+  
+  // Perform WiFi scan
+  int numNetworks = WiFi.scanNetworks();
+  
+  if (numNetworks == 0) {
+    server.send(200, "application/json", "{\"success\":true,\"networks\":[]}");
+    return;
+  }
+  
+  // Build JSON array of networks
+  String json = "{\"success\":true,\"networks\":[";
+  
+  for (int i = 0; i < numNetworks; i++) {
+    if (i > 0) json += ",";
+    json += "{\"ssid\":\"" + WiFi.SSID(i) + "\"";
+    json += ",\"rssi\":" + String(WiFi.RSSI(i));
+    json += ",\"encryption\":" + String(WiFi.encryptionType(i));
+    json += "}";
+  }
+  
+  json += "]}";
+  
+  // Clean up scan results
+  WiFi.scanDelete();
+  
+  SerialPrint("Found " + String(numNetworks) + " WiFi networks", true);
+  server.send(200, "application/json", json);
+}
+
+// ==================== SETUP WIZARD PAGE ====================
+
+/**
+ * Initial Setup Wizard - Single-page guided setup
+ * GET /InitialSetup
+ */
+void handleInitialSetup() {
+  I.lastServerStatusUpdate = I.currentTime;
+  WEBHTML = "";
+  serverTextHeader();
+  
+  WEBHTML += R"===(
+<style>
+  .setup-container { max-width: 900px; margin: 20px auto; padding: 20px; font-family: Arial, sans-serif; }
+  .setup-step { background: #f8f9fa; border: 2px solid #dee2e6; border-radius: 8px; padding: 20px; margin: 15px 0; }
+  .setup-step.active { border-color: #2196F3; background: #e3f2fd; }
+  .setup-step.completed { border-color: #4CAF50; background: #e8f5e8; }
+  .step-header { display: flex; align-items: center; margin-bottom: 15px; cursor: pointer; }
+  .step-number { width: 35px; height: 35px; border-radius: 50%; background: #ccc; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 15px; }
+  .active .step-number { background: #2196F3; }
+  .completed .step-number { background: #4CAF50; }
+  .completed .step-number::after { content: "x"; }
+  .step-title { font-size: 18px; font-weight: bold; flex-grow: 1; }
+  .step-content { display: none; padding-left: 50px; }
+  .active .step-content, .completed .step-content { display: block; }
+  .form-group { margin: 15px 0; }
+  .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+  .form-group input, .form-group select { width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  .btn { padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 5px; }
+  .btn-primary { background: #4CAF50; color: white; }
+  .btn-secondary { background: #2196F3; color: white; }
+  .btn-danger { background: #f44336; color: white; }
+  .btn:disabled { background: #ccc; cursor: not-allowed; }
+  .status-message { padding: 12px; border-radius: 4px; margin: 10px 0; display: none; }
+  .status-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+  .status-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+  .status-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+  .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; margin-left: 10px; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+
+<body>
+<div class="setup-container">
+  <h1>Initial System Setup</h1>
+  <p>Welcome! Let's configure your system.</p>
+  )===";
+
+  //insert what is missing/ why we got to initial setup
+  //possible choices include no wifi, no timezone, no location (if using weather), or user reset
+
+  //is there no wifi?
+  if (!Prefs.HAVECREDENTIALS || !WifiStatus()) {
+    WEBHTML += R"===(
+    <p>WiFi credentials not found and required to continue.</p>
+    )===";
+  } else {
+    WEBHTML += "<p>Currently connected to WiFi network: " + WiFi.SSID() + "</p>";
+    WEBHTML += "<p>Current IP address: " + WiFi.localIP().toString() + "</p>";
+  }
+
+  //is there no timezone?
+  if (Prefs.TimeZoneOffset == 0) {
+    WEBHTML += R"===(
+    <p>Timezone not found and required to continue.</p>
+    )===";
+  } else {
+    WEBHTML += "<p>Timezone: " + String(Prefs.TimeZoneOffset) + "</p>";
+  }
+
+  #ifdef _USEWEATHER
+  //is there no location?
+  if (Prefs.LATITUDE == 0 || Prefs.LONGITUDE == 0) {
+    WEBHTML += R"===(
+    <p>Location not found and required for weather data (leave blank if not using weather).</p>
+    )===";
+  } else {
+    WEBHTML += "<p>LAT, LON: " + String(Prefs.LATITUDE, 6) + ", " + String(Prefs.LONGITUDE, 6) + "</p>";
+  }
+  #endif
+
+  WEBHTML += R"===(  
+  <!-- Step 1: WiFi Configuration -->
+  <div class="setup-step" id="step1">
+    <div class="step-header" onclick="toggleStep('step1')">
+      <div class="step-number">1</div>
+      <div class="step-title">WiFi Configuration</div>
+    </div>
+    <div class="step-content">
+      <p>Connect your device to your WiFi network.</p>
+      <div id="wifi-status" class="status-message"></div>
+      
+      <div class="form-group">
+        <label for="ssid">Network Name (SSID) *</label>
+        <input type="text" id="ssid" list="ssid-list" placeholder="Select or enter your WiFi network name" autocomplete="off">
+        <datalist id="ssid-list">
+          <!-- WiFi networks will be populated here -->
+        </datalist>
+        <button class="btn btn-secondary" onclick="scanWiFiNetworks()" id="scan-btn" style="margin-top: 5px; padding: 8px 16px; font-size: 14px;">
+          Scan for Networks
+        </button>
+      </div>
+      
+      <div class="form-group">
+        <label for="password">Password *</label>
+        <input type="password" id="password" placeholder="Enter WiFi password">
+      </div>
+      
+      <div class="form-group">
+        <label for="lmk_key">Local Security Key (16 characters)</label>
+        <input type="text" id="lmk_key" maxlength="16" placeholder="Optional - for ESPNow encryption">
+      </div>
+      
+      <button class="btn btn-primary" onclick="connectWiFi()" id="wifi-btn">Connect to WiFi</button>
+    </div>
+  </div>
+  
+  <!-- Step 2: Location Setup -->
+  <div class="setup-step" id="step2">
+    <div class="step-header" onclick="toggleStep('step2')">
+      <div class="step-number">2</div>
+      <div class="step-title">Location Setup (Optional)</div>
+    </div>
+    <div class="step-content">
+      <p>Enter your address to get weather information. This step is optional if not using weather.</p>
+      <div id="location-status" class="status-message"></div>
+      
+      <div class="form-group">
+        <label for="street">Street Address</label>
+        <input type="text" id="street" placeholder="123 Main St">
+      </div>
+      
+      <div class="form-group">
+        <label for="city">City</label>
+        <input type="text" id="city" placeholder="Boston">
+      </div>
+      
+      <div class="form-group">
+        <label for="state">State (2-letter code)</label>
+        <input type="text" id="state" maxlength="2" placeholder="MA" style="width: 80px; text-transform: uppercase;">
+      </div>
+      
+      <div class="form-group">
+        <label for="zipcode">ZIP Code</label>
+        <input type="text" id="zipcode" maxlength="5" placeholder="02101" pattern="[0-9]{5}">
+      </div>
+      
+      <button class="btn btn-primary" onclick="lookupLocation()" id="location-btn">Lookup Location</button>
+      <button class="btn btn-secondary" onclick="skipLocation()">Skip This Step</button>
+    </div>
+  </div>
+  
+  <!-- Step 3: Timezone Configuration -->
+  <div class="setup-step" id="step3">
+    <div class="step-header" onclick="toggleStep('step3')">
+      <div class="step-number">3</div>
+      <div class="step-title">Timezone Configuration</div>
+    </div>
+    <div class="step-content">
+      <p>Configure your timezone settings.</p>
+      <div id="timezone-status" class="status-message"></div>
+      
+      <button class="btn btn-secondary" onclick="autoDetectTimezone()" id="detect-tz-btn">Auto-Detect Timezone</button>
+      
+      <div id="timezone-form" style="display:none; margin-top: 20px;">
+        <div class="form-group">
+          <label for="utc_offset">UTC Offset (seconds)</label>
+          <input type="number" id="utc_offset" value="-18000" step="900">
+        </div>
+        
+        <div class="form-group">
+          <label for="dst_enabled">Daylight Saving Time</label>
+          <select id="dst_enabled">
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="dst_start">DST Start (Month/Day)</label>
+          <input type="number" id="dst_start_month" value="3" min="1" max="12" style="width: 80px;" placeholder="Month">
+          <input type="number" id="dst_start_day" value="10" min="1" max="31" style="width: 80px;" placeholder="Day">
+        </div>
+        
+        <div class="form-group">
+          <label for="dst_end">DST End (Month/Day)</label>
+          <input type="number" id="dst_end_month" value="11" min="1" max="12" style="width: 80px;" placeholder="Month">
+          <input type="number" id="dst_end_day" value="3" min="1" max="31" style="width: 80px;" placeholder="Day">
+        </div>
+        
+        <button class="btn btn-primary" onclick="saveTimezone()">Save Timezone</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Complete Setup -->
+  <div style="text-align: center; margin: 30px 0;">
+    <button class="btn btn-primary" id="complete-btn" onclick="completeSetup()" disabled style="font-size: 18px; padding: 15px 30px;">
+      Complete Setup & Reboot
+    </button>
+  </div>
+</div>
+
+<script>
+let setupState = {
+  wifiConfigured: false,
+  locationConfigured: false,
+  timezoneConfigured: false
+};
+
+// Toggle step visibility
+function toggleStep(stepId) {
+  const step = document.getElementById(stepId);
+  const content = step.querySelector('.step-content');
+  if (content.style.display === 'block') {
+    content.style.display = 'none';
+  } else {
+    content.style.display = 'block';
+  }
+}
+
+// Show status message
+function showStatus(elementId, message, type) {
+  const el = document.getElementById(elementId);
+  el.textContent = message;
+  el.className = 'status-message status-' + type;
+  el.style.display = 'block';
+}
+
+// Mark step as completed
+function completeStep(stepNum) {
+  const step = document.getElementById('step' + stepNum);
+  step.classList.add('completed');
+  step.classList.remove('active');
+  if (stepNum < 3) {
+    const nextStep = document.getElementById('step' + (stepNum + 1));
+    nextStep.classList.add('active');
+  }
+  checkSetupComplete();
+}
+
+// Check if setup is complete
+function checkSetupComplete() {
+  if (setupState.wifiConfigured && setupState.timezoneConfigured) {
+    document.getElementById('complete-btn').disabled = false;
+  }
+}
+
+// Scan for WiFi networks
+async function scanWiFiNetworks() {
+  showStatus('wifi-status', 'Scanning for networks...', 'info');
+  const scanBtn = document.getElementById('scan-btn');
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Scanning...';
+  
+  try {
+    const response = await fetch('/api/wifi-scan');
+    const data = await response.json();
+    
+    if (data.success && data.networks) {
+      const datalist = document.getElementById('ssid-list');
+      datalist.innerHTML = ''; // Clear existing options
+      
+      // Sort networks by signal strength (RSSI)
+      data.networks.sort((a, b) => b.rssi - a.rssi);
+      
+      // Add each network to the datalist
+      data.networks.forEach(network => {
+        const option = document.createElement('option');
+        option.value = network.ssid;
+        // Show signal strength indicator
+        const bars = network.rssi > -50 ? '++++' : network.rssi > -60 ? '+++' : network.rssi > -70 ? '++' : '+';
+        const lock = network.encryption > 0 ? '[enc] ' : '[open]';
+        option.textContent = lock + network.ssid + ' ' + bars;
+        datalist.appendChild(option);
+      });
+      
+      showStatus('wifi-status', '✓ Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
+    } else {
+      showStatus('wifi-status', 'No networks found. You can still enter SSID manually.', 'info');
+    }
+  } catch (error) {
+    showStatus('wifi-status', 'Scan failed: ' + error.message + '. You can still enter SSID manually.', 'error');
+  } finally {
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan for Networks';
+  }
+}
+
+// Connect to WiFi
+async function connectWiFi() {
+  const ssid = document.getElementById('ssid').value;
+  const password = document.getElementById('password').value;
+  const lmk_key = document.getElementById('lmk_key').value;
+  
+  if (!ssid) {
+    showStatus('wifi-status', 'Please enter a network name (SSID)', 'error');
+    return;
+  }
+  
+  showStatus('wifi-status', 'Connecting to WiFi...', 'info');
+  document.getElementById('wifi-btn').disabled = true;
+  
+  const formData = new FormData();
+  formData.append('ssid', ssid);
+  formData.append('password', password);
+  formData.append('lmk_key', lmk_key);
+  
+  try {
+    const response = await fetch('/api/wifi', { method: 'POST', body: formData });
+    const data = await response.json();
+    
+    if (data.success) {
+      showStatus('wifi-status', 'Connected! IP: ' + data.ip, 'success');
+      setupState.wifiConfigured = true;
+      completeStep(1);
+    } else {
+      showStatus('wifi-status', 'Connection failed: ' + data.error, 'error');
+      document.getElementById('wifi-btn').disabled = false;
+    }
+  } catch (error) {
+    showStatus('wifi-status', 'Error: ' + error.message, 'error');
+    document.getElementById('wifi-btn').disabled = false;
+  }
+}
+
+// Lookup location
+async function lookupLocation() {
+  const street = document.getElementById('street').value;
+  const city = document.getElementById('city').value;
+  const state = document.getElementById('state').value;
+  const zipcode = document.getElementById('zipcode').value;
+  
+  if (!street || !city || !state || !zipcode) {
+    showStatus('location-status', 'Please fill in all address fields', 'error');
+    return;
+  }
+  
+  showStatus('location-status', 'Looking up location...', 'info');
+  document.getElementById('location-btn').disabled = true;
+  
+  const formData = new FormData();
+  formData.append('street', street);
+  formData.append('city', city);
+  formData.append('state', state);
+  formData.append('zipcode', zipcode);
+  
+  try {
+    const response = await fetch('/api/location', { method: 'POST', body: formData });
+    const data = await response.json();
+    
+    if (data.success) {
+      showStatus('location-status', 'Location found: ' + data.latitude.toFixed(4) + ', ' + data.longitude.toFixed(4), 'success');
+      setupState.locationConfigured = true;
+      completeStep(2);
+    } else {
+      showStatus('location-status', 'Lookup failed: ' + data.error, 'error');
+      document.getElementById('location-btn').disabled = false;
+    }
+  } catch (error) {
+    showStatus('location-status', 'Error: ' + error.message, 'error');
+    document.getElementById('location-btn').disabled = false;
+  }
+}
+
+// Skip location step
+function skipLocation() {
+  setupState.locationConfigured = true;
+  showStatus('location-status', 'Location setup skipped', 'info');
+  completeStep(2);
+}
+
+// Auto-detect timezone
+async function autoDetectTimezone() {
+  showStatus('timezone-status', 'Detecting timezone...', 'info');
+  document.getElementById('detect-tz-btn').disabled = true;
+  
+  try {
+    const response = await fetch('/api/timezone');
+    const data = await response.json();
+    
+    if (data.success || data.utc_offset !== 0) {
+      // Populate form
+      document.getElementById('utc_offset').value = data.utc_offset;
+      document.getElementById('dst_enabled').value = data.dst_enabled ? 'true' : 'false';
+      document.getElementById('dst_start_month').value = data.dst_start_month;
+      document.getElementById('dst_start_day').value = data.dst_start_day;
+      document.getElementById('dst_end_month').value = data.dst_end_month;
+      document.getElementById('dst_end_day').value = data.dst_end_day;
+      
+      showStatus('timezone-status', 'Timezone detected. Please review and save.', 'success');
+      document.getElementById('timezone-form').style.display = 'block';
+    } else {
+      showStatus('timezone-status', 'Auto-detection failed. Please set manually.', 'info');
+      document.getElementById('timezone-form').style.display = 'block';
+    }
+  } catch (error) {
+    showStatus('timezone-status', 'Detection error. Using defaults.', 'info');
+    document.getElementById('timezone-form').style.display = 'block';
+  }
+}
+
+// Save timezone
+async function saveTimezone() {
+  const utc_offset = document.getElementById('utc_offset').value;
+  const dst_enabled = document.getElementById('dst_enabled').value;
+  const dst_start_month = document.getElementById('dst_start_month').value;
+  const dst_start_day = document.getElementById('dst_start_day').value;
+  const dst_end_month = document.getElementById('dst_end_month').value;
+  const dst_end_day = document.getElementById('dst_end_day').value;
+  
+  const formData = new FormData();
+  formData.append('utc_offset', utc_offset);
+  formData.append('dst_enabled', dst_enabled);
+  formData.append('dst_start_month', dst_start_month);
+  formData.append('dst_start_day', dst_start_day);
+  formData.append('dst_end_month', dst_end_month);
+  formData.append('dst_end_day', dst_end_day);
+  
+  try {
+    const response = await fetch('/api/timezone', { method: 'POST', body: formData });
+    const data = await response.json();
+    
+    if (data.success) {
+      showStatus('timezone-status', 'Timezone saved!', 'success');
+      setupState.timezoneConfigured = true;
+      completeStep(3);
+    } else {
+      showStatus('timezone-status', 'Failed to save timezone', 'error');
+    }
+  } catch (error) {
+    showStatus('timezone-status', 'Error: ' + error.message, 'error');
+  }
+}
+
+// Complete setup and reboot
+function completeSetup() {
+  if (confirm('Setup complete! The device will now reboot. Continue?')) {
+    window.location.href = '/REBOOT';
+  }
+}
+
+// Initialize - check current status
+async function initSetup() {
+  try {
+    const response = await fetch('/api/setup-status');
+    const status = await response.json();
+    
+    if (status.wifi_configured) {
+      setupState.wifiConfigured = true;
+      document.getElementById('step1').classList.add('completed');
+      showStatus('wifi-status', 'Already configured: ' + status.ip, 'success');
+    } else {
+      document.getElementById('step1').classList.add('active');
+    }
+    
+    if (status.location_configured) {
+      setupState.locationConfigured = true;
+      document.getElementById('step2').classList.add('completed');
+      showStatus('location-status', 'Location: ' + status.latitude.toFixed(4) + ', ' + status.longitude.toFixed(4), 'success');
+    }
+    
+    if (status.timezone_configured) {
+      setupState.timezoneConfigured = true;
+      document.getElementById('step3').classList.add('completed');
+      showStatus('timezone-status', 'Configured: UTC offset = ' + status.utc_offset, 'success');
+    }
+    
+    checkSetupComplete();
+  } catch (error) {
+    console.error('Failed to load setup status:', error);
+    document.getElementById('step1').classList.add('active');
+  }
+}
+
+// Run on page load
+initSetup();
+</script>
+</body></html>
+)===";
+  
+  serverTextClose(200, true);
 }
 
 void handleReboot() {
-  WEBHTML = "Rebooting in 10 sec";
+  WEBHTML = "Rebooting in 3 sec";
+  
+  handleStoreCoreData();
+
   serverTextClose(200, false);  //This returns to the main page
-  delay(10000);
-  ESP.restart();
+  delay(3000);
+  controlledReboot("Rebooting",RESET_USER,true);
 }
 
 void handleCLEARSENSOR() {
@@ -847,6 +1477,27 @@ void handlerForRoot(bool allsensors) {
   LAST_WEB_REQUEST = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
+  
+  // Check if initial setup is complete
+  bool wifi_configured = Prefs.HAVECREDENTIALS && WifiStatus();
+  bool timezone_configured = (Prefs.TimeZoneOffset != 0);
+  
+  #ifdef _USEWEATHER
+  bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
+  bool setup_complete = wifi_configured && timezone_configured && location_configured;
+  #else
+  bool setup_complete = wifi_configured && timezone_configured;
+  #endif
+  
+  // Redirect to Initial Setup Wizard if not configured
+  if (!setup_complete) {
+    SerialPrint("Setup incomplete, redirecting to Initial Setup Wizard", true);
+    server.sendHeader("Location", "/InitialSetup");
+    server.send(302, "text/plain", "Setup incomplete. Redirecting to setup wizard...");
+    return;
+  }
+  
+  // Normal root page for fully configured systems
   serverTextHeader();
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Main Page</h2>";
 
@@ -879,7 +1530,7 @@ void handlerForRoot(bool allsensors) {
     // Second row - Weather data link and AC status
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "AC is " + (I.isAC ? "on" : "off");
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a></td></tr>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a> | <a href=\"/InitialSetup\" style=\"color: #4CAF50; font-weight: bold;\">Setup Wizard</a></td></tr>";
     
     // Third row - Critical flags
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/CONFIG\">System Configuration</a></td></tr>";
@@ -894,7 +1545,7 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Interior rooms below min temp: " + (String) I.isCold + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
     
     // Seventh row - Dry plants
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Plants dry: " + (String) I.isSoilDry + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Plants dry: " + (String) I.isSoilDry + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/DEVICEVIEWER\">Device Viewer</a></td></tr>";
     
     // Eighth row - Expired sensors
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical sensors expired: " + (String) I.isExpired + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
@@ -2064,6 +2715,14 @@ void handleWiFiConfig() {
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " WiFi Configuration</h2>";
   
+  // Add link to streamlined setup wizard
+  if (!Prefs.HAVECREDENTIALS || Prefs.TimeZoneOffset == 0) {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #e3f2fd; border: 2px solid #2196F3; color: #0d47a1; padding: 20px; margin: 10px 0; border-radius: 8px; text-align: center;\">";
+    WEBHTML = WEBHTML + "<h3>Setup Wizard</h3>";
+    WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; padding: 15px 30px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 18px; margin: 10px;\">Use Setup Wizard</a>";
+    WEBHTML = WEBHTML + "</div>";
+  }
+  
   // Check for error messages
   if (server.hasArg("error")) {
     String error = server.arg("error");
@@ -2308,82 +2967,56 @@ void handleWiFiConfig_POST() {
   SerialPrint("Processing WiFi request from webpage...", true);
   #endif
 
+  String ssid = server.hasArg("ssid") ? server.arg("ssid") : "";
+  String password = server.hasArg("password") ? server.arg("password") : "";
+  String lmk_key = server.hasArg("lmk_key") ? server.arg("lmk_key") : "";
+
+  // Use helper function to connect
+  bool wifiSuccess = connectToWiFi(ssid, password, lmk_key);
   
-  String ssid = Prefs.WIFISSID;
-  String password = Prefs.WIFIPWD;
-  String lmk_key = Prefs.KEYS.ESPNOW_KEY;
-
-  //do we need to update wifi credentials?
-  if (server.hasArg("ssid") && server.hasArg("password")) {
-    ssid = server.arg("ssid");
-    password = server.arg("password");
-    // Save WiFi credentials and ESPNow key
-    if ((ssid != Prefs.WIFISSID && ssid.length() > 0) || (password != Prefs.WIFIPWD && password.length() > 0))  {
-      //need to update wifi credentials
-      snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
-      snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
-      Prefs.HAVECREDENTIALS = true;
-      Prefs.isUpToDate = false;
-    }
-  }
-
-
-  if (server.hasArg("lmk_key")) {
-    lmk_key = server.arg("lmk_key");
-    if (lmk_key.length() > 16) {
-      lmk_key = lmk_key.substring(0, 16);
-    } 
-    if (lmk_key.length() < 16) {
-      lmk_key = lmk_key + String(16 - lmk_key.length(), '0'); //pad short keys with 0s
-    } 
-    snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
-    Prefs.isUpToDate = false;
-  }
-
-  // Try to connect to WiFi - note that we are already in  mixed AP+STA mode
-  tft.println("Attempting WiFi connection...");
-  WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-  delay(1000); //allow wifi to connect
-
-  if (WiFi.status()) {
-    // WiFi connection successful
-    Prefs.status = 1; // Mark WiFi as connected
-    Prefs.HAVECREDENTIALS = true;
-    Prefs.isUpToDate = false;
-    
-    Prefs.MYIP = WiFi.localIP(); //update this here just in case
-    // Reset WiFi failure count since we successfully connected
-    I.wifiFailCount = 0;
-    
+  if (wifiSuccess) {
+    #ifdef _USETFT
     tft.println("WiFi connected successfully!");
+    #endif
     HTTPCode = 200; //wifi connected
+    
     // Handle weather address if provided
-    if (server.hasArg("street") && serverr.arg != "" && server.hasArg("city") && server.arg != "" && server.hasArg("state") && server.arg != "" && server.hasArg("zipcode") && server.arg != "") {
+    if (server.hasArg("street") && server.arg("street").length() > 0 && 
+        server.hasArg("city") && server.arg("city").length() > 0 && 
+        server.hasArg("state") && server.arg("state").length() > 0 && 
+        server.hasArg("zipcode") && server.arg("zipcode").length() > 0) {
       String street = server.arg("street");
       String city = server.arg("city");
       String state = server.arg("state");
       String zipcode = server.arg("zipcode");
-      if (handlerForWeatherAddress(street, city, state, zipcode)) {
+      
+      double lat = 0, lon = 0;
+      if (lookupLocationFromAddress(street, city, state, zipcode, &lat, &lon)) {
         SerialPrint("Obtained geolocation from address", true);
         HTTPCode = 202; //geolocation obtained
+        #ifdef _USETFT
+        tft.println("Location found!");
+        #endif
         delay(1000);
       } else {
         #ifdef _USETFT
         tft.setTextColor(TFT_RED);
         tft.println("Geolocation from address failed, correct in settings later.");
-        HTTPCode = 201; //geolocation failed
         tft.setTextColor(FG_COLOR);
         #endif
+        HTTPCode = 201; //geolocation failed
         SerialPrint("Geolocation from address failed, correct in settings later.", true);
         delay(1000);
       }
     }
     
-    // Return success response (no redirect - let user click "Check Timezone" button)
+    
+    // Return success response
     server.send(HTTPCode, "text/plain", "WiFi credentials submitted successfully!");
   } else {
-    // WiFi connection failed, redirect back to config page
+    #ifdef _USETFT
     tft.println("WiFi connection failed, re-enter credentials");
+    #endif
     server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
     server.send(400, "text/plain", "WiFi connection failed. Please check credentials and try again.");
   }
@@ -2535,17 +3168,13 @@ void handleTimezoneSetup_POST() {
     // Calculate total UTC offset in seconds
     int32_t total_offset = offset_seconds;
     
-    // Save to Prefs
-    Prefs.TimeZoneOffset = total_offset;
-    Prefs.DST = dst_enabled ? 1 : 0;
-    Prefs.DSTOffset = dst_enabled ? 3600 : 0;
-    Prefs.DSTStartMonth = dst_start_month;
-    Prefs.DSTStartDay = dst_start_day;
-    Prefs.DSTEndMonth = dst_end_month;
-    Prefs.DSTEndDay = dst_end_day;
+    // Use helper function to save timezone settings
+    saveTimezoneSettings(total_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
     
-    // Mark Prefs as needing update and save to NVS
-    Prefs.isUpToDate = false;
+    // Save additional DST offset
+    Prefs.DSTOffset = dst_enabled ? 3600 : 0;
+    
+    // Save to NVS
     BootSecure bootSecure;
     int8_t ret = bootSecure.setPrefs();
     SerialPrint("setPrefs returned: " + String(ret), true);
@@ -2824,38 +3453,13 @@ void handleWeatherAddress() {
     String state = server.arg("state");
     String zipCode = server.arg("zipcode");
 
-     // Validate required fields
-     if (street.length() == 0 || city.length() == 0 || state.length() == 0 || zipCode.length() == 0) {
-      server.sendHeader("Location", "/WEATHER?error=missing_fields");
-      server.send(302, "text/plain", "All address fields are required.");
-      return;
-    }
-    
-    // Validate state format (2 letters)
-    if (state.length() != 2) {
-      server.sendHeader("Location", "/WEATHER?error=invalid_state");
-      server.send(302, "text/plain", "State must be a 2-letter code.");
-      return;
-    }
-    
-    // Validate ZIP code format
-    if (zipCode.length() != 5) {
-      server.sendHeader("Location", "/WEATHER?error=invalid_zip");
-      server.send(302, "text/plain", "Invalid ZIP code format. Must be 5 digits.");
-      return;
-    }
-    
-    for (int i = 0; i < 5; i++) {
-      if (!isdigit(zipCode.charAt(i))) {
-        server.sendHeader("Location", "/WEATHER?error=invalid_zip");
-        server.send(302, "text/plain", "Invalid ZIP code format. Must contain only digits.");
-        return;
-      }
-    }
+    // Use helper function for validation and lookup
+    double lat = 0, lon = 0;
+    bool success = lookupLocationFromAddress(street, city, state, zipCode, &lat, &lon);
 
-    if (handlerForWeatherAddress(street, city, state, zipCode)) {
+    if (success) {
       // Redirect back to weather page with success message
-      String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(WeatherData.lat, 14) + "&lon=" + String(WeatherData.lon, 14);
+      String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(lat, 6) + "&lon=" + String(lon, 6);
       server.sendHeader("Location", redirectUrl);
       server.send(302, "text/plain", "Address lookup successful. Coordinates updated and weather refreshed.");
       Prefs.isUpToDate = false;
@@ -2867,8 +3471,6 @@ void handleWeatherAddress() {
     server.sendHeader("Location", "/WEATHER?error=missing_fields");
     server.send(302, "text/plain", "Missing required address fields. Please provide street, city, state, and ZIP code.");
   }
-
-
 }
 
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
@@ -4099,9 +4701,7 @@ void handleDeviceViewerPing() {
 }
 
 void handleDeviceViewerDelete() {
-    LAST_WEB_REQUEST = I.currentTime;
-    
-    
+    LAST_WEB_REQUEST = I.currentTime;  
     
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
@@ -4114,7 +4714,11 @@ void handleDeviceViewerDelete() {
     // Ensure current device index is valid
     if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
         CURRENT_DEVICE_VIEWER = 0;
+        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.send(302, "text/plain", "Invalid device index.");
+        return;
     }
+    
     
     // Get current device
     DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
@@ -4124,11 +4728,11 @@ void handleDeviceViewerDelete() {
         return;
     }
 
-    if (device->deviceIndex == Sensors.findMyDeviceIndex()) {
+    if (device->MAC == Sensors.getDeviceMACByDevIndex(Sensors.findMyDeviceIndex())) {
       server.sendHeader("Location", "/DEVICEVIEWER?error=cannot_delete_myself");
       server.send(302, "text/plain", "Cannot delete this device.");
       return;
-  }
+    }
 
     // Store device name for confirmation message
     String deviceName = String(device->devName);
@@ -4140,7 +4744,7 @@ void handleDeviceViewerDelete() {
     }
     
     // Redirect back to device viewer with success message
-    if (device->IsSet) {
+    if (!device->IsSet) {
         server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
         server.send(302, "text/plain", "Device and sensors deleted successfully.");
       } else {
@@ -4159,8 +4763,7 @@ void setupServerRoutes() {
     server.on("/TIMEUPDATE", handleTIMEUPDATE);
     server.on("/REQUESTWEATHER", handleREQUESTWEATHER);
     server.on("/REBOOT", handleReboot);
-    server.on("/INITIALSETUP", HTTP_GET, handleSetup);
-    server.on("/INITIALSETUP", HTTP_POST, handleSetup_POST);
+    
     server.on("/STATUS", handleSTATUS);
     server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
     server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
@@ -4176,12 +4779,21 @@ void setupServerRoutes() {
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
     
-    // WiFi configuration routes
+    // New API routes for streamlined setup
+    server.on("/api/wifi", HTTP_POST, apiConnectWiFi);
+    server.on("/api/wifi-scan", HTTP_GET, apiScanWiFi);
+    server.on("/api/location", HTTP_POST, apiLookupLocation);
+    server.on("/api/timezone", HTTP_GET, apiDetectTimezone);
+    server.on("/api/timezone", HTTP_POST, apiSaveTimezone);
+    server.on("/api/setup-status", HTTP_GET, apiGetSetupStatus);
+    server.on("/InitialSetup", HTTP_GET, handleInitialSetup);
+    
+    // WiFi configuration routes (legacy - kept for backward compatibility)
     server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
     server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
     server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
     
-    // Timezone configuration routes
+    // Timezone configuration routes (legacy - kept for backward compatibility)
     server.on("/TimezoneSetup", HTTP_GET, handleTimezoneSetup);
     server.on("/TimezoneSetup_POST", HTTP_POST, handleTimezoneSetup_POST);
     server.on("/UPDATETIMEZONE", HTTP_GET, handleUPDATETIMEZONE);
@@ -4219,4 +4831,91 @@ void setupServerRoutes() {
 
     // 404 handler
     server.onNotFound(handleNotFound);
+}
+
+bool SendData(struct SnsType *S) {
+
+  if (bitRead(S->Flags,1) == 0) return false; //not monitored
+  if (!(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
+
+  S->timeLogged = I.currentTime;
+bool isGood = false;
+
+  if(Prefs.status>0){
+    // Use static buffers to reduce memory fragmentation
+    static char jsonBuffer[512];
+    static char urlBuffer[64];
+    static char bodyBuffer[768];
+    
+    String deviceMAC;
+    DevType* device = Sensors.getDeviceBySnsIndex(S->deviceIndex);
+    if (device) {
+      deviceMAC = MACToString(device->MAC, '\0', true); //send mac as 12 digit hex string without separators
+    }
+
+    // Build JSON more efficiently using snprintf
+    snprintf(jsonBuffer, sizeof(jsonBuffer), 
+      "{\"mac\":\"%s\",\"ip\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}",
+      deviceMAC.c_str(),
+      device->IP.toString().c_str(),
+      S->snsType,
+      S->snsID,
+      S->snsName,
+      S->snsValue,
+      S->timeRead,
+      S->timeLogged,
+      S->SendingInt,
+      S->Flags
+    );
+
+    // iterate all known devices to find servers  (devType >=100)
+    for (int16_t i=0; i<NUMDEVICES && i<Sensors.getNumDevices(); ++i) {
+      DevType* d = Sensors.getDeviceByDevIndex(i);
+      if (!d || !d->IsSet || d->devType < 100) continue;
+      
+      IPAddress ip(d->IP);
+      snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
+
+      SerialPrint("SENDDATA: POST to " + String(urlBuffer) , true);
+
+      // Create HTTP client with proper cleanup
+      WiFiClient wfclient;
+      HTTPClient http;
+      
+      // Set timeout to prevent hanging
+      http.setTimeout(5000); // 5 second timeout
+      http.useHTTP10(true);
+
+      if (http.begin(wfclient, urlBuffer)) {
+      http.addHeader("Content-Type","application/x-www-form-urlencoded");
+        
+        // Build body efficiently
+        String encodedJson = urlEncode(jsonBuffer);
+        snprintf(bodyBuffer, sizeof(bodyBuffer), "JSON=%s", encodedJson.c_str());
+        
+        int httpCode = http.POST(bodyBuffer);
+      String payload = http.getString();
+        
+        // Always end the connection
+      http.end();
+        
+        if (httpCode == 200) { 
+          isGood = true; 
+        }
+        else SerialPrint("SENDDATA: POST to " + String(urlBuffer) + " failed with code " + String(httpCode), true);
+
+      } else {
+        SerialPrint("Failed to begin HTTP connection", true);
+        http.end(); // Ensure cleanup even on failure
+      }
+      
+      
+      // Small delay to prevent overwhelming servers
+      delay(10);
+    }
+  }
+
+  if (isGood) bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
+  else I.makeBroadcast = true; //broadcast my presence if I failed to send the data
+  return isGood;
 }

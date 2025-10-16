@@ -64,10 +64,11 @@ extern uint32_t WTHRFAIL;
 void SerialWrite(String);
 bool WifiStatus(void);
 int16_t connectWiFi();
-int16_t tryWifi(uint16_t delayms = 250);
+int16_t tryWifi(uint16_t delayms = 250, uint16_t retryLimit = 50, bool checkCredentials = true);
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
 void APStation_Mode();
 
+String urlEncode(const String& str);
 
 String getCert(String filename);
 bool Server_Message(String &URL, String &payload, int &httpCode);

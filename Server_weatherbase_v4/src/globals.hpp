@@ -279,6 +279,8 @@ typedef enum {
   
   
   struct STRUCT_CORE {
+      uint32_t lastServerStatusUpdate;
+      bool makeBroadcast=false;
       time_t lastStoreCoreDataTime;
       bool isUpToDate;  // Core has been saved to memory
       RESETCAUSE resetInfo;
@@ -322,8 +324,6 @@ typedef enum {
       int8_t Tmin;
       uint8_t localWeatherIndex; //index of outside sensor
       int8_t lastCurrentTemp; //last current temperature
-      double LATITUDE;
-      double LONGITUDE;
       #endif
   
       #ifdef _USEBATTERY

@@ -480,6 +480,7 @@ bool broadcastServerPresence(bool broadcastPeripheral) {
     memcpy(msg.payload, Prefs.DEVICENAME, 30);
     snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server presence to all");
     
+    I.makeBroadcast = false;
     return sendESPNOW(msg);
 }
 

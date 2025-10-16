@@ -160,7 +160,7 @@ public:
     bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode);
     bool getCoordinatesFromZipCode(const String& zipCode);
     bool getCoordinatesFromZipCodeFallback(const String& zipCode);
-    String urlEncode(const String& str);
+    
 };
 
 extern String WEBHTML;

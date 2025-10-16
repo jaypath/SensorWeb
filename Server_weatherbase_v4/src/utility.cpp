@@ -1,13 +1,154 @@
 #include "utility.hpp"
 #include "BootSecure.hpp"
 
+#ifdef _USETFT
+extern LGFX tft;
+extern const uint16_t FG_COLOR ; //Foreground color
+extern const uint16_t BG_COLOR;
+#endif
+
 
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
+
+//setup functions
+
+void initSystem() {
+  #ifdef _USETFT
+  SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
+  tft.init();
+  tft.setRotation(2);
+  tft.setCursor(0,0);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setTextFont(1);
+  tft.setTextDatum(TL_DATUM);
+  tft.printf("Running setup\n");
+  #endif
+  BootSecure bootSecure;
+  int8_t boot_status = bootSecure.setup();
+  if (boot_status <= 0) {
+      #ifdef SETSECURE
+          // Security check failed for any reason, halt device
+          while (1) { delay(1000); }
+      #endif
+      #ifdef _USETFT
+      tft.println("Prefs failed to load with error code: " + String(boot_status));
+      delay(1000);
+      #endif
+  }
+
+}
+
+
+bool initSDCard() {
+  #ifdef _USESDCARD
+  #ifdef _USETFT
+  tft.print("SD Card mounting...");
+  #endif
+  if (!SD.begin(41)) {
+      displaySetupProgress(false);
+      
+      SerialPrint("SD mount failed... ",true);
+      
+      delay(5000);
+      I.resetInfo = RESET_SD;
+      I.lastResetTime = I.currentTime;
+      controlledReboot("SD Card failed", RESET_SD, true);
+      return false;
+  }
+
+  SerialPrint("SD mounted... ",true);
+  displaySetupProgress(true);
+
+  return true;
+  #endif
+  return false;
+}
+
+
+bool loadScreenFlags() {
+  #ifdef _USESDCARD
+  #ifdef _USETFT
+  tft.print("Loading core data from SD... ");
+  #endif
+  bool sdread = readScreenInfoSD();
+  displaySetupProgress( sdread);
+  initScreenFlags();
+  return sdread;
+  #endif
+  return false;
+}
+
+bool loadSensorData() {
+  #ifdef _USESDCARD
+  #ifdef _USETFT
+  tft.print("Loading sensor data from SD... ");
+  #endif
+  bool sdread = Sensors.readDevicesSensorsArrayFromSD();
+  displaySetupProgress( sdread);
+  SerialPrint("Sensor data loaded? ",false);
+  SerialPrint((sdread==true)?"yes":"no",true);
+  return sdread;
+  #endif
+  return false;
+}
+
+/**
+ * @brief Initialize the Gsheet uploader 
+ */
+void initGsheetHandler() {
+  #ifdef _USEGSHEET
+  if (!GSheetInfo.useGsheet) return;
+    SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+    SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+    
+    if (!readGsheetInfoSD() || GSheetInfo.clientEmail == NULL || GSheetInfo.projectID == NULL || GSheetInfo.privateKey == NULL) {
+        initGsheetInfo();
+        storeGsheetInfoSD();        
+    }
+    initGsheet(); 
+    if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
+        String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
+        strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
+        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
+        snprintf(GSheetInfo.GsheetID,64,"%s",file_findSpreadsheetIDByName(GSheetInfo.GsheetName).c_str());
+    } else {
+        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
+    }
+
+    SerialPrint("gsheet setup2: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
+    SerialPrint("gsheet setup2: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+  #endif
+}
+
+
+void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
+  if (I.makeBroadcast || (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime)) {        
+      // ESPNow does not require WiFi connection; always broadcast
+      broadcastServerPresence();
+  }
+}
+
+void handleStoreCoreData() {
+  if (!Prefs.isUpToDate) { 
+      Prefs.isUpToDate = true;
+      BootSecure bootSecure;
+      if (bootSecure.setPrefs()<0) {
+          SerialPrint("Failed to store core data",true);
+      }
+  }
+
+  if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if out of date and more than 5 minutes since last store
+      I.isUpToDate = true;
+      #ifdef _USESDCARD
+      storeScreenInfoSD();
+      #endif
+  }
+}
+
 void initScreenFlags(bool completeInit) {
   if (completeInit) {
-
       I.rebootsSinceLast=0;
       I.wifiFailCount=0;
       I.currentTime=0;
@@ -45,6 +186,7 @@ void initScreenFlags(bool completeInit) {
       I.Tmin=127;
       I.lastErrorTime=0;
   }
+  I.makeBroadcast = true;
   I.ScreenNum = 0;
   I.oldScreenNum = 0;
   I.lastStoreCoreDataTime = 0;
@@ -55,9 +197,7 @@ void initScreenFlags(bool completeInit) {
   I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
   I.lastFutureConditionTime=0; //last time future condition was drawn
   I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
-  
-  // Timezone is now managed entirely through Prefs
-  
+    
   I.localBatteryLevel=0;
 
   I.ESPNOW_SENDS = 0;
@@ -399,12 +539,16 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
 void storeCoreData() {
   //force core data to be stored to SD
   I.isUpToDate = true;
+  #ifdef _USESDCARD
   storeScreenInfoSD();
+  #endif
 
-  if (Prefs.isUpToDate==false) {
-  Prefs.isUpToDate = true;
-  BootSecure bootSecure;
-  bootSecure.setPrefs();
+  if (!Prefs.isUpToDate) { 
+    Prefs.isUpToDate = true;
+    BootSecure bootSecure;
+    if (bootSecure.setPrefs()<0) {
+        SerialPrint("Failed to store core data",true);
+    }
   }
 
 }
@@ -489,15 +633,15 @@ uint64_t MACToUint64(const uint8_t* macArray) {
     return mac64;
 }
 
-String MACToString(const uint64_t mac64) {
+String MACToString(const uint64_t mac64, char separator, bool asHex) {
   byte macArray[6];
   uint64ToMAC(mac64, macArray);
-  return ArrayToString(macArray, 6,':',true);
+  return ArrayToString(macArray, 6,separator,asHex);
 }
 
-String MACToString(const uint8_t* mac) {
+String MACToString(const uint8_t* mac, char separator, bool asHex) {
   
-  return ArrayToString(mac, 6,':',true);
+  return ArrayToString(mac, 6,separator,asHex);
 }
 
 
@@ -524,7 +668,10 @@ String ArrayToString(const uint8_t* Arr, byte len, char separator, bool asHex) {
   String output = "";
   char holder[10] = "";
   for (int i=len-1; i>=0; i--) {
-    if (i!=len-1) output += (String) separator;
+    if (separator!='\0') {
+      if (i!=len-1) output += (String) separator;
+    }
+  
     if (asHex)    snprintf(holder,9,"%x",Arr[i]);
     else    snprintf(holder,9,"%d",Arr[i]);
     output += (String) holder;

@@ -1090,25 +1090,6 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCode(const String& zipCode) {
     return getCoordinatesFromZipCodeFallback(zipCode);
 }
 
-// Helper function to URL encode strings
-String WeatherInfoOptimized::urlEncode(const String& str) {
-    String encoded = "";
-    for (unsigned int i = 0; i < str.length(); i++) {
-        char c = str.charAt(i);
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            encoded += c;
-        } else if (c == ' ') {
-            encoded += '+';
-        } else {
-            encoded += '%';
-            if (c < 16) {
-                encoded += '0';
-            }
-            encoded += String(c, HEX);
-        }
-    }
-    return encoded;
-}
 
 // Fallback method using a simple geocoding service
 bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCode) {

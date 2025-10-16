@@ -8,6 +8,25 @@
 #include "timesetup.hpp"
 
 
+//globals
+#ifdef _USEGSHEET
+extern STRUCT_GOOGLESHEET GSheetInfo;
+#endif
+#ifdef _USETFT
+#include "graphics.hpp"
+#endif
+ 
+
+//setup functions
+void initSystem();
+bool initSDCard();
+bool loadSensorData();
+bool loadScreenFlags();
+void initGsheetHandler();
+void handleESPNOWPeriodicBroadcast(uint8_t interval);
+void handleStoreCoreData();
+
+
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
@@ -61,8 +80,8 @@ uint32_t IPToUint32(IPAddress ip);
 // --- MAC address conversion utilities ---
 void uint64ToMAC(uint64_t mac64, byte* macArray);
 uint64_t MACToUint64(const uint8_t* macArray);
-String MACToString(const uint64_t mac64);
-String MACToString(const uint8_t* mac); //wrapper for ip2string
+String MACToString(const uint64_t mac64, char separator=':', bool asHex=true);
+String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //wrapper for ip2string
 
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);

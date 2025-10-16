@@ -122,142 +122,12 @@ uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 //fuction declarations
 
 
-// --- Helper Function Declarations ---
-void initSystem();
 
-bool initSDCard();
-bool loadSensorData();
-bool loadScreenFlags();
-void initServerRoutes();
-void initOTA();
-void handleESPNOWPeriodicBroadcast(uint8_t interval);
 
 // --- Setup Helper Implementations ---
 
 
-#ifdef _USEGSHEET
-/**
- * @brief Initialize the Gsheet uploader 
- */
-void initGsheetHandler() {
-    if (!GSheetInfo.useGsheet) return;
-    SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
-    
-    if (!readGsheetInfoSD() || GSheetInfo.clientEmail == NULL || GSheetInfo.projectID == NULL || GSheetInfo.privateKey == NULL) {
-        initGsheetInfo();
-        storeGsheetInfoSD();        
-    }
-    initGsheet(); 
-    if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
-        String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
-        strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
-        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
-        snprintf(GSheetInfo.GsheetID,64,"%s",file_findSpreadsheetIDByName(GSheetInfo.GsheetName).c_str());
-    } else {
-        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
-    }
 
-    SerialPrint("gsheet setup2: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup2: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
-}
-#endif
-
-/**
- * @brief Initialize the TFT display and SPI.
- */
-
-
-/**
- * @brief Initialize the TFT display and SPI.
- */
-void initSystem() {
-    #ifdef _USETFT
-    SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
-    tft.init();
-    tft.setRotation(2);
-    tft.setCursor(0,0);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.setTextFont(1);
-    tft.setTextDatum(TL_DATUM);
-    tft.printf("Running setup\n");
-    #endif
-    int8_t boot_status = bootSecure.setup();
-    if (boot_status <= 0) {
-        #ifdef SETSECURE
-            // Security check failed for any reason, halt device
-            while (1) { delay(1000); }
-        #endif
-        tft.println("Prefs failed to load with error code: " + String(boot_status));
-        delay(1000);
-    }
-
-}
-
-/**
- * @brief Initialize SD card and mount filesystem.
- * @return true if SD card mounted successfully, false otherwise.
- */
-
-
-bool initSDCard() {
-    tft.print("SD Card mounting...");
-    if (!SD.begin(41)) {
-        displaySetupProgress(false);
-        
-        SerialPrint("SD mount failed... ",true);
-        
-        delay(5000);
-        I.resetInfo = RESET_SD;
-        I.lastResetTime = I.currentTime;
-        controlledReboot("SD Card failed", RESET_SD, true);
-        return false;
-    }
-
-    SerialPrint("SD mounted... ",true);
-    displaySetupProgress(true);
-
-    return true;
-}
-
-/**
- * @brief Load sensor data from SD card.
- * @return true if successful, false otherwise.
- */
-bool loadSensorData() {
-    tft.print("Loading sensor data from SD... ");
-    bool sdread = Sensors.readDevicesSensorsArrayFromSD();
-    displaySetupProgress( sdread);
-    SerialPrint("Sensor data loaded? ",false);
-    SerialPrint((sdread==true)?"yes":"no",true);
-    return sdread;
-}
-
-/**
- * @brief Load screen flags from SD card.
- * @return true if successful, false otherwise.
- */
-bool loadScreenFlags() {
-    tft.print("Loading screen flags from SD... ");
-    bool sdread = readScreenInfoSD();
-    displaySetupProgress( sdread);
-    if (!sdread) {
-        delay(5000);    
-        initScreenFlags(true);
-    } else     initScreenFlags(false);
-    SerialPrint("Screen flags loaded? ",false);
-    SerialPrint((sdread==true)?"yes":"no",true);
-    return sdread;
-}
-
-
-/**
- * @brief Initialize HTTP server routes.
- * This function is now a wrapper that calls setupServerRoutes() from server.cpp
- */
-void initServerRoutes() {
-    setupServerRoutes();
-}
 
 /**
  * @brief Initialize Arduino OTA update functionality.
@@ -309,7 +179,7 @@ void setup() {
     tft.printf("Init Wifi... \n");
     SerialPrint("Init Wifi... ",false);
     SerialPrint("start server routes... ");
-    initServerRoutes();
+    setupServerRoutes();
     SerialPrint("Server routes OK",true);
 
     if (Prefs.HAVECREDENTIALS) {
@@ -462,32 +332,7 @@ void setup() {
     
 }
 
-// Non-graphical functions
 
-/**
- * @brief Handle periodic ESPNow server presence broadcast (every 5 minutes).
- */
-void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
-    if (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime) {        
-        // ESPNow does not require WiFi connection; always broadcast
-        broadcastServerPresence();
-    }
-}
-
-void handleStoreCoreData() {
-    if (!Prefs.isUpToDate) { 
-        Prefs.isUpToDate = true;
-        BootSecure bootSecure;
-        if (bootSecure.setPrefs()<0) {
-            SerialPrint("Failed to store core data",true);
-        }
-    }
-
-    if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if out of date and more than 5 minutes since last store
-        I.isUpToDate = true;
-        storeScreenInfoSD();
-    }
-}
 
 
 // --- Main Loop ---
@@ -508,9 +353,16 @@ void loop() {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
         int16_t retries = connectWiFi();
         if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
-        // If WiFi has been down for 15 minutes, reboot
-        if (wifiDownSince && (I.currentTime - wifiDownSince >= 900)) {
-            controlledReboot("Wifi failed for 15 min, rebooting", RESET_WIFI, true);
+        // If WiFi has been down for 10 minutes, enter AP mode
+        if (wifiDownSince && (I.currentTime - wifiDownSince >= 600)) {
+            tft.clear();
+            tft.setCursor(0, 0);
+            tft.setTextColor(TFT_RED);
+            tft.printf("Wifi failed for 10 minutes, entering AP mode...");
+            SerialPrint("Wifi failed for 10 minutes, entering AP mode...",true);
+            delay(3000);
+            APStation_Mode();
+//            controlledReboot("Wifi failed for 15 min, rebooting", RESET_WIFI, true);
         }
     } else {
         wifiDownSince = 0;
@@ -618,7 +470,7 @@ void loop() {
         I.isExpired = checkExpiration(-1, I.currentTime, true);
         I.isFlagged += I.isExpired;
 
-        handleESPNOWPeriodicBroadcast(5);
+        handleESPNOWPeriodicBroadcast(10);
         handleStoreCoreData();
         Sensors.storeDevicesSensorsArrayToSD(5);
         #ifdef _USEGSHEET
