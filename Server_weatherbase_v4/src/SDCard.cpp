@@ -304,7 +304,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
   if (timeEnd==0) timeEnd=-1;
   if (timeStart==0) timeStart=0;
 
-  if (timeEnd==-1) timeEnd=I.currentTime; //-1 is some huge number
+  if (timeEnd==UINT32_MAX) timeEnd=I.currentTime; //UINT32_MAX is some huge number
 
 
   if (timeStart>=timeEnd) {

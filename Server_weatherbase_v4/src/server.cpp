@@ -1510,10 +1510,15 @@ void handlerForRoot(bool allsensors) {
   #endif
   WEBHTML = WEBHTML + "<body>";  
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+  WEBHTML = WEBHTML + "<p>Device Type: " + (String) Prefs.MyType + "</p>";
+  WEBHTML = WEBHTML + "<p>Device Name: " + (String) Prefs.DEVICENAME + "</p>";
+  WEBHTML = WEBHTML + "<p>Device IP: " + (String) Prefs.MYIP + "</p>";
+  WEBHTML = WEBHTML + "<p>Device MAC: " + (String) Prefs.PROCID + "</p>";
+  WEBHTML = WEBHTML + "<p>Device SSID: " +  (String) (Prefs.WIFISSID) + "</p>";
+  WEBHTML = WEBHTML + "<p>Alive Since: " + (String) I.ALIVESINCE + "</p>";
 
- 
   WEBHTML = WEBHTML + "---------------------<br>";      
-
+    #ifndef _ISPERIPHERAL
   
     WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
     WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
@@ -1556,6 +1561,7 @@ void handlerForRoot(bool allsensors) {
   
   WEBHTML = WEBHTML + "---------------------<br>";      
 
+    #endif
 
     byte used[SENSORNUM];
     for (byte j=0;j<SENSORNUM;j++)  {
@@ -1711,9 +1717,20 @@ void handleRETRIEVEDATA() {
   uint32_t sampn=0; //sample number
   
   bool success=false;
-  if (starttime>0)  success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
-  else    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
-
+  if (starttime>0) {
+    #ifdef _ISPERIPHERAL
+    success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
+    #else
+    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
+    #endif
+  
+  } else    {
+    #ifdef _ISPERIPHERAL
+    success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true);
+    #else
+    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
+    #endif
+  }
   if (success == false)  {
     WEBHTML= "Failed to read associated file.";
     serverTextClose(401,false);
@@ -1779,7 +1796,11 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
   uint8_t f[100]={0};
   bool success=false;
 
+  #ifdef _ISPERIPHERAL
+  success = retrieveMovingAverageSensorDataFromMemory(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t, f,true);
+  #else
   success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t, f,true);
+  #endif
   
   if (success == false)  {
     WEBHTML= "handleRETRIEVEDATA_MOVINGAVERAGE: Failed to read associated file.";

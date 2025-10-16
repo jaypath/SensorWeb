@@ -94,6 +94,229 @@ bool loadSensorData() {
   return false;
 }
 
+#ifdef _ISPERIPHERAL
+bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder) {
+  //retrieve up to N most recent data points ending at timeEnd. If fewer than N data points are found, return the number of data points found.
+
+  // Validate inputs
+  if (N == nullptr || t == nullptr || v == nullptr) {
+    SerialPrint("retrieveSensorDataFromMemory: N, t, or v were nullptr.\n");
+    storeError("retrieveSensorDataFromMemory: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+  }
+  if (timeEnd <= timeStart || *N == 0) {
+    storeError("retrieveSensorDataFromMemory: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+  }
+
+  //find the index of the sensor in the SensorHistory array
+  //use the in memory array of a peripheral device to retrieve the data. The in memory array will be a struct array of historical data: SensorHistory[m].timestamp[n] and SensorHistory[m].value[n] where m is the index of the sensor and n is the index of the data point.
+
+  int16_t m = Sensors.findSensor(deviceMAC, snsType, snsID);
+  if (m < 0) {
+    SerialPrint("retrieveSensorDataFromMemory: Sensor not found.\n");
+    storeError("retrieveSensorDataFromMemory: Sensor not found.", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+  }
+
+  bool found = false;
+  byte n=0; //index of the sensor in the SensorHistory array
+  for (n=0; n<SENSORNUM; n++) {
+    if (SensorHistory[n].sensorIndex == m) {
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    SerialPrint("retrieveSensorDataFromMemory: Sensor not found in SensorHistory array.\n");
+    storeError("retrieveSensorDataFromMemory: Sensor not found in SensorHistory array.", ERROR_SD_RETRIEVEDATAPARMS);
+    return false;
+  }
+
+  if (SensorHistory[n].savedN < *N) {
+    *N = SensorHistory[n].savedN;
+  } 
+  
+  if (*N==0) {
+    SerialPrint("retrieveSensorDataFromMemory: No errors, but no data was returned.\n");
+    storeError("retrieveSensorDataFromMemory: No errors, but no data was returned.", ERROR_SD_RETRIEVEDATAMISSING);
+    return true; // No data found, but not an error
+  }
+  
+
+  
+  int16_t i=0;
+
+  if (forwardOrder) {    
+    for (int16_t j=SensorHistory[n].savedN-*N; j<SensorHistory[n].savedN; j++) {
+      t[i] = SensorHistory[n].timestamp[j];
+      v[i] = SensorHistory[n].value[j];
+      f[i] = SensorHistory[n].Flags[j];
+      i++;
+    }
+
+  } else {
+    for (int16_t j=SensorHistory[n].savedN-1; j>=SensorHistory[n].savedN-*N;j--) {
+      t[i] = SensorHistory[n].timestamp[j];
+      v[i] = SensorHistory[n].value[j];
+      f[i] = SensorHistory[n].Flags[j];
+      i++;
+    }
+  }
+
+  return true;
+
+}
+int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
+
+  if (windowSize == 0) {
+    SerialPrint("loadAverageSensorDataFromMemory: windowSize is 0",true);
+    storeError("loadAverageSensorDataFromMemory: windowSize is 0",ERROR_SD_RETRIEVEDATAPARMS);
+    return -1;
+  }
+
+  if (timeEnd==0) timeEnd=-1;
+  if (timeStart==0) timeStart=0;
+
+  if (timeEnd==UINT32_MAX) timeEnd=I.currentTime; //UINT32_MAX is some huge number
+
+
+  if (timeStart>=timeEnd) {
+    SerialPrint("loadAverageSensorDataFromMemory: timeStart >= timeEnd",true);
+    storeError("loadAverageSensorDataFromMemory: timeStart >= timeEnd",ERROR_SD_RETRIEVEDATAPARMS);
+    return -1;
+  }
+
+  int16_t sensorIndex = Sensors.findSensor(deviceMAC, sensorType, sensorID);
+  if (sensorIndex < 0) {
+    SerialPrint("loadAverageSensorDataFromMemory: Sensor not found.",true);
+    storeError("loadAverageSensorDataFromMemory: Sensor not found.", ERROR_SD_RETRIEVEDATAPARMS);
+    return -1;
+  }
+
+  bool found = false;
+  byte sensorHistoryIndex=0; //index of the sensor in the SensorHistory array
+  for (sensorHistoryIndex=0; sensorHistoryIndex<SENSORNUM; sensorHistoryIndex++) {
+    if (SensorHistory[sensorHistoryIndex].sensorIndex == sensorIndex) {
+      found = true;
+      break;
+    }  
+  }
+
+  uint32_t numPoints = SensorHistory[sensorHistoryIndex].savedN;
+  //check if the file is empty
+  if (numPoints == 0) {
+    SerialPrint("loadAverageSensorDataFromMemory: No data points found.",true);
+    return 0;
+  }
+
+  uint32_t i;
+  uint32_t j;
+
+  uint32_t numWindows = (timeEnd-timeStart)/windowSize + 1;
+  if (numWindows < numPointsX) numWindows = numPointsX; //typically numpointsX is not provided, ie numPointsX = 0, but if it is, we need to limit the number of windows
+
+  if (numWindows>100) numWindows=100;
+  if (numWindows==0) numWindows=1;
+
+  //calculate the window start and end times
+  uint32_t windowStart;
+  
+  if (timeStart + windowSize < timeEnd) windowStart = timeEnd - windowSize;
+  else windowStart = timeStart;
+
+  uint32_t windowEnd = timeEnd;
+
+  
+  i=0;
+  int16_t index=0;
+  while (i<numWindows) {
+    //SerialPrint("loadAverageSensorDataFromFile: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd,true);
+    uint16_t numPointsInWindow=0;
+    double avgVal=0;
+    uint8_t avgFlag=0;
+    bool isgood = true;
+    
+    //load data from memory if it is within the window size time range
+    for (j = 0; j < numPoints; j++) {
+      if (SensorHistory[sensorHistoryIndex].timestamp[j] >= windowEnd) continue;
+      if (SensorHistory[sensorHistoryIndex].timestamp[j] < windowStart) continue;
+      avgVal+= SensorHistory[sensorHistoryIndex].value[j];
+      if (bitRead(SensorHistory[sensorHistoryIndex].Flags[j],0)) avgFlag=1;
+      numPointsInWindow++;
+    }
+
+    if (numPointsInWindow>0) {
+      averagedValues[index] = avgVal/numPointsInWindow;
+      averagedFlags[index] = avgFlag;
+      averagedTimes[index++] = windowStart + (windowEnd-windowStart)/2;
+      //SerialPrint("loadAverageSensorDataFromMemory: window " + (String) i + " of " + (String) numWindows + " from " + filename + " with windowStart = " + (String) windowStart + " and windowEnd = " + (String) windowEnd + " with avgVal = " + (String) avgVal + " and avgTime = " + (String) averagedTimes[i],true);
+    }
+
+    if (windowEnd > windowSize && windowStart > windowSize) {
+      windowEnd -= windowSize;
+      windowStart -= windowSize;
+    }     else break; //no more valid data
+
+    i++;
+  }
+  
+  //returns the number of datapoints found
+   return index; //the last window is not complete, so we return the previous one
+}
+
+bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder) {
+        // Validate inputs
+        if (windowSize == 0 || averagedValues == nullptr || averagedTimes == nullptr || timeEnd <= timeStart) {
+          SerialPrint("retrieveMovingAverageSensorDataFromMemory: Invalid parameters", true);
+          storeError("retrieveMovingAverageSensorDataFromMemory: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
+          return false;
+        }
+    
+        int16_t numPoints = loadAverageSensorDataFromMemory(deviceMAC, sensorType, sensorID, averagedTimes, averagedValues, averagedFlags, timeStart, timeEnd, windowSize, *numPointsX);
+    
+        if (numPoints<0) {
+          SerialPrint("retrieveMovingAverageSensorDataFromMemory: could not read", true);
+          storeError("retrieveMovingAverageSensorDataFromMemory: could not read",  ERROR_SD_RETRIEVEDATAMISSING);
+          return false;
+        }
+    
+        if (numPoints==0) {
+          SerialPrint("retrieveMovingAverageSensorDataFromMemory: No data points in time range", true);
+          storeError("retrieveMovingAverageSensorDataFromMemory: No data points in time range",  ERROR_SD_RETRIEVEDATAMISSING);
+          return false;
+        }
+    
+        if (forwardOrder) {
+          // reverse the orders of t and v, which were stored in reverse order
+          //note that only the FIRST n points were actually entered
+      
+          uint32_t t0[numPoints] = {0};
+          double v0[numPoints] = {0};
+          uint8_t f0[numPoints] = {0};
+      
+          int16_t i=0;
+          for (int16_t j=numPoints-1; j>=0;j--) {
+            t0[i] = averagedTimes[j];
+            v0[i] = averagedValues[j];
+            f0[i] = averagedFlags[j];
+            i++;
+          }
+      
+          memcpy(averagedTimes, t0, numPoints * sizeof(uint32_t));
+          memcpy(averagedValues, v0, numPoints * sizeof(double));
+          memcpy(averagedFlags, f0, numPoints * sizeof(uint8_t));
+        } 
+        
+        *numPointsX = numPoints;
+      
+    
+        return true;
+    
+}
+#endif
+
 /**
  * @brief Initialize the Gsheet uploader 
  */

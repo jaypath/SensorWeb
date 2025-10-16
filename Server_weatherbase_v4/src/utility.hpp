@@ -26,6 +26,11 @@ void initGsheetHandler();
 void handleESPNOWPeriodicBroadcast(uint8_t interval);
 void handleStoreCoreData();
 
+#ifdef _ISPERIPHERAL
+bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder);
+int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX);
+bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder);
+#endif
 
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );

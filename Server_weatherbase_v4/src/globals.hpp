@@ -231,8 +231,8 @@ typedef enum {
   struct STRUCT_PrefsH {        
     bool isUpToDate; // Prefs has been saved to memory
     
-    byte WIFISSID[33];
-    byte WIFIPWD[65];
+    char WIFISSID[33];
+    char WIFIPWD[65];
     uint32_t SSIDCRC;
     uint32_t PWDCRC;
     uint64_t PROCID; //processor ID, same as MACID for most esp32
