@@ -270,14 +270,22 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     if (msg.msgType>0) {
         decryptESPNOWMessage(msg, 80);
     }
-    msg.payload[63]=0; //null terminate the server name, juts in case
 
 
     if (msg.msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
         // Received broadcast alive message (type 1) 
-        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, (char*)msg.payload, 0, 0, msg.senderType); //remove "server: " from the server name
-            
-        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg.payload);
+
+        //is this message valid, and decryptable? If so, the first byte of the payload will be the type, so we can verify decryption
+        if (msg.payload[0] != ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
+            storeError("ESPNow: Broadcast alive message is not valid");
+            snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast alive message was invalid");
+            return;
+        }
+
+
+        Sensors.addDevice(MACToUint64(msg.senderMAC), msg.senderIP, (char*)msg.payload+1, 0, 0, msg.senderType); //remove the type from the payload
+        
+        snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg.payload+1);
         
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
         return;
@@ -477,7 +485,10 @@ bool broadcastServerPresence(bool broadcastPeripheral) {
     memset(msg.targetMAC, 0xFF, sizeof(msg.targetMAC));
     msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
     memset(msg.payload, 0, 80);
-    memcpy(msg.payload, Prefs.DEVICENAME, 30);
+    memcpy(msg.payload, &msg.msgType, 1); //the first byte of the message is the type, so we can verify decryption
+    
+    memcpy(msg.payload + 1, Prefs.DEVICENAME, 30);
+    msg.payload[32]=0; //null terminate the server name, juts in case
     snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server presence to all");
     
     I.makeBroadcast = false;

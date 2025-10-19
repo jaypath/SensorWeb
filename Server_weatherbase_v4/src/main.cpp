@@ -148,7 +148,6 @@ void initOTA() {
 
 
 
-
 // --- Main Setup ---
 void setup() {
     // --- Boot Security Check ---
@@ -242,26 +241,15 @@ void setup() {
     }
     
     SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
-    SerialPrint("Prefs.MYIP: " + Prefs.MYIP.toString(),true);
-
+    
     byte deviceIndex = Sensors.findMyDeviceIndex();
     if (deviceIndex == -1) {
-        SerialPrint("I am not registered as a device, and could not register, so I cannot run...",true);
-        tft.clear();
-        tft.setCursor(0, 0);
-        tft.setTextColor(TFT_RED);
-        tft.printf("Unable to register as a device, so I cannot run...",true);
-        delay(10000);
-        controlledReboot("Unable to register myself as a device, so I cannot run...", RESET_UNKNOWN);
+        failedToRegister();
         return;
     }
     
     if (Prefs.DEVICENAME[0] == 0) {
-        snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), MYNAME);
-        Prefs.isUpToDate = false;        
-
-        //update my device name
-        Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+        if (Sensors.findMyDeviceIndex() == -1) failedToRegister();
     }
     WeatherData.lat = Prefs.LATITUDE;
     WeatherData.lon = Prefs.LONGITUDE;
@@ -422,7 +410,7 @@ void loop() {
         //see if we have local battery power
         if (I.localBatteryIndex == 255) I.localBatteryIndex = findSensorByName("Outside",61);
     
-        if (I.localBatteryIndex<255 && I.localBatteryIndex >= 0 && I.localBatteryIndex < NUMDEVICES * SENSORNUM) {
+        if (I.localBatteryIndex<255 && I.localBatteryIndex >= 0 && I.localBatteryIndex < NUMDEVICES * NUMSENSORS) {
             // Find the battery sensor
             DevType* batDevice = Sensors.getDeviceBySnsIndex(I.localBatteryIndex);
             SnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);

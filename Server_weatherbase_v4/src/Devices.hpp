@@ -6,7 +6,6 @@
 #include "globals.hpp"
 
 // Constants
-#define SENSORNUM NUMSENSORS
 
 //sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
@@ -58,6 +57,7 @@ public:
     uint8_t numSensors;
     
     // Device management
+    bool updateDeviceName(int16_t index, String newDeviceName);
     int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0, uint8_t devType = 0);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);

@@ -54,13 +54,6 @@ extern uint16_t TESTRUN;
 extern uint32_t WTHRFAIL;
 #endif
 
-
-
-
-
-
-
-
 void SerialWrite(String);
 bool WifiStatus(void);
 int16_t connectWiFi();
@@ -104,10 +97,7 @@ void handleREADONLYCOREFLAGS();
 void handleGSHEET();
 void handleGSHEET_POST();
 void handleGSHEET_UPLOAD_NOW();
-void handleWiFiConfig();
-void handleWiFiConfig_POST();
-void handleWiFiConfig_RESET();
-void addWiFiConfigForm();
+void handleREQUEST_BROADCAST();
 void handleTimezoneSetup();
 void handleTimezoneSetup_POST();
 bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day);
@@ -132,8 +122,17 @@ void handleDeviceViewerPing();
 void handleDeviceViewerDelete();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 bool SendData(struct SensorVal*);
+bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);
+void apiConnectToWiFi();
+void apiScanWiFi();
+void apiLookupLocation();
+void apiDetectTimezone();
+void apiSaveTimezone();
+void apiGetSetupStatus();
+void handleInitialSetup();
+void handleApiCompleteSetup();
 
-
+String getWiFiModeString();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID();

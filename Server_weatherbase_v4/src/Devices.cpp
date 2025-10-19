@@ -568,13 +568,22 @@ bool Devices_Sensors::isDeviceInit(int16_t index) {
 
 
 int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
-    //returns more info than isDeviceInit : -1 = not set, 0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
+    //returns more info than isDeviceInit : -2 = I am not registered and could not be registered (fatal error, regardless of whether the provided index is valid or not),-1 = not set, 0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
     if (index < 0 || index >= NUMDEVICES ) {
         return 0; //invalid index
     }
     if (devices[index].IsSet) {
         
-        uint8_t ismine = findMyDeviceIndex();
+        int16_t ismine = findMyDeviceIndex();
+        if (ismine == -1) {
+            //I am not registered as a device, so register me
+            ismine = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+            if (ismine == -1) {
+                //failed to register me, so return invalid
+                return -2;
+            }
+        }
+
         if (index == ismine ) {
             //check if expired
             if (devices[index].expired) {
@@ -704,8 +713,8 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
     if (type == "human") {//human
         return (snsType == 21);
     }
-    if (type == "server") {//binary
-        return (snsType >= 100);
+    if (type == "distance") {//binary
+        return (snsType == 7 );
     }
     if (type == "all" || type == "any") {//all
         return true;
@@ -720,6 +729,9 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
     int16_t index = findDevice(ESP.getEfuseMac());
     if (index == -1) {
         SerialPrint("I am not registered as a device, registering...",true);
+        if (Prefs.DEVICENAME[0] == 0) {
+            snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "Temporary Name");
+        }
         index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
     }
      
@@ -751,3 +763,9 @@ bool Devices_Sensors::isMySensor(int16_t index) {
     return sensors[index].deviceIndex == findMyDeviceIndex();
 }
 
+bool Devices_Sensors::updateDeviceName(int16_t index, String newDeviceName) {
+    if (isDeviceIndexValid(index)<=0) return false;
+    strncpy(devices[index].devName, newDeviceName.c_str(), sizeof(devices[index].devName));
+    devices[index].devName[sizeof(devices[index].devName) - 1] = '\0';
+    return true;
+}

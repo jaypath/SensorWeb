@@ -25,9 +25,6 @@ void updateTimestampIndex(const char* filename);
 void removeFromTimestampIndex(const char* filename);
 
 
-
-
-
 // Common data structure for sensor data points
 struct SensorDataPoint {
     uint64_t deviceMAC;
@@ -77,7 +74,7 @@ double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t
 
 // Functions for storing/reading all sensors
 bool writeErrorToSD();
-bool readErrorFromSD(String* error, uint16_t errornumber=0);
+int8_t readErrorFromSD(String* error, uint8_t MaxNumberofLines=50);
 
 // Screen and utility functions
 bool storeScreenInfoSD();
@@ -86,7 +83,7 @@ bool readScreenInfoSD();
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels);
 bool matchPattern(const char* filename, const char* pattern);
 uint16_t deleteFiles(const char* pattern,const char* directory);
-uint16_t deleteCoreStruct();
+uint16_t deleteSensorDataSD();
 
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);

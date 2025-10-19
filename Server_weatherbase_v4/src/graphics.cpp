@@ -940,40 +940,36 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   byte SensorIndex = I.alarmIndex;
 
   if (whichSensors == -1) whichSensors = I.showTheseFlags;
-
-  String sensorType[10] = {"leak", "soil", "temperature", "humidity", "pressure", "battery", "HVAC", "human", "server","all"};
-  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = server, 9 = anything else
-  for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
+  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensors are allowed if whichSensors is 0
+  String sensorType[10] = {"","","","","","","","","",""};
+  //populate sensorType based on whichSensors
+    if (bitRead(whichSensors, 3) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[0] = "leak";
+    if (bitRead(whichSensors, 2) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[1] = "soil";
+    if (bitRead(whichSensors, 4) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[2] = "temperature";
+    if (bitRead(whichSensors, 5) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[3] = "humidity";
+    if (bitRead(whichSensors, 6) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[4] = "pressure";
+    if (bitRead(whichSensors, 7) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[5] = "battery";
+    if (bitRead(whichSensors, 8) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[6] = "HVAC";
+    if (bitRead(whichSensors, 9) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[7] = "human";
+    if (bitRead(whichSensors, 10) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[8] = "distance";
+    if (bitRead(whichSensors, 11) == 1) sensorType[9] = "all"; //this bit only set if whichSensors is 0
     
+  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = distance, 9 = all others (if whichSensors is not 0)
+
+  for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
+    if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
     while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       SnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
-      bool isgood = false;
-
-      //this check is not redundant, as this checks for what is allowed, as the previous check puts sensors in order of sensor type
-      if (Sensors.isSensorOfType(SensorIndex,sensorType[snstypeindex])) {
-        if (bitRead(whichSensors, 0) == 0) { //any flag
-          isgood = true;
-        } else { //must be flagged
-          if (bitRead(sensor->Flags, 0) == 0) continue; //not flagged, exclude
-          if (bitRead(whichSensors, 1) == 1 && (sensor->expired )) isgood = true; //expired so include
-          if (bitRead(whichSensors, 2) == 1 && Sensors.isSensorOfType(SensorIndex,"soil")) isgood = true;
-          if (bitRead(whichSensors, 3) == 1 && Sensors.isSensorOfType(SensorIndex,"leak")) isgood = true;
-          if (bitRead(whichSensors, 4) == 1 && Sensors.isSensorOfType(SensorIndex,"temperature")) isgood = true;
-          if (bitRead(whichSensors, 5) == 1 && Sensors.isSensorOfType(SensorIndex,"humidity")) isgood = true;
-          if (bitRead(whichSensors, 6) == 1 && Sensors.isSensorOfType(SensorIndex,"pressure")) isgood = true;
-          if (bitRead(whichSensors, 7) == 1 && Sensors.isSensorOfType(SensorIndex,"battery")) isgood = true;
-          if (bitRead(whichSensors, 8) == 1 && Sensors.isSensorOfType(SensorIndex,"HVAC")) isgood = true;
-        }
-        //if bit 0 is 0 then include all sensors
-        //if bit 0 is set then include flagged 
-        //if bit 1 is set the include expired (overrides bit 0)
-        //  if bits 0 or 1 are set then include sensors if they meet criteria of subsequent bits
-        //aggregate sensors in this order: leak, soil dry, temperature, humidity, pressure, battery, HVAC
+      if (!Sensors.isSensorOfType(SensorIndex,sensorType[snstypeindex])) continue; //only check sensors of this type
+      bool isgood = true;
+        
+      if (bitRead(whichSensors,11)==0) {
+        //this only applies if whichSensors was not 0
+        if ((bitRead(whichSensors, 0) == 1) && (bitRead(sensor->Flags, 0) == 0)) isgood = false; //not flagged, exclude
+        if ((bitRead(whichSensors, 1) == 1) && (sensor->expired) && (bitRead(sensor->Flags,1) == 1)) isgood = true; //expired and monitored, so include
       }
-
       if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
-      
     }      
   } 
   I.alarmIndex = SensorIndex;
@@ -993,7 +989,7 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   }
 
 
-    tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
 
 }
 
@@ -1458,7 +1454,7 @@ void displaySetupProgress(bool success) {
 void displayWiFiStatus(byte retries, bool success) {
   if (success) {
     tft.setTextColor(TFT_GREEN);
-    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %s\n",retries,Prefs.MYIP.toString().c_str(),MACToString(Prefs.PROCID).c_str());
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %s\n",retries,WiFi.localIP().toString().c_str(),MACToString(Prefs.PROCID).c_str());
     tft.setTextColor(FG_COLOR);
   } else {
     tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);

@@ -271,6 +271,7 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
       file.seek(file.position()-endOffset); //rewind back to where we were
 
 
+      if (isTimeValid(dataPoint.timeLogged)==false) continue;
       if (dataPoint.deviceMAC != deviceMAC || 
             dataPoint.snsType != sensorType || 
             dataPoint.snsID != sensorID) {
@@ -395,6 +396,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
         //SerialPrint("loadAverageSensorDataFromFile: read data point " + (String) j + " of " + (String) totalPoints + " from " + filename + " at time " + (String) dataPoint.timeLogged + " with value " + (String) dataPoint.snsValue,true);
       }
 
+      if (isTimeValid(dataPoint.timeLogged)==false) continue;
       if (dataPoint.deviceMAC != deviceMAC || 
             dataPoint.snsType != sensorType || 
             dataPoint.snsID != sensorID) {
@@ -511,46 +513,77 @@ bool writeErrorToSD() {
     return true;
 }
 
-bool readErrorFromSD(String* error, uint16_t errornumber) {
+int8_t readErrorFromSD(String* error, uint8_t MaxNumberofLines) {
+  //return the number of lines read, or -1 if failed to open file, -2 if file is empty, -3 if error is nullptr
+  if (error == nullptr) {
+    return -3; //error is nullptr
+  }
   String filename = "/Data/DeviceErrors.txt";
-  File f = SD.open(filename, FILE_READ);
-  if (f==false) {
-    return false;
+  File file = SD.open(filename, FILE_READ);
+  if (file==false) {
+    return -1; //failed to open file
   }
-  if (f.size() <3) { //need at least 3 characters to read
-    f.close();
-    return false;
-  }
-  
-  //start from end of file and go back errornumber lines
-  *error = "";
-  //seek the ith /n from the end of the file
-  uint32_t n=0;
-  f.seek(f.size()); //goto end of file
-      
-  while (n<errornumber+1 && f.position() > 2) {
-    //is the last character a /n?
-    f.seek(f.position()-1);
-    if (f.read() == '\n') n++;
-    //now position at the start of this line
-    while (f.position() > 2) {
-      f.seek(f.position()-2);
-      if (f.read() == '\n') break;
-    }      
+  if (file.size() <3) { //need at least 3 characters to read
+    file.close();
+    return -2; //file is empty
   }
 
-  if (n<errornumber+1) {
-    f.close();
-    return false;
+  if (MaxNumberofLines == 0) MaxNumberofLines = 1;
+  if (MaxNumberofLines > 100) MaxNumberofLines = 100;
+  
+    // --- Step 1: Count the total number of lines ---
+    int totalLines = 0;
+    String line;
+    
+    // Note: Using 'file.readStringUntil('\n')' can be memory intensive for very large files.
+    // For this approach, it simplifies line-by-line reading.
+    // An alternative is manual character-by-character reading, which is more complex.
+    while (file.available()) {
+      line = file.readStringUntil('\n');
+      totalLines++;
+    }
+  
+    SerialPrint("readErrorFromSD: Total lines in file: ",false);
+    SerialPrint((String) totalLines,true);
+  
+    // Determine the starting line to read from
+    int startLine = totalLines - MaxNumberofLines;
+  
+    // Ensure startLine is not negative (if file has fewer lines than LINES_TO_READ)
+    if (startLine < 0) {
+      startLine = 0;
+    }
+    
+    SerialPrint("readErrorFromSD: Starting read from line: ",false);
+    SerialPrint((String) (startLine + 1),true); // +1 for 1-based indexing in human-readable output
+  
+    // --- Step 2: Reset pointer and read from the calculated start line ---
+    file.seek(0); // Move the file pointer back to the beginning
+  
+    // Read and discard lines until the startLine is reached
+    for (int i = 0; i < startLine; i++) {
+      if (file.available()) {
+        file.readStringUntil('\n'); // Discard line
+      } else {
+        break; // Reached end of file unexpectedly
+      }
+    }
+  
+    // --- Step 3: Read and save the last 'numLines' ---
+    int linesRead = 0;
+    while (file.available() && linesRead < MaxNumberofLines) {
+      line = file.readStringUntil('\n');
+      *error += line + "\n";
+      linesRead++;
+    }
+    file.close();
+    return linesRead;
   }
-  
-  *error = f.readStringUntil('\n');
-  if (error->length() == 0) return false;
-  
-  f.close();
-  return true;
-}
 
+
+
+
+  
 
 //storing variables
 bool storeScreenInfoSD() {
@@ -834,16 +867,6 @@ double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t
     return nearestValue;
 }
 
-uint16_t deleteCoreStruct() {
-  uint16_t nDeleted = deleteFiles("ScreenFlags.dat","/Data");
-
-  if (nDeleted > 0) {
-    initScreenFlags(true);
-  } 
-
-  return nDeleted;
-}
-
 uint16_t deleteFiles(const char* pattern,const char* directory) {
   //returns number of files deleted
   File dir = SD.open(directory); // Open the target directory
@@ -889,6 +912,28 @@ uint16_t deleteFiles(const char* pattern,const char* directory) {
   return nDeleted;
 }
 
+
+uint16_t deleteSensorDataSD() {
+    // returns sensor data files
+    uint16_t deletedCount = 0;
+      
+    File root = SD.open("/Data");
+    if (root && root.isDirectory()) {
+      File file = root.openNextFile();
+      while (file) {
+        String filename = file.name();
+        if (filename.endsWith(".dat") && filename != "ScreenFlags.dat" && filename != "SensorBackupv2.dat" && filename != "GsheetInfo.dat" && filename != "FileTimestamps.dat" && filename != "WeatherData.dat" && filename != "DevicesSensors.dat") {
+          if (SD.remove("/Data/" + filename)) {
+            removeFromTimestampIndex(filename.c_str());
+            deletedCount++;
+          }
+        }
+        file = root.openNextFile();
+      }
+      root.close();
+    }
+    return deletedCount;
+}
 
 // Simple wildcard matching function (supports * only)
 bool matchPattern(const char* filename, const char* pattern) {

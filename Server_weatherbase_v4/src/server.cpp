@@ -15,10 +15,8 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 
 
-bool RegistrationCompleted = false;
 
 
-#define WIFI_CONFIG_KEY "Kj8mN2pQ9rS5tU7vW3xY1zA4bC6dE8fG" //key to encrypt/decrypt wifi config
 
 // Base64 decoding functions
 int base64_dec_len(const char* input, int length) {
@@ -154,9 +152,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 
 bool WifiStatus(void) {
   if (WiFi.status() == WL_CONNECTED) {
-    I.WiFiMode = WIFI_STA;
-    Prefs.MYIP =   WiFi.localIP(); 
-
+    
     return true;
   }
 
@@ -172,22 +168,21 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
   if (checkCredentials) {
     if (Prefs.HAVECREDENTIALS) {
       // force station-only mode for normal operation
-      WiFi.mode(WIFI_STA);
-      I.WiFiMode = WIFI_STA;
+      WiFi.mode(WIFI_MODE_STA);
+
     } else {
       return -1000;
     }
   }
     
-  if (Prefs.WIFISSID == 0) return -1000;
+  if (Prefs.WIFISSID[0] == 0) return -1000;
 
   for (i = 0; i < retryLimit; i++) {
     if (!WifiStatus()) {        
       WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
       delay(delayms);
     } else {
-      Prefs.status = 1;
-      Prefs.MYIP = WiFi.localIP();
+      
       Prefs.HAVECREDENTIALS=true;
       Prefs.isUpToDate = false;
       I.wifiFailCount = 0;
@@ -204,7 +199,7 @@ int16_t connectWiFi() {
   
   int16_t retries = 0;
   retries = tryWifi(250,50,true);
-  if (WiFi.status() == WL_CONNECTED) return retries;
+  if (WifiStatus()) return retries;
 
   if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
     SerialPrint("No credentials, starting AP Station Mode",true);
@@ -216,7 +211,7 @@ int16_t connectWiFi() {
 }
 
 void APStation_Mode() {
-  I.WiFiMode = WIFI_AP_STA;
+  I.lastServerStatusUpdate = I.currentTime;
   
   //wifi ID and pwd will be set in connectsoftap
   String wifiPWD;
@@ -266,74 +261,64 @@ void APStation_Mode() {
     uint32_t startTime = m;
     const uint32_t timeoutMs = 600000; // 10 minute timeout
     uint32_t last60Seconds = m;
+    uint32_t lastServerStatusUpdate = I.lastServerStatusUpdate;
 
-    RegistrationCompleted = false;
-    
     do {
       //reset the watchdog timer
       esp_task_wdt_reset();
       m=millis();
       //draw the timeout left at the botton right of the screen
-      #ifdef _USETFT
-      //wait for every 5 seconds
-      if (m - last60Seconds > 5000) {
+      
+      if (m - last60Seconds > 1000) {
         last60Seconds = m;
+        I.currentTime = m/1000; //arbitrary time measure, just to keep track of clock
 
+        #ifdef _USETFT
         //clear the bottom left of the screen
-        tft.fillRect(0, tft.height()-100, tft.width(), 100, TFT_BLACK);
-        tft.setCursor(0, tft.height()-90);
+        tft.fillRect(0, tft.height()-40, tft.width(), 100, TFT_BLACK);
+        tft.setCursor(0, tft.height()-40);
         tft.setTextColor(TFT_WHITE);
         tft.setTextFont(2);
         tft.setTextSize(1);
-        tft.printf("Seconds before reboot: %ds", ((timeoutMs - (m - startTime))/1000));
-      }
-      #endif
+        tft.printf("Seconds before reboot: %ds\n", ((timeoutMs - (m - startTime))/1000));
+        tft.printf("WiFi: %s, Location: %s, Time: %s",
+          (Prefs.HAVECREDENTIALS)?"Y":"N",
+          (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0)?"Y":"N",
+          (Prefs.TimeZoneOffset!=0)?"Y":"N");
+        #endif
 
+      }
+
+      //reset the start time if the server status has been updated
+      if (I.lastServerStatusUpdate != lastServerStatusUpdate) {
+        lastServerStatusUpdate = I.lastServerStatusUpdate;
+        startTime = m;
+      }
+      
       server.handleClient(); //check if user has set up WiFi
             
       // Check for timeout
       if ( m - startTime > timeoutMs) {
-        #ifdef _USETFT
-        tft.println("Timeout waiting for credentials. Rebooting...");        
-        #endif
 
-        //if credentials are stored, but havecredentials was false, then try rebooting with those credentials
+        //if credentials are stored, but havecredentials was false, then try rebooting with those credentials on next boot
         if (Prefs.WIFISSID[0] != 0 && Prefs.WIFIPWD[0] != 0) {
           Prefs.HAVECREDENTIALS = true;
           Prefs.isUpToDate = false;
         }
-        tft.println("Rebooting due to timeout...");
+        #ifdef _USETFT
+        tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+        tft.setCursor(0, tft.height()-200);
+        tft.setTextColor(TFT_WHITE);
+        tft.setTextFont(2);
+        tft.setTextSize(1);
+        tft.println("Timeout waiting for credentials. Rebooting...");        
+        #endif
         delay(5000);
         controlledReboot("WiFi credentials timeout", RESET_WIFI, true);
         break;
       }
+    }     while (true); //just keep looping until time runs out, or setup completed
 
-    } while (Prefs.HAVECREDENTIALS == false);
-    
-  // Only reboot if we have credentials but registration is not completed
-  if ( RegistrationCompleted == false) {
-    // User has submitted WiFi credentials but hasn't completed timezone setup
-    // Continue running the server to allow timezone configuration
-    tft.println("WiFi credentials saved. Please configure timezone settings.");
-    tft.println("Server will continue running for timezone setup...");
-    
-    // Keep the server running indefinitely until timezone setup is complete
-    while (RegistrationCompleted == false) {
-      server.handleClient();
-      delay(50);
-    }
-  }
-
-  
-  BootSecure bootSecure;
-  if (bootSecure.setPrefs()<0) {
-    SerialPrint("Failed to store core data",true);
-  }
-
-  tft.println("Rebooting with updated credentials...");
-  delay(5000);
-  controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI);
-   
 }
 
 
@@ -373,6 +358,7 @@ String urlEncode(const String& str) {
 //    - POST /api/location           : Lookup location (returns JSON)
 //    - GET  /api/timezone           : Auto-detect timezone (returns JSON)
 //    - POST /api/timezone           : Save timezone (returns JSON)
+//    - POST /api/complete-setup     : Complete setup (returns JSON)
 //    - GET  /api/setup-status       : Get setup completion status (returns JSON)
 //
 // 3. SETUP WIZARD - Single-page guided setup interface
@@ -382,8 +368,6 @@ String urlEncode(const String& str) {
 //      Step 3: Timezone Configuration
 //
 // 4. LEGACY HANDLERS - Backward compatible (still functional)
-//    - handleWiFiConfig()           : Old WiFi config page
-//    - handleWiFiConfig_POST()      : Now uses helper functions
 //    - handleTimezoneSetup()        : Old timezone page
 //    - handleTimezoneSetup_POST()   : Now uses helper functions
 //    - handleWeatherAddress()       : Now uses helper functions
@@ -413,13 +397,8 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   
   // Save LMK key if provided
   if (lmk_key.length() > 0) {
-    String padded_key = lmk_key;
-    if (padded_key.length() > 16) {
-      padded_key = padded_key.substring(0, 16);
-    } else if (padded_key.length() < 16) {
-      padded_key = padded_key + String("0000000000000000").substring(0, 16 - padded_key.length());
-    }
-    snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", padded_key.c_str());
+    memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
+    strncpy((char*)Prefs.KEYS.ESPNOW_KEY, lmk_key.c_str(), 16);
   }
   
   Prefs.HAVECREDENTIALS = true;
@@ -428,7 +407,7 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   // Attempt WiFi connection
   SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
-  int retries = tryWifi(250,20,false);
+  int retries = tryWifi(250,20,false); //do not check credentials, which will terminate AP mode
   
   if (WiFi.status() == WL_CONNECTED) {
     SerialPrint("WiFi connected! IP: " + WiFi.localIP().toString(), true);
@@ -530,16 +509,38 @@ void saveTimezoneSettings(int32_t utc_offset, bool dst_enabled, uint8_t dst_star
  * Parameters: ssid, password, lmk_key (optional)
  * Returns: JSON with status
  */
-void apiConnectWiFi() {
+void apiConnectToWiFi() {
   I.lastServerStatusUpdate = I.currentTime;
   
   String ssid = "";
   String password = "";
   String lmk_key = "";
-
+  String deviceName = "";
   
+  if (server.hasArg("deviceName")) {
+    deviceName = server.arg("deviceName");
+    if (deviceName.length() > 0) {
+      snprintf((char*)Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", deviceName.c_str());
+      Prefs.isUpToDate = false; // Mark as needing to be saved
+  
+      //now update the DeviceStore with the new device name
+      int16_t deviceIndex = Sensors.findMyDeviceIndex();
+      if (!Sensors.updateDeviceName(deviceIndex, deviceName)) {
+        SerialPrint("Failed to update device name", true);
+        storeError("Failed to update device name");
+      } 
+    }
+  
+  }
   if (server.hasArg("ssid") ) {
     ssid = server.arg("ssid");
+    if (ssid.length() == 0) {
+
+      server.send(400, "application/json", "{\"success\":false,\"error\":\"SSID required\"}");
+      return;
+    }
+
+  
   }
   if (server.hasArg("password")) {
     password = server.arg("password");
@@ -549,20 +550,12 @@ void apiConnectWiFi() {
     lmk_key = server.arg("lmk_key");
   }
 
-    
-  if (ssid.length() == 0) {
-    server.send(400, "application/json", "{\"success\":false,\"error\":\"SSID required\"}");
-    return;
-  }
-  
-  bool success = connectToWiFi(ssid, password, lmk_key);
-  
-  if (success) {
-    String json = "{\"success\":true,\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-    server.send(200, "application/json", json);
+  if (connectToWiFi(ssid, password, lmk_key)) {
+    server.send(200, "application/json", "{\"success\":true,\"ip\":\"" + WiFi.localIP().toString() + "\"}");
   } else {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"Connection failed\"}");
   }
+  
 }
 
 /**
@@ -675,6 +668,42 @@ void apiGetSetupStatus() {
   server.send(200, "application/json", json);
 }
 
+void handleApiCompleteSetup() {
+  I.lastServerStatusUpdate = I.currentTime;
+
+  if (!WifiStatus()) {
+    #ifdef _USETFT
+    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+    tft.setCursor(0, tft.height()-200);
+    tft.setTextColor(TFT_RED);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.println("Connection failed...");
+    tft.setTextColor(TFT_WHITE);
+    #endif
+  
+    server.send(200, "application/json", "{\"success\":false,\"error\":\"Failed to connect to WiFi\"}");
+    return;
+  }
+
+  handleStoreCoreData(); //update prefs and core if needed  
+
+
+  #ifdef _USETFT
+  tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+  tft.setCursor(0, tft.height()-200);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextFont(2);
+  tft.setTextSize(1);
+  tft.println("Rebooting with updated credentials...");
+  #endif
+  //reboot the device
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Setup complete\"}");
+
+  controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI,true);
+  
+}
+
 /**
  * API: Scan for WiFi networks
  * GET /api/wifi-scan
@@ -684,32 +713,57 @@ void apiScanWiFi() {
   I.lastServerStatusUpdate = I.currentTime;
   
   SerialPrint("Scanning for WiFi networks...", true);
-  
+  #ifdef _USETFT
+    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+    tft.setCursor(0, tft.height()-200);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.println("Scanning networks...");
+    tft.setTextColor(TFT_WHITE);
+    #endif
   // Perform WiFi scan
   int numNetworks = WiFi.scanNetworks();
+
+  // Build JSON array of networks
+  String json = "{\"success\":true,\"networks\":[";
+  String lastnetwork = "";
+  byte count=0;
+  for (int i = 0; i < numNetworks; i++) {
+    if (WiFi.SSID(i)!=lastnetwork) {
+      lastnetwork = WiFi.SSID(i);
+      if (count>0) json += ",";
+      count++;
+      json += "{\"ssid\":\"" + WiFi.SSID(i) + "\"";
+      json += ",\"rssi\":" + String(WiFi.RSSI(i));
+      json += ",\"encryption\":" + String(WiFi.encryptionType(i));
+      json += "}";      
+    }
+    
+  }
+  json += "]}";
   
   if (numNetworks == 0) {
+    #ifdef _USETFT
+    tft.setTextColor(TFT_RED);
+    tft.println("No networks found. Enter Manually.");
+    tft.setTextColor(TFT_WHITE);
+    #endif
     server.send(200, "application/json", "{\"success\":true,\"networks\":[]}");
     return;
   }
   
-  // Build JSON array of networks
-  String json = "{\"success\":true,\"networks\":[";
-  
-  for (int i = 0; i < numNetworks; i++) {
-    if (i > 0) json += ",";
-    json += "{\"ssid\":\"" + WiFi.SSID(i) + "\"";
-    json += ",\"rssi\":" + String(WiFi.RSSI(i));
-    json += ",\"encryption\":" + String(WiFi.encryptionType(i));
-    json += "}";
-  }
-  
-  json += "]}";
   
   // Clean up scan results
   WiFi.scanDelete();
   
-  SerialPrint("Found " + String(numNetworks) + " WiFi networks", true);
+  SerialPrint("Found " + String(count) + " WiFi networks", true);
+  #ifdef _USETFT
+  tft.setTextColor(TFT_GREEN);
+  tft.printf("%d networks found.\n",count);
+  tft.setTextColor(TFT_WHITE);
+  #endif
+
   server.send(200, "application/json", json);
 }
 
@@ -824,7 +878,12 @@ void handleInitialSetup() {
         <label for="lmk_key">Local Security Key (16 characters)</label>
         <input type="text" id="lmk_key" maxlength="16" placeholder="Optional - for ESPNow encryption">
       </div>
-      
+
+      <div class="form-group">
+        <label for="DeviceName">Device Name</label>
+        <input type="text" id="DeviceName" maxlength="32" placeholder="Enter a name for your device">
+      </div>
+
       <button class="btn btn-primary" onclick="connectWiFi()" id="wifi-btn">Connect to WiFi</button>
     </div>
   </div>
@@ -910,7 +969,7 @@ void handleInitialSetup() {
   <!-- Complete Setup -->
   <div style="text-align: center; margin: 30px 0;">
     <button class="btn btn-primary" id="complete-btn" onclick="completeSetup()" disabled style="font-size: 18px; padding: 15px 30px;">
-      Complete Setup & Reboot
+      Complete Setup
     </button>
   </div>
 </div>
@@ -989,7 +1048,7 @@ async function scanWiFiNetworks() {
         datalist.appendChild(option);
       });
       
-      showStatus('wifi-status', '✓ Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
+      showStatus('wifi-status', 'Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
     } else {
       showStatus('wifi-status', 'No networks found. You can still enter SSID manually.', 'info');
     }
@@ -1003,6 +1062,7 @@ async function scanWiFiNetworks() {
 
 // Connect to WiFi
 async function connectWiFi() {
+  const deviceName = document.getElementById('DeviceName').value;
   const ssid = document.getElementById('ssid').value;
   const password = document.getElementById('password').value;
   const lmk_key = document.getElementById('lmk_key').value;
@@ -1012,6 +1072,11 @@ async function connectWiFi() {
     return;
   }
   
+  if (!deviceName) {
+    showStatus('wifi-status', 'Please enter a device name', 'error');
+    return;
+  }
+
   showStatus('wifi-status', 'Connecting to WiFi...', 'info');
   document.getElementById('wifi-btn').disabled = true;
   
@@ -1019,7 +1084,8 @@ async function connectWiFi() {
   formData.append('ssid', ssid);
   formData.append('password', password);
   formData.append('lmk_key', lmk_key);
-  
+  formData.append('deviceName', deviceName);
+
   try {
     const response = await fetch('/api/wifi', { method: 'POST', body: formData });
     const data = await response.json();
@@ -1147,10 +1213,10 @@ async function saveTimezone() {
   }
 }
 
-// Complete setup and reboot
+// Complete setup
 function completeSetup() {
-  if (confirm('Setup complete! The device will now reboot. Continue?')) {
-    window.location.href = '/REBOOT';
+  if (confirm('Setup complete!  Continue?')) {
+    window.location.href = '/api/complete-setup';
   }
 }
 
@@ -1316,10 +1382,8 @@ void handleTIMEUPDATE() {
 }
 
 
-
-
 void handleSTATUS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -1346,6 +1410,32 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + getWiFiModeString() + "</p>";
+
+  wifi_mode_t t = WiFi.getMode();
+
+  if (t == WIFI_MODE_APSTA) {
+    WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
+    WEBHTML = WEBHTML + "<p>APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "</p>";
+    WEBHTML = WEBHTML + "<p>Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "</p>";
+    WEBHTML = WEBHTML + "<p><strong>Router Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
+    
+  } else if (t == WIFI_MODE_STA) {
+    WEBHTML = WEBHTML + "<p>Station IP: " + WiFi.localIP().toString() + "</p>";
+    WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
+    WEBHTML = WEBHTML + "<p><strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
+  
+  } else if (t == WIFI_MODE_AP) {
+    WEBHTML = WEBHTML + "<p>APIP: " + WiFi.softAPIP().toString() + "</p>";
+    WEBHTML = WEBHTML + "<p>Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "</p>";
+  } 
+  
+
+  WEBHTML = WEBHTML + "<p><strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
+  WEBHTML = WEBHTML + "---------------------<br>";      
+
   WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";
@@ -1364,6 +1454,15 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<br>";      
   WEBHTML = WEBHTML + "LAN Messages Sent today: " + (String) I.ESPNOW_SENDS + "<br>";
   WEBHTML = WEBHTML + "LAN Messages Received today: " + (String) I.ESPNOW_RECEIVES + "<br>";
+  //add a button here to trigger a broadcast (I'm alive) message
+  // Button to trigger a broadcast ("I'm alive") message
+  WEBHTML = WEBHTML + R"===(
+    <form action="/REQUEST_BROADCAST" method="post" style="margin-bottom:15px;">
+      <button type="submit" style="padding:10px 20px; background-color:#2196F3; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">
+        Broadcast Now
+      </button>
+    </form>
+  )===";
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -1388,10 +1487,6 @@ void handleSTATUS() {
   
   WEBHTML = WEBHTML + "---------------------<br>";      
 
-  // Error log button
-  WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
-
-  WEBHTML = WEBHTML + "</font>---------------------<br>";      
 
   // Device viewer link under server status section
   WEBHTML = WEBHTML + "<br><div style=\"text-align: center; padding: 10px;\">";
@@ -1402,7 +1497,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Timezone Setup</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
@@ -1474,7 +1569,7 @@ void rootTableFill(byte j) {
 
 
 void handlerForRoot(bool allsensors) {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   
@@ -1510,12 +1605,12 @@ void handlerForRoot(bool allsensors) {
   #endif
   WEBHTML = WEBHTML + "<body>";  
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
-  WEBHTML = WEBHTML + "<p>Device Type: " + (String) Prefs.MyType + "</p>";
+  WEBHTML = WEBHTML + "<p>Device Type: " + (String) MYTYPE + "</p>";
   WEBHTML = WEBHTML + "<p>Device Name: " + (String) Prefs.DEVICENAME + "</p>";
-  WEBHTML = WEBHTML + "<p>Device IP: " + (String) Prefs.MYIP + "</p>";
-  WEBHTML = WEBHTML + "<p>Device MAC: " + (String) Prefs.PROCID + "</p>";
+  WEBHTML = WEBHTML + "<p>Device IP: " + (String) WiFi.localIP().toString() + "</p>";
+  WEBHTML = WEBHTML + "<p>Device MAC: " + (String) MACToString(Prefs.PROCID) + "</p>";
   WEBHTML = WEBHTML + "<p>Device SSID: " +  (String) (Prefs.WIFISSID) + "</p>";
-  WEBHTML = WEBHTML + "<p>Alive Since: " + (String) I.ALIVESINCE + "</p>";
+  WEBHTML = WEBHTML + "<p>Alive Since: " + (String) dateify(I.ALIVESINCE,"DOW mm/dd/yyyy hh:nn:ss") + "</p>";
 
   WEBHTML = WEBHTML + "---------------------<br>";      
     #ifndef _ISPERIPHERAL
@@ -1535,7 +1630,7 @@ void handlerForRoot(bool allsensors) {
     // Second row - Weather data link and AC status
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "AC is " + (I.isAC ? "on" : "off");
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WiFiConfig\">WiFi Config</a> | <a href=\"/InitialSetup\" style=\"color: #4CAF50; font-weight: bold;\">Setup Wizard</a></td></tr>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/InitialSetup\" style=\"color: #4CAF50; font-weight: bold;\">WiFi and Startup Settings</a></td></tr>";
     
     // Third row - Critical flags
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Critical flags: " + (String) I.isFlagged + "</td></td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/CONFIG\">System Configuration</a></td></tr>";
@@ -1563,8 +1658,8 @@ void handlerForRoot(bool allsensors) {
 
     #endif
 
-    byte used[SENSORNUM];
-    for (byte j=0;j<SENSORNUM;j++)  {
+    byte used[NUMSENSORS];
+    for (byte j=0;j<NUMSENSORS;j++)  {
       used[j] = 255;
     }
 
@@ -1573,19 +1668,19 @@ void handlerForRoot(bool allsensors) {
 
   WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:900px\">";      
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:200px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:100px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th></tr>"; 
-  for (byte j=0;j<SENSORNUM;j++)  {
+  for (byte j=0;j<NUMSENSORS;j++)  {
     SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
     if (sensor && sensor->IsSet) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
-      if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,SENSORNUM) == false)  {
+      if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
         used[usedINDEX++] = j;
         rootTableFill(j);
         
-        for (byte jj=j+1;jj<SENSORNUM;jj++) {
+        for (byte jj=j+1;jj<NUMSENSORS;jj++) {
           SnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);    
           if (sensor2 && sensor2->IsSet) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
-            if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,SENSORNUM) == false && sensor2->deviceIndex==sensor->deviceIndex) {
+            if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
                 used[usedINDEX++] = jj;
                 rootTableFill(jj);
             }
@@ -1644,9 +1739,9 @@ void handlerForRoot(bool allsensors) {
 
 } else {
   if (Prefs.HAVECREDENTIALS==false) {
-    SerialPrint("Prefs.HAVECREDENTIALS==false, redirecting to WiFiConfig");
+    SerialPrint("Prefs.HAVECREDENTIALS==false, redirecting to InitialSetup");
     //redirect to WiFi config page
-    server.sendHeader("Location", "/WiFiConfig");
+    server.sendHeader("Location", "/InitialSetup");
     serverTextClose(302,false);
     return;
   } else {
@@ -1672,7 +1767,7 @@ void handleNotFound(){
 }
 
 void handleRETRIEVEDATA() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -1743,7 +1838,7 @@ void handleRETRIEVEDATA() {
 }
 
 void handleRETRIEVEDATA_MOVINGAVERAGE() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2078,7 +2173,7 @@ void handlePost() {
 
 
 void handleCONFIG() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2131,42 +2226,42 @@ void handleCONFIG() {
   
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit0\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 0) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 0 (Set for flagged only)</label>";
+  WEBHTML = WEBHTML + "Bit 0 (Show if flagged)</label>";
   
   // Bit 1 - Set for expired only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit1\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 1) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 1 (Set for expired only)</label>";
+  WEBHTML = WEBHTML + "Bit 1 (Show if expired)</label>";
   
   // Bit 2 - Set for soil dry only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit2\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 2) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 2 (soil dry)</label>";
+  WEBHTML = WEBHTML + "Bit 2 (Soil)</label>";
   
   // Bit 3 - Set for leak only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit3\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 3) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 3 (leak)</label>";
+  WEBHTML = WEBHTML + "Bit 3 (Leak)</label>";
   
   // Bit 4 - Set for temperature only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit4\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 4) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 4 (temperature)</label>";
+  WEBHTML = WEBHTML + "Bit 4 (Temperature)</label>";
   
   // Bit 5 - Set for humidity only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit5\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 5) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 5 (humidity)</label>";
+  WEBHTML = WEBHTML + "Bit 5 (Humidity)</label>";
   
   // Bit 6 - Set for pressure only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit6\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 6) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 6 (pressure)</label>";
+  WEBHTML = WEBHTML + "Bit 6 (Pressure)</label>";
   
   // Bit 7 - Set for battery only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
   WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit7\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 7) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 7 (battery)</label>";
+  WEBHTML = WEBHTML + "Bit 7 (Battery)</label>";
 
   // Bit 8 - Set for HVAC only
   WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
@@ -2174,7 +2269,7 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "Bit 8 (HVAC)</label>";
   
   WEBHTML = WEBHTML + "</div>";
-  WEBHTML = WEBHTML + "<div style=\"margin-top: 8px; font-size: 12px; color: #666;\">Current value: " + String(I.showTheseFlags) + " (0x" + String(I.showTheseFlags, HEX) + ")</div>";
+
   WEBHTML = WEBHTML + "</div>";
   
   WEBHTML = WEBHTML + "</div>";
@@ -2192,7 +2287,7 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
@@ -2205,7 +2300,7 @@ void handleCONFIG() {
 }
 
 void handleREADONLYCOREFLAGS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2283,7 +2378,7 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsSinceLast</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
 
-  #ifdef _USETFTdddd
+  #ifdef _USETFT
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.CLOCK_Y + "</div>";
   
@@ -2399,7 +2494,7 @@ void handleREADONLYCOREFLAGS() {
 }
 
 void handleGSHEET() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2484,7 +2579,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
@@ -2496,7 +2591,7 @@ void handleGSHEET() {
 }
 
 void handleGSHEET_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Process Google Sheets configuration
   if (server.hasArg("useGsheet")) {
@@ -2535,6 +2630,21 @@ void handleGSHEET_UPLOAD_NOW() {
   server.send(200, "text/plain", msg);
 }
 
+void handleREQUEST_BROADCAST() {
+  I.lastServerStatusUpdate = I.currentTime;
+  
+  // Trigger broadcast by calling the broadcastServerPresence function
+  bool result = broadcastServerPresence(false);
+  
+  String msg = "Broadcast triggered. Result: " + String(result ? "Success" : "Failed");
+  SerialPrint(msg, true);
+  
+  // Redirect back to the status page
+  server.sendHeader("Location", "/STATUS");
+  server.send(302, "text/plain", (msg)?"Success":"Failed");
+  
+}
+
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
 String generateAPSSID() {
     char ssid[20];
@@ -2546,23 +2656,12 @@ String generateAPSSID() {
 
 // Connect to Soft AP mode (combined AP-station mode)
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
-  if (I.WiFiMode != WIFI_AP_STA) {
-    I.WiFiMode = WIFI_AP_STA;
-    I.isUpToDate = false;
+  if (WiFi.getMode() != WIFI_MODE_APSTA) {
+    WiFi.mode(WIFI_MODE_APSTA); // Combined AP and station mode
   }
 
   *wifiID = generateAPSSID();
-//    byte lastByte = getPROCIDByte(Prefs.PROCID, 5); // Last byte of MAC for IP address
   *apIP = IPAddress(192, 168, 4, 1);
-  
-  // Ensure WiFi is properly initialized
-  WiFi.disconnect(true);
-  delay(200);
-  
-  WiFi.mode(WIFI_OFF);
-  delay(200);
-  
-  WiFi.mode(WIFI_AP_STA); // Combined AP and station mode
   *wifiPWD = "S3nsor.N3t!";
   
 
@@ -2584,7 +2683,7 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
 }
 
 void handleCONFIG_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Process form submissions and update editable fields
   // Timezone configuration is now handled through the timezone setup page
@@ -2616,6 +2715,13 @@ void handleCONFIG_POST() {
     if (newDeviceName.length() > 0 && newDeviceName.length() <= 32) {
       snprintf((char*)Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", newDeviceName.c_str());
       Prefs.isUpToDate = false; // Mark as needing to be saved
+
+      //now update the DeviceStore with the new device name
+      int16_t deviceIndex = Sensors.findMyDeviceIndex();
+      if (!Sensors.updateDeviceName(deviceIndex, newDeviceName)) {
+        SerialPrint("Failed to update device name", true);
+        storeError("Failed to update device name");
+      } 
     }
   }
   
@@ -2693,126 +2799,17 @@ if (I.IntervalHourlyWeather > 4) {
 }
 
 void handleCONFIG_DELETE() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
-  // Delete the ScreenFlags.dat file from the /Data directory
-  deleteCoreStruct(); //delete the screen flags file
-  deleteFiles("GsheetInfo.dat", "/Data");
-  deleteFiles("WeatherData.dat", "/Data");
-  deleteFiles("DevicesSensors.dat", "/Data");
-  BootSecure bootSecure;
-  //flush Prefs
-  int8_t ret = bootSecure.flushPrefs();
-  if (ret < 0) {
-    SerialPrint("Failed to flush Prefs: " + String(ret), true);
-    
-    #ifdef _USETFT
-    tft.clear();
-    tft.setCursor(0, 0);
-    tft.printf("Failed to flush Prefs: %d\n", ret);
-    #endif
-    server.send(500, "text/plain", "Failed to flush Prefs");
-
-  } else {
-    SerialPrint("Prefs flushed", true);
-    #ifdef _USETFT
-    tft.clear();
-    tft.setCursor(0, 0);
-    tft.println("Prefs flushed");
-    
-    #endif
-  }
+  // Delete all config data
+  int8_t ret =delete_all_core_data(true,true); 
+   //just reboot, regardless of any failures
+   
   Prefs.isUpToDate = true; //this prevents prefs from updating in controlled reboot
-  controlledReboot("User Request",RESET_USER);
-
+  controlledReboot("User Request",RESET_USER,true);
 }
 
 
-void handleWiFiConfig() {
-  LAST_WEB_REQUEST = I.currentTime;
-  WEBHTML = "";
-  serverTextHeader();
-
-  WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " WiFi Configuration</h2>";
-  
-  // Add link to streamlined setup wizard
-  if (!Prefs.HAVECREDENTIALS || Prefs.TimeZoneOffset == 0) {
-    WEBHTML = WEBHTML + "<div style=\"background-color: #e3f2fd; border: 2px solid #2196F3; color: #0d47a1; padding: 20px; margin: 10px 0; border-radius: 8px; text-align: center;\">";
-    WEBHTML = WEBHTML + "<h3>Setup Wizard</h3>";
-    WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; padding: 15px 30px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 18px; margin: 10px;\">Use Setup Wizard</a>";
-    WEBHTML = WEBHTML + "</div>";
-  }
-  
-  // Check for error messages
-  if (server.hasArg("error")) {
-    String error = server.arg("error");
-    if (error == "connection_failed") {
-      WEBHTML = WEBHTML + "<div style=\"background-color: #ffebee; border: 1px solid #f44336; color: #c62828; padding: 15px; margin: 10px 0; border-radius: 4px;\">";
-      WEBHTML = WEBHTML + "<strong>WiFi Connection Failed!</strong><br>";
-      WEBHTML = WEBHTML + "Please check your WiFi credentials and try again.";
-      WEBHTML = WEBHTML + "</div>";
-    }
-  }
-  
-  // Display current WiFi status and configuration
-  WEBHTML = WEBHTML + "<h3>Current WiFi Status</h3>";
-
-  if (!Prefs.HAVECREDENTIALS) {
-    WEBHTML = WEBHTML + "<p>Wifi credentials are not set, and are required.</p>";
-  }
-
-  #ifdef _USEWEATHER
- if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) {
-  WEBHTML = WEBHTML + "<p>Set your address for weather lookup (weather information will be matched to the address provided).<br></p>";
- }
- #endif
-
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
-  if (WiFi.status() == WL_CONNECTED) {
-    WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
-  }
-  
-  // Add WiFi mode information
-  String wifiModeStr = "Unknown";
-  if (I.WiFiMode == WIFI_AP_STA) {
-    wifiModeStr = "Access Point + Station (AP+STA)";
-  } else if (I.WiFiMode == WIFI_STA) {
-    wifiModeStr = "Station Mode Only";
-  } else if (I.WiFiMode == WIFI_AP) {
-    wifiModeStr = "Access Point Mode Only";
-  } else if (I.WiFiMode == WIFI_OFF) {
-    wifiModeStr = "WiFi Off";
-  }
-  WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + wifiModeStr + "</p>";
-  
-  WEBHTML = WEBHTML + "<p><strong>Stored SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
-
-  addWiFiConfigForm();
-
-  WEBHTML = WEBHTML + "<h3>WiFi Reset</h3>";
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WiFiConfig_RESET\" style=\"display: inline;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset WiFi Configuration\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
-  WEBHTML = WEBHTML + "</div>";
-  
-  WEBHTML = WEBHTML + "</body></html>";
-
-  serverTextClose(200, true);
-}
 
 // Timezone detection function
 bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
@@ -2871,201 +2868,8 @@ bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_
   return false;
 }
 
-void addWiFiConfigForm() {
-  // WiFi configuration form
-  WEBHTML = WEBHTML + "<h3>Configure WiFi</h3>";
-  WEBHTML = WEBHTML + "<form id=\"wifiForm\" method=\"POST\" action=\"/WiFiConfig\">";
-  WEBHTML = WEBHTML + "<p><label for=\"ssid\">SSID:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"ssid\" name=\"ssid\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"password\">Password:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"password\" id=\"password\" name=\"password\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"lmk_key\">Local Security Key (up to 16 chars) - must be same for all devices:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"lmk_key\" name=\"lmk_key\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-
-  #ifdef _USEWEATHER
-  //add weather address lookup if no credentials
-  if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) {
-    WEBHTML = WEBHTML + "<p>Location not set! Weather will not work unless you set Latitude and Longitude (or enter address and I will look up your geolocation).<br></p>";
-  } else {
-    WEBHTML = WEBHTML + "<p>Location was already set! You can optionally enter a new address to change your geolocation.</p>";
-  }
-  WEBHTML = WEBHTML + "<p><label for=\"street\">Street Address:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"street\" name=\"street\" placeholder=\"123 Main St\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"city\">City:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"city\" name=\"city\" placeholder=\"Boston\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"state\">State (2-letter code):</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"state\" name=\"state\" pattern=\"[A-Za-z]{2}\" maxlength=\"2\" placeholder=\"MA\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  WEBHTML = WEBHTML + "<p><label for=\"zipcode\">ZIP Code (5 digits):</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"text\" id=\"zipcode\" name=\"zipcode\" pattern=\"[0-9]{5}\" maxlength=\"5\" placeholder=\"12345\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
-  #endif
-  // Disconnection notice
-  WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin: 10px 0; border-radius: 4px;\">";
-  WEBHTML = WEBHTML + "<strong>Important:</strong> After submitting data, there may be a brief disconnection as the device connects to your WiFi network. ";
-  WEBHTML = WEBHTML + "</div>";
-
-  // Status and action buttons
-  WEBHTML = WEBHTML + "<div id=\"statusSection\" style=\"margin: 20px 0;\">";
-  WEBHTML = WEBHTML + "<div id=\"statusMessage\" style=\"padding: 10px; margin: 10px 0; border-radius: 4px; display: none;\"></div>";
-  WEBHTML = WEBHTML + "<input type=\"submit\" id=\"submitButton\" value=\"Connect WiFi and Configure\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" id=\"timezoneButton\" style=\"display: none; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; margin-left: 10px;\">Check Timezone</a>";
-  WEBHTML = WEBHTML + "</div>";
-
-  WEBHTML = WEBHTML + "</form>";
-
-  // Add JavaScript for form submission handling
-  WEBHTML = WEBHTML + R"===(<script>
-  function showStatus(message, isError = false) {
-    const statusDiv = document.getElementById('statusMessage');
-    statusDiv.textContent = message;
-    statusDiv.style.display = 'block';
-    statusDiv.style.backgroundColor = isError ? '#ffebee' : '#e8f5e8';
-    statusDiv.style.color = isError ? '#c62828' : '#2e7d32';
-    statusDiv.style.border = isError ? '1px solid #f44336' : '1px solid #4CAF50';
-  }
-
-  function showTimezoneButton() {
-    // Hide submit button and show timezone button
-    document.getElementById('submitButton').style.display = 'none';
-    document.getElementById('timezoneButton').style.display = 'inline-block';
-    showStatus('WiFi credentials submitted successfully! Click "Check Timezone" to configure timezone settings.', false);
-  }
-
-  // Override form submission to handle the process
-  document.getElementById('wifiForm').addEventListener('submit', function(e) {
-    e.preventDefault();
-    
-    showStatus('Submitting WiFi credentials...', false);
-    
-    // Submit the form normally
-    const formData = new FormData(this);
-    
-    fetch('/WiFiConfig', {
-      method: 'POST',
-      body: formData
-    })
-    .then(response => {
-      if (response.status >= 200 && response.status < 300) {
-        if (response.status == 202) {
-          showStatus('WiFi credentials submitted successfully.', false); // WiFi credentials submitted successfully, no address check
-          showTimezoneButton();
-        } 
-        else if (response.status == 201) {
-          showStatus('WiFi credentials submitted successfully, but geolocation failed.', false); // WiFi credentials submitted successfully, but geolocation failed
-          
-        }
-        else {
-          showStatus('WiFi and address credentials submitted successfully.', false); // WiFi credentials submitted successfully,  address check
-          showTimezoneButton();
-        }
-      } else {
-        showStatus('Failed to submit WiFi credentials. Please try again.', true);
-        
-      }
-    })
-    .catch(error => {
-      // Network error - this might be due to WiFi transition 
-      showStatus('WiFi credentials submitted. If WiFi connection succeeds, you can proceed to timezone configuration.', false);
-      showTimezoneButton();
-    });
-  });
-  </script>)===";
-  
-}
 
 
-void handleWiFiConfig_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
-  int HTTPCode = 0;
-
-  #ifdef _USETFT
-  tft.clear();
-  tft.setCursor(0, 0);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);
-  tft.setTextFont(2);
-  tft.printf("Processing WiFi request...\n");
-  #else
-  SerialPrint("Processing WiFi request from webpage...", true);
-  #endif
-
-  String ssid = server.hasArg("ssid") ? server.arg("ssid") : "";
-  String password = server.hasArg("password") ? server.arg("password") : "";
-  String lmk_key = server.hasArg("lmk_key") ? server.arg("lmk_key") : "";
-
-  // Use helper function to connect
-  bool wifiSuccess = connectToWiFi(ssid, password, lmk_key);
-  
-  if (wifiSuccess) {
-    #ifdef _USETFT
-    tft.println("WiFi connected successfully!");
-    #endif
-    HTTPCode = 200; //wifi connected
-    
-    // Handle weather address if provided
-    if (server.hasArg("street") && server.arg("street").length() > 0 && 
-        server.hasArg("city") && server.arg("city").length() > 0 && 
-        server.hasArg("state") && server.arg("state").length() > 0 && 
-        server.hasArg("zipcode") && server.arg("zipcode").length() > 0) {
-      String street = server.arg("street");
-      String city = server.arg("city");
-      String state = server.arg("state");
-      String zipcode = server.arg("zipcode");
-      
-      double lat = 0, lon = 0;
-      if (lookupLocationFromAddress(street, city, state, zipcode, &lat, &lon)) {
-        SerialPrint("Obtained geolocation from address", true);
-        HTTPCode = 202; //geolocation obtained
-        #ifdef _USETFT
-        tft.println("Location found!");
-        #endif
-        delay(1000);
-      } else {
-        #ifdef _USETFT
-        tft.setTextColor(TFT_RED);
-        tft.println("Geolocation from address failed, correct in settings later.");
-        tft.setTextColor(FG_COLOR);
-        #endif
-        HTTPCode = 201; //geolocation failed
-        SerialPrint("Geolocation from address failed, correct in settings later.", true);
-        delay(1000);
-      }
-    }
-    
-    
-    // Return success response
-    server.send(HTTPCode, "text/plain", "WiFi credentials submitted successfully!");
-  } else {
-    #ifdef _USETFT
-    tft.println("WiFi connection failed, re-enter credentials");
-    #endif
-    server.sendHeader("Location", "/WiFiConfig?error=connection_failed");
-    server.send(400, "text/plain", "WiFi connection failed. Please check credentials and try again.");
-  }
-}
-
-
-
-void handleWiFiConfig_RESET() {
-  I.lastServerStatusUpdate = I.currentTime;
-  
-  // Clear WiFi credentials and LMK key
-  memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
-  memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
-  memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
-  Prefs.HAVECREDENTIALS = false;
-  Prefs.isUpToDate = false;
-
-  //flush prefs
-  BootSecure bootSecure;
-   bootSecure.flushPrefs();
-
-
-   //redirect to wifi config page
-  server.sendHeader("Location", "/WiFiConfig");
-  server.send(200, "text/plain", "WiFi configuration and LMK key reset. Please reconfigure.");
-
-
-}
 
 void handleTimezoneSetup() {
   I.lastServerStatusUpdate = I.currentTime;
@@ -3156,7 +2960,7 @@ void handleTimezoneSetup() {
   WEBHTML = WEBHTML + "<p><input type=\"submit\" value=\"Save Timezone Settings and Reboot\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\"></p>";
   WEBHTML = WEBHTML + "</form>";
   
-  WEBHTML = WEBHTML + "<p><a href=\"/WiFiConfig\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">Back to WiFi Config</a></p>";
+  WEBHTML = WEBHTML + "<p><a href=\"/InitialSetup\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">Back to WiFi Config</a></p>";
   
   WEBHTML = WEBHTML + "</body></html>";
   serverTextClose(200, true);
@@ -3165,14 +2969,14 @@ void handleTimezoneSetup() {
 void handleTimezoneSetup_POST() {
   I.lastServerStatusUpdate = I.currentTime;
   #ifdef _USETFT
-  
-  tft.clear();
-  tft.setCursor(0, 0);
+  tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+  tft.setCursor(0, tft.height()-200);
   tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);
   tft.setTextFont(2);
+  tft.setTextSize(1);
   tft.printf("Saving timezone settings...\n");
   #endif
+
   if (server.hasArg("utc_offset_seconds") && 
       server.hasArg("dst_enabled") && server.hasArg("dst_start_month") && 
       server.hasArg("dst_start_day") && server.hasArg("dst_end_month") && 
@@ -3192,8 +2996,8 @@ void handleTimezoneSetup_POST() {
     // Use helper function to save timezone settings
     saveTimezoneSettings(total_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
     
-    // Save additional DST offset
-    Prefs.DSTOffset = dst_enabled ? 3600 : 0;
+    // Set DST offset
+    updateTime();
     
     // Save to NVS
     BootSecure bootSecure;
@@ -3227,11 +3031,13 @@ void handleTimezoneSetup_POST() {
     server.sendHeader("Location", "/TimezoneSetup");
     server.send(302, "text/plain", "Failed to save timezone data. Please try again.");
   } else {
-    tft.clear();
-    tft.setCursor(0, 0);
-    tft.setTextColor(TFT_RED);
-    tft.setTextSize(1);
+    #ifdef _USETFT
+    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+    tft.setCursor(0, tft.height()-200);
+    tft.setTextColor(TFT_WHITE);
     tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_RED);
     if (!server.hasArg("UTC_OFFSET_SECONDS")) tft.println("No UTC offset seconds");
     if (!server.hasArg("DST_ENABLED")) tft.println("No DST enabled");
     if (!server.hasArg("DST_START_MONTH")) tft.println("No DST start month");
@@ -3239,16 +3045,15 @@ void handleTimezoneSetup_POST() {
     if (!server.hasArg("DST_END_MONTH")) tft.println("No DST end month");
     if (!server.hasArg("DST_END_DAY")) tft.println("No DST end day");
     tft.setTextColor(FG_COLOR);
-
+    #endif
     server.sendHeader("Location", "/TimezoneSetup");
     server.send(302, "text/plain", "Invalid timezone data. Please try again.");
   }
 }
 
-// Removed handleWiFiConfirm and handleWiFiConfirm_POST - now using AJAX approach
 
 void handleWeather() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML = "";
   serverTextHeader();
 
@@ -3368,7 +3173,7 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
@@ -3382,7 +3187,7 @@ void handleWeather() {
 }
 
 void handleWeather_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Handle location update
   if (server.hasArg("lat") && server.hasArg("lon")) {
@@ -3411,7 +3216,7 @@ void handleWeather_POST() {
 }
 
 void handleWeatherRefresh() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Force immediate weather update
   bool updateResult = WeatherData.updateWeather(0);
@@ -3426,7 +3231,7 @@ void handleWeatherRefresh() {
 }
 
 void handleWeatherZip() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Handle ZIP code lookup (legacy function for backward compatibility)
   if (server.hasArg("zipcode")) {
@@ -3495,24 +3300,45 @@ void handleWeatherAddress() {
 }
 
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
-
+  #ifdef _USEWEATHER
   //assume data is valid   
   if (WifiStatus()) {
     // Lookup coordinates from complete address
     #ifdef _USETFT
+    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
+    tft.setCursor(0, tft.height()-200);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
     tft.setTextColor(TFT_GREEN);
     tft.println("Getting coordinates from address");
     tft.setTextColor(FG_COLOR);
     #endif
+  
     if (WeatherData.getCoordinatesFromAddress(street, city, state, zipCode)) {
       
       // Force weather update with new coordinates
       //WeatherData.updateWeather(0);
-      if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) return true;
+      if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) {
+        #ifdef _USETFT
+        tft.setTextColor(TFT_GREEN);
+        tft.println("Geolocation set");
+        tft.setTextColor(FG_COLOR);
+        #endif
+    
+        return true;
+      } else {
+        #ifdef _USETFT
+        tft.setTextColor(TFT_RED);
+        tft.println("Geolocation not set");
+        tft.setTextColor(FG_COLOR);
+        #endif    
+        return false;
+      }
     } else {
       #ifdef _USETFT
       tft.setTextColor(TFT_RED);
-      tft.println("Failed to fetch coordinates from address");
+      tft.println("Geolocation lookup failed");
       tft.setTextColor(FG_COLOR);
       #endif
       return false;
@@ -3520,17 +3346,20 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
   } else {
     #ifdef _USETFT
     tft.setTextColor(TFT_RED);
-    tft.println("WiFi is down, cannot fetch coordinates from address");
+    tft.println("WiFi is down, cannot lookup geolocation");
     tft.setTextColor(FG_COLOR);
     #endif
     return false;
   }
-    return false;
-
+  #endif
+  return false;
+  
 }
 
 void handleSDCARD() {
-  LAST_WEB_REQUEST = I.currentTime;
+  
+  
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -3540,6 +3369,16 @@ void handleSDCARD() {
   
   // SD Card Information
   WEBHTML = WEBHTML + "<h3>SD Card Information</h3>";
+  
+  #ifndef _USESDCARD
+    WEBHTML = WEBHTML + "There is no SD card installed or it is not enabled.<br>"; 
+    
+  #else
+  
+  // Error log button
+    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
+
+    WEBHTML = WEBHTML + "</font>---------------------<br>";      
   
   // Get SD card size information
   uint64_t cardSize = SD.cardSize();
@@ -3569,11 +3408,7 @@ void handleSDCARD() {
     }
   }
   
-  // Debug output to Serial
-  SerialPrint("=== SD Card Debug Info ===", true);
-  SerialPrint("SD.cardSize(): " + String(cardSize) + " bytes (" + formatBytes(cardSize) + ")", true);
-  SerialPrint("SD.usedBytes(): " + String(usedBytes) + " bytes (" + formatBytes(usedBytes) + ")", true);
-  SerialPrint("Calculated free space: " + String(totalBytes - usedBytes) + " bytes (" + formatBytes(totalBytes - usedBytes) + ")", true);
+
   
   // Additional debugging for potential issues
   if (cardSize < (1024ULL * 1024ULL * 1024ULL)) {
@@ -3827,6 +3662,11 @@ void handleSDCARD() {
   // Individual Sensor Files Status
   WEBHTML = WEBHTML + "<p><strong>Note:</strong> Individual sensor files are automatically created when new sensor data is received.</p>";
   
+
+  WEBHTML = WEBHTML + "</font>---------------------<br>";      
+  // Error log button
+    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
+  
   // Action Buttons
   WEBHTML = WEBHTML + "<h3>SD Card Actions</h3>";
   
@@ -3881,7 +3721,7 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WiFiConfig\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
@@ -3890,56 +3730,67 @@ void handleSDCARD() {
   
   WEBHTML = WEBHTML + "</body></html>";
   
+
+  
+  #endif
   serverTextClose(200, true);
+
+  return;
+
 }
 
 void handleSDCARD_DELETE_DEVICES() {
-  LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USESDCARD
+
+  
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Delete the sensors data file
-  uint16_t nDeleted = deleteFiles("DevicesSensors.dat", "/Data");
+  uint32_t nDeleted = deleteDataFiles(false, false, false, true);
   if (nDeleted > 0) {
-    SerialPrint("DevicesSensors data file deleted " + String(nDeleted) + " files successfully", true);
+    SerialPrint("Devices data deleted", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "DevicesSensors data file deleted " + String(nDeleted) + " files successfully.");
+    server.send(302, "text/plain", "Devices data deleted successfully.");
   } else {
-    SerialPrint("Failed to delete DevicesSensors data file", true);
+    SerialPrint("Failed to delete Devices data", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to delete DevicesSensors data file.");
+    server.send(302, "text/plain", "Failed to delete Devices data.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_DELETE_SENSORS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USESDCARD
+  I.lastServerStatusUpdate = I.currentTime;
   
-  // Delete all individual sensor history files
-  File root = SD.open("/Data");
-  if (root && root.isDirectory()) {
-    File file = root.openNextFile();
-    int deletedCount = 0;
-    while (file) {
-      String filename = file.name();
-      if (filename.endsWith(".dat") && filename != "ScreenFlags.dat" && filename != "SensorBackupv2.dat" && filename != "GsheetInfo.dat" && filename != "FileTimestamps.dat" && filename != "WeatherData.dat" && filename != "DevicesSensors.dat") {
-        if (SD.remove("/Data/" + filename)) {
-          deletedCount++;
-        }
-      }
-      file = root.openNextFile();
-    }
-    root.close();
-    
+  uint16_t deletedCount = deleteSensorDataSD();
+  if (deletedCount > 0) {
     SerialPrint("Deleted " + String(deletedCount) + " sensor history files", true);
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Deleted " + String(deletedCount) + " sensor history files.");
   } else {
-    SerialPrint("Failed to access Data directory", true);
+    SerialPrint("No files found.", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to access Data directory.");
+    server.send(302, "text/plain", "No files found.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_STORE_DEVICES() {
-  LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USESDCARD
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Store the devices and sensors data to SD card
   if (storeDevicesSensorsSD()) {
@@ -3949,44 +3800,53 @@ void handleSDCARD_STORE_DEVICES() {
     SerialPrint("Failed to store DevicesSensors data to SD card", true);
     server.send(302, "text/plain", "Failed to store DevicesSensors data to SD card.");
   }
+  #endif
 }
 
 void handleSDCARD_DELETE_SCREENFLAGS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Delete the ScreenFlags.dat file
-  uint16_t nDeleted = deleteCoreStruct();
+  uint32_t nDeleted = deleteCoreStruct();
+  if (nDeleted == UINT32_MAX) {
+    SerialPrint("No SD card found", true);
+    server.sendHeader("Location", "/SDCARD");
+    server.send(302, "text/plain", "Core data structure reset.");
+    return;
+  }
 
   if (nDeleted > 0) {
-    SerialPrint("ScreenFlags.dat deleted " + String(nDeleted) + " files successfully", true);
+    SerialPrint("Core data deleted", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "ScreenFlags.dat deleted " + String(nDeleted) + " files successfully.");
+    server.send(302, "text/plain", "Core data struct reset and files deleted successfully.");
   } else {
     SerialPrint("Failed to delete ScreenFlags.dat", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to delete ScreenFlags.dat.");
-  }
-
+    server.send(302, "text/plain", "Core data reset, but files were not deleted..");
+  } 
+  
 }
 
 void handleSDCARD_DELETE_WEATHERDATA() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Delete the WeatherData.dat file
-  uint16_t nDeleted = deleteFiles("WeatherData.dat", "/Data");
+  uint32_t nDeleted = deleteDataFiles(false, true, false, false);
   if (nDeleted > 0) {
-    SerialPrint("WeatherData.dat deleted " + String(nDeleted) + " files successfully", true);
+    SerialPrint("Weather data deleted", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "WeatherData.dat deleted " + String(nDeleted) + " files successfully.");
+    server.send(302, "text/plain", "Weather data deleted successfully.");
   } else {
     SerialPrint("Failed to delete WeatherData.dat", true);
     server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to delete WeatherData.dat.");
+    server.send(302, "text/plain", "Failed to delete Weather data.");
   }
 }
 
 void handleSDCARD_SAVE_SCREENFLAGS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USESDCARD
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Save ScreenFlags.dat immediately
   if (storeScreenInfoSD()) {
@@ -3998,10 +3858,18 @@ void handleSDCARD_SAVE_SCREENFLAGS() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Failed to save ScreenFlags.dat to SD card.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_SAVE_WEATHERDATA() {
-  LAST_WEB_REQUEST = I.currentTime;
+  #ifdef _USESDCARD
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Save WeatherData.dat immediately
   if (storeWeatherDataSD()) {
@@ -4013,11 +3881,19 @@ void handleSDCARD_SAVE_WEATHERDATA() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Failed to save WeatherData.dat to SD card.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_TIMESTAMPS() {
-  LAST_WEB_REQUEST = I.currentTime;
-  
+  I.lastServerStatusUpdate = I.currentTime;
+
+  #ifdef _USESDCARD
   // Open and read the FileTimestamps.dat file
   String filename = "/Data/FileTimestamps.dat";
   File file = SD.open(filename, FILE_READ);
@@ -4111,46 +3987,19 @@ void handleSDCARD_TIMESTAMPS() {
   htmlContent += "</body></html>";
   
   server.send(200, "text/html", htmlContent);
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleERROR_LOG() {
-  LAST_WEB_REQUEST = I.currentTime;
-  
-  // Open and read the DeviceErrors.txt file
-  String filename = "/Data/DeviceErrors.txt";
-  File file = SD.open(filename, FILE_READ);
-  
-  if (!file) {
-    // File doesn't exist or can't be opened
-    server.send(200, "text/html", 
-      "<html><head><title>Error Log</title></head><body>"
-      "<h1>Error Log</h1>"
-      "<p>The DeviceErrors.txt file does not exist or cannot be opened.</p>"
-      "<p>This file is created automatically when errors occur on the device.</p>"
-      "<br><a href=\"/STATUS\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Status</a>"
-      "</body></html>");
-    return;
-  }
-  
-  // Read the file content
-  String content = "";
-  while (file.available()) {
-    content += file.readString();
-  }
-  file.close();
-  
-  if (content.length() == 0) {
-    // File is empty
-    server.send(200, "text/html", 
-      "<html><head><title>Error Log</title></head><body>"
-      "<h1>Error Log</h1>"
-      "<p>The DeviceErrors.txt file is empty.</p>"
-      "<p>No errors have been logged yet.</p>"
-      "<br><a href=\"/STATUS\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to Status</a>"
-      "</body></html>");
-    return;
-  }
-  
+  I.lastServerStatusUpdate = I.currentTime;
+
+  #ifdef _USESDCARD
   // Format the content for display
   String htmlContent = "<html><head><title>Error Log</title>";
   htmlContent += "<style>";
@@ -4164,14 +4013,36 @@ void handleERROR_LOG() {
   htmlContent += "pre { background-color: #f8f8f8; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }";
   htmlContent += "</style></head><body>";
   htmlContent += "<h1>Device Error Log</h1>";
-  htmlContent += "<p>This shows all errors that have occurred on the device:</p>";
+  htmlContent += "<p>This shows the last 50 errors that have occurred on the device:</p>";
+  
+
+  // Read the file content
+  String content = "";
+  int8_t linesRead = readErrorFromSD(&content, 50);
+
+  if (linesRead < 0) {
+    htmlContent += "<p>Failed to read error log file</p>";
+    htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
+    htmlContent += "</body></html>";
+    server.send(200, "text/html", htmlContent);
+    return;
+  }
+
+  if (linesRead == 0) {
+    htmlContent += "<p>No errors have been logged yet.</p>";
+    htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
+    htmlContent += "</body></html>";
+    server.send(200, "text/html", htmlContent);
+    return;
+  }
+
   
   // Parse and format each line
   int lineStart = 0;
   int lineEnd = content.indexOf('\n');
   int entryCount = 0;
   
-  while (lineEnd >= 0 && entryCount < 1000) { // Limit to 1000 entries to prevent memory issues
+  while (lineEnd >= 0 && entryCount < 100) { // Limit to 1000 entries to prevent memory issues
     String line = content.substring(lineStart, lineEnd);
     line.trim();
     
@@ -4219,10 +4090,18 @@ void handleERROR_LOG() {
   htmlContent += "</body></html>";
   
   server.send(200, "text/html", htmlContent);
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_DELETE_ERRORLOG() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
+  #ifdef _USESDCARD
   
   // Delete the DeviceErrors.txt file
   String filename = "/Data/DeviceErrors.txt";
@@ -4243,10 +4122,19 @@ void handleSDCARD_DELETE_ERRORLOG() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Error log file does not exist.");
   }
+  
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_DELETE_TIMESTAMPS() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
+  #ifdef _USESDCARD
   
   // Delete the FileTimestamps.dat file
   String filename = "/Data/FileTimestamps.dat";
@@ -4265,10 +4153,18 @@ void handleSDCARD_DELETE_TIMESTAMPS() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "File timestamps log does not exist.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_DELETE_GSHEET() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
+  #ifdef _USESDCARD
   
   // Delete the GsheetInfo.dat file
   String filename = "/Data/GsheetInfo.dat";
@@ -4289,12 +4185,19 @@ void handleSDCARD_DELETE_GSHEET() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "GSheet info file does not exist.");
   }
+  return;
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 
 
 void handleREBOOT_DEBUG() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -4328,11 +4231,11 @@ void handleREBOOT_DEBUG() {
  * instead of having the routes defined there.
  */
 void handleUPDATETIMEZONE() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Check if WiFi is connected
   if (WiFi.status() != WL_CONNECTED) {
-    server.sendHeader("Location", "/WiFiConfig");
+    server.sendHeader("Location", "/InitialSetup");
     server.send(302, "text/plain", "WiFi not connected. Please configure WiFi first.");
     return;
   }
@@ -4411,7 +4314,7 @@ void handleUPDATETIMEZONE() {
 }
 
 void handleUPDATETIMEZONE_POST() {
-  LAST_WEB_REQUEST = I.currentTime;
+  I.lastServerStatusUpdate = I.currentTime;
   
   // Parse timezone settings
   if (server.hasArg("utc_offset_seconds")) {
@@ -4469,13 +4372,12 @@ void handleUPDATETIMEZONE_POST() {
   
   serverTextClose(200);
 
-  RegistrationCompleted = true;  
 }
 
 // ==================== DEVICE VIEWER FUNCTIONS ====================
 
 void handleDeviceViewer() {
-    LAST_WEB_REQUEST = I.currentTime;
+    I.lastServerStatusUpdate = I.currentTime;
     WEBHTML = "";
     serverTextHeader();
     
@@ -4657,7 +4559,7 @@ void handleDeviceViewer() {
 }
 
 void handleDeviceViewerNext() {
-    LAST_WEB_REQUEST = I.currentTime;
+    I.lastServerStatusUpdate = I.currentTime;
     
     if (Sensors.getNumDevices() > 0) {
         CURRENT_DEVICE_VIEWER = (CURRENT_DEVICE_VIEWER + 1) % Sensors.getNumDevices();
@@ -4668,7 +4570,7 @@ void handleDeviceViewerNext() {
 }
 
 void handleDeviceViewerPrev() {
-    LAST_WEB_REQUEST = I.currentTime;
+    I.lastServerStatusUpdate = I.currentTime;
     
     if (Sensors.getNumDevices() > 0) {
         if (CURRENT_DEVICE_VIEWER == 0) {
@@ -4683,7 +4585,7 @@ void handleDeviceViewerPrev() {
 }
 
 void handleDeviceViewerPing() {
-    LAST_WEB_REQUEST = I.currentTime;
+    I.lastServerStatusUpdate = I.currentTime;
     
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
@@ -4722,7 +4624,7 @@ void handleDeviceViewerPing() {
 }
 
 void handleDeviceViewerDelete() {
-    LAST_WEB_REQUEST = I.currentTime;  
+    I.lastServerStatusUpdate = I.currentTime;  
     
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
@@ -4800,20 +4702,20 @@ void setupServerRoutes() {
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
     
+    // ESP-NOW Broadcast route
+    server.on("/REQUEST_BROADCAST", HTTP_POST, handleREQUEST_BROADCAST);
+    
     // New API routes for streamlined setup
-    server.on("/api/wifi", HTTP_POST, apiConnectWiFi);
+    server.on("/api/wifi", HTTP_POST, apiConnectToWiFi);
     server.on("/api/wifi-scan", HTTP_GET, apiScanWiFi);
     server.on("/api/location", HTTP_POST, apiLookupLocation);
     server.on("/api/timezone", HTTP_GET, apiDetectTimezone);
     server.on("/api/timezone", HTTP_POST, apiSaveTimezone);
     server.on("/api/setup-status", HTTP_GET, apiGetSetupStatus);
     server.on("/InitialSetup", HTTP_GET, handleInitialSetup);
-    
-    // WiFi configuration routes (legacy - kept for backward compatibility)
-    server.on("/WiFiConfig", HTTP_GET, handleWiFiConfig);
-    server.on("/WiFiConfig", HTTP_POST, handleWiFiConfig_POST);
-    server.on("/WiFiConfig_RESET", HTTP_POST, handleWiFiConfig_RESET);
-    
+    server.on("/api/complete-setup", HTTP_POST, handleApiCompleteSetup);
+    server.on("/api/complete-setup", HTTP_GET, handleApiCompleteSetup);
+        
     // Timezone configuration routes (legacy - kept for backward compatibility)
     server.on("/TimezoneSetup", HTTP_GET, handleTimezoneSetup);
     server.on("/TimezoneSetup_POST", HTTP_POST, handleTimezoneSetup_POST);
@@ -4862,7 +4764,7 @@ bool SendData(struct SnsType *S) {
   S->timeLogged = I.currentTime;
 bool isGood = false;
 
-  if(Prefs.status>0){
+  if(WiFi.status() == WL_CONNECTED){
     // Use static buffers to reduce memory fragmentation
     static char jsonBuffer[512];
     static char urlBuffer[64];
@@ -4939,4 +4841,20 @@ bool isGood = false;
   if (isGood) bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
   else I.makeBroadcast = true; //broadcast my presence if I failed to send the data
   return isGood;
+}
+
+
+String getWiFiModeString() {
+  //possible modes are WIFI_MODE_OFF, WIFI_MODE_STA, WIFI_MODE_AP, WIFI_MODE_APSTA
+  switch (WiFi.getMode()) {
+    case WIFI_MODE_NULL:
+      return "WIFI_MODE_OFF";
+    case WIFI_MODE_STA:
+      return "WIFI_MODE_STA";
+    case WIFI_MODE_AP:
+      return "WIFI_MODE_AP";
+    case WIFI_MODE_APSTA:
+      return "WIFI_MODE_APSTA";
+  }
+  return "UNKNOWN";
 }

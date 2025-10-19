@@ -32,12 +32,17 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
 bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder);
 #endif
 
+bool isTimeValid(uint32_t time);
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
 
 // Legacy compatibility functions - these are now methods of the Devices_Sensors class
 // but we keep them as standalone functions for backward compatibility
+int8_t delete_all_core_data(bool flushPrefs = false, bool flushDevicesSensors = false);
+uint32_t deleteCoreStruct();
+uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet, bool deleteDevices);
+void failedToRegister();
 void initScreenFlags(bool completeInit = false);
 void storeCoreData();
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
@@ -55,8 +60,8 @@ int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
 uint16_t countSubstr(String orig, String token);
 String enumErrorToName(ERRORCODES E);
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin);
-bool cycleByteIndex(byte* start, byte arraysize, byte origin);
+bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards=false);
+bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards=false);
 
 // Legacy sensor functions - these now delegate to the Devices_Sensors class
 bool isSensorInit(int i);

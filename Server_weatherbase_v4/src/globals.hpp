@@ -8,14 +8,19 @@
 #define _USEBATTERY
 #define _USEGSHEET
 #define _USESDCARD
-
-#define MYNAME "Pleasant Backup Server"
-#define NUMDEVICES 50
-#define NUMSENSORS 100
-#define MYTYPE 100
-
 //#define _ISPERIPHERAL 1
 
+#define TIMEZERO 1735689600 //2025-01-01 00:00:00
+#define NUMDEVICES 50 //max number of devices to track
+#define NUMSENSORS 100 //number of sensors to track 
+#define MYTYPE 100
+#define SENSORNUM 0 //number of sensors I have
+
+#ifdef _ISPERIPHERAL
+#define SENSORHISTORYSIZE 150 //number of data points to store for each sensor
+#endif
+//------------------
+//add libraries here
 
   #include <Arduino.h>
   #include <String.h>
@@ -60,8 +65,8 @@
 //4 -  temp, AHT21
 //5 - RH, AHT21
 //6 - 
-//7 - distance, HC-SR04 or tfluna 
-//8 - human presence (mm wave)
+//7 - distance, HC-SR04 or tfluna or tof 
+//8 - motion, PIR, etc.
 //9 - BMP pressure
 //10 - BMP temp
 //11 - BMP altitude
@@ -153,14 +158,6 @@
 #endif  
 
 
-
-
-//------------------
-//add libraries here
-
-
-
-
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
 
 //potential reset issues
@@ -220,9 +217,23 @@ typedef enum {
     ERROR_GSHEET_DELETE, //failed to delete spreadsheet
     ERROR_GSHEET_FIND, //failed to find spreadsheet
     ERROR_GSHEET_HEADERS, //failed to create headers
+    ERROR_FAILED_PREFS, //failed storage or retrieval of Prefs
+    ERROR_FAILED_STRUCTCORE, //faileed storage or retrieval of struct core
+    ERROR_FAILED_ENCRYPTION, //failed to encrypt data
+    ERROR_FAILED_DECRYPTION //failed to decrypt data
   } ERRORCODES;
 
 
+  #ifdef _ISPERIPHERAL
+  //create a struct type to hold sensor history
+  struct STRUCT_SNSHISTORY {
+    int16_t sensorIndex[SENSORNUM];
+    uint8_t HistoryIndex[SENSORNUM];
+    uint32_t TimeStamps[SENSORNUM][SENSORHISTORYSIZE] = {0};
+    double Values[SENSORNUM][SENSORHISTORYSIZE] = {0};
+    uint8_t Flags[SENSORNUM][SENSORHISTORYSIZE] = {0};
+  };
+  #endif
 
   struct STRUCT_KEYS {
     uint8_t ESPNOW_KEY[17]; // espnow PMK key, only 16 bytes are used
@@ -237,7 +248,7 @@ typedef enum {
     uint32_t PWDCRC;
     uint64_t PROCID; //processor ID, same as MACID for most esp32
     uint32_t LASTBOOTTIME;
-    uint8_t MyType; //see end of this file for types
+    
     char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
 
     STRUCT_KEYS KEYS;
@@ -248,13 +259,12 @@ typedef enum {
     uint32_t DNS; // 4 bytes
     uint32_t DNS2; // 4 bytes
     uint32_t SUBNET; // 4 bytes
-    IPAddress MYIP; // 4 bytes
-    uint8_t status;
+
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
 
     //time zone info
     int32_t TimeZoneOffset; //offset from UTC in seconds, on standard time rather than daylight time
-    uint8_t DST; //0 = no DST, 1 = DST
+    uint8_t DST; //0 = no DST, 1 = DST in this locale (if DST=1, then use the DSToffset, which will be 3600 or 0)
     int16_t DSTOffset; //offset from UTC in seconds, on standard time rather than daylight time
     uint8_t DSTStartMonth; //month of DST start
     uint8_t DSTStartDay; //day of DST start
@@ -289,8 +299,8 @@ typedef enum {
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
       time_t currentTime;
-      uint8_t WiFiMode;
 
+      
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
       
       #ifdef _USETFT

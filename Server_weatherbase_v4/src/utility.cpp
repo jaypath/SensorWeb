@@ -94,6 +94,31 @@ bool loadSensorData() {
   return false;
 }
 
+bool isTimeValid(uint32_t time) {
+  if (time < TIMEZERO) return false;
+  if (time > I.currentTime) return false;
+  return true;
+}
+
+bool isTempValid(double temp, bool extremeTemp) {
+  if (extremeTemp) {
+    if (temp < -10 || temp > 650) return false;
+  } else {
+    if (temp < -10 || temp > 125) return false;
+  }
+  return true;
+}
+
+bool isRHValid(double rh) {
+  if (rh < 0 || rh > 100) return false;
+  return true;
+}
+
+bool isPressureValid(double pressure) {
+  if (pressure < 890 || pressure > 1070) return false;
+  return true;
+}
+
 #ifdef _ISPERIPHERAL
 bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder) {
   //retrieve up to N most recent data points ending at timeEnd. If fewer than N data points are found, return the number of data points found.
@@ -122,7 +147,7 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
   bool found = false;
   byte n=0; //index of the sensor in the SensorHistory array
   for (n=0; n<SENSORNUM; n++) {
-    if (SensorHistory[n].sensorIndex == m) {
+    if (SensorHistory.sensorIndex[n] == m) {
       found = true;
       break;
     }
@@ -134,8 +159,15 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     return false;
   }
 
-  if (SensorHistory[n].savedN < *N) {
-    *N = SensorHistory[n].savedN;
+  //how many valid data points are there? //cycle through the history timestamps and count the number of valid data points
+  uint16_t validDataPoints = 0;
+  for (uint16_t i=0; i<SENSORHISTORYSIZE; i++) {
+    if (isTimeValid(SensorHistory.TimeStamps[n][i]))       validDataPoints++;
+    
+  }
+
+  if (validDataPoints < *N) {
+    *N = validDataPoints;
   } 
   
   if (*N==0) {
@@ -144,30 +176,38 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     return true; // No data found, but not an error
   }
   
-
-  
   int16_t i=0;
 
-  if (forwardOrder) {    
-    for (int16_t j=SensorHistory[n].savedN-*N; j<SensorHistory[n].savedN; j++) {
-      t[i] = SensorHistory[n].timestamp[j];
-      v[i] = SensorHistory[n].value[j];
-      f[i] = SensorHistory[n].Flags[j];
-      i++;
-    }
+  if (forwardOrder) {    //pull data in order of oldest to newest
 
+    //using SensorHistory.HistoryIndex[n], which is the index of the last data point saved, rewind N points and pull them in order
+    int16_t index = SensorHistory.HistoryIndex[n]-*N; //this might be a negative number, so we need to wrap around
+    if (index < 0) index = SENSORHISTORYSIZE + index;
+    while (cycleIndex(&index, SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
+      if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
+        t[i] = SensorHistory.TimeStamps[n][index];
+        v[i] = SensorHistory.Values[n][index];
+        f[i] = SensorHistory.Flags[n][index];
+        i++;
+      }
+    }
   } else {
-    for (int16_t j=SensorHistory[n].savedN-1; j>=SensorHistory[n].savedN-*N;j--) {
-      t[i] = SensorHistory[n].timestamp[j];
-      v[i] = SensorHistory[n].value[j];
-      f[i] = SensorHistory[n].Flags[j];
-      i++;
+    //pull data in order of newest to oldest
+    int16_t index = SensorHistory.HistoryIndex[n];
+    while (cycleIndex(&index, SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
+      if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
+        t[i] = SensorHistory.TimeStamps[n][index];
+        v[i] = SensorHistory.Values[n][index];
+        f[i] = SensorHistory.Flags[n][index];
+        i++;
+      }
     }
   }
 
   return true;
 
 }
+
 int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
 
   if (windowSize == 0) {
@@ -198,15 +238,25 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
   bool found = false;
   byte sensorHistoryIndex=0; //index of the sensor in the SensorHistory array
   for (sensorHistoryIndex=0; sensorHistoryIndex<SENSORNUM; sensorHistoryIndex++) {
-    if (SensorHistory[sensorHistoryIndex].sensorIndex == sensorIndex) {
+    if (SensorHistory.sensorIndex[sensorHistoryIndex] == sensorIndex) {
       found = true;
       break;
     }  
   }
 
-  uint32_t numPoints = SensorHistory[sensorHistoryIndex].savedN;
+    //how many valid data points are there? //cycle through the history timestamps and count the number of valid data points
+    uint16_t validDataPoints = 0;
+    for (uint16_t i=0; i<SENSORHISTORYSIZE; i++) {
+      if (isTimeValid(SensorHistory.TimeStamps[n][i]))       validDataPoints++;
+      
+    }
+  
+    if (validDataPoints < *N) {
+      *N = validDataPoints;
+    } 
+  
   //check if the file is empty
-  if (numPoints == 0) {
+  if (validDataPoints == 0) {
     SerialPrint("loadAverageSensorDataFromMemory: No data points found.",true);
     return 0;
   }
@@ -239,12 +289,14 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
     bool isgood = true;
     
     //load data from memory if it is within the window size time range
-    for (j = 0; j < numPoints; j++) {
-      if (SensorHistory[sensorHistoryIndex].timestamp[j] >= windowEnd) continue;
-      if (SensorHistory[sensorHistoryIndex].timestamp[j] < windowStart) continue;
-      avgVal+= SensorHistory[sensorHistoryIndex].value[j];
-      if (bitRead(SensorHistory[sensorHistoryIndex].Flags[j],0)) avgFlag=1;
-      numPointsInWindow++;
+    for (j = 0; j < SENSORHISTORYSIZE; j++) {
+      if (isTimeValid(SensorHistory.TimeStamps[sensorHistoryIndex][j])) {
+        if (SensorHistory.TimeStamps[sensorHistoryIndex][j] >= windowEnd) continue;
+        if (SensorHistory.TimeStamps[sensorHistoryIndex][j] < windowStart) continue;
+        avgVal+= SensorHistory.Values[sensorHistoryIndex][j];
+        if (bitRead(SensorHistory.Flags[sensorHistoryIndex][j],0)==1) avgFlag=1;
+        numPointsInWindow++;
+      }
     }
 
     if (numPointsInWindow>0) {
@@ -354,13 +406,18 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 }
 
 void handleStoreCoreData() {
-  if (!Prefs.isUpToDate) { 
-      Prefs.isUpToDate = true;
-      BootSecure bootSecure;
-      if (bootSecure.setPrefs()<0) {
-          SerialPrint("Failed to store core data",true);
+    BootSecure bootSecure;
+    int8_t ret = bootSecure.setPrefs(false); 
+    if (ret<0) {
+      if (ret == -1) {  
+        SerialPrint("Failed to encrypt core data",true);
+        storeError("Failed to encrypt core data", ERROR_FAILED_PREFS, true);
       }
-  }
+      if (ret == -10) {
+        SerialPrint("Failed Prefs security",true);
+        storeError("Failed Prefs security", ERROR_FAILED_PREFS, true);  
+      }      
+    }
 
   if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if out of date and more than 5 minutes since last store
       I.isUpToDate = true;
@@ -429,7 +486,7 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
   I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=IPAddress(0,0,0,0);
   I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
-  I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE=MYTYPE;
+  I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE=0;
   memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
   I.ESPNOW_LAST_INCOMINGMSG_TIME=0;
   I.ESPNOW_LAST_INCOMINGMSG_STATE=0;
@@ -761,18 +818,24 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
 
 void storeCoreData() {
   //force core data to be stored to SD
+
+  BootSecure bootSecure;
+  int8_t ret = bootSecure.setPrefs(true); 
+  if (ret<0) {
+    if (ret == -1) {  
+      SerialPrint("Failed to encrypt core data",true);
+      storeError("Failed to encrypt core data", ERROR_FAILED_PREFS, true);
+    }
+    if (ret == -10) {
+      SerialPrint("Failed Prefs security",true);
+      storeError("Failed Prefs security", ERROR_FAILED_PREFS, true);  
+    }      
+  }
+
   I.isUpToDate = true;
   #ifdef _USESDCARD
   storeScreenInfoSD();
   #endif
-
-  if (!Prefs.isUpToDate) { 
-    Prefs.isUpToDate = true;
-    BootSecure bootSecure;
-    if (bootSecure.setPrefs()<0) {
-        SerialPrint("Failed to store core data",true);
-    }
-  }
 
 }
 
@@ -910,7 +973,7 @@ uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
     return (procid >> (8 * (byteIndex))) & 0xFF;
 }
 
-bool cycleByteIndex(byte* start, byte arraysize, byte origin) {
+bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards) {
   //cycles through a byte vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete, and start is incremented appropriately.
@@ -920,8 +983,14 @@ bool cycleByteIndex(byte* start, byte arraysize, byte origin) {
   if (*start>=arraysize) return false; 
 
 
-  if (*start == arraysize-1) *start=0;
-  else *start = *start + 1;
+
+  if (backwards) {   //cycle backwards
+    if (*start == 0) *start=arraysize-1;
+    else *start = *start - 1;
+  } else {          //cycle forwards
+    if (*start == arraysize-1) *start=0;
+    else *start = *start + 1;
+  }
 
   if (*start==origin)  {
     //cycle index has already been updated, no changes
@@ -931,19 +1000,23 @@ bool cycleByteIndex(byte* start, byte arraysize, byte origin) {
   }
 }
 
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin) {
-  //cycles through a vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
+bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards) {
+  //cycles through a uint16_t vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete
-
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;
   if (*start>=arraysize) return false; 
 
 
 
-  if (*start == arraysize-1) *start=0;
-  else *start = *start + 1;
+  if (backwards) {   //cycle backwards
+    if (*start == 0) *start=arraysize-1;
+    else *start = *start - 1;
+  } else {          //cycle forwards
+    if (*start == arraysize-1) *start=0;
+    else *start = *start + 1;
+  }
 
   if (*start==origin)  {
     //cycle index has already been updated, no changes
@@ -951,11 +1024,69 @@ bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin) {
   } else {
     return true;
   }
+
   
 }
+
 
 uint32_t IPToUint32(IPAddress ip) {
   return (ip[0]<<24) + (ip[1]<<16) + (ip[2]<<8) + ip[3];
 } 
 
 
+void failedToRegister() {
+  SerialPrint("I am not registered as a device, and could not register, so I cannot run...",true);
+  
+  #ifdef _USETFT
+  tft.clear();
+  tft.setCursor(0, 0);
+  tft.setTextColor(TFT_RED);
+  tft.printf("Unable to register as a device, so I cannot run...",true);
+  tft.printf("Reverting to initial settings...",true);
+  #endif
+  deleteCoreStruct();
+
+  //flush wifi info, sd card, prefs, screen flags, screen data, error, etc.
+  controlledReboot("Unable to register myself as a device, so I cannot run...", RESET_UNKNOWN);
+}
+
+int8_t delete_all_core_data(bool flushPrefs, bool flushDevicesSensors) {
+  //returns the number of files deleted, with the flags, weather, devices, and gsheet files being shifted left by 8, 16, and 24 bits respectively
+  //returns MAX_UINT32 if no SD card
+
+  memset(&I, 0, sizeof(I));
+  initScreenFlags(true);
+
+  uint32_t ndeleted = deleteDataFiles(true, true, flushDevicesSensors, true);
+  int8_t ret = 0;
+  if (flushPrefs) {
+    memset(&Prefs, 0, sizeof(Prefs));
+    BootSecure bootSecure;
+    ret = bootSecure.flushPrefs();
+  }
+  
+  return ret;
+}
+
+uint32_t deleteCoreStruct() {
+//delete the core struct
+memset(&I, 0, sizeof(I));
+uint32_t ndeleted = deleteDataFiles(true, false, false, false);
+initScreenFlags(true);
+return ndeleted;
+}
+
+uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet, bool deleteDevices) {
+  //returns the number of files deleted, with the flags, weather, devices, and gsheet files being shifted left by 8, 16, and 24 bits respectively
+  //returns MAX_UINT32 if no SD card
+  #ifdef _USESDCARD
+  uint32_t nDeleted = 0;
+  if (deleteGsheet) nDeleted += deleteFiles("GsheetInfo.dat", "/Data");
+  if (deleteWeather) nDeleted += (deleteFiles("WeatherData.dat", "/Data")<<8);
+  if (deleteDevices) nDeleted += (deleteFiles("DevicesSensors.dat", "/Data")<<16);
+  if (deleteFlags) nDeleted += (deleteFiles("ScreenFlags.dat", "/Data")<<24);
+  return nDeleted;
+  #else
+  return MAX_UINT32;
+  #endif
+}

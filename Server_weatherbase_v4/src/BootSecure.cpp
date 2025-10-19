@@ -104,7 +104,9 @@ int8_t BootSecure::getPrefs() {
     return 1; //success
 }
 
-int8_t BootSecure::setPrefs() {
+int8_t BootSecure::setPrefs(bool forceUpdate) {
+    //returns 0 if no update required, -1 if encryption failed, -10 if setsecure failed, and 1 if update
+    if (Prefs.isUpToDate == false && forceUpdate==false ) return 0; //don't need to update
     if (Prefs.PROCID != ESP.getEfuseMac()) {
         #ifdef SETSECURE
                 return -10;

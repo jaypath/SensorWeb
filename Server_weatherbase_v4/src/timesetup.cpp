@@ -13,91 +13,26 @@ NTPClient timeClient(ntpUDP,"time.nist.gov",0,TIMEUPDATEINT); //3rd param is off
 char DATESTRING[25]="";
 
 
-time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
-{
+bool setupTime(void) {
+  timeClient.begin();
+  
+  // Initialize with base timezone offset from Prefs
+  timeClient.setTimeOffset(Prefs.TimeZoneOffset +  Prefs.DSTOffset );
+  setTime(timeClient.getEpochTime());
 
-  //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
-
-    int m = month(), d=day(), h=0, n=0, s=0;
-    int yy = year()-2000;
-    String datesplit = "";
-
-  if (str.indexOf("/")>-1) datesplit = "/"; //date is included
-  if (str.indexOf("-")>-1) datesplit = "-";//date is included
-
-
-  if (datesplit!="")
-  {
-    m = breakString(&str,datesplit,true).toInt();
-    if (m>12) {
-      yy=m;
-      m = breakString(&str,datesplit,true).toInt();
-      if (str.indexOf(" ")<0) //time is not included
-      {
-        d = str.toInt();      
-      } else {
-        d = breakString(&str," ",true).toInt();
-      }
-    } else {
-      d = breakString(&str,datesplit,true).toInt();
-      if (str.indexOf(" ")<0) //time is not included
-      {
-        yy = str.toInt();      
-      } else {
-        yy = breakString(&str," ",true).toInt();
-      }
-    }
-    
-    if (yy>2000) yy = yy-2000;
-    else if (yy>1970) yy=yy-1900;
-
-      SerialPrint((String) "   m=" + m + "...\n");
-            SerialPrint((String) "   d=" + d + "...\n");
-                  SerialPrint((String) "   yy=" + yy + "...\n");
-
-
-
-    SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
-
-    if (str.length()==0) return makeUnixTime((byte) yy, m,d,0,0,0);
+  byte i=0;
+  
+  while (timeClient.forceUpdate()==false && i<25) {
+    i++;
   }
+  if (i>=25) return false;
+  checkDST(); //this also sets timelib, so no need to call settime separately
 
-  byte hoffset = 0;
-  if (str.indexOf(" ")>-1) { //there is a " AM/PM" present
-    if (str.indexOf("PM")>-1)  hoffset=12;
-    str = breakString(&str," ",true); //remove the am/pm
-  }
-  h = breakString(&str,":",true).toInt() + hoffset;
-  n = breakString(&str,":",true).toInt();
+  setTime(timeClient.getEpochTime());
+  I.currentTime = now();
 
-  if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data
 
-  s = str.toInt();
-
-  SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
-
-  return makeUnixTime((byte) yy, m,d,h,n,s);
-
-}
-
-time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
-  //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
-
-  int16_t y = 2000;
-
-  if (yy>=70) y = 1900+yy;
-  else y=2000+yy;
-
-  tmElements_t unixTime;
-
-  unixTime.Year = y-1970; //years since 1970
-  unixTime.Month = m;
-  unixTime.Day = d;
-  unixTime.Hour = h;
-  unixTime.Minute = n;
-  unixTime.Second = s;
-
-  return makeTime(unixTime);
+  return true;
 }
 
 
@@ -122,43 +57,39 @@ bool updateTime() {
 
 void checkDST(void) {
   
- 
 
-  SerialPrint((String) "checkDST: Starting time is: " + dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss") + "\n", true);
+  timeClient.setTimeOffset(Prefs.TimeZoneOffset);
+  setTime(timeClient.getEpochTime()); //set time without DST offset
+  I.currentTime = now();  
 
-
-  // Calculate total timezone offset based on Prefs
-  int32_t totalOffset = Prefs.TimeZoneOffset; // Start with base timezone offset
-
-  // Check if DST is enabled in user's locale
-  if (Prefs.DST == 1) {
-    // DST is enabled, check if we're currently in DST period
-    int m = month(I.currentTime);
-    int d = day(I.currentTime);
-    int y = year(I.currentTime);
-    
-    // Check if current date is within DST period
-    bool inDST = false;
-    
-    // Check if we're after DST start date
-    if (m > Prefs.DSTStartMonth || (m == Prefs.DSTStartMonth && d >= Prefs.DSTStartDay)) {
-      // Check if we're before DST end date
-      if (m < Prefs.DSTEndMonth || (m == Prefs.DSTEndMonth && d < Prefs.DSTEndDay)) {
-        inDST = true;
-      }
-    }
-    
-    if (inDST)       totalOffset = Prefs.TimeZoneOffset + Prefs.DSTOffset; // Add 1 hour for DST
-    
+  if (Prefs.DST==0) {
+    Prefs.DSTOffset=0;
+    return;
   }
 
-  timeClient.setTimeOffset(totalOffset);
-  timeClient.forceUpdate();
+
+  int m = month(I.currentTime);
+  int d = day(I.currentTime);
+  int y = year(I.currentTime);
+  
+  // Check if current date is within DST period  
+  // Check if we're after DST start date
+  if (m > Prefs.DSTStartMonth || (m == Prefs.DSTStartMonth && d >= Prefs.DSTStartDay)) {
+    // Check if we're before DST end date
+    if (m < Prefs.DSTEndMonth || (m == Prefs.DSTEndMonth && d < Prefs.DSTEndDay)) {
+  
+      Prefs.DSTOffset = 3600;
+    } else {
+  
+      Prefs.DSTOffset = 0;
+    }
+  } else {
+    Prefs.DSTOffset = 0;
+  }
+  
+  timeClient.setTimeOffset(Prefs.TimeZoneOffset + Prefs.DSTOffset);
   setTime(timeClient.getEpochTime());
-  I.currentTime = now();
-
-
-  SerialPrint((String) "checkDST: Ending time is: " + dateify(I.currentTime,"mm/dd/yyyy hh:mm:ss") + " (Total offset: " + totalOffset + " seconds)\n", true);
+  I.currentTime = now();  
 }
 
 
@@ -228,27 +159,6 @@ char* dateify(time_t t, String dateformat) {
   snprintf(DATESTRING,25,"%s",dateformat.c_str());
   
   return DATESTRING;  
-}
-
-bool setupTime(void) {
-    timeClient.begin();
-    
-    // Initialize with base timezone offset from Prefs
-    timeClient.setTimeOffset(Prefs.TimeZoneOffset + (Prefs.DST ? Prefs.DSTOffset : 0));
-
-    byte i=0;
-    
-    while (timeClient.forceUpdate()==false && i<25) {
-      i++;
-    }
-    if (i>=25) return false;
-
-    setTime(timeClient.getEpochTime());
-    I.currentTime = now();
-
-    checkDST(); //this also sets timelib, so no need to call settime separately
-
-    return true;
 }
 
 
@@ -336,4 +246,91 @@ void checkTimezoneUpdate() {
   
 }
 
+
+time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
+{
+
+  //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
+
+    int m = month(), d=day(), h=0, n=0, s=0;
+    int yy = year()-2000;
+    String datesplit = "";
+
+  if (str.indexOf("/")>-1) datesplit = "/"; //date is included
+  if (str.indexOf("-")>-1) datesplit = "-";//date is included
+
+
+  if (datesplit!="")
+  {
+    m = breakString(&str,datesplit,true).toInt();
+    if (m>12) {
+      yy=m;
+      m = breakString(&str,datesplit,true).toInt();
+      if (str.indexOf(" ")<0) //time is not included
+      {
+        d = str.toInt();      
+      } else {
+        d = breakString(&str," ",true).toInt();
+      }
+    } else {
+      d = breakString(&str,datesplit,true).toInt();
+      if (str.indexOf(" ")<0) //time is not included
+      {
+        yy = str.toInt();      
+      } else {
+        yy = breakString(&str," ",true).toInt();
+      }
+    }
+    
+    if (yy>2000) yy = yy-2000;
+    else if (yy>1970) yy=yy-1900;
+
+      SerialPrint((String) "   m=" + m + "...\n");
+            SerialPrint((String) "   d=" + d + "...\n");
+                  SerialPrint((String) "   yy=" + yy + "...\n");
+
+
+
+    SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
+
+    if (str.length()==0) return makeUnixTime((byte) yy, m,d,0,0,0);
+  }
+
+  byte hoffset = 0;
+  if (str.indexOf(" ")>-1) { //there is a " AM/PM" present
+    if (str.indexOf("PM")>-1)  hoffset=12;
+    str = breakString(&str," ",true); //remove the am/pm
+  }
+  h = breakString(&str,":",true).toInt() + hoffset;
+  n = breakString(&str,":",true).toInt();
+
+  if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data
+
+  s = str.toInt();
+
+  SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
+
+  return makeUnixTime((byte) yy, m,d,h,n,s);
+
+}
+
+time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
+  //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
+
+  int16_t y = 2000;
+
+  if (yy>=70) y = 1900+yy;
+  else y=2000+yy;
+
+  tmElements_t unixTime;
+
+  unixTime.Year = y-1970; //years since 1970
+  unixTime.Month = m;
+  unixTime.Day = d;
+  unixTime.Hour = h;
+  unixTime.Minute = n;
+  unixTime.Second = s;
+
+  return makeTime(unixTime);
+}
 
