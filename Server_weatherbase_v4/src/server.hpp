@@ -6,13 +6,10 @@
 #include <Arduino.h>
 #include <WiFiClient.h>
 
-#include "timesetup.hpp"
-#include "utility.hpp"
-#include "BootSecure.hpp"
-#include "globals.hpp"
-#include "Weather_Optimized.hpp"
-#include "SDCard.hpp"
-#include "AddESPNOW.hpp"
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
+class WeatherInfoOptimized;
+class Devices_Sensors;
 
 
 //Server requests time out after 2 seconds

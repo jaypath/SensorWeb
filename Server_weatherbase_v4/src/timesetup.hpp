@@ -8,8 +8,9 @@
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include "globals.hpp"
 
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
 
 extern WiFiUDP ntpUDP;
 extern NTPClient timeClient;

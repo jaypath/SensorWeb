@@ -30,8 +30,8 @@ Messages will use the ESPNOW_type struct for their transmission
 */
 
 #include "AddESPNOW.hpp"
-#include "utility.hpp"
 #include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
+#include "utility.hpp"
 #ifdef _USETFT
 #include "graphics.hpp"
 #endif
@@ -293,6 +293,10 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
     
     if (msg.msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
+        if (MYTYPE<100) {
+            storeError("ESPNow: peripheral cannot process WiFi password request");
+            return; //only servers can provide WiFi password
+        }
         // Received request for WiFi password (payload[0..15] = key, payload[16..31] = IV, payload[32..39] = nonce)
         ESPNOW_type resp = {};
         uint64ToMAC(Prefs.PROCID, resp.senderMAC);
@@ -478,7 +482,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 // --- Broadcast Server Presence (Type 1) ---
 bool broadcastServerPresence(bool broadcastPeripheral) {
 
-    if (MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, unless peripherals specifically request it
+    if (MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, except under certain circumstances when peripherals specifically requested to do so
 
     ESPNOW_type msg = {};
 
@@ -498,6 +502,8 @@ bool broadcastServerPresence(bool broadcastPeripheral) {
 
 // --- Broadcast Server List (Type 1) ---
 bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count) {
+    if (MYTYPE<100) return false; //only servers broadcast, unless peripherals specifically request it
+    
     // If user provided a list, use it
     if (serverMACs && serverIPs && count > 0) {
         ESPNOW_type msg = {};

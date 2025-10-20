@@ -53,29 +53,11 @@
 
 
 #include "globals.hpp"
-#include "utility.hpp"
-#include "Devices.hpp"
-#include "server.hpp"
-#include "SDCard.hpp"
-#include "Weather_Optimized.hpp"
-#include "timesetup.hpp"
-#include "graphics.hpp"
-#include "AddESPNOW.hpp"
-#include "BootSecure.hpp"
-#include "devices.hpp"
-
-#ifdef _USEGSHEET
-#include "GsheetUpload.hpp"
-#endif
-#ifdef _USEFIREBASE
-#include "FirebaseUpload.hpp"
-#endif
 
 // --- WiFi Down Timer ---
 static uint32_t wifiDownSince = 0;
 static uint32_t lastPwdRequestMinute = 0;
 
-#define WDT_TIMEOUT_MS 120000
 
 
 //gen global types
@@ -99,6 +81,7 @@ union convertBYTE {
 
 //globals
 
+uint16_t mydeviceindex = 0; //local stored index of my device
 extern LGFX tft;
 // SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
 extern STRUCT_CORE I;
@@ -107,10 +90,11 @@ extern String WEBHTML;
 extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 
+#ifdef _USEWEATHER
 //extern uint8_t OldTime[4];
 extern WeatherInfoOptimized WeatherData;
+#endif
 
-extern uint32_t LAST_WEB_REQUEST;
 extern double LAST_BAR;
 
 uint32_t FONTHEIGHT = 0;
@@ -119,31 +103,25 @@ BootSecure bootSecure;
 //time
 uint8_t OldTime[4] = {0,0,0,0}; //s,m,h,d
 
-//fuction declarations
-
-
-
-
-// --- Setup Helper Implementations ---
-
-
-
+//function declarations
+void initOTA();
 
 /**
  * @brief Initialize Arduino OTA update functionality.
  */
 void initOTA() {
-    tft.print("Connecting ArduinoOTA... ");
+    tftPrint("Connecting ArduinoOTA... ", false);
     ArduinoOTA.setHostname("WeatherStation");
     ArduinoOTA.setPassword("12345678");
+    #ifdef _USETFT
     ArduinoOTA.onStart([]() { displayOTAProgress(0, 100); });
-    ArduinoOTA.onEnd([]() { tft.setTextSize(1); tft.println("OTA End. About to reboot!"); });
+    ArduinoOTA.onEnd([]() {     tft.setTextSize(1); tft.println("OTA End. About to reboot!"); });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { displayOTAProgress(progress, total); });
     ArduinoOTA.onError([](ota_error_t error) { displayOTAError(error); });
+    #endif
     ArduinoOTA.begin();
-    tft.setTextColor(TFT_GREEN);
-    tft.printf("OK.\n");
-    tft.setTextColor(FG_COLOR);
+
+    tftPrint("OK.", true, TFT_GREEN);
 }
 
 
@@ -170,12 +148,18 @@ void setup() {
 
     initSensor(-256);
 
-    if (!initSDCard()) return;
-    loadScreenFlags();
-    loadSensorData();
+
+    int8_t sdResult = initSDCard();
+    if (sdResult==0) return;
+    if (sdResult==-1) {
+        tftPrint("SD Card not supported", true, TFT_RED, 2, 1, true, 0, 0);
+    } else {
+        loadScreenFlags();
+        loadSensorData();
+    }
 
 
-    tft.printf("Init Wifi... \n");
+    tftPrint("Init Wifi... \n", true);
     SerialPrint("Init Wifi... ",false);
     SerialPrint("start server routes... ");
     setupServerRoutes();
@@ -187,9 +171,7 @@ void setup() {
             //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
             SerialPrint("Failed to connect to Wifi",true);
             if (connectWiFi()>-10000 && connectWiFi()<0) {
-                tft.clear();
-                tft.setCursor(0, 0);
-                tft.printf("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ");  
+                tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
                 delay(30000);  
                 Prefs.HAVECREDENTIALS = false;
                 APStation_Mode();
@@ -203,14 +185,14 @@ void setup() {
     SerialPrint("Wifi OK",true);
 
 
-    tft.print("Set up time... ");
+    tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     if (setupTime()) {
         displaySetupProgress( true);
     } else {
         displaySetupProgress( false);
     }
     delay(100);
-    tft.printf("Current time = %s\n", dateify(now(),"yyyy-mm-dd hh:nn:ss"));
+    tftPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
     SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
     I.currentTime = now();
     I.ALIVESINCE = I.currentTime;
@@ -251,27 +233,19 @@ void setup() {
     if (Prefs.DEVICENAME[0] == 0) {
         if (Sensors.findMyDeviceIndex() == -1) failedToRegister();
     }
-    WeatherData.lat = Prefs.LATITUDE;
-    WeatherData.lon = Prefs.LONGITUDE;
 
     //check if I am registered as a device
 
-    tft.printf("Init server... ");
+    tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     server.begin();
-    tft.setTextColor(TFT_GREEN);
-    tft.printf(" OK.\n");
-    tft.setTextColor(FG_COLOR);
+    tftPrint(" OK.", true, TFT_GREEN);
 
-    tft.print("Initializing ESPNow... ");
+    tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     if (initESPNOW()) {
-        tft.setTextColor(TFT_GREEN);
-        tft.printf("OK.\n");
-        tft.setTextColor(FG_COLOR);
+        tftPrint("OK.", true, TFT_GREEN);
         broadcastServerPresence();
     } else {
-        tft.setTextColor(TFT_RED);
-        tft.printf("FAILED.\n");
-        tft.setTextColor(FG_COLOR);
+        tftPrint("FAILED.", true, TFT_RED);
         storeError("ESPNow initialization failed");
     }
 
@@ -279,31 +253,34 @@ void setup() {
 
     #ifdef _USEGSHEET
     if (GSheetInfo.useGsheet) {
-        tft.print("Initializing Gsheet... ");
+        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
         initGsheetHandler();
         if (GSheet.ready()) {
-            tft.setTextColor(TFT_GREEN);
-            tft.printf("OK.\n");
-            tft.setTextColor(FG_COLOR);
+            tftPrint("OK.", true, TFT_GREEN);
         } else {
-            tft.setTextColor(TFT_RED);
-            tft.printf("FAILED.\n");
-            tft.setTextColor(FG_COLOR);
+            tftPrint("FAILED.", true, TFT_RED);
             storeError("Gsheet initialization failed");
         }
     }
     else {
-        tft.setTextColor(TFT_GREEN);
-        tft.printf("Skipping Gsheet initialization.\n");
-        tft.setTextColor(FG_COLOR);
+        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
     }
     #endif
 
 
+    #ifdef _ISPERIPHERAL
+    initHardwareSensors();
+    #endif
 
-    tft.printf("Loading weather data...\n");
-    //load weather data from SD card
+
+    
+    #ifdef _USEWEATHER
+    tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
+//load weather data from SD card
     if (readWeatherDataSD()) {
+        WeatherData.lat = Prefs.LATITUDE;
+        WeatherData.lon = Prefs.LONGITUDE;
+    
         if (WeatherData.updateWeatherOptimized(3600)>0) {
             SerialPrint("Weather data loaded from SD card",true);
         } else {
@@ -313,9 +290,8 @@ void setup() {
         SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
         WeatherData.updateWeatherOptimized(3600);
     }
-    tft.setTextColor(TFT_GREEN);
-    tft.printf("Setup OK...");
-    tft.setTextColor(FG_COLOR);
+    tftPrint("Setup OK.", true, TFT_GREEN);
+    #endif
 
     
 }
@@ -329,8 +305,9 @@ void loop() {
 
     updateTime(); //sets I.currenttime
 
-    
+    #ifdef _USETFT
     checkTouchScreen();
+    #endif
 
     #ifdef _USEGSHEET
     GSheet.ready(); //maintains authentication
@@ -343,10 +320,7 @@ void loop() {
         if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
         // If WiFi has been down for 10 minutes, enter AP mode
         if (wifiDownSince && (I.currentTime - wifiDownSince >= 600)) {
-            tft.clear();
-            tft.setCursor(0, 0);
-            tft.setTextColor(TFT_RED);
-            tft.printf("Wifi failed for 10 minutes, entering AP mode...");
+            tftPrint("Wifi failed for 10 minutes, entering AP mode...", true, TFT_RED, 2, 1, true, 0, 0);
             SerialPrint("Wifi failed for 10 minutes, entering AP mode...",true);
             delay(3000);
             APStation_Mode();
@@ -361,8 +335,16 @@ void loop() {
 
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
-        if (I.wifiFailCount > 5) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
+        OldTime[1] = minute();
+
+        if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
+
+        #ifdef _ISPERIPHERAL
+        mydeviceindex = Sensors.findMyDeviceIndex(); //update this periodically to ensure I have no changed
+        #endif
+
+        #ifdef _USEWEATHER
         // WEATHER OPTIMIZATION - Use optimized weather update method
         byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
         if (weatherResult > 3) {
@@ -424,11 +406,8 @@ void loop() {
         }
 
         if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 300 && I.currentTime - I.ALIVESINCE > 10800) {
-            tft.clear();
-            tft.setCursor(0, 0);
-            tft.setTextColor(TFT_RED);
-            setFont(2);
-            tft.printf("Weather failed \nfor 60 minutes.\nRebooting in 3 seconds...");
+            tftPrint("Weather failed for 60 minutes.", true, TFT_RED, 2, 1, true, 0, 0);
+            tftPrint("Rebooting in 3 seconds...", false, TFT_WHITE, 2, 1, false, -1, -1);
             SerialPrint("Weather failed for 60 minutes. Rebooting in 3 seconds...",true);
             delay(3000);
             I.resetInfo = RESET_WEATHER;
@@ -436,13 +415,10 @@ void loop() {
             storeError("Weather failed too many times");
             controlledReboot("Weather failed too many times", RESET_WEATHER);
         }
+        #endif
 
-        if (I.currentTime - Sensors.lastSDSaveTime > 600) {
-            storeDevicesSensorsSD();
-        }
+        #ifndef _ISPERIPHERAL
 
-        
-        OldTime[1] = minute();
         I.isFlagged = 0;
         I.isSoilDry = 0;
         I.isHot = 0;
@@ -458,9 +434,11 @@ void loop() {
         I.isExpired = checkExpiration(-1, I.currentTime, true);
         I.isFlagged += I.isExpired;
 
+        #endif
+
         handleESPNOWPeriodicBroadcast(10);
         handleStoreCoreData();
-        Sensors.storeDevicesSensorsArrayToSD(5);
+        
         #ifdef _USEGSHEET
 
         uint8_t gsheetResult = Gsheet_uploadData();
@@ -475,10 +453,20 @@ void loop() {
         OldTime[2] = hour();
 
 
+        #ifndef _ISPERIPHERAL
         checkExpiration(-1, I.currentTime, false);
+        #endif
 
-        Sensors.storeAllSensorsSD(); //store all sensors to SD card once an hour
 
+        #ifdef _ISPERIPHERAL
+        //update mySensorsIndices array
+        memset(I.mySensorsIndices, 0, sizeof(I.mySensorsIndices));
+        for (int16_t i = 0; i < NUMSENSORS; i++) {
+            uint16_t snsvalid = Sensors.isSensorIndexValid(i);
+            if (snsvalid == 1 || snsvalid == 3) I.mySensorsIndices[i] = i;
+            
+        }
+        #endif
 
         if (OldTime[2] == 4) {
             //check if DST has changed every day at 4 am
@@ -495,14 +483,21 @@ void loop() {
         OldTime[0] = second();
 
 
-        fcnDrawScreen();
-        if (I.screenChangeTimer > 0) I.screenChangeTimer--;
-        else I.ScreenNum=0;
+        #ifdef _ISPERIPHERAL
+        //run through all my sensors and try and update them
 
-
+        for (int16_t i = 0; i < SENSORNUM; i++) {
+            SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+            if (sensor && sensor->IsSet) {
+                int8_t readResult = ReadData(sensor, false, mydeviceindex);
+                
+                bool sendResult = SendData(sensor, false);
+                if (sendResult)                     SensorHistory.recordSentValue(sensor,i);
+                
+            }
+        }
+        #endif
     }
-    
-
 }
 
 

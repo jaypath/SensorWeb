@@ -8,11 +8,15 @@
 #include <SD.h>
 #include <vector>
 #include <algorithm>
-#include "globals.hpp"
-#include "timesetup.hpp"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
+struct STRUCT_PrefsH;
+class Devices_Sensors;
+class WeatherInfoOptimized;
 
 #ifdef _USEGSHEET
-#include "GsheetUpload.hpp"
+struct STRUCT_GOOGLESHEET;
 #endif
 
 extern STRUCT_CORE I;

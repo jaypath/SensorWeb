@@ -1,15 +1,12 @@
 #ifndef UTILITY_HPP
 #define UTILITY_HPP
 
-#include <Arduino.h>
 #include "globals.hpp"
-#include "SDCard.hpp"
-#include "Devices.hpp"
-#include "timesetup.hpp"
 
 
 //globals
 #ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
 extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 #ifdef _USETFT
@@ -19,7 +16,7 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
 
 //setup functions
 void initSystem();
-bool initSDCard();
+int8_t initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
 void initGsheetHandler();
@@ -96,5 +93,6 @@ String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //w
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
-
+bool tftPrint(String S, bool newline, uint16_t color=FG_COLOR, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
+void displaySetupProgress(bool success);
 #endif

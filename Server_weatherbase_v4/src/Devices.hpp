@@ -3,7 +3,16 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include "globals.hpp"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+#ifndef NUMDEVICES
+#define NUMDEVICES 50
+#endif
+#ifndef NUMSENSORS
+#define NUMSENSORS 100
+#endif
+
+struct STRUCT_CORE;
 
 // Constants
 
@@ -52,6 +61,7 @@ public:
     Devices_Sensors();
 
     uint32_t lastSDSaveTime;
+    uint32_t lastSensorSaveTime;
     uint32_t lastUpdatedTime;
     uint8_t numDevices;
     uint8_t numSensors;
@@ -102,7 +112,7 @@ public:
 
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
-    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID); //get the preferences index for this sensor
+    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
     #endif
     int16_t findMyDeviceIndex();
     bool isMySensor(int16_t index);
@@ -113,7 +123,7 @@ public:
     bool setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten=0);
     uint8_t storeDevicesSensorsArrayToSD(uint8_t intervalMinutes);
     bool readDevicesSensorsArrayFromSD();
-    uint8_t storeAllSensorsSD();
+    int16_t storeAllSensorsSD(uint8_t intervalMinutes);
     #endif
     
 

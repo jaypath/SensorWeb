@@ -1,3 +1,4 @@
+#ifdef _USETFT
 #ifndef GRAPHICS_HPP
 #define GRAPHICS_HPP
 
@@ -5,15 +6,17 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <LovyanGFX.hpp>
-#include "globals.hpp"
-#include "utility.hpp"
-#include "Devices.hpp"
-#include "Weather_Optimized.hpp"
-#include "timesetup.hpp"
-#include "SDCard.hpp"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
+struct STRUCT_PrefsH;
+struct DevType;
+struct SnsType;
+class Devices_Sensors;
+class WeatherInfoOptimized;
 
 #ifdef _USEGSHEET
-#include "GsheetUpload.hpp"
+struct STRUCT_GOOGLESHEET;
 #endif
 
 // drawing
@@ -68,7 +71,6 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
 
 
 // Setup display functions
-void displaySetupProgress(bool success = true);
 void displayWiFiStatus(byte retries, bool success);
 void displayOTAProgress(unsigned int progress, unsigned int total);
 void displayOTAError(int error);
@@ -180,3 +182,4 @@ public:
 
 
 #endif 
+#endif

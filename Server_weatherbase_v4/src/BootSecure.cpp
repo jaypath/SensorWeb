@@ -1,3 +1,4 @@
+#include "globals.hpp"
 #include "BootSecure.hpp"
 
 byte prefs_set = 0;

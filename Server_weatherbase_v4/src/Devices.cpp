@@ -1,3 +1,4 @@
+#include "globals.hpp"
 #include "Devices.hpp"
 #include "utility.hpp"
 #include <TimeLib.h>
@@ -222,6 +223,7 @@ int16_t  Devices_Sensors::initDevice(int16_t index) {
 int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                                   uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType) {
+    //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
     // Find or create device
     int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, 0, 0, devType);
     if (deviceIndex < 0) {
@@ -519,16 +521,24 @@ int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
 
 #ifdef _USESDCARD
 // Data storage functions
-uint8_t Devices_Sensors::storeAllSensorsSD() {
+int16_t Devices_Sensors::storeAllSensorsSD(uint8_t intervalMinutes) {
     //march through all sensors and write to SD card if timeWritten is older than 1 hour
     uint8_t count = 0;
-    for (int16_t i = 0; i < NUMSENSORS; i++) {
-      if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
-        storeSensorDataSD(i);
-        count++;
-      }
-    }
+
+    if (intervalMinutes==0) intervalMinutes=10;//never write to SD card more than once per minute
+    if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSensorSaveTime+intervalMinutes*60<I.currentTime) { 
+        lastSensorSaveTime = I.currentTime;    
+        for (int16_t i = 0; i < NUMSENSORS; i++) {
+            if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
+              storeSensorDataSD(i);
+              count++;
+            }
+          }
+      
     return count;
+    }
+    return -1; //not time yet
+    
   }
   
 bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten) {
@@ -604,7 +614,7 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
 
 int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
     //checks if the sensor index is VALID
-    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine, 5 = not set
+    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine, -1 = not set
     if (index < 0 || index >= NUMSENSORS ) {
         //index is invalid
         return 0;
@@ -629,6 +639,7 @@ int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
 
 
 uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
+    //returns 1 if invalid, 2 if not set, 3 if expired, 0 if valid
     if (index < 0 || index >= NUMSENSORS ) {
         return 1;
     }
@@ -720,7 +731,6 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
         return true;
     }
 
-
     return false;
 }
 
@@ -739,15 +749,16 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
 }
 
 #ifdef _ISPERIPHERAL
-int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID) {
+int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
     //this always references me as the device
-    //returns -1 if no Prefsindex found, otherwise the idnex to Prefs values 
-    int16_t devID = findMyDeviceIndex();
-    if (devID == -1) return -1;
+    //returns -2 if I am not registered,  -1 if no Prefsindex found, otherwise the idnex to Prefs values 
+
+    if (devID == -1) devID = findMyDeviceIndex();
+
+    if (devID == -1) return -2;
     
     //get prefs index for this sensor
     uint32_t sensorID = devID<<16 + snsType<<8 + snsID;
-    int16_t prefs_index = -1;
     for (byte i=0;i<NUMSENSORS;i++) {
         if (Prefs.SENSORIDS[i] == sensorID) {        
             return i;

@@ -17,9 +17,6 @@ STRUCT_CORE I; //here, I is of type Screen (struct)
 
 STRUCT_PrefsH Prefs;
 
-#ifdef _ISPERIPHERAL
-STRUCT_SNSHISTORY SensorHistory;
-#endif
 
 #ifndef _ISPERIPHERAL
 uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;

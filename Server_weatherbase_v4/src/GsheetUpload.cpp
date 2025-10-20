@@ -1,3 +1,5 @@
+#include "globals.hpp"
+#ifdef _USEGSHEET
 #include "GsheetUpload.hpp"
 #include "timesetup.hpp"
 #include "Devices.hpp"
@@ -424,3 +426,4 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     SerialPrint(" status: " + tmp,true);
     return tmp;
   }
+  #endif

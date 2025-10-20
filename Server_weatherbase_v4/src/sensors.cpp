@@ -1,3 +1,4 @@
+#include "globals.hpp"
 #ifdef _ISPERIPHERAL
 #include "sensors.hpp"
 
@@ -49,6 +50,10 @@
 */
 
 extern Devices_Sensors Sensors;
+#ifdef _ISPERIPHERAL
+STRUCT_SNSHISTORY SensorHistory;
+#endif
+
 
 #if defined(_CHECKAIRCON) || defined(_CHECKHEAT) 
 uint8_t HVACSNSNUM = 0;
@@ -170,14 +175,14 @@ byte sensortypes[] = SENSORTYPES;
 
   #if defined(_USEMUX) && defined(_CHECKHEAT)
     pinMode(MUXPINS[0],OUTPUT);
-    pinMode(MUXPINSS[1],OUTPUT);
-    pinMode(MUXPINSS[2],OUTPUT);
-    pinMode(MUXPINSS[3],OUTPUT);
-    pinMode(MUXPINSS[4],INPUT);
-    digitalWrite(MUXPINSS[0],LOW);
-    digitalWrite(MUXPINSS[1],LOW);
-    digitalWrite(MUXPINSS[2],LOW);
-    digitalWrite(MUXPINSS[3],LOW);
+    pinMode(MUXPINS[1],OUTPUT);
+    pinMode(MUXPINS[2],OUTPUT);
+    pinMode(MUXPINS[3],OUTPUT);
+    pinMode(MUXPINS[4],INPUT);
+    digitalWrite(MUXPINS[0],LOW);
+    digitalWrite(MUXPINS[1],LOW);
+    digitalWrite(MUXPINS[2],LOW);
+    digitalWrite(MUXPINS[3],LOW);
     #ifdef _DEBUG
       Serial.println("dio configured");
     #endif
@@ -185,12 +190,12 @@ byte sensortypes[] = SENSORTYPES;
   #endif
 
   #if defined(_CHECKAIRCON)
-    pinMode(MUXPINSS[0],OUTPUT);
-    pinMode(MUXPINSS[1],OUTPUT);
-    pinMode(MUXPINSS[2],INPUT);
-    pinMode(MUXPINSS[3],INPUT);
-    digitalWrite(MUXPINSS[0],LOW);
-    digitalWrite(MUXPINSS[1],LOW);    
+    pinMode(MUXPINS[0],OUTPUT);
+    pinMode(MUXPINS[1],OUTPUT);
+    pinMode(MUXPINS[2],INPUT);
+    pinMode(MUXPINS[3],INPUT);
+    digitalWrite(MUXPINS[0],LOW);
+    digitalWrite(MUXPINS[1],LOW);    
   #endif
 
 
@@ -597,8 +602,14 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
     case 3: //soil
       {
         #ifdef _USESOILCAP
-        //soil moisture v1.2
-        val = analogRead(SOILPIN);
+        digitalWrite(SOILPOWERRPIN, HIGH);
+        delay(100); //wait X ms for reading to settle
+        for (byte ii=0;ii<nsamps;ii++) {                  
+          val += analogRead(_USESOILCAP);
+          delay(1);
+        }
+          digitalWrite(SOILPOWERRPIN, LOW);
+        val=val/nsamps;
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
         val =  (int) ((-0.28571*val+228.5714)*100); //round value
         P->snsValue =  val/100;
@@ -610,13 +621,13 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         val=0;
         nsamps=100;
 
-        digitalWrite(_USESOILRES, HIGH);
+        digitalWrite(SOILPOWERRPIN, HIGH);
         delay(100); //wait X ms for reading to settle
         for (byte ii=0;ii<nsamps;ii++) {                  
-          val += analogRead(SOILPIN);
+          val += analogRead(_USESOILRES);
           delay(1);
         }
-          digitalWrite(_USESOILRES, LOW);
+          digitalWrite(SOILPOWERRPIN, LOW);
         val=val/nsamps;
 
 
@@ -632,26 +643,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         #endif
 
 
-        #ifdef _USESOILRESOLD
-        //soil moisture by stainless steel wire (Resistance)        
-        digitalWrite(_USESOILRES, HIGH);
-        val = analogRead(SOILPIN);
-        digitalWrite(_USESOILRES, LOW);
-        //voltage divider, calculate soil resistance: Vsoil = 3.3 *r_soil / ( r_soil + r_fixed)
-        //so R_soil = R_fixed * (3.3/Vsoil -1)
-      
 
-        #ifdef _USE32
-          val = val * (3.3 / 4095); //12 bit
-          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
-        #endif
-        #ifdef _USE8266
-          val = val * (3.3 / _ADCRATE); //it's _ADCRATE because the value 1024 is overflow
-          P->snsValue =  (int) ((double) SOILRESISTANCE * (3.3/val -1)); //round value. 
-        #endif
-
-        
-        #endif
       
       break;
       }
@@ -1075,10 +1067,10 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
     case 70: //Leak detection
       {
         #ifdef _USELEAK
-        digitalWrite(_LEAKDIO, HIGH);
-        if (digitalRead(_LEAKPIN)==HIGH) P->snsValue =1;
+        digitalWrite(LEAKPOWERPIN, HIGH);
+        if (digitalRead(_USELEAK)==HIGH) P->snsValue =1;
         else P->snsValue =0;
-        digitalWrite(_LEAKDIO, LOW);
+        digitalWrite(LEAKPOWERPIN, LOW);
 
       #endif
 

@@ -1,12 +1,14 @@
+#ifdef _USEWEATHER
 #ifndef WEATHER_OPTIMIZED_HPP
 #define WEATHER_OPTIMIZED_HPP
 
-#include <Arduino.h>
+
 #include "globals.hpp"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <functional>
+
 
 #define NUMWTHRDAYS 5
 #define WEATHER_CACHE_SIZE 3
@@ -166,3 +168,4 @@ public:
 extern String WEBHTML;
 
 #endif 
+#endif

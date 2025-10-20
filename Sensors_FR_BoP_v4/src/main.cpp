@@ -108,6 +108,8 @@ union convertINT {
 
 
 //globals
+//--------------------------------
+
 #ifdef _USEBARPRED
   double BAR_HX[24];
   char WEATHER[24] = "Steady";
@@ -116,70 +118,32 @@ union convertINT {
 
 
 
-
+uint16_t mydeviceindex = 0;
 byte OldTime[5] = {0,0,0,0,0};
 extern Devices_Sensors Sensors;
+
 
 #ifdef _USELED
   extern Animation_type LEDs;
 #endif
 
 //function declarations
-
-
-#ifdef _USELOWPOWER
-
-uint16_t SleepCounter = 0;
-// Write 16 bit int to RTC memory with checksum, return true if verified OK
-// Slot 0-127
-// (C) Turo Heikkinen 2019
-bool writeRtcMem(uint16_t *inVal, uint8_t slot = 0) {
-  uint32_t valToStore = *inVal | ((*inVal ^ 0xffff) << 16); //Add checksum
-  uint32_t valFromMemory;
-  if (ESP.rtcUserMemoryWrite(slot, &valToStore, sizeof(valToStore)) &&
-      ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
-      valToStore == valFromMemory) {
-        return true;
-  }
-  return false;
-}
-
-// Read 16 bit int from RTC memory, return true if checksum OK
-// Only overwrite variable, if checksum OK
-// Slot 0-127
-// (C) Turo Heikkinen 2019
-bool readRtcMem(uint16_t *inVal, uint8_t slot = 0) {
-  uint32_t valFromMemory;
-  if (ESP.rtcUserMemoryRead(slot, &valFromMemory, sizeof(valFromMemory)) &&
-      ((valFromMemory >> 16) ^ (valFromMemory & 0xffff)) == 0xffff) {
-        *inVal = valFromMemory;
-        return true;
-  }
-  return false;
-}
-
-#endif
+void initSystem();
+bool initConnectivity();
+void initDisplay();
+bool initTime();
+void initOTA();
+void initServer();
+void handleESPNOWPeriodicBroadcast(uint8_t interval);
+void handleStoreCoreData();
 
 // ==================== SETUP HELPER FUNCTIONS ====================
 
 /**
  * @brief Initialize system - boot secure, serial, and copy sensor configs
  */
-// Memory cleanup function
-void cleanupMemory() {
-  #ifdef _USE32
-  
-  
-  // Log memory status
-  size_t freeHeap = ESP.getFreeHeap();
-  size_t minFreeHeap = ESP.getMinFreeHeap();
-  
-  #ifdef _DEBUG
-  Serial.printf("Memory cleanup: Free=%d, MinFree=%d\n", freeHeap, minFreeHeap);
-  #endif
-  #endif
-}
 
+ 
 void initSystem() {
   #ifdef _DEBUG
     Serial.begin(115200);
@@ -316,161 +280,6 @@ void initDisplay() {
   #endif
 }
 
-/**
- * @brief Initialize hardware sensors (BME, BMP, DHT, etc.)
- */
-void initHardwareSensors() {
-  #ifdef _USESSD1306
-    oled.clear();
-    oled.setCursor(0,0);
-    oled.println("Sns setup.");
-  #endif
-
-  #ifdef _USEBME680_BSEC
-    iaqSensor.begin(BME68X_I2C_ADDR_LOW, Wire);
-    String output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
-    Serial.println(output);
-    checkIaqSensorStatus();
-
-    bsec_virtual_sensor_t sensorList[13] = {
-      BSEC_OUTPUT_IAQ,
-      BSEC_OUTPUT_STATIC_IAQ,
-      BSEC_OUTPUT_CO2_EQUIVALENT,
-      BSEC_OUTPUT_BREATH_VOC_EQUIVALENT,
-      BSEC_OUTPUT_RAW_TEMPERATURE,
-      BSEC_OUTPUT_RAW_PRESSURE,
-      BSEC_OUTPUT_RAW_HUMIDITY,
-      BSEC_OUTPUT_RAW_GAS,
-      BSEC_OUTPUT_STABILIZATION_STATUS,
-      BSEC_OUTPUT_RUN_IN_STATUS,
-      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
-      BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
-      BSEC_OUTPUT_GAS_PERCENTAGE
-    };
-
-    iaqSensor.updateSubscription(sensorList, 13, BSEC_SAMPLE_RATE_LP);
-    checkIaqSensorStatus();
-  #endif
-
-  #ifdef _USEBME680
-    while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
-      #ifdef _DEBUG
-        Serial.println("-  Unable to find BME680. Trying again in 5 seconds.\n");
-      #endif
-      delay(5000);
-    }
-    BME680.setOversampling(TemperatureSensor, Oversample16);
-    BME680.setOversampling(HumiditySensor, Oversample16);
-    BME680.setOversampling(PressureSensor, Oversample16);
-    BME680.setIIRFilter(IIR4);
-    BME680.setGas(320, 150);  // 320°c for 150 milliseconds
-  #endif
-
-  #ifdef DHTTYPE
-    #ifdef _DEBUG
-      Serial.printf("dht begin\n");
-    #endif
-    dht.begin();
-  #endif
-
-  #ifdef _USEBMP
-    #ifdef _DEBUG
-      Serial.println("bmp begin");
-    #endif
-    byte retry = 0;
-    byte trybmp = _USEBMP;
-    
-    while (bmp.begin(trybmp) != true && retry < 20) {
-      #ifdef _DEBUG
-        Serial.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);
-      #endif
-
-      #ifdef _USESSD1306  
-        oled.clear();
-        oled.setCursor(0,0);  
-        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);          
-      #endif
-
-      if (retry == 10) { // Try swapping address
-        if (trybmp == 0x76) trybmp = 0x77;
-        else trybmp = 0x76;
-      }
-
-      delay(250);
-      retry++;
-    }
-
-    /* Default settings from datasheet. */
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
-                    Adafruit_BMP280::SAMPLING_X2,
-                    Adafruit_BMP280::SAMPLING_X16,
-                    Adafruit_BMP280::FILTER_X16,
-                    Adafruit_BMP280::STANDBY_MS_500);
-  #endif
-  
-  #ifdef _USEBME
-    #ifdef _DEBUG
-      Serial.printf("bme begin\n");
-    #endif
-    
-    byte retry = 0;
-    while (!bme.begin() && retry < 20) {
-      #ifdef _USESSD1306
-        oled.println("BME failed.");
-        delay(500);
-        oled.clear();
-        oled.setCursor(0,0);
-        delay(500);
-      #else
-        digitalWrite(LED, HIGH);
-        delay(500);
-        digitalWrite(LED, LOW);
-        delay(500);
-      #endif
-      retry++;
-    }
-
-    /* Default settings from datasheet. */
-    bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                    Adafruit_BME280::SAMPLING_X2,
-                    Adafruit_BME280::SAMPLING_X16,
-                    Adafruit_BME280::FILTER_X16,
-                    Adafruit_BME280::STANDBY_MS_500);
-  #endif
-
-  // Initialize barometric prediction globals
-  #ifdef _USEBARPRED
-    for (byte ii = 0; ii < 24; ii++) {
-      BAR_HX[ii] = -1;
-    }
-    LAST_BAR_READ = 0;
-  #endif
-  
-  // Initialize AHT sensor
-  #if defined(_USEAHT) || defined(_USEAHTADA)
-    retry = 0;
-    while (aht.begin() != true && retry < 10) {
-      #ifdef _DEBUG
-        Serial.printf("AHT not connected. Retry number %d\n", retry);
-      #endif
-
-      #ifdef _USESSD1306  
-        oled.clear();
-        oled.setCursor(0,0);  
-        oled.printf("No aht x%d!", retry);          
-      #endif
-      delay(250);
-      retry++;
-    }
-  #endif
-
-  // Call sensor-specific setup
-  setupSensors();
-  
-  #ifdef _DEBUG
-    Serial.println("Hardware sensors initialized");
-  #endif
-}
 
 /**
  * @brief Initialize time using NTP
@@ -865,17 +674,10 @@ void loop() {
 
     if (OldTime[1]%10==0) {
     
-      // Force memory cleanup
-      cleanupMemory();
-      
       #ifdef _USE32
       size_t freeHeap = ESP.getFreeHeap();
       size_t minFreeHeap = ESP.getMinFreeHeap();
-      
-      #ifdef _DEBUG
-      Serial.printf("Memory: Free=%d, MinFree=%d\n", freeHeap, minFreeHeap);
-      #endif
-      
+        
       // If memory is critically low, restart
       if (freeHeap < 10000) { // Less than 10KB free
         SerialPrint("CRITICAL: Low memory detected, restarting system", true);
@@ -886,6 +688,7 @@ void loop() {
       // If minimum free heap is very low, log warning
       if (minFreeHeap < 5000) { // Less than 5KB minimum
         SerialPrint("WARNING: Memory fragmentation detected", true);
+        ESP.restart();
       }
       #endif
     

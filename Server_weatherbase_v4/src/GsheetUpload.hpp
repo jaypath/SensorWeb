@@ -1,8 +1,12 @@
+#ifdef _USEGSHEET
 #ifndef GSHEETUPLOAD_HPP
 #define GSHEETUPLOAD_HPP
 
 #include <ESP_Google_Sheet_Client.h>
-#include "globals.hpp"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
+class Devices_Sensors;
 
 struct STRUCT_GOOGLESHEET {
     bool useGsheet = true;
@@ -36,4 +40,5 @@ int8_t Gsheet_uploadData(); //uploads data to gsheets
 bool Gsheet_uploadSensorDataFunction(void);
 String GsheetUploadErrorString();
 
+#endif
 #endif

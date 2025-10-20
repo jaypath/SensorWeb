@@ -1,3 +1,7 @@
+#include "globals.hpp"
+
+#ifdef _USEWEATHER
+
 #include "Weather_Optimized.hpp"
 #include "timesetup.hpp"
 #include "server.hpp"
@@ -1145,3 +1149,4 @@ bool WeatherInfoOptimized::getCoordinatesFromZipCodeFallback(const String& zipCo
     SerialPrint("All geocoding methods failed for ZIP code: " + zipCode, true);
     return false;
 } 
+#endif

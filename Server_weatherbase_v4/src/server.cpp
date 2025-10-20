@@ -1,5 +1,5 @@
-#include "server.hpp"
 #include "globals.hpp"
+#include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
 #ifdef _USETFT
@@ -7,14 +7,6 @@
   extern LGFX tft;
 #endif
 #include "BootSecure.hpp"
-#include <esp_system.h>
-
-#ifdef _USEGSHEET
-#include "GsheetUpload.hpp"
-extern STRUCT_GOOGLESHEET GSheetInfo;
-#endif
-
-
 
 
 
@@ -4756,10 +4748,11 @@ void setupServerRoutes() {
     server.onNotFound(handleNotFound);
 }
 
-bool SendData(struct SnsType *S) {
-
-  if (bitRead(S->Flags,1) == 0) return false; //not monitored
-  if (!(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
+bool SendData(struct SnsType *S, bool forceSend=false) {
+  if (!forceSend) {
+    if (bitRead(S->Flags,1) == 0) return false; //not monitored
+    if (!(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
+  }
 
   S->timeLogged = I.currentTime;
 bool isGood = false;
@@ -4771,7 +4764,7 @@ bool isGood = false;
     static char bodyBuffer[768];
     
     String deviceMAC;
-    DevType* device = Sensors.getDeviceBySnsIndex(S->deviceIndex);
+    DevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
     if (device) {
       deviceMAC = MACToString(device->MAC, '\0', true); //send mac as 12 digit hex string without separators
     }
@@ -4792,12 +4785,11 @@ bool isGood = false;
     );
 
     // iterate all known devices to find servers  (devType >=100)
-    for (int16_t i=0; i<NUMDEVICES && i<Sensors.getNumDevices(); ++i) {
+    for (int16_t i=0; i<NUMDEVICES ; i++) {
       DevType* d = Sensors.getDeviceByDevIndex(i);
       if (!d || !d->IsSet || d->devType < 100) continue;
       
-      IPAddress ip(d->IP);
-      snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
+      snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", d->IP.toString().c_str());
 
       SerialPrint("SENDDATA: POST to " + String(urlBuffer) , true);
 
@@ -4838,8 +4830,11 @@ bool isGood = false;
     }
   }
 
-  if (isGood) bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
-  else I.makeBroadcast = true; //broadcast my presence if I failed to send the data
+  if (isGood) {
+    bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
+  }  else {
+    I.makeBroadcast = true; //broadcast my presence if I failed to send the data
+  }
   return isGood;
 }
 

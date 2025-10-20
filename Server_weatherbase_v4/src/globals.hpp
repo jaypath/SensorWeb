@@ -1,161 +1,32 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
-#define GLOBALS_HPP_INCLUDED
 
+//edit these!
+//#define _ISPERIPHERAL 1
+#define _USESPI //if required for sensors or peripherals
+//#define _USEI2C //if required for sensors or peripherals
 #define _USETFT
 #define _USESERIAL
 #define _USEWEATHER
 #define _USEBATTERY
 #define _USEGSHEET
 #define _USESDCARD
-//#define _ISPERIPHERAL 1
 
 #define TIMEZERO 1735689600 //2025-01-01 00:00:00
 #define NUMDEVICES 50 //max number of devices to track
 #define NUMSENSORS 100 //number of sensors to track 
 #define MYTYPE 100
-#define SENSORNUM 0 //number of sensors I have
 
-#ifdef _ISPERIPHERAL
-#define SENSORHISTORYSIZE 150 //number of data points to store for each sensor
-#endif
-//------------------
-//add libraries here
+#define WDT_TIMEOUT_MS 120000
 
-  #include <Arduino.h>
-  #include <String.h>
-  #include <TimeLib.h>
-  #include <WiFi.h>
-  #include <time.h>
-  #include <SPI.h>
-  #include <SD.h>
-  #include <string>
-  #include <LovyanGFX.hpp>
+// Forward declarations
+class LGFX;
+class Devices_Sensors;
 
-  #include <ArduinoOTA.h>
-  #include <HTTPClient.h>
-  #include <ArduinoJson.h>
-  #include <NTPClient.h>
-  #include <WiFiUdp.h>
-  #include <esp_task_wdt.h>
-  #include <esp_now.h>
-  #include <esp_wifi.h>
-  
-
-
-#ifdef _USEGSHEET
-#include "GsheetUpload.hpp"
-
-#endif
-
-#ifdef _ISPERIPHERAL
-  const uint8_t SENSORTYPES[SENSORNUM] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //can have zeros for unused sensors, but must init all to the correct sensortypes
-  #define MONITORINGSTATES         {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1} //for monitored, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
-  #define OUTSIDESTATES            {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //from R to L each bit represents a sensor, 1 means outside, 0 means not outside
-  #define INTERVAL_POLL            {30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30} //seconds between polls
-  #define INTERVAL_SEND            {120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120} //seconds between sends
-  #define LIMIT_MAX                {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //store max values for each sensor in NVS
-  #define LIMIT_MIN                {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //store min values for each sensor in NVS
-  //#define _ISHVAC 1
-  /*sens types
-//0 - not defined
-//1 - temp, DHT
-//2 - RH, DHT
-//3 - soil moisture, capacitative or Resistive
-//4 -  temp, AHT21
-//5 - RH, AHT21
-//6 - 
-//7 - distance, HC-SR04 or tfluna or tof 
-//8 - motion, PIR, etc.
-//9 - BMP pressure
-//10 - BMP temp
-//11 - BMP altitude
-//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
-//13 - BMe pressure
-//14 - BMe temp
-//15 - BMe humidity
-//16 - BMe altitude
-//17 - BME680 temp
-18 - BME680 rh
-19 - BME680 air press
-20  - BME680 gas sensor
-21 - human present (mmwave)
-50 - any binary, 1=yes/true/on
-51 = any on/off switch
-52 = any yes/no switch
-53 = any 3 way switch
-54 = 
-55 - heat on/off {requires N DIO Pins}
-56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
-57 - a/c fan on/off
-58 - leak yes/no
-60 -  battery power
-61 - battery %
-98 - clock
-99 = any numerical value
-100+ is a server type sensor, to which other sensors will send their data
-101 - weather display server with local persistent storage (ie SD card)
-102 = any weather server that has no persistent storage
-103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
-104 = any server without local persistent storage that uploads data cloud storage
-*/
-
-
-  //uncomment the devices attached!
-  //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
-    //#define _USEDHT 1 //specify DHT pin
-    //#define _USEAHT 1 //specify AHT I2C
-    //#define _USEAHTADA 0x38 // with bmp combined
-    //#define _USEBMP  0x77 //set to 0x76 for stand alone bmp, or 0x77 for combined aht bmp
-    //#define _USEBME 1 //specify BME I2C
-    //#define _USEBME680_BSEC 1 //specify BME680 I2C with BSEC
-    //#define _USEBME680 1 //specify BME680 I2C
-    //#define _USEPOWERPIN 12 //specify the pin being used for power
-    //#define _USESOILMODULE A0 //specify the pin being read for soil moisture
-    //#define _USESOILRES 1 //use soil resistnace, pin and power specified later
-    //#define _USESOILCAP 1 //specify soil capacitance sensor pin
-    //#define _USEBARPRED 1 //specify barometric pressure prediction
-    //#define _USEHCSR04 1 //distance
-    //#define _USETFLUNA 1 // distance
-    //#define _USESSD1306  1
-    //#define _USELIBATTERY  A0 //set to the pin that is analogin
-    //#define _USESLABATTERY  A0 //set to the pin that is analogin
-    //#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-    //#define _USELEAK 1 //specify the pin being used for leak detection
-    //binary switches
-    //#define _CHECKAIRCON 1
-    //#define _CHECKHEAT 1 //check which lines are charged to provide heat
-    //#define _USEMUX //use analog input multiplexor to allow for >6 inputs
-    //#define _USECALIBRATIONMODE 6 //testing mode
-
-
-
-    #ifdef _ISHVAC
-    
-        #ifdef _CHECKAIRCON 
-        //const uint8_t DIO_INPUTS=2; //two pins assigned
-        const uint8_t DIOPINS[4] = {35,34,39,36}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out
-        #endif
-
-        #ifdef _CHECKHEAT
-        //  const uint8_t DIO_INPUTS=6; //6 sensors
-          #ifdef _USEMUX
-            //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
-            //36 is first pin from EN, and the rest are consecutive
-            const uint8_t DIOPINS[5] = {32,33,25,26,36}; //first 4 lines are DIO to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin). So 36 will be Analog and 32 will be s0...
-
-          #else
-            const uint8_t DIOPINS[6] = {36, 39, 34, 35,32,33}; //ADC bank 1, starting from pin next to EN
-          #endif
-          const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
-
-        #endif
-
-        #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
-          #define _HVACHXPNTS 24
-        #endif
-    #endif
-#endif  
+// Include necessary Arduino libraries for basic types
+#include <Arduino.h>
+#include <WiFi.h>
+#include <IPAddress.h>
 
 
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
@@ -224,17 +95,8 @@ typedef enum {
   } ERRORCODES;
 
 
-  #ifdef _ISPERIPHERAL
-  //create a struct type to hold sensor history
-  struct STRUCT_SNSHISTORY {
-    int16_t sensorIndex[SENSORNUM];
-    uint8_t HistoryIndex[SENSORNUM];
-    uint32_t TimeStamps[SENSORNUM][SENSORHISTORYSIZE] = {0};
-    double Values[SENSORNUM][SENSORHISTORYSIZE] = {0};
-    uint8_t Flags[SENSORNUM][SENSORHISTORYSIZE] = {0};
-  };
-  #endif
 
+  
   struct STRUCT_KEYS {
     uint8_t ESPNOW_KEY[17]; // espnow PMK key, only 16 bytes are used
   };
@@ -391,6 +253,7 @@ typedef enum {
       uint8_t isLeak;
 
       uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
+      
       #endif
   
       char lastError[76];
@@ -482,5 +345,66 @@ struct DeviceVal {
  
 
 */
+
+//------------------
+// Now include headers that depend on the above type definitions
+#include "Devices.hpp"
+
+// Forward declare classes to avoid circular dependencies
+class WebServer;
+class LGFX;
+
+#include "utility.hpp"
+#include "server.hpp"
+#include "timesetup.hpp"
+
+#ifdef _USESDCARD
+#include "SDCard.hpp"
+#endif
+
+#ifdef _USEWEATHER
+#include "Weather_Optimized.hpp"
+#endif
+
+#ifdef _USETFT
+#include "graphics.hpp"
+#endif
+
+#include "AddESPNOW.hpp"
+#include "BootSecure.hpp"
+
+#ifdef _ISPERIPHERAL
+#include "sensors.hpp"
+#endif
+
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+#endif
+
+#ifdef _USEFIREBASE
+#include "FirebaseUpload.hpp"
+#endif
+
+//general libraries
+#include <Arduino.h>
+#include <String.h>
+#include <TimeLib.h>
+#include <time.h>
+#include <SPI.h>
+#include <SD.h>
+#include <string>
+#ifdef _USETFT
+#include <LovyanGFX.hpp>
+#endif
+#include <ArduinoOTA.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <esp_task_wdt.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+
 
 #endif

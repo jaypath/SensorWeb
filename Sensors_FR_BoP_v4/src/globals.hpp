@@ -21,7 +21,6 @@
 //#define _USEGSHEET
 //#define _USESDCARD
 
-#define MYNAME "FRBoP"
 #define NUMDEVICES 50 //how many should I store
 #define NUMSENSORS 100 //how many should I store
 #define SENSORNUM 1 //how many do I have

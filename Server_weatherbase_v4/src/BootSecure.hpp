@@ -5,12 +5,12 @@
 
 
     #include <Preferences.h>
-    #include "globals.hpp"
-    #include "utility.hpp"
-    #include "server.hpp"
     #include <mbedtls/aes.h>
     #include <mbedtls/cipher.h>
     #include "esp_random.h"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_PrefsH;
 
 
     #define BOOTKEY "YfMVDR2qtzxJdD9yNhN6IDGPwgpyMjk2" //must be 128, 192, or 256 bits long - used for decrypting/encrypting boot parameters

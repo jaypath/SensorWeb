@@ -1,20 +1,23 @@
+#ifdef _ISPERIPHERAL
 #ifndef SENSORS_HPP
 #define SENSORS_HPP
-#ifndef _ISPERIPHERAL
-#error "Peripheral devices require _ISPERIPHERAL to be defined in globals.hpp."
-#endif
+
 
 
 #include <Arduino.h>
-#include "globals.hpp"
-#include "timesetup.hpp"
-#include "Devices.hpp"
-#include "server.hpp"
+
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_CORE;
+struct STRUCT_PrefsH;
+struct DevType;
+struct SnsType;
+class Devices_Sensors;
 
 
 
 //note that extra values here will be considered an error.
-/*
+/* example:
+  #define SENSORNUM 20
   #define SENSORTYPES              {3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //list of each sensorytype in order. can have zeros for unused sensors, but must init all to the correct sensortypes
   #define MONITORINGSTATES         {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
   #define OUTSIDESTATES            {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each element indicates outside state for the ith sensor, with 1 means outside, 0 means not outside
@@ -23,16 +26,19 @@
   #define LIMIT_MAX                {550,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each ith value is the max  for each sensor in NVS
   #define LIMIT_MIN                {50,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} //each ith value is the min values for each sensor in NVS
 */
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+
+#define SENSORNUM 1
 #define SENSORTYPES              {3} //can have zeros for unused sensors, but must init all to the correct sensortypes
-#define MONITORINGSTATES         {1} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
+#define MONITORINGSTATES         {0b10000011} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
 #define OUTSIDESTATES            {0} //each element indicates outside state for the ith sensor, with 1 means outside, 0 means not outside
 #define INTERVAL_POLL            {300} //each ith value is the seconds between polls
 #define INTERVAL_SEND            {1200} //each ith value is the seconds between sends
 #define LIMIT_MAX                {550} //each ith value is the max  for each sensor in NVS
 #define LIMIT_MIN                {50} //each ith value is the min values for each sensor in NVS
+#define SENSORHISTORYSIZE 150
 
-
-  #define _USELED 12 //uncomment this to use an LED, value is the pin number
+  #define _USELED 12 //uncomment this to use an LED, value is the pin number. Requires LED libraries
 
    //uncomment the devices attached!
   //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
@@ -54,7 +60,7 @@
     //#define _USELIBATTERY  A0 //set to the pin that is analogin
     //#define _USESLABATTERY  A0 //set to the pin that is analogin
     //#define _USELOWPOWER 36e8 //microseconds must also have _USEBATTERY
-    //#define _USELEAK 1 //specify the pin being used for leak detection
+    //#define _USELEAK 1 //specify the pin being used for leak detection reading
     //binary switches
     //#define _CHECKAIRCON 1
     //#define _CHECKHEAT 1 //check which lines are charged to provide heat
@@ -153,32 +159,20 @@
     #endif
 
     #ifdef _USELEAK
-      #define _LEAKPIN 12
-      #define _LEAKDIO 13
+      #define LEAKPOWERPIN 12
     #endif
 
     #ifdef _USESOILRES
       //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
       #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
-      #ifdef _USE32
-        const int SOILPIN = 32; // ESP32 can use any GPIO pin with certain limits - recommend to use a pin from ADC1 bank (ADC2 interferes with WiFi) - for example GPIO 36 which is VP or 32
-      #endif
-      #ifdef _USE8266
-        const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0;
-      #endif
+      #define SOILPOWERPIN 12
+
       //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
     #endif
 
-
-    #ifdef _USESOILRESOLD
-      #define SOILRESISTANCE 4700
-      #define SOILR_MAX 2000
-      const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0; use A4 or 32 for esp32 
-      //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
-    #endif
 
     #ifdef _USESOILCAP
-      const int SOILPIN = A0;  // ESP8266 Analog Pin ADC0 = A0
+      #define SOILPOWERPIN 12
     #endif
 
     #ifdef _USEHCSR04
@@ -364,5 +358,26 @@ void redrawOled(void);
 #endif
 
 
+  //create a struct type to hold sensor history
+  struct STRUCT_SNSHISTORY {
+    int16_t sensorIndex[SENSORNUM];
+    uint8_t HistoryIndex[SENSORNUM];
+    uint32_t TimeStamps[SENSORNUM][SENSORHISTORYSIZE] = {0};
+    double Values[SENSORNUM][SENSORHISTORYSIZE] = {0};
+    uint8_t Flags[SENSORNUM][SENSORHISTORYSIZE] = {0};
 
+    bool recordSentValue(struct SnsType *S, int16_t hIndex) {
+      if (hIndex < 0 || hIndex >= SENSORNUM) return false;
+      HistoryIndex[hIndex]++;
+      if (HistoryIndex[hIndex] >= SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
+      TimeStamps[hIndex][HistoryIndex[hIndex]] = S->timeRead;
+      Values[hIndex][HistoryIndex[hIndex]] = S->snsValue;
+      Flags[hIndex][HistoryIndex[hIndex]] = S->Flags;
+      return true;
+    }
+  };
+
+
+
+#endif
 #endif

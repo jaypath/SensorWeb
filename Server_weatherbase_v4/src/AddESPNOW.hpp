@@ -3,22 +3,19 @@
 
     //#define _USEENCRYPTION
 
-
-    #include <esp_now.h>
     #include "globals.hpp"
-    #include "utility.hpp"
-    #include "server.hpp"
-    #include "BootSecure.hpp"
+    #include <esp_now.h>
     #include <string.h>
     #include <esp_system.h>
-    #include "timesetup.hpp"
 
+// Forward declarations - avoid circular includes since globals.hpp includes this file
+struct STRUCT_PrefsH;
+struct STRUCT_CORE;
+struct DevType;
+class Devices_Sensors;
 
 extern STRUCT_PrefsH Prefs;
 extern STRUCT_CORE I;
-
-
-extern DevType Devices;
 
 // --- ESPNow Message Types ---
 constexpr uint8_t ESPNOW_MSG_BROADCAST_ALIVE      = 0;   // Broadcast: device is alive (all devices, periodic)

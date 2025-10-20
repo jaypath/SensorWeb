@@ -1,4 +1,5 @@
 //#define _DEBUG
+#include "globals.hpp"
 #include "timesetup.hpp"
 #include <TimeLib.h>
 #include <NTPClient.h>

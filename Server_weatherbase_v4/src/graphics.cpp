@@ -1,5 +1,8 @@
-#include "graphics.hpp"
 #include "globals.hpp"
+
+#ifdef _USETFT
+
+#include "graphics.hpp"
 #include "BootSecure.hpp"
 
 
@@ -1439,17 +1442,6 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
 
 
 // Setup display functions
-void displaySetupProgress(bool success) {
-  if (success) {
-    tft.setTextColor(TFT_GREEN);
-    tft.println("OK.\n");
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-  } else {
-    tft.setTextColor(TFT_RED);
-    tft.println("FAIL");
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-  }
-}
 
 void displayWiFiStatus(byte retries, bool success) {
   if (success) {
@@ -1560,3 +1552,5 @@ void checkTouchScreen() {
   I.touchY = 0;
 
 }
+
+#endif

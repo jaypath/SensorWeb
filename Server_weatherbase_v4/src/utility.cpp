@@ -1,3 +1,4 @@
+#include "globals.hpp"
 #include "utility.hpp"
 #include "BootSecure.hpp"
 
@@ -15,8 +16,18 @@ extern const uint16_t BG_COLOR;
 //setup functions
 
 void initSystem() {
-  #ifdef _USETFT
+
+  #ifdef _USESPI
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
+  #endif
+
+  #ifdef _USEI2C
+  Wire.begin();
+  Wire.setClock(400000L);
+  #endif
+  
+
+  #ifdef _USETFT
   tft.init();
   tft.setRotation(2);
   tft.setCursor(0,0);
@@ -32,19 +43,19 @@ void initSystem() {
           // Security check failed for any reason, halt device
           while (1) { delay(1000); }
       #endif
-      #ifdef _USETFT
-      tft.println("Prefs failed to load with error code: " + String(boot_status));
+      tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
       delay(1000);
-      #endif
-  }
+
+    }
 
 }
 
 
-bool initSDCard() {
+int8_t initSDCard() {
+  //returns 1 if successful, 0 if not successful, -1 if not supported
   #ifdef _USESDCARD
   #ifdef _USETFT
-  tft.print("SD Card mounting...");
+  tftPrint("SD Card mounting...", false, TFT_WHITE, 2, 1, false, -1, -1);
   #endif
   if (!SD.begin(41)) {
       displaySetupProgress(false);
@@ -55,22 +66,22 @@ bool initSDCard() {
       I.resetInfo = RESET_SD;
       I.lastResetTime = I.currentTime;
       controlledReboot("SD Card failed", RESET_SD, true);
-      return false;
+      return 0;
   }
 
   SerialPrint("SD mounted... ",true);
   displaySetupProgress(true);
 
-  return true;
+  return 1;
   #endif
-  return false;
+  return -1;
 }
 
 
 bool loadScreenFlags() {
   #ifdef _USESDCARD
   #ifdef _USETFT
-  tft.print("Loading core data from SD... ");
+  tftPrint("Loading core data from SD... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   #endif
   bool sdread = readScreenInfoSD();
   displaySetupProgress( sdread);
@@ -83,7 +94,7 @@ bool loadScreenFlags() {
 bool loadSensorData() {
   #ifdef _USESDCARD
   #ifdef _USETFT
-  tft.print("Loading sensor data from SD... ");
+  tftPrint("Loading sensor data from SD... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   #endif
   bool sdread = Sensors.readDevicesSensorsArrayFromSD();
   displaySetupProgress( sdread);
@@ -399,10 +410,12 @@ void initGsheetHandler() {
 
 
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
+  #ifndef _ISPERIPHERAL
   if (I.makeBroadcast || (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime)) {        
       // ESPNow does not require WiFi connection; always broadcast
       broadcastServerPresence();
   }
+  #endif
 }
 
 void handleStoreCoreData() {
@@ -425,6 +438,12 @@ void handleStoreCoreData() {
       storeScreenInfoSD();
       #endif
   }
+
+  #ifdef _USESDCARD
+  //store device data
+  Sensors.storeDevicesSensorsArrayToSD(60);
+  Sensors.storeAllSensorsSD(60); //store all sensors to SD card once an hour
+  #endif
 }
 
 void initScreenFlags(bool completeInit) {
@@ -1088,5 +1107,39 @@ uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet
   return nDeleted;
   #else
   return MAX_UINT32;
+  #endif
+}
+
+bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsize, bool cleartft, int x, int y) {
+  //wrapper function to print to TFT, if available
+  #ifdef _USETFT
+
+  if (cleartft) tft.clear();
+  if (x>=0 && y>=0) tft.setCursor(x,y);
+  tft.setTextColor(color);
+  tft.setTextFont(fontType);
+  tft.setTextSize(fontsize);
+  tft.print(S.c_str());
+  if (newline) tft.println();
+  tft.setTextColor(FG_COLOR);
+  tft.setTextFont(2);
+  tft.setTextSize(1);
+  return true;
+  #else
+  return false;
+  #endif
+}
+
+void displaySetupProgress(bool success) {
+  #ifdef _USETFT
+  if (success) {
+    tft.setTextColor(TFT_GREEN);
+    tft.println("OK.\n");
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  } else {
+    tft.setTextColor(TFT_RED);
+    tft.println("FAIL");
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  }
   #endif
 }
