@@ -2,20 +2,24 @@
 #define GLOBALS_HPP
 
 //edit these!
-//#define _ISPERIPHERAL 1
-#define _USESPI //if required for sensors or peripherals
+#define _ISPERIPHERAL 1
+//#define _USESPI //if required for sensors or peripherals
 //#define _USEI2C //if required for sensors or peripherals
-#define _USETFT
-#define _USESERIAL
-#define _USEWEATHER
-#define _USEBATTERY
-#define _USEGSHEET
-#define _USESDCARD
+//#define _USETFT
+//#define _USESERIAL
+//#define _USEWEATHER
+//#define _USEBATTERY
+//#define _USEGSHEET
+//#define _USESDCARD
 
 #define TIMEZERO 1735689600 //2025-01-01 00:00:00
 #define NUMDEVICES 50 //max number of devices to track
 #define NUMSENSORS 100 //number of sensors to track 
 #define MYTYPE 100
+
+#if defined(_ISPERIPHERAL)
+#define SENSORNUM 1 //number of sensors to track
+#endif
 
 #define WDT_TIMEOUT_MS 120000
 
@@ -384,6 +388,7 @@ class LGFX;
 #ifdef _USEFIREBASE
 #include "FirebaseUpload.hpp"
 #endif
+
 
 //general libraries
 #include <Arduino.h>

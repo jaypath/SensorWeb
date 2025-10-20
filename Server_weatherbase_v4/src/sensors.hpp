@@ -28,17 +28,15 @@ class Devices_Sensors;
 */
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
-#define SENSORNUM 1
-#define SENSORTYPES              {3} //can have zeros for unused sensors, but must init all to the correct sensortypes
+#define SENSORTYPES              {3} //can have zeros for unused sensors, but must init all to the correct sensortypes. element number must match SENSORNUM (as defined in globals.hpp)
 #define MONITORINGSTATES         {0b10000011} //each element indicates monitoring state for the ith sensor, 0 = not monitored (not sent), 1 = monitored non-critical (take no action and expiration is irrelevant), 2 = monitored moderately critical (flag if out of bounds, but not if expired), 3 = monitored critically critical (flag if out of bounds or expired)
 #define OUTSIDESTATES            {0} //each element indicates outside state for the ith sensor, with 1 means outside, 0 means not outside
 #define INTERVAL_POLL            {300} //each ith value is the seconds between polls
 #define INTERVAL_SEND            {1200} //each ith value is the seconds between sends
-#define LIMIT_MAX                {550} //each ith value is the max  for each sensor in NVS
-#define LIMIT_MIN                {50} //each ith value is the min values for each sensor in NVS
+#define LIMIT_MAX                {200} //each ith value is the max  for each sensor in NVS
+#define LIMIT_MIN                {0} //each ith value is the min values for each sensor in NVS
 #define SENSORHISTORYSIZE 150
-
-  #define _USELED 12 //uncomment this to use an LED, value is the pin number. Requires LED libraries
+#define _USELED 12 //uncomment this to use an LED, value is the pin number. Requires LED libraries
 
    //uncomment the devices attached!
   //note: I2c on esp32 is 22=scl and 21=sda; d1=scl and d2=sda on nodemcu
@@ -51,7 +49,7 @@ class Devices_Sensors;
     //#define _USEBME680 1 //specify BME680 I2C
     //#define _USEPOWERPIN 12 //specify the pin being used for power
     //#define _USESOILMODULE A0 //specify the pin being read for soil moisture
-    #define _USESOILRES 33//use soil resistnace, pin and power specified later
+    #define _USESOILRES 32//use soil resistnace, pin and power specified later
     //#define _USESOILCAP 1 //specify soil capacitance sensor pin
     //#define _USEBARPRED 1 //specify barometric pressure prediction
     //#define _USEHCSR04 1 //distance
@@ -165,7 +163,7 @@ class Devices_Sensors;
     #ifdef _USESOILRES
       //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
       #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
-      #define SOILPOWERPIN 12
+      #define SOILPOWERPIN 33
 
       //const int SOILDIO = _USESOILRES;  // ESP8266 Analog Pin ADC0 = A0
     #endif
@@ -378,6 +376,9 @@ void redrawOled(void);
   };
 
 
+  #ifdef _USELED
+  #include "LEDGraphics.hpp"
+  #endif
 
 #endif
 #endif

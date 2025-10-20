@@ -58,29 +58,6 @@
 static uint32_t wifiDownSince = 0;
 static uint32_t lastPwdRequestMinute = 0;
 
-
-
-//gen global types
-
-/*
-//gen unions
-union convertULONG {
-  char str[4];
-  unsigned long val;
-};
-union convertINT {
-  char str[2];
-  int16_t val;
-};
-
-union convertBYTE {
-  char str;
-  uint8_t  val;
-};
-*/
-
-//globals
-
 uint16_t mydeviceindex = 0; //local stored index of my device
 extern LGFX tft;
 // SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
@@ -93,6 +70,10 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
 #ifdef _USEWEATHER
 //extern uint8_t OldTime[4];
 extern WeatherInfoOptimized WeatherData;
+#endif
+
+#ifdef _USELED
+  extern Animation_type LEDs;
 #endif
 
 extern double LAST_BAR;
@@ -114,9 +95,43 @@ void initOTA() {
     ArduinoOTA.setHostname("WeatherStation");
     ArduinoOTA.setPassword("12345678");
     #ifdef _USETFT
-    ArduinoOTA.onStart([]() { displayOTAProgress(0, 100); });
+    ArduinoOTA.onStart([]() { 
+        displayOTAProgress(0, 100); 
+        #ifdef _USELED
+        // Set all LEDs to green to indicate OTA start
+        for (byte j = 0; j < LEDCOUNT; j++) {
+          LEDARRAY[j] = (uint32_t) 0 << 16 | 26 << 8 | 0; // green at 10% brightness
+        }
+        FastLED.show();
+        #endif
+    });
+
     ArduinoOTA.onEnd([]() {     tft.setTextSize(1); tft.println("OTA End. About to reboot!"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { displayOTAProgress(progress, total); });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        #ifdef _USESERIAL
+          Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+        #endif
+        #ifdef _USETFT
+        displayOTAProgress(progress, total);
+        #endif
+        #ifdef _USESSD1306
+          if ((int)(progress) % 10 == 0) oled.print(".");   
+        #endif
+        #ifdef _USELED
+          // Show OTA progress on LEDs as a filling bar
+          for (byte j = 0; j < LEDCOUNT; j++) {
+            LEDARRAY[LEDCOUNT - j - 1] = 0;
+            if (j <= (double) LEDCOUNT * progress / total) {
+              LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+            }
+          }
+          FastLED.show();
+        #endif
+      });
+  
+    
+    
     ArduinoOTA.onError([](ota_error_t error) { displayOTAError(error); });
     #endif
     ArduinoOTA.begin();
@@ -124,6 +139,17 @@ void initOTA() {
     tftPrint("OK.", true, TFT_GREEN);
 }
 
+void initLEDs() {
+    #ifdef _USELED
+    FastLED.addLeds<WS2813, _USELED, GRB>(LEDARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
+    LEDs.LED_animation_defaults(1);
+    LEDs.LEDredrawRefreshMS = 20;
+    LEDs.LED_set_color(255, 255, 255, 255, 255, 255); // default is white
+    #ifdef _USESERIAL
+      Serial.println("LED strip initialized");
+    #endif
+     #endif
+}
 
 
 // --- Main Setup ---
@@ -140,7 +166,6 @@ void setup() {
     Serial.println("Serial started");
     SerialPrint("SerialPrint started",true);
     #endif
-
 
     WEBHTML.reserve(20000);
 
@@ -184,7 +209,7 @@ void setup() {
     displaySetupProgress( true);
     SerialPrint("Wifi OK",true);
 
-
+    
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     if (setupTime()) {
         displaySetupProgress( true);
@@ -272,7 +297,9 @@ void setup() {
     initHardwareSensors();
     #endif
 
-
+    #ifdef _USELED
+    initLEDs();
+    #endif
     
     #ifdef _USEWEATHER
     tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
@@ -291,6 +318,14 @@ void setup() {
         WeatherData.updateWeatherOptimized(3600);
     }
     tftPrint("Setup OK.", true, TFT_GREEN);
+
+    #ifdef _USETFT
+    tft.clear();
+    tft.setCursor(0,0);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    #endif
     #endif
 
     
@@ -301,6 +336,7 @@ void setup() {
 
 // --- Main Loop ---
 void loop() {
+
     esp_task_wdt_reset();
 
     updateTime(); //sets I.currenttime
@@ -313,6 +349,9 @@ void loop() {
     GSheet.ready(); //maintains authentication
     #endif
     
+    #ifdef _USELED
+    LEDs.LED_update();
+    #endif
 
     if (WiFi.status() != WL_CONNECTED) {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
@@ -332,6 +371,7 @@ void loop() {
         ArduinoOTA.handle();
         server.handleClient();
     }
+
 
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
@@ -453,6 +493,26 @@ void loop() {
         OldTime[2] = hour();
 
 
+        #ifdef _USE32
+        size_t freeHeap = ESP.getFreeHeap();
+        size_t minFreeHeap = ESP.getMinFreeHeap();
+          
+        // If memory is critically low, restart
+        if (freeHeap < 10000) { // Less than 10KB free
+          SerialPrint("CRITICAL: Low memory detected, restarting system", true);
+          storeError("CRITICAL: Low memory detected, restarting system",true);
+          delay(1000);
+          ESP.restart();
+        }
+        
+        // If minimum free heap is very low, log warning
+        if (minFreeHeap < 5000) { // Less than 5KB minimum
+          SerialPrint("WARNING: Memory fragmentation detected", true);
+          storeError("WARNING: Memory fragmentation detected",true);
+          ESP.restart();
+        }
+        #endif
+
         #ifndef _ISPERIPHERAL
         checkExpiration(-1, I.currentTime, false);
         #endif
@@ -478,24 +538,55 @@ void loop() {
         checkTimezoneUpdate();
         I.ESPNOW_SENDS = 0;
         I.ESPNOW_RECEIVES = 0;
+
+
+        #ifdef _REBOOTDAILY
+        SerialPrint("Rebooting daily...",true);
+        ESP.restart();
+        #endif
+
+        #ifdef _ISPERIPHERAL
+            #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
+
+                #ifdef _USESERIAL
+                SerialPrint( "Reset HVACs...",true);
+                #endif
+                initHVAC();
+
+            #endif
+        #endif
+
+      
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
 
+        #ifdef _USETFT
+        fcnDrawScreen();
+        if (I.screenChangeTimer > 0) I.screenChangeTimer--;
+        else I.ScreenNum=0;
+        #endif
 
         #ifdef _ISPERIPHERAL
-        //run through all my sensors and try and update them
+            //run through all my sensors and try and update them
 
-        for (int16_t i = 0; i < SENSORNUM; i++) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
-            if (sensor && sensor->IsSet) {
-                int8_t readResult = ReadData(sensor, false, mydeviceindex);
-                
-                bool sendResult = SendData(sensor, false);
-                if (sendResult)                     SensorHistory.recordSentValue(sensor,i);
-                
+            for (int16_t i = 0; i < SENSORNUM; i++) {
+                SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+                if (sensor && sensor->IsSet) {
+                    int8_t readResult = ReadData(sensor, false, mydeviceindex);
+                    
+                    bool sendResult = SendData(sensor, false);
+                    if (sendResult)                     SensorHistory.recordSentValue(sensor,i);
+
+                    #ifdef _USELED
+                        if (sensor->snsType == 3) { // soil sensor
+                        LEDs.LED_set_color_soil(sensor);
+                        }
+                    #endif
+                    
+                }
             }
-        }
+
         #endif
     }
 }

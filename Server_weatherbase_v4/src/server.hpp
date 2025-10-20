@@ -35,12 +35,17 @@ class Devices_Sensors;
 
 //declared as global constants
 extern STRUCT_CORE I;
-extern uint32_t LAST_WEB_REQUEST;
-extern WeatherInfoOptimized WeatherData;
-extern uint32_t LAST_BAR_READ;
-extern uint32_t LAST_BAT_READ;
-extern double batteryArray[48];
-extern double LAST_BAR;
+
+#ifdef _USEWEATHER
+  extern WeatherInfoOptimized WeatherData;
+#endif
+
+#ifndef _ISPERIPHERAL
+  extern uint32_t LAST_BAR_READ;
+  extern uint32_t LAST_BAT_READ;
+  extern double batteryArray[48];
+  extern double LAST_BAR;
+#endif
 // SECSCREEN and HourlyInterval are now members of Screen struct (I.SECSCREEN, I.HourlyInterval)
 
 

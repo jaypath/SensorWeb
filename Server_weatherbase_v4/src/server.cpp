@@ -1306,6 +1306,7 @@ void handleREQUESTUPDATE() {
 
 
 void handleREQUESTWEATHER() {
+  #ifdef _USEWEATHER
 //if no parameters passed, return current temp, max, min, today weather ID, pop, and snow amount
 //otherwise, return the index value for the requested value
 
@@ -1352,7 +1353,9 @@ void handleREQUESTWEATHER() {
 
     }
   }
-  
+  #else
+  WEBHTML = "Weather not enabled on this device.";
+  #endif
 
   serverTextClose(200,false);
 
@@ -1455,10 +1458,13 @@ void handleSTATUS() {
       </button>
     </form>
   )===";
+  #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+  #endif
+  #ifdef _USEGSHEET
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "GSheets enabled: " + (String) GSheetInfo.useGsheet + "<br>";
   WEBHTML += "Last GSheets upload time: " + (String) (GSheetInfo.lastGsheetUploadTime ? dateify(GSheetInfo.lastGsheetUploadTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -1476,7 +1482,7 @@ void handleSTATUS() {
   <p style="font-family:arial, sans-serif">
   <button type="submit">Upload Google Sheets Now</button>
   </p></form><br>)===";
-  
+  #endif
   WEBHTML = WEBHTML + "---------------------<br>";      
 
 
@@ -2717,6 +2723,7 @@ void handleCONFIG_POST() {
     }
   }
   
+#if defined(_USETFT) && !defined(_ISPERIPHERAL)
   // Process showTheseFlags checkboxes - reconstruct byte from individual bits
   I.showTheseFlags = 0; // Start with all bits cleared
   if (server.hasArg("flag_bit0")) {
@@ -2744,7 +2751,9 @@ void handleCONFIG_POST() {
     bitSet(I.showTheseFlags, 7);
   }
 
-//check for invalid values
+
+#if defined(_USEWEATHER) && defined(_USETFT)
+  //check for invalid values
 if (I.cycleHeaderMinutes < 1) {
   I.cycleHeaderMinutes = 1;
 }
@@ -2781,6 +2790,7 @@ if (I.screenChangeTimer > 120) {
 if (I.IntervalHourlyWeather > 4) {
   I.IntervalHourlyWeather = 4;
 }
+#endif
 
   // Save the updated configuration to persistent storage
   I.isUpToDate = false;
@@ -3048,7 +3058,7 @@ void handleWeather() {
   I.lastServerStatusUpdate = I.currentTime;
   WEBHTML = "";
   serverTextHeader();
-
+  #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
   
@@ -3174,13 +3184,17 @@ void handleWeather() {
   
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "</html>";
+
+  #else
+  WEBHTML = "Weather not enabled on this device.";
+  #endif
   
   serverTextClose(200, true);
 }
 
 void handleWeather_POST() {
   I.lastServerStatusUpdate = I.currentTime;
-  
+  #ifdef _USEWEATHER
   // Handle location update
   if (server.hasArg("lat") && server.hasArg("lon")) {
     double newLat = server.arg("lat").toDouble();
@@ -3205,10 +3219,16 @@ void handleWeather_POST() {
     server.sendHeader("Location", "/WEATHER");
     server.send(302, "text/plain", "Missing coordinates. Please try again.");
   }
+  #else
+  WEBHTML = "Weather not enabled on this device.";
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Weather not enabled on this device.");
+  #endif
 }
 
 void handleWeatherRefresh() {
   I.lastServerStatusUpdate = I.currentTime;
+  #ifdef _USEWEATHER
   
   // Force immediate weather update
   bool updateResult = WeatherData.updateWeather(0);
@@ -3220,11 +3240,16 @@ void handleWeatherRefresh() {
     server.sendHeader("Location", "/WEATHER");
     server.send(302, "text/plain", "Weather update failed. Please try again.");
   }
+
+  #else
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Weather not enabled on this device.");
+  #endif
 }
 
 void handleWeatherZip() {
   I.lastServerStatusUpdate = I.currentTime;
-  
+  #ifdef _USEWEATHER
   // Handle ZIP code lookup (legacy function for backward compatibility)
   if (server.hasArg("zipcode")) {
     String zipCode = server.arg("zipcode");
@@ -3289,6 +3314,10 @@ void handleWeatherAddress() {
     server.sendHeader("Location", "/WEATHER?error=missing_fields");
     server.send(302, "text/plain", "Missing required address fields. Please provide street, city, state, and ZIP code.");
   }
+  #else
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Weather not enabled on this device.");
+  #endif
 }
 
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
@@ -3343,6 +3372,9 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
     #endif
     return false;
   }
+  #else
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Weather not enabled on this device.");
   #endif
   return false;
   
@@ -3796,8 +3828,9 @@ void handleSDCARD_STORE_DEVICES() {
 }
 
 void handleSDCARD_DELETE_SCREENFLAGS() {
-  
+  #ifdef _USESDCARD
   I.lastServerStatusUpdate = I.currentTime;
+
   
   // Delete the ScreenFlags.dat file
   uint32_t nDeleted = deleteCoreStruct();
@@ -3817,12 +3850,17 @@ void handleSDCARD_DELETE_SCREENFLAGS() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Core data reset, but files were not deleted..");
   } 
-  
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_DELETE_WEATHERDATA() {
   I.lastServerStatusUpdate = I.currentTime;
-  
+  #ifdef _USESDCARD
   // Delete the WeatherData.dat file
   uint32_t nDeleted = deleteDataFiles(false, true, false, false);
   if (nDeleted > 0) {
@@ -3834,6 +3872,12 @@ void handleSDCARD_DELETE_WEATHERDATA() {
     server.sendHeader("Location", "/SDCARD");
     server.send(302, "text/plain", "Failed to delete Weather data.");
   }
+  #else
+  SerialPrint("No SD card found", true);
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "No SD card found.");
+  return;
+  #endif
 }
 
 void handleSDCARD_SAVE_SCREENFLAGS() {
@@ -3853,7 +3897,7 @@ void handleSDCARD_SAVE_SCREENFLAGS() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -3861,6 +3905,7 @@ void handleSDCARD_SAVE_SCREENFLAGS() {
 
 void handleSDCARD_SAVE_WEATHERDATA() {
   #ifdef _USESDCARD
+  #ifdef _USEWEATHER
   I.lastServerStatusUpdate = I.currentTime;
   
   // Save WeatherData.dat immediately
@@ -3879,6 +3924,7 @@ void handleSDCARD_SAVE_WEATHERDATA() {
   server.sendHeader("Location", "/SDCARD");
   server.send(302, "text/plain", "No SD card found.");
   return;
+  #endif
   #endif
 }
 
@@ -3982,7 +4028,7 @@ void handleSDCARD_TIMESTAMPS() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -4085,7 +4131,7 @@ void handleERROR_LOG() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -4118,7 +4164,7 @@ void handleSDCARD_DELETE_ERRORLOG() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -4148,7 +4194,7 @@ void handleSDCARD_DELETE_TIMESTAMPS() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -4180,7 +4226,7 @@ void handleSDCARD_DELETE_GSHEET() {
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
+  server.sendHeader("Location", "/");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif

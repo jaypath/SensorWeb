@@ -93,6 +93,8 @@ String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //w
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
+#ifdef _USETFT
 bool tftPrint(String S, bool newline, uint16_t color=FG_COLOR, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 void displaySetupProgress(bool success);
+#endif
 #endif

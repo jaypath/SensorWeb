@@ -536,7 +536,6 @@ bool SerialPrint(String S,bool newline) {
 
 bool SerialPrint(const char* S,bool newline) {
   bool printed =false;
-
   
   #ifdef _USESERIAL
     Serial.printf("%s",S);
@@ -1110,9 +1109,10 @@ uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet
   #endif
 }
 
+
+#ifdef _USETFT
 bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsize, bool cleartft, int x, int y) {
   //wrapper function to print to TFT, if available
-  #ifdef _USETFT
 
   if (cleartft) tft.clear();
   if (x>=0 && y>=0) tft.setCursor(x,y);
@@ -1125,13 +1125,9 @@ bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsi
   tft.setTextFont(2);
   tft.setTextSize(1);
   return true;
-  #else
-  return false;
-  #endif
 }
 
 void displaySetupProgress(bool success) {
-  #ifdef _USETFT
   if (success) {
     tft.setTextColor(TFT_GREEN);
     tft.println("OK.\n");
@@ -1141,5 +1137,5 @@ void displaySetupProgress(bool success) {
     tft.println("FAIL");
     tft.setTextColor(FG_COLOR,BG_COLOR);
   }
-  #endif
 }
+#endif
