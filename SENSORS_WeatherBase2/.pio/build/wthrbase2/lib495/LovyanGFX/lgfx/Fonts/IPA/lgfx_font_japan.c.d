@@ -1,4 +1,0 @@
-.pio/build/wthrbase2/lib495/LovyanGFX/lgfx/Fonts/IPA/lgfx_font_japan.c.o: \
- .pio/libdeps/wthrbase2/LovyanGFX/src/lgfx/Fonts/IPA/lgfx_font_japan.c \
- .pio/libdeps/wthrbase2/LovyanGFX/src/lgfx/Fonts/IPA/lgfx_font_japan.h \
- C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32/cores/esp32/pgmspace.h
