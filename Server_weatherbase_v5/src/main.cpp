@@ -272,7 +272,7 @@ void setup() {
     if (Prefs.DEVICENAME[0] == 0) {
         //name the device sensor-MAC where MAC is in hex without spacers
         #ifdef MYNAME
-        strncpy(Prefs.DEVICENAME, (String(MYNAME)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
+        strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
         Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
         #else
         //name the device server-MAC where MAC is in hex without spacers
@@ -522,7 +522,9 @@ void loop() {
 
 
         updateMyDevice(); //update mydeviceindex and ip
+        #ifdef _ISPERIPHERAL
         initPeripheralSensors(); //update the SensorHistory array to reflect the current sensors on this device
+        #endif
         
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
