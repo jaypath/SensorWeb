@@ -117,27 +117,34 @@ void initOTA() {
         #endif
     });
 
-    ArduinoOTA.onEnd([]() {     tft.setTextSize(1); tft.println("OTA End. About to reboot!"); });
-    
+    ArduinoOTA.onEnd([]() {     
+        tft.setTextSize(1); 
+        displayOTAProgress(100, 100);
+        tftPrint("OTA End.\nRebooting.", true, TFT_GREEN, 4, 1, false, 0, 200);
+    });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         #ifdef _USESERIAL
           Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
         #endif
         #ifdef _USETFT
-        displayOTAProgress(progress, total);
+        if (progress%10==0) {
+          displayOTAProgress(progress, total);
+        }
         #endif
         #ifdef _USESSD1306
           if ((int)(progress) % 10 == 0) oled.print(".");   
         #endif
         #ifdef _USELED
           // Show OTA progress on LEDs as a filling bar
-          for (byte j = 0; j < LEDCOUNT; j++) {
-            LEDARRAY[LEDCOUNT - j - 1] = 0;
-            if (j <= (double) LEDCOUNT * progress / total) {
-              LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+          if (progress%10==0) {
+            for (byte j = 0; j < LEDCOUNT; j++) {
+                LEDARRAY[LEDCOUNT - j - 1] = 0;
+                if (j <= (double) LEDCOUNT * progress / total) {
+                LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+                }
             }
+            FastLED.show();
           }
-          FastLED.show();
         #endif
       });
   
@@ -272,7 +279,7 @@ void setup() {
     if (Prefs.DEVICENAME[0] == 0) {
         //name the device sensor-MAC where MAC is in hex without spacers
         #ifdef MYNAME
-        strncpy(Prefs.DEVICENAME, (String(MYNAME)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
+        strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
         Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
         #else
         //name the device server-MAC where MAC is in hex without spacers
@@ -368,6 +375,9 @@ void loop() {
 
     esp_task_wdt_reset();
 
+    #ifdef _USEUDP
+    receiveUDPMessage(); //receive UDP messages, which are sent in parallel to ESPNow
+    #endif
     updateTime(); //sets I.currenttime
 
     #ifdef _USETFT
@@ -522,7 +532,9 @@ void loop() {
 
 
         updateMyDevice(); //update mydeviceindex and ip
+        #ifdef _ISPERIPHERAL
         initPeripheralSensors(); //update the SensorHistory array to reflect the current sensors on this device
+        #endif
         
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();

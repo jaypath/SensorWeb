@@ -117,27 +117,34 @@ void initOTA() {
         #endif
     });
 
-    ArduinoOTA.onEnd([]() {     tft.setTextSize(1); tft.println("OTA End. About to reboot!"); });
-    
+    ArduinoOTA.onEnd([]() {     
+        tft.setTextSize(1); 
+        displayOTAProgress(100, 100);
+        tftPrint("OTA End.\nRebooting.", true, TFT_GREEN, 4, 1, false, 0, 200);
+    });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         #ifdef _USESERIAL
           Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
         #endif
         #ifdef _USETFT
-        displayOTAProgress(progress, total);
+        if (progress%10==0) {
+          displayOTAProgress(progress, total);
+        }
         #endif
         #ifdef _USESSD1306
           if ((int)(progress) % 10 == 0) oled.print(".");   
         #endif
         #ifdef _USELED
           // Show OTA progress on LEDs as a filling bar
-          for (byte j = 0; j < LEDCOUNT; j++) {
-            LEDARRAY[LEDCOUNT - j - 1] = 0;
-            if (j <= (double) LEDCOUNT * progress / total) {
-              LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+          if (progress%10==0) {
+            for (byte j = 0; j < LEDCOUNT; j++) {
+                LEDARRAY[LEDCOUNT - j - 1] = 0;
+                if (j <= (double) LEDCOUNT * progress / total) {
+                LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+                }
             }
+            FastLED.show();
           }
-          FastLED.show();
         #endif
       });
   
@@ -368,6 +375,9 @@ void loop() {
 
     esp_task_wdt_reset();
 
+    #ifdef _USEUDP
+    receiveUDPMessage(); //receive UDP messages, which are sent in parallel to ESPNow
+    #endif
     updateTime(); //sets I.currenttime
 
     #ifdef _USETFT

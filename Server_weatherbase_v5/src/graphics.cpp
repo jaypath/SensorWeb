@@ -1454,10 +1454,15 @@ void displayWiFiStatus(byte retries, bool success) {
 }
 
 void displayOTAProgress(unsigned int progress, unsigned int total) {
-  tft.fillScreen(BG_COLOR);            // Clear screen
-  tft.setTextFont(2);
-  tft.setCursor(0,0);
-  tft.println("OTA started, receiving data.");
+  if (progress==0) {
+    tft.fillScreen(BG_COLOR);            // Clear screen
+    tft.setTextFont(2);
+    tft.setCursor(0,0);
+    tft.println("OTA started, receiving data.");
+    tft.drawRect(0,100,tft.width(),25,FG_COLOR);
+  } else {
+    tft.fillRect(0,100,tft.width()*progress/total,25,FG_COLOR);    
+  }
 }
 
 void displayOTAError(int error) {

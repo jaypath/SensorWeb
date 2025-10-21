@@ -12,19 +12,6 @@
 #define TFT_BLACK 0x0000
 #define TFT_SKYBLUE 0x867D
 
-//automatically detect arduino type
-#if defined (ARDUINO_ARCH_ESP8266)
-  #define _USE8266 1
-  #define _ADCRATE 1023
-#elif defined(ESP32)
-  #define _USE32
-  #define _ADCRATE 4095
-#else
-  #error Arduino architecture unrecognized by this code.
-#endif
-
-
-
 // Forward declarations
 class LGFX;
 class Devices_Sensors;
@@ -34,10 +21,6 @@ class Devices_Sensors;
 #include <WiFi.h>
 #include <IPAddress.h>
 
-#ifdef _USEUDP
-#define _UDPPORT 56832
-#include <WiFiUdp.h>
-#endif
 
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
 
@@ -285,6 +268,26 @@ struct DeviceVal {
   uint8_t ardID;//legacy from V1 and V2 used this to define ID. Now MAC is the ID. ArdID can still be some value, but can also be zero.
 };
 */
+
+
+
+
+
+//
+
+
+
+//automatically detect arduino type
+#if defined (ARDUINO_ARCH_ESP8266)
+  #define _USE8266 1
+  #define _ADCRATE 1023
+#elif defined(ESP32)
+  #define _USE32
+  #define _ADCRATE 4095
+#else
+  #error Arduino architecture unrecognized by this code.
+#endif
+
 
 
 /*sens types

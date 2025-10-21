@@ -162,7 +162,7 @@ void initPeripheralSensors() {
       if (snsvalid == 1 || snsvalid == 3) {
         SnsType* sensor = Sensors.getSensorBySnsIndex(i);
         SensorHistory.SensorIDs[count] = MY_DEVICE_INDEX<<16 + sensor->snsType<<8 + sensor->snsID;
-        SensorHistory.sensorIndex[count] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensor->snsType, sensor->snsID, String(sensor->snsName).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], sensor->Flags, Prefs.DEVICENAME, MYTYPE);
+        SensorHistory.sensorIndex[count] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensor->snsType, sensor->snsID, String(sensor->snsName).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], sensor->Flags, String(sensor->snsName).c_str(), MYTYPE);
         count++;
         if (count >= SENSORNUM) break;
       }
@@ -261,17 +261,8 @@ if (!PrefsUpToDate) {
   for (byte i=0;i<SENSORNUM;i++) {
     byte flags = Prefs.SNS_FLAGS[i];
     byte snstype = sensortypes[i];
-    String myname = String(Prefs.DEVICENAME);
-
-    if (myname = "") {
-      #ifdef MYNAME
-        myname = MYNAME;
-      #else
-        myname = "sensor" + String(ESP.getEfuseMac(), HEX);
-      #endif
-      snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", myname.c_str());
-      Prefs.isUpToDate = false;
-    }
+    String MYNAME = String(Prefs.DEVICENAME);
+    if (MYNAME = "") MYNAME = "sensor" + String(ESP.getEfuseMac(), HEX);
     byte snsID = Sensors.countSensors(snstype,MY_DEVICE_INDEX)+1;
     
     switch (snstype) {
@@ -279,7 +270,7 @@ if (!PrefsUpToDate) {
       {
         #ifdef DHTTYPE
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(MYNAME+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         #endif
         break;
       }
@@ -288,11 +279,11 @@ if (!PrefsUpToDate) {
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         #ifdef _USESOILCAP
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(MYNAME+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         #endif
         #ifdef _USESOILRES
           pinMode(_USESOILRES,OUTPUT);  
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(MYNAME+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         #endif
 
         break;
@@ -301,7 +292,7 @@ if (!PrefsUpToDate) {
         {
         #if defined(_USEAHT) || defined(_USEAHTADA)
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 4, snsID, String(myname+String("_AHT_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 4, snsID, String(MYNAME+String("_AHT_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         #endif
         break;
         }
@@ -310,7 +301,7 @@ if (!PrefsUpToDate) {
         #if defined(_USEAHT) || defined(_USEAHTADA)
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 5, snsID, String(myname+String("_AHT_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 5, snsID, String(MYNAME+String("_AHT_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         #endif
         break;
         }
@@ -320,28 +311,28 @@ if (!PrefsUpToDate) {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         bitWrite(flags,7,0);
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 7, snsID, String(myname+String("_Dist")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 7, snsID, String(MYNAME+String("_Dist")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 9: //BMP pres
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 9, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 9, snsID, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 10: //BMP temp
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 10, snsID, String(myname+String("_BMP_t")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 10, snsID, String(MYNAME+String("_BMP_t")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 11: //BMP alt
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 11, snsID, String(myname+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 11, snsID, String(MYNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 12: //Bar prediction
@@ -351,21 +342,21 @@ if (!PrefsUpToDate) {
         bitWrite(flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
         bitWrite(flags,3,1); bitWrite(flags,4,1);
         
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 12, snsID, String(myname+String("_Pred")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 12, snsID, String(MYNAME+String("_Pred")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 13: //BME pres
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 13, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 13, snsID, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 14: //BMEtemp
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 14, snsID, String(myname+String("_BMEt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 14, snsID, String(MYNAME+String("_BMEt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 15: //bme rh
@@ -373,7 +364,7 @@ if (!PrefsUpToDate) {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         bitWrite(flags,7,0);
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 15, snsID, String(myname+String("_BMErh")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 15, snsID, String(MYNAME+String("_BMErh")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 16: //bme alt
@@ -381,32 +372,32 @@ if (!PrefsUpToDate) {
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
           bitWrite(flags,7,0);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 16, snsID, String(myname+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 16, snsID, String(MYNAME+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 17: //bme680
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 17, snsID, String(myname+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 17, snsID, String(MYNAME+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 18: //bme680
         {
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 18, snsID, String(myname+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 18, snsID, String(MYNAME+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 19: //bme680
         {
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 19, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 19, snsID, String(MYNAME+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         break;
         }
       case 20: //bme680
         {
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 20, snsID, String(myname+String("_VOC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 20, snsID, String(MYNAME+String("_VOC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         break;
@@ -418,7 +409,7 @@ if (!PrefsUpToDate) {
           bitWrite(flags,3,1);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(myname+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(MYNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           
           break;
          }
@@ -432,7 +423,7 @@ if (!PrefsUpToDate) {
           bitWrite(flags,3,1);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(myname+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(MYNAME+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           
           break;
          }
@@ -440,7 +431,7 @@ if (!PrefsUpToDate) {
         case 54: //ac, gas valve
         {
           pinMode(_USERELAY, INPUT);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 51, snsID, String(myname+String("_GAS")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 51, snsID, String(MYNAME+String("_GAS")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
           
           break;
@@ -451,8 +442,8 @@ if (!PrefsUpToDate) {
 
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-          String heatName = String(myname) + "_" + String(HEATZONE[HZindex]); //no HZindex-1 because we are using a 1-based index
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 55, snsID, heatName.c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          String heatName = String(MYNAME) + "_" + String(HEATZONE[HZindex]); //no HZindex-1 because we are using a 1-based index
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 55, snsID, heatName.c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           #ifdef _USEMUX
           #else
             pinMode(HEATPINS[HZindex], INPUT);
@@ -466,12 +457,12 @@ if (!PrefsUpToDate) {
         case 56: //aircon compressor
           {
             SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-            SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 56, snsID, String(myname+String("_comp")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+            SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 56, snsID, String(MYNAME+String("_comp")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           break;
           }
         case 57: //aircon fan
           {
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 57, snsID, String(myname+String("_fan")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 57, snsID, String(MYNAME+String("_fan")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
           break;
@@ -482,7 +473,7 @@ if (!PrefsUpToDate) {
         {
           #ifdef _USELEAK
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 70, snsID, String(myname+String("_leak")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 70, snsID, String(MYNAME+String("_leak")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           #endif
           break;
         }
@@ -490,7 +481,7 @@ if (!PrefsUpToDate) {
       case 60: //battery
         {
           bitWrite(flags,1,0);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 60, snsID, String(myname+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 60, snsID, String(MYNAME+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
         break;
@@ -500,14 +491,14 @@ if (!PrefsUpToDate) {
           
           bitWrite(flags,3,1);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 61, snsID, String(myname+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 61, snsID, String(MYNAME+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);
         break;
         }
       case 90: //Sleep info
         {
           bitWrite(flags,7,0); bitWrite(flags,3,1); bitWrite(flags,1,0);
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 90, snsID, String(myname+String("_sleep")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);          
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 90, snsID, String(MYNAME+String("_sleep")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], String(MYNAME).c_str(), MYTYPE);          
         break;
         }
 
