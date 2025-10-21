@@ -1,0 +1,31 @@
+.pio/build/FRBoPv4_esp32dev_OTA/lib394/FastLED/fl/allocator.cpp.o: \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/allocator.cpp \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/allocator.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/inplacenew.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/stdint.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/platforms/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/platforms/arm/is_arm.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/platforms/esp/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/memfill.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/type_traits.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/namespace.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/move.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/unused.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/bit_cast.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/bitset.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/bitset_dynamic.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/math_macros.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/has_include.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/compiler_control.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/variant.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/thread_local.h \
+ .pio/libdeps/FRBoPv4_esp32dev_OTA/FastLED/src/fl/thread.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/heap/include/esp_heap_caps.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/heap/include/multi_heap.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_common/include/esp_err.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_common/include/esp_compiler.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_common/include/esp_attr.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_system/include/esp_system.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_common/include/esp_bit_defs.h \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32-libs/esp32/include/esp_common/include/esp_idf_version.h

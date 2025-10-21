@@ -1,0 +1,5 @@
+SPI
+lovyan03/LovyanGFX@^1.2.0
+bblanchon/ArduinoJson@^7.0.3
+paulstoffregen/Time@^1.6.1
+arduino-libraries/NTPClient@^3.2.1

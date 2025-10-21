@@ -1,0 +1,31 @@
+.pio/build/FRBoPesp32dev_OTA/lib884/FastLED/fx/video/pixel_stream.cpp.o: \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/video/pixel_stream.cpp \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/video/pixel_stream.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/namespace.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/crgb.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/chsv.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/color.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/lib8tion/types.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/force_inline.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/template_magic.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/ptr.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/scoped_ptr.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/bytestream.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/file_system.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/video.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/fx1d.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/xmap.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/lut.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/allocator.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/fx.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/detail/draw_context.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/detail/transition.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/str.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/vector.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/inplacenew.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/insert_result.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/unused.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/time.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/callback.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fx/frame.h \
+ .pio/libdeps/FRBoPesp32dev_OTA/FastLED/src/fl/dbg.h

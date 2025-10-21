@@ -1,0 +1,21 @@
+.pio/build/FRBoPv4_esp32dev/lib2b3/FastLED/fl/gamma.cpp.o: \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/gamma.cpp \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/gamma.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/crgb.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/stdint.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/platforms/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/platforms/arm/is_arm.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/platforms/esp/int.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/chsv.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/hsv.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/namespace.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/color.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/lib8tion/types.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/force_inline.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/type_traits.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/move.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/hsv2rgb.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fl/ease.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/fastled_progmem.h \
+ .pio/libdeps/FRBoPv4_esp32dev/FastLED/src/platforms/null_progmem.h
