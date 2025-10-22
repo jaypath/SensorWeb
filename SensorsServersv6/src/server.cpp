@@ -2119,11 +2119,11 @@ void handlePost() {
     String senderIP = "";
     uint64_t deviceMAC = 0;
     IPAddress deviceIP = IPAddress(0,0,0,0);
+    String devName = "";
 
     int16_t sensorIndex = -1;
 
     uint8_t ardID = 0; //legacy field, not used anymore
-    String devName = ""; //optional field
     uint8_t snsType = 0;
     uint8_t snsID = 0;
     String snsName = "";
@@ -2140,54 +2140,52 @@ void handlePost() {
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, postData);
         if (!error) {
-            // New-style MAC-based messages
-            if (doc["ip"].is<JsonVariantConst>()==false && doc["mac"].is<JsonVariantConst>()==false) {
-              SerialPrint("Invalid JSON message format",true);
-              responseMsg = "Invalid JSON message format";
-            } else {
-              if (doc["ip"].is<JsonVariantConst>()) {
-                String ipStr = doc["ip"];
-                 deviceIP.fromString(ipStr);              }
-              if (doc["mac"].is<JsonVariantConst>()) {
-                String macStr = doc["mac"];
-                //mac should be 12 hex digits
+            // New-style MAC-based messages have this format: "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}"
+            if (doc["device"].is<JsonObject>()) {
+              JsonObject device = doc["device"];
+              
+              if (device["ip"].is<JsonVariantConst>()==false && device["mac"].is<JsonVariantConst>()==false) {
+                SerialPrint("Invalid JSON message format - missing MAC and IP",true);
+                responseMsg = "Invalid JSON message format - missing MAC and IP";
+              }
+              if (device["ip"].is<JsonVariantConst>()) {
+                String ipStr = device["ip"];
+                deviceIP.fromString(ipStr);
+              }
+              if (device["mac"].is<JsonVariantConst>()) {
+                String macStr = device["mac"];                  
                 deviceMAC = strtoull(macStr.c_str(), NULL, 16);
               } else {
                 deviceMAC = IPToMACID(deviceIP);
               }
-
-              if (doc["sensor"].is<JsonArray>()) {
-                  JsonArray sensorsArray = doc["sensor"];
-                  for (JsonObject sensor : sensorsArray) {
-                      if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
-                          sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
-                          if (sensor["devName"].is<JsonVariantConst>()) {
-                            devName = sensor["devName"].as<String>();
-                          }
-                          snsType = sensor["type"];
-                          snsID = sensor["id"];
-                          snsName = sensor["name"].as<String>();
-                          snsValue = sensor["value"];
-                          timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
-                          timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
-                          sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
-                          flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;                            
-                      }
-                  }
-              } else {
-                deviceMAC=0;
-                deviceIP=IPAddress(0,0,0,0);
-                snsType = 0;
-                SerialPrint("Invalid JSON message format",true);
-                responseMsg = "Invalid JSON message format";
+              if (device["name"].is<JsonVariantConst>()) {
+                devName = device["name"].as<String>();
               }
-             
+              if (device["sensor"].is<JsonArray>()) {
+                JsonArray sensorArray = device["sensor"];
+                for (JsonObject sensor : sensorArray) {
+                  if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
+                      sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
+                      snsType = sensor["type"];
+                      snsID = sensor["id"];
+                      snsName = sensor["name"].as<String>();
+                      snsValue = sensor["value"];
+                      timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
+                      timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
+                      sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
+                      flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
+                    }
+                }
+              }
+            } else {
+              SerialPrint("JSON message missing device object",true);
+              responseMsg = "JSON message missing device object";
             }
         } else {
           SerialPrint("Could not deserialize JSON message",true);
           responseMsg = "Could not deserialize JSON message";
         }
-    } else {
+     } else {
         // Handle old HTML form data (backward compatibility)
         if (server.args() > 0) {
           
@@ -5070,6 +5068,7 @@ void setupServerRoutes() {
 }
 
 bool SendData(struct SnsType *S, bool forceSend) {
+  //newstyle json message
   if (!forceSend) {
     if (bitRead(S->Flags,1) == 0) return false; //not monitored
     if (!(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
@@ -5090,22 +5089,14 @@ bool isGood = false;
       deviceMAC = MACToString(device->MAC, '\0', true); //send mac as 12 digit hex string without separators
     }
 
-    // Build JSON more efficiently using snprintf
-    snprintf(jsonBuffer, sizeof(jsonBuffer), 
-      "{\"mac\":\"%s\",\"ip\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}",
+    // Build JSON more efficiently using snprintf. should be device object, which holds all sensor objects
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
       deviceMAC.c_str(),
       device->IP.toString().c_str(),
-      S->snsType,
-      S->snsID,
-      S->snsName,
-      S->snsValue,
-      S->timeRead,
-      S->timeLogged,
-      S->SendingInt,
-      S->Flags
-    );
+      device->devName,
+      S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->timeLogged, S->SendingInt, S->Flags);
 
-    // iterate all known devices to find servers  (devType >=100)
+    // now send to any servers I know of. iterate all known devices to find servers  (devType >=100)
     for (int16_t i=0; i<NUMDEVICES ; i++) {
       DevType* d = Sensors.getDeviceByDevIndex(i);
       if (!d || !d->IsSet || d->devType < 100) continue;

@@ -409,6 +409,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
 
             if (bitRead(I.showTheseFlags, 2) == 1) {//include soil dry
                 count += countFlagged(3,0b00000011,0b00000011,MoreRecentThan);
+                count += countFlagged(33,0b00000011,0b00000011,MoreRecentThan);
             }
             if (bitRead(I.showTheseFlags, 3) == 1) {//include leak
                 count += countFlagged(58,0b00000011,0b00000011,MoreRecentThan);
@@ -443,7 +444,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         if (snsType > 0 && sensors[i].snsType != snsType) continue;
         if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
         if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
-        if (snsType == -3 && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
+        if ((snsType == -3 || snsType == -33) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
         if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
         if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
@@ -724,7 +725,7 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
         return (snsType == 55 || snsType == 56 || snsType == 57);
     }
     if (type == "soil") {//soil
-        return (snsType == 3);
+        return (snsType == 3 || snsType == 33);
     }
     if (type == "leak") {//leak
         return (snsType == 70);

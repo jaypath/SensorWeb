@@ -2,49 +2,7 @@
 #ifdef _ISPERIPHERAL
 #include "sensors.hpp"
 
-/*sens types
-//0 - not defined
-//1 - temp, DHT
-//2 - RH, DHT
-//3 - soil moisture, capacitative or Resistive
-//4 -  temp, AHT21
-//5 - RH, AHT21
-//6 - 
-//7 - distance, HC-SR04
-//8 - human presence (mm wave)
-//9 - BMP pressure
-//10 - BMP temp
-//11 - BMP altitude
-//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
-//13 - BMe pressure
-//14 - BMe temp
-//15 - BMe humidity
-//16 - BMe altitude
-//17 - BME680 temp
-18 - BME680 rh
-19 - BME680 air press
-20  - BME680 gas sensor
-21 - human present (mmwave)
-50 - any binary, 1=yes/true/on
-51 = any on/off switch
-52 = any yes/no switch
-53 = any 3 way switch
-54 = 
-55 - heat on/off {requires N DIO Pins}
-56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
-57 - a/c fan on/off
-58 - 
-60 -  battery power
-61 - battery %
-70 - leak sensor 
-98 - clock
-99 = any numerical value
-100+ is a server type sensor, to which other sensors will send their data
-100 = any server (receives data), disregarding subtype
-101 - weather display server with local persistent storage (ie SD card)
-102 = any weather server that has no persistent storage
-103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
-104 = any server without local persistent storage that uploads data cloud storage
+/*sens types - see hpp file
  
 
 */
@@ -287,16 +245,10 @@ if (!PrefsUpToDate) {
         #endif
         break;
       }
-      case 3: //soil
+      case 3: //soilresistance
         {
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
 
-          #ifdef _USESOILCAP
-          pinMode(_USESOILCAP,INPUT);
-          pinMode(_SOILCAPPOWERPIN, OUTPUT);
-          digitalWrite(_SOILCAPPOWERPIN, LOW);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          #endif
           #ifdef _USESOILRES
           pinMode(_USESOILRES,INPUT);
           pinMode(_SOILRESPOWERPIN, OUTPUT);
@@ -306,6 +258,20 @@ if (!PrefsUpToDate) {
 
         break;
         }
+      case 33: //soil capacitance
+        {
+          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+
+          #ifdef _USESOILCAP
+          pinMode(_USESOILCAP,INPUT);
+          pinMode(_SOILCAPPOWERPIN, OUTPUT);
+          digitalWrite(_SOILCAPPOWERPIN, LOW);
+          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          #endif
+
+        break;
+        }
+
       case 4: //AHT temp
         {
         #if defined(_USEAHT) || defined(_USEAHTADA)
@@ -643,7 +609,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       
       break;
       }
-    case 3: //soil
+    case 3: //soil resistance
       {
         #ifdef _USESOILCAP
         val=0;
@@ -691,6 +657,29 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       
       break;
       }
+      case 33: //soil capacitance
+      {
+        #ifdef _USESOILCAP
+        val=0;
+        nsamps=100;
+
+        digitalWrite(_SOILCAPPOWERPIN, HIGH);
+        delay(100); //wait X ms for reading to settle
+        for (byte ii=0;ii<nsamps;ii++) {                  
+          val += analogRead(_USESOILCAP);
+          delay(10);
+        }
+          digitalWrite(_SOILCAPPOWERPIN, LOW);
+        val=val/nsamps;
+        //invert value, which is high when wet
+        P->snsValue =  1000-val;
+        if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+        #endif
+
+      
+      break;
+      }
+
     case 4: //AHT Temp
       {
         #ifdef _USEAHT
