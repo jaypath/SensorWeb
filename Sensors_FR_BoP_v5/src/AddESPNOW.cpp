@@ -254,28 +254,27 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
 // --- ESPNow Receive Callback ---
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+    I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
         I.ESPNOW_LAST_INCOMINGMSG_STATE = -2; //message received but too short
-        I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
         return;
     }
     ESPNOW_type msg;
+
     memcpy(&msg, incomingData, sizeof(msg));
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = MACToUint64(msg.senderMAC);
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_IP = msg.senderIP;
+    I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE = msg.senderType;
+    I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg.msgType;
+    I.ESPNOW_RECEIVES++;
+    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2; //message received and processed
+    I.isUpToDate = false;
 
     processLANMessage(&msg);
 }
 
 void processLANMessage(ESPNOW_type* msg) {
-    I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = MACToUint64(msg->senderMAC);
-    I.ESPNOW_LAST_INCOMINGMSG_FROM_IP = msg->senderIP;
-    I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE = msg->senderType;
-    I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
-    I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg->msgType;
-    I.isUpToDate = false;
-    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2; //message received and processed
-    I.ESPNOW_RECEIVES++;
-    I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
 
 
     if (msg->msgType>0) {
@@ -299,6 +298,7 @@ void processLANMessage(ESPNOW_type* msg) {
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg->payload+1);
         
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
+    
         return;
     }
 

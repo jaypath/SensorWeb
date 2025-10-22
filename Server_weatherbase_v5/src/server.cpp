@@ -2714,7 +2714,7 @@ void handleGSHEET() {
   #else
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>Google Sheets Configuration</h2>";
-  WEBHTML = WEBHTML + "<p>Google Sheets configuration is not enabled on this device</p>";
+  WEBHTML = WEBHTML + "<p>Google Sheets upload is not available on this device</p>";
   #endif
   // Navigation links to other config pages
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
@@ -3333,9 +3333,9 @@ void handleWeather() {
   I.lastServerStatusUpdate = I.currentTime;
   WEBHTML = "";
   serverTextHeader();
-  #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
+  #ifdef _USEWEATHER
   
   // Display current weather data
   if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) {
@@ -3446,6 +3446,10 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Refresh Weather Now\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
+#else
+  WEBHTML = WEBHTML + "Weather not enabled on this device.";
+  #endif
+
   // Navigation links to other config pages
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
@@ -3460,10 +3464,7 @@ void handleWeather() {
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "</html>";
 
-  #else
-  WEBHTML = "Weather not enabled on this device.";
-  #endif
-  
+    
   serverTextClose(200, true);
 }
 
@@ -3664,7 +3665,7 @@ void handleSDCARD() {
   
   #ifndef _USESDCARD
     WEBHTML = WEBHTML + "There is no SD card installed or it is not enabled.<br>"; 
-    
+      
   #else
   
   // Error log button
@@ -4008,6 +4009,7 @@ void handleSDCARD() {
   // View timestamps button
   WEBHTML = WEBHTML + "<br><br>";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD_TIMESTAMPS\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">List File Timestamps</a>";
+  #endif
   
   // Navigation links to other config pages
   WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
@@ -4024,7 +4026,6 @@ void handleSDCARD() {
   
 
   
-  #endif
   serverTextClose(200, true);
 
   return;
