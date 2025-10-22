@@ -999,14 +999,14 @@ bool isMACSet(byte *m, bool doReset) {
 String ArrayToString(const uint8_t* Arr, byte len, char separator, bool asHex) {
 
   String output = "";
-  char holder[10] = "";
+  char holder[20] = "";
   for (int i=len-1; i>=0; i--) {
     if (separator!='\0') {
       if (i!=len-1) output += (String) separator;
     }
   
-    if (asHex)    snprintf(holder,9,"%x",Arr[i]);
-    else    snprintf(holder,9,"%d",Arr[i]);
+    if (asHex)    snprintf(holder,20,"%02x",Arr[i]);
+    else    snprintf(holder,20,"%d",Arr[i]);
     output += (String) holder;
   }
   return output;

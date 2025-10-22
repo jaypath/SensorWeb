@@ -290,16 +290,19 @@ if (!PrefsUpToDate) {
       case 3: //soil
         {
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          pinMode(_USESOILRES,INPUT);
-          pinMode(SOILPOWERPIN, OUTPUT);
-          digitalWrite(SOILPOWERPIN, LOW);
 
-        #ifdef _USESOILCAP
+          #ifdef _USESOILCAP
+          pinMode(_USESOILCAP,INPUT);
+          pinMode(_SOILCAPPOWERPIN, OUTPUT);
+          digitalWrite(_SOILCAPPOWERPIN, LOW);
           SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        #endif
-        #ifdef _USESOILRES
+          #endif
+          #ifdef _USESOILRES
+          pinMode(_USESOILRES,INPUT);
+          pinMode(_SOILRESPOWERPIN, OUTPUT);
+          digitalWrite(_SOILRESPOWERPIN, LOW);
           SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        #endif
+          #endif
 
         break;
         }
@@ -643,13 +646,16 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
     case 3: //soil
       {
         #ifdef _USESOILCAP
-        digitalWrite(SOILPOWERPIN, HIGH);
+        val=0;
+        nsamps=100;
+
+        digitalWrite(_SOILCAPPOWERPIN, HIGH);
         delay(100); //wait X ms for reading to settle
         for (byte ii=0;ii<nsamps;ii++) {                  
           val += analogRead(_USESOILCAP);
-          delay(1);
+          delay(10);
         }
-          digitalWrite(SOILPOWERPIN, LOW);
+          digitalWrite(_SOILCAPPOWERPIN, LOW);
         val=val/nsamps;
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
         val =  (int) ((-0.28571*val+228.5714)*100); //round value
@@ -662,13 +668,13 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         val=0;
         nsamps=100;
 
-        digitalWrite(SOILPOWERPIN, HIGH);
+        digitalWrite(_SOILRESPOWERPIN, HIGH);
         delay(200); //wait X ms for reading to settle
         for (byte ii=0;ii<nsamps;ii++) {                  
           val += analogRead(_USESOILRES);
           delay(10);
         }
-          digitalWrite(SOILPOWERPIN, LOW);
+          digitalWrite(_SOILRESPOWERPIN, LOW);
         val=val/nsamps;
 
         //convert val to voltage
@@ -676,7 +682,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         //the chip I am using is a voltage divider with a 10K r1. 
         //equation for R2 is R2 = R1 * (V2/(V-v2))
 
-        P->snsValue = (double) 10000 * (val/(3.3-val));
+        P->snsValue = (double) _SOILRESISTOR * (val/(3.3-val));
 
         if (isSoilResistanceValid(P->snsValue)==false) {
           isInvalid=true;

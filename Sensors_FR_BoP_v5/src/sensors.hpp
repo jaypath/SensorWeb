@@ -103,18 +103,9 @@ class Devices_Sensors;
       const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {32,33,25,26,36}; //which pins should be stored for charting?
     #endif
 
-    #ifdef _USESOILRES
-      //using LM393 comparator and stainless probes. Here higher voltage is dryer, and roughly 1/2 Vcc is dry
-      #define SOILR_MAX 1000 //%max resistance value (dependent on R1 choice)
-      #define SOILPOWERPIN 33
-
-    #endif
 
 
-    #ifdef _USESOILCAP
-      #define SOILPOWERPIN 12
-    #endif
-
+    
     #ifdef _USEHCSR04
       #define USONIC_DIV 58   //conversion for ultrasonic distance time to cm
       #define TRIGPIN 2
