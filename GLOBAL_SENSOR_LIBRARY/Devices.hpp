@@ -3,10 +3,10 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include "globals.hpp"
+
+struct STRUCT_CORE;
 
 // Constants
-#define SENSORNUM NUMSENSORS
 
 //sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
@@ -14,7 +14,7 @@
 // Device structure
 struct DevType {
     uint64_t MAC;           // Device MAC address
-    uint32_t IP;            // Device IP address
+    IPAddress IP;            // Device IP address
     uint8_t devType;        // Device type (server, sensor, etc.)
     uint32_t timeLogged;    // Last time device was seen
     uint32_t timeRead;      // Last time device sent data
@@ -53,36 +53,40 @@ public:
     Devices_Sensors();
 
     uint32_t lastSDSaveTime;
+    uint32_t lastSensorSaveTime;
     uint32_t lastUpdatedTime;
     uint8_t numDevices;
     uint8_t numSensors;
     
     // Device management
-    int16_t addDevice(uint64_t MAC, uint32_t IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0);
+    bool updateDeviceName(int16_t index, String newDeviceName);
+    int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0, uint8_t devType = 0);
     int16_t findDevice(uint64_t MAC);
-    int16_t findDevice(uint32_t IP);
+    int16_t findDevice(IPAddress IP);
     DevType* getDeviceByDevIndex(int16_t devindex);
     DevType* getDeviceBySnsIndex(int16_t snsindex);
     uint64_t getDeviceMACByDevIndex(int16_t devindex);
     uint64_t getDeviceMACBySnsIndex(int16_t snsindex);
-    uint32_t getDeviceIPByDevIndex(int16_t devindex);
-    uint32_t getDeviceIPBySnsIndex(int16_t snsindex);
+    IPAddress getDeviceIPByDevIndex(int16_t devindex);
+    IPAddress getDeviceIPBySnsIndex(int16_t snsindex);
     uint8_t getNumDevices();
-    uint8_t countDev(); // Legacy compatibility function
+    uint8_t countDev(uint8_t devType); // count the devices of the given type
+    uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
     bool isDeviceInit(int16_t devindex);
-    void initDevice(int16_t devindex);
+    int16_t initDevice(int16_t devindex);
     bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
     uint16_t isSensorIndexInvalid(int16_t index);
-    int16_t addSensor(uint64_t deviceMAC, uint32_t deviceIP, uint8_t snsType, uint8_t snsID, 
+    int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                     uint32_t sendingInt, uint8_t flags, const char* devName = "");
+                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
-    int16_t findSensor(uint32_t deviceIP, uint8_t snsType, uint8_t snsID);
+    int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     SnsType* getSensorBySnsIndex(int16_t snsindex);
     uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
     void initSensor(int16_t index);
+
     
     // Utility functions
     int16_t findOldestDevice();
@@ -97,13 +101,21 @@ public:
     uint8_t find_sensor_count(String snsname, uint8_t snsType);
     uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
     int16_t findSnsOfType(uint8_t snstype, bool newest = false);
-    
+
+    //peripheral specific functions
+    #ifdef _ISPERIPHERAL
+    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
+    #endif
+    int16_t findMyDeviceIndex();
+    bool isMySensor(int16_t index);
+    int16_t isDeviceIndexValid(int16_t index);
+    int16_t isSensorIndexValid(int16_t index);
     #ifdef _USESDCARD
     // Data storage
     bool setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten=0);
     uint8_t storeDevicesSensorsArrayToSD(uint8_t intervalMinutes);
     bool readDevicesSensorsArrayFromSD();
-    uint8_t storeAllSensorsSD();
+    int16_t storeAllSensorsSD(uint8_t intervalMinutes);
     #endif
     
 

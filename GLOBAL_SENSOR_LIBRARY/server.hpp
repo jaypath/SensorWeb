@@ -97,10 +97,6 @@ void handleCONFIG();
 void handleCONFIG_POST();
 void handleCONFIG_DELETE();
 void handleREADONLYCOREFLAGS();
-#ifdef _ISPERIPHERAL
-void handleSENSOR_UPDATE_POST();
-void handleSENSOR_READ_SEND_NOW();
-#endif
 void handleGSHEET();
 void handleGSHEET_POST();
 void handleGSHEET_UPLOAD_NOW();

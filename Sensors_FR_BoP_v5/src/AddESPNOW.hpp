@@ -64,6 +64,7 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr
 bool sendPingRequest(const uint8_t* targetMAC);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
+void processLANMessage(ESPNOW_type* msg);
 
 // --- Utility for server list packing ---
 void packServerList(uint8_t* payload, const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count);
@@ -86,4 +87,6 @@ bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen);
 // Generate AP SSID based on MAC address
 String generateAPSSID();
 
+bool receiveUDPMessage();
+bool sendUDPMessage(ESPNOW_type* msg);
 #endif

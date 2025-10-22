@@ -1,3 +1,4 @@
+#include "globals.hpp"
 #include "BootSecure.hpp"
 
 byte prefs_set = 0;
@@ -47,9 +48,24 @@ uint16_t BootSecure::CRCCalculator(uint8_t * data, uint16_t length) {
     return (sum2 << 8) | sum1;
 }
 
+int8_t BootSecure::flushPrefs(void) {
+    //returns 1 if successful, -1 if could not open prefs, -2 if could not find key
+    Preferences p;
+    if (!p.begin("STARTUP", false)) return -1; //could not open prefs
+    if (p.isKey("Boot")) {        
+        p.clear();
+        p.end();
+        return 1;
+    } 
+      
+    p.end();
+    return -2;
+    
+}
+
 int8_t BootSecure::getPrefs() {
     Preferences p;
-    p.begin("STARTUP", true);
+    if (!p.begin("STARTUP", false)) return -1;
     if (p.isKey("Boot")) {        
         uint8_t padding = 0;
         if (sizeof(STRUCT_PrefsH) % 16 != 0) {
@@ -89,17 +105,19 @@ int8_t BootSecure::getPrefs() {
     return 1; //success
 }
 
-bool BootSecure::setPrefs() {
+int8_t BootSecure::setPrefs(bool forceUpdate) {
+    //returns 0 if no update required, -1 if encryption failed, -10 if setsecure failed, and 1 if update
+    if (Prefs.isUpToDate == false && forceUpdate==false ) return 0; //don't need to update
     if (Prefs.PROCID != ESP.getEfuseMac()) {
         #ifdef SETSECURE
-                return false;
+                return -10;
         #else
                 Prefs.PROCID = ESP.getEfuseMac();
                 Prefs.isUpToDate = false;
         #endif
     }
     Preferences p;
-    if (!p.begin("STARTUP", false)) return false;
+    if (!p.begin("STARTUP", false)) return 0;
     uint8_t padding = 0;
     if (sizeof(STRUCT_PrefsH) % 16 != 0) {
         padding = 16 - (sizeof(STRUCT_PrefsH) % 16);
@@ -108,17 +126,18 @@ bool BootSecure::setPrefs() {
     uint8_t tempPrefs[p_length];
     memset(tempPrefs, 0, p_length);
     uint16_t outlen = 0;
-    Prefs.MYIP = (uint32_t) WiFi.localIP(); //update this here just in case
     Prefs.isUpToDate = true;
-    if (BootSecure::encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)BOOTKEY, tempPrefs, &outlen, 32) != 0) {
+    int8_t ret = BootSecure::encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)BOOTKEY, tempPrefs, &outlen, 32);
+    if (ret < 0) { //negative return codes are errors
+        SerialPrint("Failed to encrypt Prefs with error code: " + String(ret), true);
         p.end();
-        return false;
+        return -1;
     }
     p.putBytes("Boot", tempPrefs, outlen);
     p.end();
     BootSecure::zeroize(tempPrefs, p_length);
     
-    return true;
+    return 1;
 
 }
 
@@ -148,7 +167,7 @@ int8_t BootSecure::encrypt(const unsigned char* input, uint16_t inputlength, cha
     mbedtls_aes_free(&aes);
     BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 int8_t BootSecure::decrypt(unsigned char* input, char* key, unsigned char* output, uint16_t datalength, uint8_t keylength) {
@@ -164,7 +183,7 @@ int8_t BootSecure::decrypt(unsigned char* input, char* key, unsigned char* outpu
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, datalength - 16, iv, input + 16, output);
     mbedtls_aes_free(&aes);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 // --- AES-CBC with provided IV (no IV prepended/extracted) ---
@@ -190,7 +209,7 @@ int8_t BootSecure::encryptWithIV(const unsigned char* input, uint16_t inputlengt
     mbedtls_aes_free(&aes);
     BootSecure::zeroize(localinput, paddedLen);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 int8_t BootSecure::decryptWithIV(unsigned char* input, char* key, uint8_t* iv, unsigned char* output, uint16_t datalength, uint8_t keylength) {
@@ -206,7 +225,7 @@ int8_t BootSecure::decryptWithIV(unsigned char* input, char* key, uint8_t* iv, u
     ret = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, datalength, iv_copy, input, output);
     mbedtls_aes_free(&aes);
     if (ret != 0) return -3;
-    return 0;
+    return 1;
 }
 
 void BootSecure::zeroize(void* buf, size_t len) {
@@ -219,6 +238,8 @@ void initCreds(STRUCT_PrefsH *w) {
     for (byte j=0;j<65;j++) w->WIFIPWD[j]=0;
 }
 
+
+/*
 // --- Secure WiFi Credentials Storage ---
 bool putWiFiCredentials() {
     bool isGood = false;
@@ -310,3 +331,4 @@ bool getWiFiCredentials() {
     return true;
 }
   
+*/

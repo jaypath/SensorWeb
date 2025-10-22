@@ -1,21 +1,46 @@
 #ifndef UTILITY_HPP
 #define UTILITY_HPP
 
-#include <Arduino.h>
 #include "globals.hpp"
-#ifdef _USESDCARD
-#include "SDCard.hpp"
+
+
+//globals
+#ifdef _USEGSHEET
+#include "GsheetUpload.hpp"
+extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
-#include "Devices.hpp"
-#include "timesetup.hpp"
+#ifdef _USETFT
+#include "graphics.hpp"
+#endif
+ 
 
+//setup functions
+void initSystem();
+int8_t initSDCard();
+bool loadSensorData();
+bool loadScreenFlags();
+void initGsheetHandler();
+void handleESPNOWPeriodicBroadcast(uint8_t interval);
+void handleStoreCoreData();
 
+#ifdef _ISPERIPHERAL
+bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder);
+int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX);
+bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder);
+#endif
+
+bool isTimeValid(uint32_t time);
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
 
 // Legacy compatibility functions - these are now methods of the Devices_Sensors class
 // but we keep them as standalone functions for backward compatibility
+int8_t delete_all_core_data(bool flushPrefs = false, bool flushDevicesSensors = false);
+uint32_t deleteCoreStruct();
+uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet, bool deleteDevices);
+void failedToRegister();
+int16_t updateMyDevice();
 void initScreenFlags(bool completeInit = false);
 void storeCoreData();
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
@@ -33,8 +58,8 @@ int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
 uint16_t countSubstr(String orig, String token);
 String enumErrorToName(ERRORCODES E);
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin);
-bool cycleByteIndex(byte* start, byte arraysize, byte origin);
+bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards=false);
+bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards=false);
 
 // Legacy sensor functions - these now delegate to the Devices_Sensors class
 bool isSensorInit(int i);
@@ -54,24 +79,24 @@ byte checkExpiration(int i, time_t t=0,bool onlycritical=true);
 
 
 // --- IP address conversion utilities ---
-String ArrayToString(byte* Arr, byte len, char separator= '.', bool asHex = false);
-String IPToString(uint32_t ip);
-String IPbytes2String(byte* IP,byte len=4);
-uint32_t StringToIP(String str);
-bool IPString2ByteArray(String IPstr,byte* IP);
-uint32_t IPToUint32(byte* ip);
-void uint32toIP(uint32_t ip32, byte* ip);
-uint64_t IPToMACID(uint32_t ip);
+String ArrayToString(const uint8_t* Arr, byte len, char separator= '.', bool asHex = false);
+
+uint64_t IPToMACID(IPAddress ip);
 uint64_t IPToMACID(byte* ip);
+uint32_t IPToUint32(IPAddress ip);
 
 // --- MAC address conversion utilities ---
 void uint64ToMAC(uint64_t mac64, byte* macArray);
-uint64_t MACToUint64(byte* macArray);
-String MACToString(uint64_t mac64);
-String MACToString(uint8_t* mac); //wrapper for ip2string
+uint64_t MACToUint64(const uint8_t* macArray);
+String MACToString(const uint64_t mac64, char separator=':', bool asHex=true);
+String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //wrapper for ip2string
 
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
-
+bool tftPrint(String S, bool newline, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
+#ifdef _USETFT
+void displaySetupProgress(bool success);
 #endif
+#endif
+

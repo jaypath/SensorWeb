@@ -30,6 +30,12 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsTy
 #endif
 
 bool isTimeValid(uint32_t time);
+bool isTempValid(double temp, bool extremeTemp=false);
+bool isRHValid(double rh);
+bool isSoilCapacitanceValid(double soil);
+bool isSoilResistanceValid(double soil);
+bool isPressureValid(double pressure);
+
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
