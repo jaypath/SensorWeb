@@ -16,9 +16,6 @@ extern int16_t MY_DEVICE_INDEX;
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
-#ifdef _USEUDP
-extern WiFiUDP LAN_UDP;
-#endif
 
 //setup functions
 
@@ -56,10 +53,6 @@ void initSystem() {
       SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
       delay(1000);
   }
-
-  #ifdef _USEUDP
-    LAN_UDP.begin(_UDPPORT); //start the UDP server on port 56832
-  #endif
 
 
 }
@@ -543,6 +536,10 @@ void initScreenFlags(bool completeInit) {
   memset(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD,0,80);
   I.ESPNOW_LAST_OUTGOINGMSG_TIME=0;
   I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
+
+
+  I.UDP_LAST_PARSE_TIME = 0;
+  I.UDP_PARSE_INT = 100; //100 ms
 
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;

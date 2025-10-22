@@ -10,6 +10,10 @@
 
 extern int16_t MY_DEVICE_INDEX;
 
+#ifdef _USEUDP
+extern WiFiUDP LAN_UDP;
+#endif
+
 // Base64 decoding functions
 int base64_dec_len(const char* input, int length) {
   int i = 0;
@@ -184,15 +188,23 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
   }
 
   if (!WifiStatus())       return -1*i;
-  else return i;
+
+
+
+  return i;
 }
 
 int16_t connectWiFi() {
   
   int16_t retries = 0;
   retries = tryWifi(250,50,true);
-  if (WifiStatus()) return retries;
-
+  if (WifiStatus()) {
+    #ifdef _USEUDP
+    LAN_UDP.begin(WiFi.localIP(),_USEUDP); //start the UDP server on port the port defined
+    #endif
+  
+    return retries;
+  }
   if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
     SerialPrint("No credentials, starting AP Station Mode",true);
     APStation_Mode();
@@ -1719,7 +1731,7 @@ void handlerForRoot(bool allsensors) {
     
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Last Broadcast Out: " + (String) dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"DOW mm/dd/yyyy hh:nn:ss") + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
     
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Last Broadcast In: " + (String) I.ESPNOW_LAST_INCOMING_TIME + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Last Broadcast In: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TIME + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td></tr>";
     #endif
         
     WEBHTML = WEBHTML + "</table>";

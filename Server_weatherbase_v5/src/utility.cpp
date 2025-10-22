@@ -537,6 +537,10 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_LAST_OUTGOINGMSG_TIME=0;
   I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
 
+
+  I.UDP_LAST_PARSE_TIME = 0;
+  I.UDP_PARSE_INT = 100; //100 ms
+
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;
   I.wifiFailCount=0;

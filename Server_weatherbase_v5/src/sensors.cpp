@@ -184,6 +184,10 @@ void initPeripheralSensors() {
 void setupSensors() {
 /* legacy template removed; Sensors is now the source of truth */
 
+#ifdef _USE32
+analogSetAttenuation(ADC_11db); //this sets the voltage range to 3.3v
+#endif
+
 MY_DEVICE_INDEX = updateMyDevice(); //update my index
 
 uint16_t flagstates[] = FLAGSTATES;
@@ -286,12 +290,14 @@ if (!PrefsUpToDate) {
       case 3: //soil
         {
           SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
+          pinMode(_USESOILRES,INPUT);
+          pinMode(SOILPOWERPIN, OUTPUT);
+          digitalWrite(SOILPOWERPIN, LOW);
 
         #ifdef _USESOILCAP
           SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soil")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
         #endif
         #ifdef _USESOILRES
-          pinMode(_USESOILRES,OUTPUT);  
           SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
         #endif
 
@@ -611,7 +617,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
   bitWrite(P->Flags,0,0);
 
   double LastsnsValue = P->snsValue;
-
+  bool isInvalid = false;
   
   switch (P->snsType) {
     case 1: //DHT temp
@@ -619,7 +625,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         #ifdef DHTTYPE
         //DHT Temp
         P->snsValue =  (dht.readTemperature()*9/5+32);
-        if (isTempValid(P->snsValue,false)==false) return -10;
+        if (isTempValid(P->snsValue,false)==false) isInvalid=true;
       #endif
       
       break;
@@ -629,7 +635,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         #ifdef DHTTYPE
         //DHT Temp
         P->snsValue = dht.readHumidity();
-        if (isRHValid(P->snsValue)==false) return -10;
+        if (isRHValid(P->snsValue)==false) isInvalid=true;
       #endif
       
       break;
@@ -648,7 +654,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
         val =  (int) ((-0.28571*val+228.5714)*100); //round value
         P->snsValue =  val/100;
-        if (isSoilCapacitanceValid(P->snsValue)==false) return -10;
+        if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
         #endif
 
         #ifdef _USESOILRES
@@ -657,28 +663,25 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         nsamps=100;
 
         digitalWrite(SOILPOWERPIN, HIGH);
-        delay(100); //wait X ms for reading to settle
+        delay(200); //wait X ms for reading to settle
         for (byte ii=0;ii<nsamps;ii++) {                  
           val += analogRead(_USESOILRES);
-          delay(1);
+          delay(10);
         }
           digitalWrite(SOILPOWERPIN, LOW);
         val=val/nsamps;
 
-
         //convert val to voltage
-        val = 3.3 * (val / _ADCRATE);
-
+        val = 3.3 * (val / (_ADCRATE-1));
         //the chip I am using is a voltage divider with a 10K r1. 
         //equation for R2 is R2 = R1 * (V2/(V-v2))
 
         P->snsValue = (double) 10000 * (val/(3.3-val));
-        if (isSoilResistanceValid(P->snsValue)==false) return -10;
-        
+
+        if (isSoilResistanceValid(P->snsValue)==false) {
+          isInvalid=true;
+        }
         #endif
-
-
-
       
       break;
       }
@@ -708,7 +711,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           sensors_event_t humidity, temperature;
           aht.getEvent(&humidity,&temperature);
           P->snsValue = (100*(temperature.temperature*9/5+32))/100; 
-          if (isTempValid(P->snsValue,false)==false) return -10;
+          if (isTempValid(P->snsValue,false)==false) isInvalid=true;
 
       #endif
 
@@ -741,7 +744,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
               Serial.print(F("AHT Humidity Error"));
             #endif
           }
-          if (isRHValid(P->snsValue)==false) return -10;
+          if (isRHValid(P->snsValue)==false) isInvalid=true;
           #endif
       break;
       }
@@ -792,7 +795,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
             LAST_BAR_READ = I.currentTime;          
           }
         #endif
-        if (isPressureValid(P->snsValue)==false) return -10;
+        if (isPressureValid(P->snsValue)==false) isInvalid=true;
 
       #endif
           
@@ -887,7 +890,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       {
         #ifdef _USEBME
          P->snsValue = bme.readPressure(); //in Pa
-        if (isPressureValid(P->snsValue)==false) return -10;
+        if (isPressureValid(P->snsValue)==false) isInvalid=true;
         #ifdef _USEBARPRED
           //adjust critical values based on history, if available
           if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
@@ -910,7 +913,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       {
         #ifdef _USEBME
         P->snsValue = (( bme.readTemperature()*9/5+32) );
-        if (isTempValid(P->snsValue,false)==false) return -10;
+        if (isTempValid(P->snsValue,false)==false) isInvalid=true;
       #endif
       
       break;
@@ -920,7 +923,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         #ifdef _USEBME
       
           P->snsValue = ( bme.readHumidity() );
-          if (isRHValid(P->snsValue)==false) return -10;
+          if (isRHValid(P->snsValue)==false) isInvalid=true;
         #endif
       
       break;
@@ -938,21 +941,21 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       {
         read_BME680();
       P->snsValue = (double) (( ((double) temperature/100) *9/5)+32); //degrees F
-      if (isTempValid(P->snsValue,false)==false) return -10;
+      if (isTempValid(P->snsValue,false)==false) isInvalid=true;
       break;
       }
     case 18: //bme680 humidity
       {
         read_BME680();
         P->snsValue = ((double) humidity/1000); //RH%
-        if (isRHValid(P->snsValue)==false) return -10;
+        if (isRHValid(P->snsValue)==false) isInvalid=true;
         break;
       }
     case 19: //bme680 air pressure
       {
         read_BME680();
       P->snsValue = ((double) pressure/100); //hPa
-      if (isPressureValid(P->snsValue)==false) return -10;
+      if (isPressureValid(P->snsValue)==false) isInvalid=true;
       break;
       }
     case 20: //bme680 gas
@@ -1180,6 +1183,17 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       }
     
   }
+
+  if (isInvalid) {
+    //the reading is considered invalid. Set the lastread time such that the next read will be 25% of typical interval.
+    int shortDelay = (Prefs.SNS_INTERVAL_POLL[prefs_index] * 0.25);
+    if (shortDelay < 60 && Prefs.SNS_INTERVAL_POLL[prefs_index] > 60) shortDelay = 60; //minimum 1 minute
+    if (shortDelay > 60*10) shortDelay = 60*10; //maximum 10 minutes
+    P->timeRead = I.currentTime - shortDelay;
+    SerialPrint((String) "Reading from " + String(P->snsType) + " " + String(P->snsID) + " Invalid: " + String(P->snsValue) + " Setting next read to " + String(shortDelay) + " seconds",true);
+    return -10;
+  }
+
   checkSensorValFlag(P); //sets isFlagged
   P->timeRead = I.currentTime; //localtime
 

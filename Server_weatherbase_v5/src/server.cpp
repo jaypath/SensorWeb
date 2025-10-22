@@ -190,9 +190,6 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
   if (!WifiStatus())       return -1*i;
 
 
-  #ifdef _USEUDP
-  LAN_UDP.begin(_USEUDP); //start the UDP server on port the port defined
-  #endif
 
   return i;
 }
@@ -201,8 +198,13 @@ int16_t connectWiFi() {
   
   int16_t retries = 0;
   retries = tryWifi(250,50,true);
-  if (WifiStatus()) return retries;
-
+  if (WifiStatus()) {
+    #ifdef _USEUDP
+    LAN_UDP.begin(WiFi.localIP(),_USEUDP); //start the UDP server on port the port defined
+    #endif
+  
+    return retries;
+  }
   if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
     SerialPrint("No credentials, starting AP Station Mode",true);
     APStation_Mode();

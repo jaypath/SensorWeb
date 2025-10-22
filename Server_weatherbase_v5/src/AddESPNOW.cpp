@@ -690,6 +690,11 @@ bool receiveUDPMessage() {
     //receive a message via UDP
     //return true if message is received, false if no message is received
     #ifdef _USEUDP
+    uint32_t m = millis();
+    if (I.UDP_LAST_PARSE_TIME != 0 && (m - I.UDP_LAST_PARSE_TIME) < I.UDP_PARSE_INT) {
+        return false;
+    }
+    I.UDP_LAST_PARSE_TIME = m;
     ESPNOW_type msg = {};
     int packetSize = LAN_UDP.parsePacket();
     if (packetSize > 0) {

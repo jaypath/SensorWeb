@@ -689,7 +689,12 @@ bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
 bool receiveUDPMessage() {
     //receive a message via UDP
     //return true if message is received, false if no message is received
-    
+    #ifdef _USEUDP
+    uint32_t m = millis();
+    if (I.UDP_LAST_PARSE_TIME != 0 && (m - I.UDP_LAST_PARSE_TIME) < I.UDP_PARSE_INT) {
+        return false;
+    }
+    I.UDP_LAST_PARSE_TIME = m;
     ESPNOW_type msg = {};
     int packetSize = LAN_UDP.parsePacket();
     if (packetSize > 0) {
@@ -701,7 +706,9 @@ bool receiveUDPMessage() {
         processLANMessage(&msg);
         return true;
     }
+    #endif
     return false;
+    
 }
 
 bool sendUDPMessage(ESPNOW_type* msg) {
@@ -711,9 +718,12 @@ bool sendUDPMessage(ESPNOW_type* msg) {
     //the message is already in the payload field of the ESPNOW_type struct
     //the message is already in the length field of the ESPNOW_type struct
     //the targetMAC field of the ESPNOW_type struct has the recipient MAC address
-    
-    LAN_UDP.beginPacket(msg->targetMAC, _UDPPORT); //some random port that is unlikely to be used by any other device
+    #ifdef _USEUDP
+    LAN_UDP.beginPacket(msg->targetMAC, _USEUDP); //some random port that is unlikely to be used by any other device
     LAN_UDP.write((uint8_t*)msg, sizeof(ESPNOW_type));
     LAN_UDP.endPacket();
     return true;
+    #else
+    return false;
+    #endif
 }
