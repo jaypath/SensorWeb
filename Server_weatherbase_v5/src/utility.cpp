@@ -539,7 +539,7 @@ void initScreenFlags(bool completeInit) {
 
 
   I.UDP_LAST_PARSE_TIME = 0;
-  I.UDP_PARSE_INT = 100; //100 ms
+  I.UDP_PARSE_INTERVAL_MS = 100; //100 ms
 
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;

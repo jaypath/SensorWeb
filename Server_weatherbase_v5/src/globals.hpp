@@ -219,7 +219,7 @@ typedef enum {
       //for UDP messages
       uint32_t UDP_LAST_MESSAGE_TIME; // time of last UDP message received
       uint32_t UDP_LAST_PARSE_TIME; // time of last UDP  parsing
-      uint8_t UDP_PARSE_INT; //interval in ms for UDP parsing
+      uint8_t UDP_PARSE_INTERVAL_MS = 50; //interval in ms for UDP parsing
       
     //for messages received
     uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight

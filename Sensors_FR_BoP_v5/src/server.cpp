@@ -1442,7 +1442,9 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<p><strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
   WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-
+  #ifdef _USEUDP
+  WEBHTML = WEBHTML + "Last LAN UDP Message Received at: " +  (String) (I.UDP_LAST_MESSAGE_TIME ? dateify(I.UDP_LAST_MESSAGE_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  #endif
   WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";

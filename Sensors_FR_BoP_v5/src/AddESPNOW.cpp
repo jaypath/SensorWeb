@@ -210,7 +210,9 @@ bool sendESPNOW(ESPNOW_type& msg) {
     SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
 
     #ifdef _USEUDP
-    sendUDPMessage(&msg);
+    if (isBroadcast) {
+      sendUDPMessage(&msg); //send broadcast messages via UDP as well
+    }
     #endif
     return true;
 }
@@ -691,7 +693,7 @@ bool receiveUDPMessage() {
     //return true if message is received, false if no message is received
     #ifdef _USEUDP
     uint32_t m = millis();
-    if (I.UDP_LAST_PARSE_TIME != 0 && (m - I.UDP_LAST_PARSE_TIME) < I.UDP_PARSE_INT) {
+    if (I.UDP_LAST_PARSE_TIME != 0 && (m - I.UDP_LAST_PARSE_TIME) < I.UDP_PARSE_INTERVAL_MS) {
         return false;
     }
     I.UDP_LAST_PARSE_TIME = m;
@@ -703,6 +705,7 @@ bool receiveUDPMessage() {
             return false;
         }
         LAN_UDP.read((uint8_t*)&msg, packetSize);
+        I.UDP_LAST_MESSAGE_TIME = I.currentTime;
         processLANMessage(&msg);
         return true;
     }
