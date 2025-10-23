@@ -13,6 +13,7 @@ struct DevType;
 struct SnsType;
 class Devices_Sensors;
 
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
   /*sens types
 //0 - not defined
@@ -37,17 +38,21 @@ class Devices_Sensors;
 19 - BME680 air press
 20  - BME680 gas sensor
 21 - human present (mmwave)
-50 - any binary, 1=yes/true/on
-51 = any on/off switch/relay (for example, relay on at 5v)
-52 = any yes/no switch
-53 = total heating time (use for a multizone system)
-54 = any ac on/off switch (for example, 24v driven relay)
-55 - heat on/off {requires N DIO Pins}
-56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
-57 - a/c fan on/off
-58 - leak yes/no
+
+50 - HVAC, total heating time (use for a multizone system) (ie heat on)
+51 - HVAC, Heat zone 
+52 - HVAC, Heat fan  
+53 - HVAC, Heat pump on
+55 = HVAC, total cooling time
+56 = HVAC, AC/heatpump Compressor on
+57 = HVAC, AC/heatpump fan on
+58 = HVAC, dehumidifer on
+59 = HVAC, humidifier on
+
 60 -  battery power
 61 - battery %
+70 - leak yes/no
+71 - any binary, 1=yes/true/on
 98 - clock
 99 = any numerical value
 100+ is a server type sensor, to which other sensors will send their data
@@ -64,31 +69,33 @@ class Devices_Sensors;
       const uint8_t MUXPINS[5] = {32,33,25,26,36}; //DIO pins to select from 15 channels [0 is 0 and [1111] is 15]  and 5th line is the reading (goes to an ADC pin). So 36 will be Analog and 32 will be s0...            
     #endif
 
-    #ifdef _ISHVAC
-        #ifdef _CHECKAIRCON 
+    #ifdef _USEHVAC //this is any number
+      #ifdef _USEAC //number of AC zones
         //const uint8_t DIO_INPUTS=2; //two pins assigned
-        const uint8_t ACPINS[4] = {35,34,39,36}; //comp DIO in,  fan DIO in,comp DIO out, fan DIO out
-        #endif
+        #ifdef _USEMUX
+        const uint8_t ACPINS[4] = _ACPINS; //if using MUX, then the pin count is always 4, regardless of the number of zones
+        #else
 
-        #ifdef _CHECKHEAT
+        const uint8_t ACPINS[_USEAC] = _ACPINS; //note that this must match the number of zones. Declare a different sensor for compressor/fan or gas/zone valve. Note that the pin should be a mux address if _USEMUX is defined
+        #endif
+        const String ACZONE[_USEAC] = _ACZONES;
+
+        #endif
+        #ifdef _USEHEAT
         //  const uint8_t DIO_INPUTS=6; //6 sensors
           #ifdef _USEMUX
-            const uint8_t HEATPINS[5] = {0,1,2,3,4,5}; //what are the mux addresses of heat zones?
+            const uint8_t HEATPINS[4] = _HEATPINS; //if using MUX, then the pin count is always 4, regardless of the number of zones
           #else
-            const uint8_t HEATPINS[6] = {36, 39, 34, 35,32,33}; //what are the pins of heat zones? ADC bank 1, starting from pin next to EN
+            const uint8_t HEATPINS[_USEHEAT] = _HEATPINS; //what are the pins of heat zones? ADC bank 1, starting from pin next to EN
           #endif
-          const String HEATZONE[6] = {"Office","MastBR","DinRm","Upstrs","FamRm","Den"};
+          const String HEATZONE[_USEHEAT] = _HEATZONES;
 
         #endif
 
-        #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
+        #if defined(_USEHEAT) || defined(_USEAC)
           #define _HVACHXPNTS 24
         #endif
 
-      // warnings
-      #if defined(_CHECKAIRCON) && defined(_CHECKHEAT)
-        #error "Check air con and check heat cannot both be defined."
-      #endif
 
     #endif
 
@@ -141,20 +148,24 @@ class Devices_Sensors;
 #endif
 
 #ifdef _USEAHT
+  #include <Wire.h>
   #include <AHTxx.h>
 #endif
 #ifdef _USEAHTADA
-  #include <Adafruit_AHTX0.h>
+#include <Wire.h>
+#include <Adafruit_AHTX0.h>
 #endif
 
 #ifdef _USEBMP
 //  #include <Adafruit_Sensor.h>
-  #include <Adafruit_BMP280.h>
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
 
 #endif
 
 #ifdef _USEBME
   #include <Wire.h>
+  #include <Adafruit_Sensor.h>
   #include <Adafruit_BME280.h>
 
 #endif
@@ -216,13 +227,6 @@ class Devices_Sensors;
 #endif
 
 #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
-  struct HISTORY {
-    uint32_t lastRead;
-    uint16_t interval;
-    double values[_HVACHXPNTS];
-  };
-  
-  extern HISTORY HVACHX[];
 
   #ifdef _USECALIBRATIONMODE
 
@@ -280,11 +284,13 @@ void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);
 int peak_to_peak(int pin, int ms = 50);
 void initHardwareSensors();
-
+uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 #ifdef _USESSD1306
 void redrawOled(void);
 #endif
-
+#ifdef _USEMUX
+double readMUX(int16_t pin, byte nsamps);
+#endif
 #ifdef _USEBME680
   void read_BME680();
 #endif
@@ -292,17 +298,17 @@ void redrawOled(void);
 
   //create a struct type to hold sensor history
   struct STRUCT_SNSHISTORY {
-    int16_t sensorIndex[SENSORNUM]; //index to the sensor array
-    uint32_t SensorIDs[SENSORNUM]; //ID of the sensor, which is devID<<16 + snsType<<8 + snsID
-    uint8_t HistoryIndex[SENSORNUM]; //point in array that we are at for each sensor's history
-    uint32_t TimeStamps[SENSORNUM][SENSORHISTORYSIZE] = {0};
-    double Values[SENSORNUM][SENSORHISTORYSIZE] = {0};
-    uint8_t Flags[SENSORNUM][SENSORHISTORYSIZE] = {0};
+    int16_t sensorIndex[_SENSORNUM]; //index to the sensor array
+    uint32_t SensorIDs[_SENSORNUM]; //ID of the sensor, which is devID<<16 + snsType<<8 + snsID
+    uint8_t HistoryIndex[_SENSORNUM]; //point in array that we are at for each sensor's history
+    uint32_t TimeStamps[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
+    double Values[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
+    uint8_t Flags[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
 
     bool recordSentValue(struct SnsType *S, int16_t hIndex) {
-      if (hIndex < 0 || hIndex >= SENSORNUM) return false;
+      if (hIndex < 0 || hIndex >= _SENSORNUM) return false;
       HistoryIndex[hIndex]++;
-      if (HistoryIndex[hIndex] >= SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
+      if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
       TimeStamps[hIndex][HistoryIndex[hIndex]] = S->timeRead;
       Values[hIndex][HistoryIndex[hIndex]] = S->snsValue;
       Flags[hIndex][HistoryIndex[hIndex]] = S->Flags;

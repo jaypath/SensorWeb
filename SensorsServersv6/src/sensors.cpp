@@ -13,7 +13,7 @@ STRUCT_SNSHISTORY SensorHistory;
 #endif
 
 
-#if defined(_CHECKAIRCON) || defined(_CHECKHEAT) 
+#if defined(_USEHVAC) 
 uint8_t HVACSNSNUM = 0;
 #endif
 
@@ -30,21 +30,6 @@ TFLI2C tflI2C;
   SensorChart SensorCharts[_WEBCHART];
 #endif
 
-#if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
-  HISTORY HVACHX[SENSORNUM];
-
-  #ifdef _USECALIBRATIONMODE
-    void checkHVAC(void) {
-      //push peak to peak values into HVACHX array
-      for (byte j=0;j<SENSORNUM;j++) {
-        pushDoubleArray(HVACHX[j].values,_HVACHXPNTS,peak_to_peak(SENSORS_TO_CHART[j],100));
-      }
-    
-    }
-  #endif
-
-  
-#endif
 
 
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
@@ -91,12 +76,6 @@ TFLI2C tflI2C;
 #ifdef _USEBME
 
   Adafruit_BME280 bme; // I2C
-//Adafruit_BMP280 bmp(BMP_CS); // hardware SPI
-//  #define BMP_SCK  (13)
-//  #define BMP_MISO (12)
-//  #define BMP_MOSI (11)
-// #define BMP_CS   (10)
-//Adafruit_BMP280 bmp(BMP_CS, BMP_MOSI, BMP_MISO,  BMP_SCK); //software SPI
 #endif
 
 #ifdef  _USESSD1306
@@ -105,6 +84,7 @@ TFLI2C tflI2C;
 #endif
 
 extern int16_t MY_DEVICE_INDEX;
+
 
 void initPeripheralSensors() {
   //this performs several functions:
@@ -115,26 +95,19 @@ void initPeripheralSensors() {
 
   //update mysensorindices array
   byte count = 0;
+  MY_DEVICE_INDEX = Sensors.findMyDeviceIndex();
   for (int16_t i = 0; i < NUMSENSORS; i++) {
       uint16_t snsvalid = Sensors.isSensorIndexValid(i);
-      if (snsvalid == 1 || snsvalid == 3) {
+      if (snsvalid == 1 || snsvalid == 3) { //my sensors
         SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-        SensorHistory.SensorIDs[count] = MY_DEVICE_INDEX<<16 + sensor->snsType<<8 + sensor->snsID;
-        SensorHistory.sensorIndex[count] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensor->snsType, sensor->snsID, String(sensor->snsName).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], sensor->Flags, Prefs.DEVICENAME, MYTYPE);
+        SensorHistory.SensorIDs[count] = Sensors.makeSensorID(sensor->snsType, sensor->snsID, MY_DEVICE_INDEX);
+        SensorHistory.sensorIndex[count] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensor->snsType, sensor->snsID, String(sensor->snsName).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], sensor->Flags, Prefs.DEVICENAME, _MYTYPE, sensor->snsPin, sensor->powerPin);
         count++;
-        if (count >= SENSORNUM) break;
+        if (count >= _SENSORNUM) break;
       }
   }
 
-  //update SensorHistory array
-  memset(SensorHistory.SensorIDs, 0, sizeof(SensorHistory.SensorIDs));
-  for (int16_t i = 0; i < NUMSENSORS; i++) {
-      uint16_t snsvalid = Sensors.isSensorIndexValid(i);
-      if (snsvalid == 1 || snsvalid == 3) SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + Sensors.getSensorBySnsIndex(i)->snsType<<8 + Sensors.getSensorBySnsIndex(i)->snsID;
-      
-  }
-
-
+ 
 }
 
 
@@ -146,394 +119,127 @@ void setupSensors() {
 analogSetAttenuation(ADC_11db); //this sets the voltage range to 3.3v
 #endif
 
-MY_DEVICE_INDEX = updateMyDevice(); //update my index
-
-uint16_t flagstates[] = FLAGSTATES;
-uint16_t interval_poll[] = INTERVAL_POLL;
-uint16_t interval_send[] = INTERVAL_SEND;
-double limit_max[] = LIMIT_MAX;
-double limit_min[] = LIMIT_MIN;
-byte sensortypes[] = SENSORTYPES;
-
-//if Prefs has values saved, use those. Otherwise, use the defaults
-bool PrefsUpToDate = false;
-for (byte i=0;i<SENSORNUM;i++) {
-  if (Prefs.SNS_FLAGS[i] != 0) PrefsUpToDate = true;
-  if (Prefs.SNS_LIMIT_MAX[i] != 0) PrefsUpToDate = true;
-  if (Prefs.SNS_LIMIT_MIN[i] != 0) PrefsUpToDate = true;
-  if (Prefs.SNS_INTERVAL_POLL[i] != 0) PrefsUpToDate = true;
-  if (Prefs.SNS_INTERVAL_SEND[i] != 0) PrefsUpToDate = true;
+String myname = String(Prefs.DEVICENAME);
+if (myname == "") {
+  #ifdef _MYNAME
+    myname = _MYNAME;
+  #else
+    myname = "sensor" + String(ESP.getEfuseMac(), HEX);
+  #endif
+  snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", myname.c_str());
+  Prefs.isUpToDate = false;
 }
 
-if (!PrefsUpToDate) {
-  for (byte i=0;i<SENSORNUM;i++) {
+
+MY_DEVICE_INDEX = updateMyDevice(); //update my index
+
+uint16_t flagstates[] = _FLAGSTATES;
+uint16_t interval_poll[] = _INTERVAL_POLL;
+uint16_t interval_send[] = _INTERVAL_SEND;
+double limit_max[] = _LIMIT_MAX;
+double limit_min[] = _LIMIT_MIN;
+String sensornames[] = _SENSORNAMES;
+byte sensortypes[] = _SENSORTYPES;
+int16_t snsPins[] = _SNSPINS;
+int16_t powerPins[] = _POWERPINS;
+
+//if Prefs has values saved, use those. Otherwise, use the defaults
+// Check each sensor individually and fill in missing values
+
+  
+
+for (byte i=0;i<_SENSORNUM;i++) {
+  bool sensorNeedsDefaults = false;
+  
+  // Check if this sensor's values are uninitialized (all zeros is invalid)
+  if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) {
+    sensorNeedsDefaults = true;
+  }
+  
+  if (sensorNeedsDefaults) {
     Prefs.SNS_FLAGS[i] = flagstates[i];
     Prefs.SNS_LIMIT_MAX[i] = limit_max[i];
     Prefs.SNS_LIMIT_MIN[i] = limit_min[i];
     Prefs.SNS_INTERVAL_POLL[i] = interval_poll[i];
     Prefs.SNS_INTERVAL_SEND[i] = interval_send[i];
+    Prefs.isUpToDate = false;
   }
-  Prefs.isUpToDate = false;
 }
 
 
-
-
-#if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
-//init hvachx 
-  for (byte j=0;j<SENSORNUM;j++) {
-    HVACHX[j].interval = 60*60; //seconds
-    HVACHX[j].lastRead = 0;
-    for (byte jj=0;jj<_HVACHXPNTS;jj++) HVACHX[j].values[jj]=0;
-  }
-
-  #if defined(_USEMUX) && defined(_CHECKHEAT)
-    pinMode(MUXPINS[0],OUTPUT);
-    pinMode(MUXPINS[1],OUTPUT);
-    pinMode(MUXPINS[2],OUTPUT);
-    pinMode(MUXPINS[3],OUTPUT);
-    pinMode(MUXPINS[4],INPUT);
-    digitalWrite(MUXPINS[0],LOW);
-    digitalWrite(MUXPINS[1],LOW);
-    digitalWrite(MUXPINS[2],LOW);
-    digitalWrite(MUXPINS[3],LOW);
-    #ifdef _DEBUG
-      Serial.println("dio configured");
-    #endif
-
-  #endif
-
-  #if defined(_CHECKAIRCON)
-    pinMode(MUXPINS[0],OUTPUT);
-    pinMode(MUXPINS[1],OUTPUT);
-    pinMode(MUXPINS[2],INPUT);
-    pinMode(MUXPINS[3],INPUT);
-    digitalWrite(MUXPINS[0],LOW);
-    digitalWrite(MUXPINS[1],LOW);    
-  #endif
-
-
-
+#if defined(_USEMUX) 
+pinMode(MUXPINS[0],OUTPUT);
+pinMode(MUXPINS[1],OUTPUT);
+pinMode(MUXPINS[2],OUTPUT);
+pinMode(MUXPINS[3],OUTPUT);
+pinMode(MUXPINS[4],INPUT);
+digitalWrite(MUXPINS[0],HIGH);
+digitalWrite(MUXPINS[1],HIGH);
+digitalWrite(MUXPINS[2],HIGH);
+digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
 #endif
 
-//double sc_multiplier = 0;
-//int sc_offset;
 
+#if defined(_USEHVAC)
 
-  for (byte i=0;i<SENSORNUM;i++) {
-    byte flags = Prefs.SNS_FLAGS[i];
-    byte snstype = sensortypes[i];
-    String myname = String(Prefs.DEVICENAME);
+  #if defined(_USEAC) && !defined(_USEMUX)
 
-    if (myname = "") {
-      #ifdef MYNAME
-        myname = MYNAME;
-      #else
-        myname = "sensor" + String(ESP.getEfuseMac(), HEX);
-      #endif
-      snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", myname.c_str());
-      Prefs.isUpToDate = false;
+    for (byte i=0;i<_USEAC;i++) {
+      pinMode(ACPINS[i],INPUT);
     }
-    byte snsID = Sensors.countSensors(snstype,MY_DEVICE_INDEX)+1;
-    
-    switch (snstype) {
-      case 1: //DHT temp
-      {
-        #ifdef DHTTYPE
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        #endif
-        break;
-      }
-      case 3: //soilresistance
+  #endif
+  #if defined(_USEHEAT) && !defined(_USEMUX)
+    for (byte i=0;i<_USEHEAT;i++) {
+      pinMode(HEATPINS[i],INPUT);
+    }
+  #endif
+#endif
+
+
+
+
+  for (byte i=0;i<_SENSORNUM;i++) {
+    byte snsID = Sensors.countSensors(sensortypes[i],MY_DEVICE_INDEX)+1;
+
+    //;pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. // pin number for the sensor, if applicable. If 0-99 then it is an analoginput pin. If 100-199 then it is 100-pin number and a digital input. If >=200 then SPI and (snsPin-100) is the chip select pin. If -1 to -128 then it is -1*the I2C address of the sensor. If -200 then there is no pin, if -201 then it is a special case
+    int8_t correctedPin=-1;
+    uint8_t pintype = getPinType(snsPins[i], &correctedPin);
+    if (pintype !=0) {
+      //set up pins
+      if (pintype <= 4) pinMode(correctedPin, INPUT);
+      //if pintype is even, then it is a power pin, and we need to set the pin to output and low
+      if (pintype % 2 == 0 && pintype <= 6) {
+        pinMode(powerPins[i], OUTPUT);
+        digitalWrite(powerPins[i], LOW);
+      } 
+    }
+
+    SensorHistory.SensorIDs[i] = Sensors.makeSensorID(sensortypes[i], snsID, MY_DEVICE_INDEX); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
+    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname+String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
+
+    switch (sensortypes[i]) {
+      
+      case 53: //HVAC time - this is the total time. Note that sensor pin is not used
         {
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          #ifdef _USESOILRES
-          pinMode(_USESOILRES,INPUT);
-          pinMode(_SOILRESPOWERPIN, OUTPUT);
-          digitalWrite(_SOILRESPOWERPIN, LOW);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilR")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          #endif
-
-        break;
-        }
-      case 33: //soil capacitance
-        {
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          #ifdef _USESOILCAP
-          pinMode(_USESOILCAP,INPUT);
-          pinMode(_SOILCAPPOWERPIN, OUTPUT);
-          digitalWrite(_SOILCAPPOWERPIN, LOW);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), snstype, snsID, String(myname+String("_soilC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          #endif
-
-        break;
-        }
-
-      case 4: //AHT temp
-        {
-        #if defined(_USEAHT) || defined(_USEAHTADA)
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 4, snsID, String(myname+String("_AHT_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        #endif
-        break;
-        }
-      case 5: //aht rh
-        {
-        #if defined(_USEAHT) || defined(_USEAHTADA)
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 5, snsID, String(myname+String("_AHT_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        #endif
-        break;
-        }
-
-      case 7: //dist
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        bitWrite(flags,7,0);
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 7, snsID, String(myname+String("_Dist")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 9: //BMP pres
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 9, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 10: //BMP temp
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 10, snsID, String(myname+String("_BMP_t")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 11: //BMP alt
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 11, snsID, String(myname+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 12: //Bar prediction
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        bitWrite(flags,7,0); //not a "monitored" sensor, ie do not alarm if sensor fails to report
-        bitWrite(flags,3,1); bitWrite(flags,4,1);
+        bitWrite(Prefs.SNS_FLAGS[i],3,1);
         
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 12, snsID, String(myname+String("_Pred")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 13: //BME pres
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 13, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 14: //BMEtemp
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 14, snsID, String(myname+String("_BMEt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 15: //bme rh
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        bitWrite(flags,7,0);
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 15, snsID, String(myname+String("_BMErh")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 16: //bme alt
-        {
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          bitWrite(flags,7,0);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 16, snsID, String(myname+String("_alt")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 17: //bme680
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 17, snsID, String(myname+String("_T")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 18: //bme680
-        {
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 18, snsID, String(myname+String("_RH")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        break;
-        }
-      case 19: //bme680
-        {
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 19, snsID, String(myname+String("_hPa")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        break;
-        }
-      case 20: //bme680
-        {
-        SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 20, snsID, String(myname+String("_VOC")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-        SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
         break;
         }
 
-      #if defined(_CHECKAIRCON) 
-        case 53: //HVAC time - this is the total time. Note that sensor pin is not used
-         {
-          bitWrite(flags,3,1);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(myname+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          
-          break;
-         }
-      #endif
-
-      #if defined(_CHECKHEAT) 
-        case 53: //HVAC time - this is the total time. Note that sensor pin is not used
-         {
-
-
-          bitWrite(flags,3,1);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 50, snsID, String(myname+String("_Total")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          
-          break;
-         }
-
-        case 54: //ac, gas valve
-        {
-          pinMode(_USERELAY, INPUT);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 51, snsID, String(myname+String("_GAS")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          
-          break;
-        }
-        case 55: //heat
-        {
-          //need to count how many heat zones have been added so far
-
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          String heatName = String(myname) + "_" + String(HEATZONE[HZindex]); //no HZindex-1 because we are using a 1-based index
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 55, snsID, heatName.c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          #ifdef _USEMUX
-          #else
-            pinMode(HEATPINS[HZindex], INPUT);
-          #endif
-          break;
-        }
-      #endif
-
-
-      #ifdef _CHECKAIRCON
-        case 56: //aircon compressor
-          {
-            SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-            SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 56, snsID, String(myname+String("_comp")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          break;
-          }
-        case 57: //aircon fan
-          {
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 57, snsID, String(myname+String("_fan")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-          break;
-          }
-          
-      #endif
-      case 70: //leak
-        {
-          #ifdef _USELEAK
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 70, snsID, String(myname+String("_leak")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          #endif
-          break;
-        }
-
-      case 60: //battery
-        {
-          bitWrite(flags,1,0);
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 60, snsID, String(myname+String("_bat")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-
-        break;
-        }
       case 61: //battery percent
         {
-          
-          bitWrite(flags,3,1);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 61, snsID, String(myname+String("_bpct")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);
+          bitWrite(Prefs.SNS_FLAGS[i],3,1);
         break;
         }
       case 90: //Sleep info
         {
-          bitWrite(flags,7,0); bitWrite(flags,3,1); bitWrite(flags,1,0);
-          SensorHistory.SensorIDs[i] = MY_DEVICE_INDEX<<16 + snstype<<8 + snsID; //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1
-          SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), 90, snsID, String(myname+String("_sleep")).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), MYTYPE);          
+          bitWrite(Prefs.SNS_FLAGS[i],7,0); bitWrite(Prefs.SNS_FLAGS[i],3,1); bitWrite(Prefs.SNS_FLAGS[i],1,0);
         break;
         }
-
     }
-
-
   }
 
-
-
-
-  #if defined(_CHECKHEAT) || defined(_CHECKAIRCON)
-  //init hvachx 
-
-  //count hvac sensors
-  HVACSNSNUM=0;
-  for (byte j=0;j<SENSORNUM;j++) if (Sensors[j].snsType>=50 && Sensors[j].snsType<60) HVACSNSNUM++;
-  
-  for (byte j=0;j<HVACSNSNUM;j++) {
-    HVACHX[j].interval = 60*60; //seconds
-    HVACHX[j].lastRead = 0;
-    for (byte jj=0;jj<_HVACHXPNTS;jj++) HVACHX[j].values[jj]=0;
-  }
-
-  #if defined(_USEMUX) && defined(_CHECKHEAT)
-    pinMode(HEATPINS[0],OUTPUT);
-    pinMode(HEATPINS[1],OUTPUT);
-    pinMode(HEATPINS[2],OUTPUT);
-    pinMode(HEATPINS[3],OUTPUT);
-    pinMode(HEATPINS[4],INPUT);
-    digitalWrite(HEATPINS[0],LOW);
-    digitalWrite(HEATPINS[1],LOW);
-    digitalWrite(HEATPINS[2],LOW);
-    digitalWrite(HEATPINS[3],LOW);
-
-  #endif
-
-  #if defined(_CHECKAIRCON)
-    pinMode(ACPINS[0],OUTPUT);
-    pinMode(ACPINS[1],OUTPUT);
-    pinMode(ACPINS[2],INPUT);
-    pinMode(ACPINS[3],INPUT);
-    digitalWrite(ACPINS[2],LOW);
-    digitalWrite(ACPINS[3],LOW);    
-  #endif
-
-
-
-#endif
-
-
+  SerialPrint("Sensors setup complete",true);
 }
 
 int peak_to_peak(int pin, int ms) {
@@ -566,7 +272,7 @@ int peak_to_peak(int pin, int ms) {
 
 int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
-
+  
   if (mydeviceindex == -1) mydeviceindex = Sensors.findMyDeviceIndex();
   //is this my sensor?
   if (P->deviceIndex != mydeviceindex) return -1;
@@ -579,6 +285,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
   //is it time to read?
   if (forceRead==false && !(P->timeRead==0 || P->timeRead>I.currentTime || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < I.currentTime || I.currentTime - P->timeRead >60*60*24 )) return 0;
 
+  
 
   // Use I.currentTime instead of local time_t t variable
   byte nsamps; //only used for some sensors
@@ -609,74 +316,45 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       
       break;
       }
-    case 3: //soil resistance
+    case 3: //soil resistance 
+    case 33: //soil capacitance
       {
-        #ifdef _USESOILCAP
         val=0;
-        nsamps=100;
+        nsamps=10;
 
-        digitalWrite(_SOILCAPPOWERPIN, HIGH);
-        delay(100); //wait X ms for reading to settle
-        for (byte ii=0;ii<nsamps;ii++) {                  
-          val += analogRead(_USESOILCAP);
-          delay(10);
+        int8_t correctedPin=-1;
+        uint8_t pintype = getPinType(P->snsPin, &correctedPin);
+            
+        //has power pin?
+        if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
+          pinMode(P->powerPin, OUTPUT);
+          digitalWrite(P->powerPin, HIGH);
+          delay(100); //wait X ms for reading to settle
         }
-          digitalWrite(_SOILCAPPOWERPIN, LOW);
-        val=val/nsamps;
-        //based on experimentation... this eq provides a scaled soil value where 0 to 100 corresponds to 450 to 800 range for soil saturation (higher is dryer. Note that water and air may be above 100 or below 0, respec
-        val =  (int) ((-0.28571*val+228.5714)*100); //round value
-        P->snsValue =  val/100;
-        if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
-        #endif
 
-        #ifdef _USESOILRES
-        //soil moisture by stainless steel probe (voltage out = 0 to Vcc)
-        val=0;
-        nsamps=100;
-
-        digitalWrite(_SOILRESPOWERPIN, HIGH);
-        delay(200); //wait X ms for reading to settle
-        for (byte ii=0;ii<nsamps;ii++) {                  
-          val += analogRead(_USESOILRES);
-          delay(10);
+        if (pintype == 1 || pintype == 2) {
+          for (byte ii=0;ii<nsamps;ii++) {
+            val += analogRead(correctedPin); //analog pin, no power
+            delay(10);
+          }
+          val=val/nsamps;
         }
-          digitalWrite(_SOILRESPOWERPIN, LOW);
-        val=val/nsamps;
 
-        //convert val to voltage
-        val = 3.3 * (val / (_ADCRATE-1));
-        //the chip I am using is a voltage divider with a 10K r1. 
-        //equation for R2 is R2 = R1 * (V2/(V-v2))
-
-        P->snsValue = (double) _SOILRESISTOR * (val/(3.3-val));
-
-        if (isSoilResistanceValid(P->snsValue)==false) {
-          isInvalid=true;
+        if (pintype == 3 || pintype == 4) {
+          val = digitalRead(correctedPin); //digital pin, high is dry
         }
-        #endif
-      
-      break;
-      }
-      case 33: //soil capacitance
-      {
-        #ifdef _USESOILCAP
-        val=0;
-        nsamps=100;
 
-        digitalWrite(_SOILCAPPOWERPIN, HIGH);
-        delay(100); //wait X ms for reading to settle
-        for (byte ii=0;ii<nsamps;ii++) {                  
-          val += analogRead(_USESOILCAP);
-          delay(10);
+        if (pintype == 5 || pintype == 6) {
+          //use MUX to read the pin
+          #ifdef _USEMUX
+          val = readMUX(correctedPin, nsamps);
+          #endif
         }
-          digitalWrite(_SOILCAPPOWERPIN, LOW);
-        val=val/nsamps;
-        //invert value, which is high when wet
-        P->snsValue =  1000-val;
-        if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
-        #endif
 
-      
+        P->snsValue =  val;
+        if (P->snsType==3 && isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
+        
+        if (P->snsType==33 && isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
       break;
       }
 
@@ -687,18 +365,11 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           val = aht.readTemperature();
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
-            P->snsValue = (100*(val*9/5+32))/100; 
-            #ifdef _DEBUG
-              Serial.print(F("AHT Temperature...: "));
-              Serial.print(P->snsValue);
-              Serial.println(F("F"));
-            #endif
+            P->snsValue = (100*(val*9/5+32))/100;                       
           }
           else
           {
-            #ifdef _DEBUG
-              Serial.print(F("AHT Temperature Error"));
-            #endif
+            SerialPrint("AHT Temperature Error",true);
           }
       #endif
       #ifdef _USEAHTADA
@@ -726,18 +397,11 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           val = aht.readHumidity();
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
-            P->snsValue = (val*100)/100; 
-            #ifdef _DEBUG
-              Serial.print(F("AHT HUmidity...: "));
-              Serial.print(P->snsValue);
-              Serial.println(F("%"));
-            #endif
+            P->snsValue = (val*100)/100;             
           }
           else
           {
-            #ifdef _DEBUG
-              Serial.print(F("AHT Humidity Error"));
-            #endif
+            SerialPrint("AHT Humidity Error",true);
           }
           if (isRHValid(P->snsValue)==false) isInvalid=true;
           #endif
@@ -776,6 +440,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       {
         #ifdef _USEBMP
          P->snsValue = bmp.readPressure()/100; //in hPa
+         
         #ifdef _USEBARPRED
           //adjust critical values based on history, if available
           if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
@@ -961,7 +626,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
       }
     #endif
 
-    #if defined(_CHECKHEAT) 
+    #if defined(_USEHEAT) 
 
       case 53: //total HVAC time        
         {
@@ -1058,7 +723,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         }
     #endif
 
-    #if defined(_CHECKAIRCON)
+    #if defined(_USEAC)
       case 56: //aircon compressor
       {
         //assumes you are using a fan relay to switch on
@@ -1185,7 +850,6 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
     if (shortDelay < 60 && Prefs.SNS_INTERVAL_POLL[prefs_index] > 60) shortDelay = 60; //minimum 1 minute
     if (shortDelay > 60*10) shortDelay = 60*10; //maximum 10 minutes
     P->timeRead = I.currentTime - shortDelay;
-    SerialPrint((String) "Reading from " + String(P->snsType) + " " + String(P->snsID) + " Invalid: " + String(P->snsValue) + " Setting next read to " + String(shortDelay) + " seconds",true);
     return -10;
   }
 
@@ -1342,6 +1006,14 @@ void initHardwareSensors() {
     oled.println("Sns setup.");
   #endif
 
+  #ifdef _USEAHT
+  if (!aht.begin()) SerialPrint("AHT not connected",true);
+  #endif
+  #ifdef _USEAHTADA
+  if (!aht.begin()) SerialPrint("AHT not connected",true);
+  #endif
+  
+
   #ifdef _USEBME680_BSEC
     iaqSensor.begin(BME68X_I2C_ADDR_LOW, Wire);
     String output = "\nBSEC library version " + String(iaqSensor.version.major) + "." + String(iaqSensor.version.minor) + "." + String(iaqSensor.version.major_bugfix) + "." + String(iaqSensor.version.minor_bugfix);
@@ -1390,30 +1062,28 @@ void initHardwareSensors() {
   #endif
 
   #ifdef _USEBMP
-    #ifdef _DEBUG
-      Serial.println("bmp begin");
-    #endif
-    byte retry = 0;
-    byte trybmp = _USEBMP;
     
-    while (bmp.begin(trybmp) != true && retry < 20) {
-      #ifdef _DEBUG
-        Serial.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);
-      #endif
+    byte BMPretry = 0;
+    byte trybmp = _USEBMP;
+    if (trybmp == 0) trybmp = 0x76;
+    else if (trybmp == 1) trybmp = 0x77;
+    
+    while (bmp.begin(trybmp) != true && BMPretry < 20) {
+      SerialPrint("BMP fail at 0x" + String(trybmp) + ".\nRetry number " + String(BMPretry) + "\n",true);
 
       #ifdef _USESSD1306  
         oled.clear();
         oled.setCursor(0,0);  
-        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);          
+        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, BMPretry);          
       #endif
 
-      if (retry == 10) { // Try swapping address
+      if (BMPretry == 10) { // Try swapping address
         if (trybmp == 0x76) trybmp = 0x77;
         else trybmp = 0x76;
       }
 
       delay(250);
-      retry++;
+      BMPretry++;
     }
 
     /* Default settings from datasheet. */
@@ -1425,10 +1095,6 @@ void initHardwareSensors() {
   #endif
   
   #ifdef _USEBME
-    #ifdef _DEBUG
-      Serial.printf("bme begin\n");
-    #endif
-    
     byte retry = 0;
     while (!bme.begin() && retry < 20) {
       #ifdef _USESSD1306
@@ -1438,10 +1104,11 @@ void initHardwareSensors() {
         oled.setCursor(0,0);
         delay(500);
       #else
-        digitalWrite(LED, HIGH);
-        delay(500);
-        digitalWrite(LED, LOW);
-        delay(500);
+        SerialPrint("BME failed. Retry number " + String(retry),true);
+        digitalWrite(2, HIGH);
+        delay(100);
+        digitalWrite(2, LOW);
+        delay(100);
       #endif
       retry++;
     }
@@ -1464,28 +1131,105 @@ void initHardwareSensors() {
   
   // Initialize AHT sensor
   #if defined(_USEAHT) || defined(_USEAHTADA)
-    retry = 0;
-    while (aht.begin() != true && retry < 10) {
-      #ifdef _DEBUG
-        Serial.printf("AHT not connected. Retry number %d\n", retry);
-      #endif
+    byte AHTretry = 0;
+    while (aht.begin() != true && AHTretry < 10) {
+      
+      SerialPrint("AHT not connected. Retry number " + String(AHTretry),true);
 
       #ifdef _USESSD1306  
         oled.clear();
         oled.setCursor(0,0);  
-        oled.printf("No aht x%d!", retry);          
+        oled.printf("No aht x%d!", AHTretry);          
       #endif
       delay(250);
-      retry++;
+      AHTretry++;
     }
   #endif
 
   // Call sensor-specific setup
   setupSensors();
   
-  #ifdef _DEBUG
-    Serial.println("Hardware sensors initialized");
-  #endif
 }
+
+
+
+uint8_t getPinType(int16_t pin, int8_t* correctedPin) {
+  //0 = unknown or no pin
+  //1 = analog input, no power
+  //2 = analog input, power
+  //3 = digital input, no power
+  //4 = digital input, power
+  //5 = MUX input, no power
+  //6 = MUX input, power
+  //7 = SPI input, no power
+  //8 = SPI input, power
+  //9 = I2C input, no power
+  //10 = I2C input, power
+
+  //pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
+  *correctedPin = -1;
+  if (pin == -9999) return 0;
+  if (pin >= 0 && pin < 100) {
+    *correctedPin = pin;
+    return 1;
+  }
+  if (pin >= -99 && pin < 0) {
+    *correctedPin = -1*pin;
+    return 2;
+  }
+  if (pin >= 100 && pin < 200) {
+    *correctedPin = pin-100;
+    return 5;
+  }
+  if (pin >= -199 && pin <= -100) {
+    *correctedPin = -1*pin-100;
+    return 6;
+  }
+  if (pin >= 200 && pin < 300) {
+    *correctedPin = pin-200;
+    return 3;
+  }
+  if (pin >= -299 && pin <= -200) {
+    *correctedPin = -1*pin-200;
+    return 4;
+  }
+  if (pin >= 300 && pin < 400) {
+    *correctedPin = pin-300;
+    return 7;
+  }
+  if (pin >= -399 && pin <= -300) {
+    *correctedPin = -1*pin-300;
+    return 8;
+  }
+  if (pin >= 400 && pin < 500) {
+    *correctedPin = pin-400;
+    return 9;
+  }
+  if (pin >= -499 && pin <= -400) {
+    *correctedPin = -1*pin-400;
+    return 10;
+  }
+  return 0;
+}
+
+#ifdef _USEMUX
+double readMUX(int16_t pin, byte nsamps) {
+  double val = 0;
+  digitalWrite(MUXPINS[0],bitRead(pin,0));
+  digitalWrite(MUXPINS[1],bitRead(pin,1));
+  digitalWrite(MUXPINS[2],bitRead(pin,2));
+  digitalWrite(MUXPINS[3],bitRead(pin,3));  
+  for (byte ii=0;ii<nsamps;ii++) {
+    val += analogRead(MUXPINS[4]);
+    delay(10);
+  }
+  val=val/nsamps;
+  digitalWrite(MUXPINS[0],HIGH);
+  digitalWrite(MUXPINS[1],HIGH);
+  digitalWrite(MUXPINS[2],HIGH);
+  digitalWrite(MUXPINS[3],HIGH);
+  return val;
+}
+#endif
 
 #endif

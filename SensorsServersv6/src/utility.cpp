@@ -52,7 +52,9 @@ void initSystem() {
       #endif
       SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
       delay(1000);
-  }
+  } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
+
+
 
 
 }
@@ -174,7 +176,7 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
 
   bool found = false;
   byte n=0; //index of the sensor in the SensorHistory array
-  for (n=0; n<SENSORNUM; n++) {
+  for (n=0; n<_SENSORNUM; n++) {
     if (SensorHistory.sensorIndex[n] == m) {
       found = true;
       break;
@@ -189,7 +191,7 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
 
   //how many valid data points are there? //cycle through the history timestamps and count the number of valid data points
   uint16_t validDataPoints = 0;
-  for (uint16_t i=0; i<SENSORHISTORYSIZE; i++) {
+  for (uint16_t i=0; i<_SENSORHISTORYSIZE; i++) {
     if (isTimeValid(SensorHistory.TimeStamps[n][i]))       validDataPoints++;
     
   }
@@ -210,9 +212,9 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
 
     //using SensorHistory.HistoryIndex[n], which is the index of the last data point saved, rewind N points and pull them in order
     int16_t index_start = SensorHistory.HistoryIndex[n]-*N; //this might be a negative number, so we need to wrap around
-    if (index_start < 0) index_start = SENSORHISTORYSIZE + index_start;
+    if (index_start < 0) index_start = _SENSORHISTORYSIZE + index_start;
     uint16_t index = index_start;
-    while (cycleIndex(&index, SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
+    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -223,7 +225,7 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
   } else {
     //pull data in order of newest to oldest
     uint16_t index = SensorHistory.HistoryIndex[n];
-    while (cycleIndex(&index, SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
+    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -268,7 +270,7 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
 
     //how many valid data points are there? //cycle through the history timestamps and count the number of valid data points
     uint16_t validDataPoints = 0;    
-    for (uint16_t i=0; i<SENSORHISTORYSIZE; i++) {
+    for (uint16_t i=0; i<_SENSORHISTORYSIZE; i++) {
       if (isTimeValid(SensorHistory.TimeStamps[sensorHistoryIndex][i]))       validDataPoints++;
       
     }
@@ -307,7 +309,7 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
     bool isgood = true;
     
     //load data from memory if it is within the window size time range
-    for (j = 0; j < SENSORHISTORYSIZE; j++) {
+    for (j = 0; j < _SENSORHISTORYSIZE; j++) {
       if (isTimeValid(SensorHistory.TimeStamps[sensorHistoryIndex][j])) {
         if (SensorHistory.TimeStamps[sensorHistoryIndex][j] >= windowEnd) continue;
         if (SensorHistory.TimeStamps[sensorHistoryIndex][j] < windowStart) continue;
@@ -426,25 +428,8 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 }
 
 void handleStoreCoreData() {
-    BootSecure bootSecure;
-    int8_t ret = bootSecure.setPrefs(false); 
-    if (ret<0) {
-      if (ret == -1) {  
-        SerialPrint("Failed to encrypt core data",true);
-        storeError("Failed to encrypt core data", ERROR_FAILED_PREFS, true);
-      }
-      if (ret == -10) {
-        SerialPrint("Failed Prefs security",true);
-        storeError("Failed Prefs security", ERROR_FAILED_PREFS, true);  
-      }      
-    }
+  storeCoreData(false);
 
-  if (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime) { //store if out of date and more than 5 minutes since last store
-      I.isUpToDate = true;
-      #ifdef _USESDCARD
-      storeScreenInfoSD();
-      #endif
-  }
 
   #ifdef _USESDCARD
   //store device data
@@ -863,11 +848,11 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
 }
 
 
-void storeCoreData() {
+void storeCoreData(bool forceStore) {
   //force core data to be stored to SD
 
   BootSecure bootSecure;
-  int8_t ret = bootSecure.setPrefs(true); 
+  int8_t ret = bootSecure.setPrefs(forceStore); 
   if (ret<0) {
     if (ret == -1) {  
       SerialPrint("Failed to encrypt core data",true);
@@ -879,11 +864,12 @@ void storeCoreData() {
     }      
   }
 
-  I.isUpToDate = true;
-  #ifdef _USESDCARD
-  storeScreenInfoSD();
-  #endif
-
+  if (forceStore || (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime)) { //store if out of date and more than 5 minutes since last store
+    I.isUpToDate = true;
+    #ifdef _USESDCARD
+    storeScreenInfoSD();
+    #endif
+  }
 }
 
 
@@ -1082,7 +1068,7 @@ uint32_t IPToUint32(IPAddress ip) {
 
 int16_t updateMyDevice() {
     //update mySensorsIndices array and update my IP if needed
-    MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+    MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
 
   return MY_DEVICE_INDEX;
 }

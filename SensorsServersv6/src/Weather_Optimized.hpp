@@ -107,7 +107,7 @@ public:
     bool flag_rain;
     bool flag_snow;
     bool flag_ice;
-    double lat, lon;
+    // lat, lon removed - now using Prefs.LATITUDE and Prefs.LONGITUDE throughout
 
     // Constructor
     WeatherInfoOptimized();

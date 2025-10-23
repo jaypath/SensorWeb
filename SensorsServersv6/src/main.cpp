@@ -228,9 +228,10 @@ void setup() {
     #ifdef _USETFT
     displaySetupProgress( true);
     #endif
-    SerialPrint("Wifi OK",true);
+    SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true);
 
-    
+    delay(250);
+
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     #ifdef _USETFT
     if (setupTime()) {
@@ -269,10 +270,11 @@ void setup() {
         // This is likely the first boot, set initial values
         I.resetInfo = RESET_DEFAULT;
         I.lastResetTime = I.currentTime;
+        #ifndef _ISPERIPHERAL
         SerialPrint("First boot detected, setting initial reset info", true);
+        #endif
     }
     
-    SerialPrint("Current IP Address: " + WiFi.localIP().toString(),true);
     
 
     //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
@@ -287,7 +289,7 @@ void setup() {
         Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
         #endif
     }
-    byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+    byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
     
     if (devIndex == -1) {
         failedToRegister();
@@ -341,8 +343,6 @@ void setup() {
     tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
 //load weather data from SD card
     if (readWeatherDataSD()) {
-        WeatherData.lat = Prefs.LATITUDE;
-        WeatherData.lon = Prefs.LONGITUDE;
     
         if (WeatherData.updateWeatherOptimized(3600)>0) {
             SerialPrint("Weather data loaded from SD card",true);
@@ -601,6 +601,7 @@ void loop() {
             storeError("Time is invalid, completely resetting time", ERROR_TIME,true);
             I.currentTime = 0;
             setupTime();
+            SerialPrint((String) "New time is: " + dateify(I.currentTime),true);
         }
 
         #ifdef _USETFT
@@ -612,7 +613,7 @@ void loop() {
         #ifdef _ISPERIPHERAL
             //run through all my sensors and try and update them
 
-            for (int16_t i = 0; i < SENSORNUM; i++) {
+            for (int16_t i = 0; i < _SENSORNUM; i++) {
                 SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
                 if (sensor && sensor->IsSet) {
                     int8_t readResult = ReadData(sensor, false, MY_DEVICE_INDEX);

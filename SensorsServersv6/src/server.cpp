@@ -455,7 +455,15 @@ bool lookupLocationFromAddress(const String& street, const String& city, const S
     *lat = Prefs.LATITUDE;
     *lon = Prefs.LONGITUDE;
     Prefs.isUpToDate = false;
-    SerialPrint("Location lookup successful: " + String(*lat, 6) + ", " + String(*lon, 6), true);
+    
+    // Save to NVS
+    BootSecure bootSecure;
+    int8_t ret = bootSecure.setPrefs();
+    if (ret < 0) {
+      SerialPrint("lookupLocationFromAddress: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
+    } else {
+      SerialPrint("Location lookup successful and saved: " + String(*lat, 6) + ", " + String(*lon, 6), true);
+    }
   }
   
   return result;
@@ -555,6 +563,7 @@ void apiConnectToWiFi() {
   }
 
   if (connectToWiFi(ssid, password, lmk_key)) {
+    handleStoreCoreData(); //update prefs and core if needed  
     server.send(200, "application/json", "{\"success\":true,\"ip\":\"" + WiFi.localIP().toString() + "\"}");
   } else {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"Connection failed\"}");
@@ -690,7 +699,7 @@ void handleApiCompleteSetup() {
     return;
   }
 
-  handleStoreCoreData(); //update prefs and core if needed  
+  storeCoreData(true);
 
 
   #ifdef _USETFT
@@ -702,7 +711,7 @@ void handleApiCompleteSetup() {
   tft.println("Rebooting with updated credentials...");
   #endif
   //reboot the device
-  server.send(200, "application/json", "{\"success\":true,\"message\":\"Setup complete\"}");
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Setup complete - rejoin regular wifi network\"}");
 
   controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI,true);
   
@@ -1399,6 +1408,16 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Status Page</h2>";
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
+  // Navigation buttons
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+  WEBHTML = WEBHTML + "</div>";
+
   #ifdef _USE8266
   WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "<br>";  
   #endif
@@ -1571,8 +1590,9 @@ void rootTableFill(byte j) {
       WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";    
       WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
   
-      int16_t prefsIndex = Sensors.getPrefsIndex(sensor->snsType, sensor->snsID);
-      if (prefsIndex >= 0 && prefsIndex < SENSORNUM) {
+      int16_t prefsIndex = Sensors.getPrefsIndex(sensor->snsType, sensor->snsID,-1);
+      
+      if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
         // Add a configuration cell with expandable form
         WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
         WEBHTML = WEBHTML + "<details>";
@@ -1719,7 +1739,7 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Device Name: " + (String) Prefs.DEVICENAME;
     WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/STATUS\">Status</a></td></tr>";
     
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Device Type: " + (String) MYTYPE;
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Device Type: " + (String) _MYTYPE;
     WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/InitialSetup\" style=\"color: #4CAF50; font-weight: bold;\">WiFi and Startup Settings</a></td></tr>";
     
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Device IP: " + (String) WiFi.localIP().toString() ;
@@ -1731,9 +1751,9 @@ void handlerForRoot(bool allsensors) {
     #ifndef _ISPERIPHERAL
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Device SSID: " +  (String) (Prefs.WIFISSID) + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/SDCARD\">SD Card Config</a></td></tr>";
     
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Last Broadcast Out: " + (String) dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"DOW mm/dd/yyyy hh:nn:ss") + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Connected Devices/Sensors: " + (String) Sensors.getNumDevices()  + "/" + (String) Sensors.getNumSensors() + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td></tr>";
     
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Last Broadcast In: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TIME + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td></tr>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">Free memory: " + (String) ESP.getFreeHeap() + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td></tr>";
     #endif
         
     WEBHTML = WEBHTML + "</table>";
@@ -2120,7 +2140,8 @@ void handlePost() {
     uint64_t deviceMAC = 0;
     IPAddress deviceIP = IPAddress(0,0,0,0);
     String devName = "";
-
+    uint8_t devType = 0;
+    uint8_t devFlags = 0;
     int16_t sensorIndex = -1;
 
     uint8_t ardID = 0; //legacy field, not used anymore
@@ -2160,6 +2181,12 @@ void handlePost() {
               }
               if (device["name"].is<JsonVariantConst>()) {
                 devName = device["name"].as<String>();
+              }
+              if (device["devType"].is<JsonVariantConst>()) {
+                devType = device["devType"];
+              }
+              if (device["devFlags"].is<JsonVariantConst>()) {
+                devFlags = device["devFlags"];
               }
               if (device["sensor"].is<JsonArray>()) {
                 JsonArray sensorArray = device["sensor"];
@@ -2250,8 +2277,8 @@ void handlePost() {
 
     bool addToSD = false;
     if ((deviceMAC!=0 || deviceIP!=IPAddress(0,0,0,0)) && snsType!=0 ) {
-      if (devName.length() > 0) Sensors.addDevice(deviceMAC, deviceIP, devName.c_str());
-      else Sensors.addDevice(deviceMAC, deviceIP, "");
+      if (devName.length() > 0) Sensors.addDevice(deviceMAC, deviceIP, devName.c_str(),0,devFlags,devType);
+      else Sensors.addDevice(deviceMAC, deviceIP, "",0,devFlags,devType);
         sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
         if (sensorIndex < 0) {
           SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
@@ -2308,6 +2335,18 @@ void handleCONFIG() {
 
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " System Configuration</h2>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+  // Navigation buttons
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+  WEBHTML = WEBHTML + "</div>";
+
   WEBHTML = WEBHTML + "<p>This page is used to configure editable system parameters.</p>";
   
   // Start the form and grid container
@@ -2414,17 +2453,6 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset All Settings\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
-  
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
-  WEBHTML = WEBHTML + "</div>";
   
   WEBHTML = WEBHTML + "</body></html>";
 
@@ -2637,6 +2665,18 @@ void handleGSHEET() {
 
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Google Sheets Configuration</h2>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+  // Navigation buttons
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+  WEBHTML = WEBHTML + "</div>";
+
   WEBHTML = WEBHTML + "<p>This page displays Google Sheets configuration and status.</p>";
   
   // Start the form and grid container
@@ -2714,15 +2754,6 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<h2>Google Sheets Configuration</h2>";
   WEBHTML = WEBHTML + "<p>Google Sheets upload is not available on this device</p>";
   #endif
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
-  WEBHTML = WEBHTML + "</div>";
   
   WEBHTML = WEBHTML + "</body></html>";
 
@@ -2981,9 +3012,10 @@ void handleSENSOR_UPDATE_POST() {
   uint8_t snsID = server.arg("snsID").toInt();
   
   // Get the prefs index for this sensor
-  int16_t prefsIndex = Sensors.getPrefsIndex(snsType, snsID);
+  int16_t prefsIndex = Sensors.getPrefsIndex(snsType, snsID,-1);
+  SerialPrint("Updating sensor: " + String(snsType) + "." + String(snsID) + " with Prefs index: " + String(prefsIndex),true);
   
-  if (prefsIndex < 0 || prefsIndex >= SENSORNUM) {
+  if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) {
     server.send(400, "text/plain", "Invalid sensor or sensor not found");
     return;
   }
@@ -3333,6 +3365,18 @@ void handleWeather() {
   serverTextHeader();
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+  // Navigation buttons
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+  WEBHTML = WEBHTML + "</div>";
+
   #ifdef _USEWEATHER
   
   // Display current weather data
@@ -3358,10 +3402,10 @@ void handleWeather() {
 
   // Basic weather data
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Latitude</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(WeatherData.lat, 6) + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(Prefs.LATITUDE, 6) + "</td></tr>";
   
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Longitude</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(WeatherData.lon, 6) + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(Prefs.LONGITUDE, 6) + "</td></tr>";
     
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Sunrise</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunrise) ? dateify(WeatherData.sunrise) : "???") + "</td></tr>";
@@ -3416,11 +3460,11 @@ void handleWeather() {
   
   // Configuration form for lat/lon
   WEBHTML = WEBHTML + "<h3>Update Location</h3>";
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/handleWeather\">";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WEATHER\">";
   WEBHTML = WEBHTML + "<p><label for=\"lat\">Latitude:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"lat\" name=\"lat\" step=\"0.000001\" min=\"-90\" max=\"90\" value=\"" + String(WeatherData.lat, 14) + "\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<input type=\"number\" id=\"lat\" name=\"lat\" step=\"0.000001\" min=\"-90\" max=\"90\" value=\"" + String(Prefs.LATITUDE, 14) + "\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<p><label for=\"lon\">Longitude:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"lon\" name=\"lon\" step=\"0.000001\" min=\"-180\" max=\"180\" value=\"" + String(WeatherData.lon, 14) + "\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
+  WEBHTML = WEBHTML + "<input type=\"number\" id=\"lon\" name=\"lon\" step=\"0.000001\" min=\"-180\" max=\"180\" value=\"" + String(Prefs.LONGITUDE, 14) + "\" style=\"width: 300px; padding: 8px; margin: 5px 0;\"></p>";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Update Location\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
@@ -3447,17 +3491,6 @@ void handleWeather() {
 #else
   WEBHTML = WEBHTML + "Weather not enabled on this device.";
   #endif
-
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
-  WEBHTML = WEBHTML + "</div>";
   
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "</html>";
@@ -3476,15 +3509,25 @@ void handleWeather_POST() {
     
     // Validate coordinates
     if (newLat >= -90.0 && newLat <= 90.0 && newLon >= -180.0 && newLon <= 180.0) {
-      WeatherData.lat = newLat;
-      WeatherData.lon = newLon;
+      // Update Prefs only (WeatherData now uses Prefs.LATITUDE/LONGITUDE)
+      Prefs.LATITUDE = newLat;
+      Prefs.LONGITUDE = newLon;
+      Prefs.isUpToDate = false;
+      
+      // Save to NVS
+      BootSecure bootSecure;
+      int8_t ret = bootSecure.setPrefs();
+      if (ret < 0) {
+        SerialPrint("handleWeather_POST: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
+      } else {
+        SerialPrint("Coordinates updated and saved: " + String(newLat, 6) + ", " + String(newLon, 6), true);
+      }
       
       // Force weather update with new coordinates
       WeatherData.updateWeather(0);
       
       server.sendHeader("Location", "/WEATHER");
       server.send(302, "text/plain", "Location updated successfully. Weather data refreshed.");
-      Prefs.isUpToDate = false;
     } else {
       server.sendHeader("Location", "/WEATHER");
       server.send(302, "text/plain", "Invalid coordinates. Please check your input.");
@@ -3580,7 +3623,7 @@ void handleWeatherAddress() {
       String redirectUrl = "/WEATHER?success=address_lookup&lat=" + String(lat, 6) + "&lon=" + String(lon, 6);
       server.sendHeader("Location", redirectUrl);
       server.send(302, "text/plain", "Address lookup successful. Coordinates updated and weather refreshed.");
-      Prefs.isUpToDate = false;
+      // Prefs already saved by lookupLocationFromAddress
     } else {
       server.sendHeader("Location", "/WEATHER?error=lookup_failed");
       server.send(302, "text/plain", "Address lookup failed. Please check the address or try again later.");
@@ -3657,6 +3700,17 @@ void handleSDCARD() {
 
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " SD Card Configuration</h2>";
+  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+  // Navigation buttons
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+  WEBHTML = WEBHTML + "</div>";
   
   // SD Card Information
   WEBHTML = WEBHTML + "<h3>SD Card Information</h3>";
@@ -4009,20 +4063,7 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "<a href=\"/SDCARD_TIMESTAMPS\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">List File Timestamps</a>";
   #endif
   
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a>";
-  WEBHTML = WEBHTML + "</div>";
-  
   WEBHTML = WEBHTML + "</body></html>";
-  
-
   
   serverTextClose(200, true);
 
@@ -4688,6 +4729,26 @@ void handleDeviceViewer() {
     
     WEBHTML = WEBHTML + "<body>";
     WEBHTML = WEBHTML + "<h2>Device Viewer</h2>";
+    WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+
+    // Navigation buttons to config pages
+    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
+    WEBHTML = WEBHTML + "</div>";
+
+    // Device-specific navigation buttons
+    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 10px; background-color: #e8e8e8; margin-bottom: 20px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">Previous</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Next</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Ping</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete</a>";
+    WEBHTML = WEBHTML + "</div>";
+    
     
     // Check for status messages from ping operations
     if (server.hasArg("ping")) {
@@ -4712,6 +4773,7 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Success:</strong> Device '" + deviceName + "' and " + sensorCount + " associated sensors have been deleted.";
             WEBHTML = WEBHTML + "</div>";
+            CURRENT_DEVICE_VIEWER = 0;
         }
     }
     
@@ -4850,14 +4912,6 @@ void handleDeviceViewer() {
     }
     WEBHTML = WEBHTML + "</div>";
     
-    // Navigation buttons
-    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px;\">";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">Previous Device</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Next Device</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Ping Device</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete Device</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Back to Main</a>";
-    WEBHTML = WEBHTML + "</div>";
     
     WEBHTML = WEBHTML + "</body></html>";
     serverTextClose(200, true);
@@ -5090,10 +5144,11 @@ bool isGood = false;
     }
 
     // Build JSON more efficiently using snprintf. should be device object, which holds all sensor objects
-    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"devType\":%d,\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
       deviceMAC.c_str(),
       device->IP.toString().c_str(),
       device->devName,
+      device->devType,
       S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->timeLogged, S->SendingInt, S->Flags);
 
     // now send to any servers I know of. iterate all known devices to find servers  (devType >=100)
@@ -5342,6 +5397,14 @@ bool getCoordinatesFromZipCode(const String& zipCode) {
                   Prefs.LATITUDE = lat;
                   Prefs.LONGITUDE = lon;
                   Prefs.isUpToDate = false;
+                  
+                  // Save to NVS
+                  BootSecure bootSecure;
+                  int8_t ret = bootSecure.setPrefs();
+                  if (ret < 0) {
+                    SerialPrint("getCoordinatesFromZipCode: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
+                  }
+                  
                   // Log the matched address for verification
                   if (match["matchedAddress"].is<String>()) {
                       String matchedAddress = match["matchedAddress"].as<String>();
@@ -5410,6 +5473,14 @@ bool getCoordinatesFromZipCodeFallback(const String& zipCode) {
           Prefs.LATITUDE = lat;
           Prefs.LONGITUDE = lon;
           Prefs.isUpToDate = false;
+          
+          // Save to NVS
+          BootSecure bootSecure;
+          int8_t ret = bootSecure.setPrefs();
+          if (ret < 0) {
+            SerialPrint("getCoordinatesFromZipCodeFallback: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
+          }
+          
           SerialPrint(("Coordinates found: " + String(lat, 6) + ", " + String(lon, 6)).c_str(), true);
           return true;
       }

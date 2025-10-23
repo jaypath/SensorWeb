@@ -170,7 +170,7 @@ bool sendESPNOW(ESPNOW_type& msg) {
 
     uint64ToMAC(Prefs.PROCID, msg.senderMAC);
     msg.senderIP = WiFi.localIP();
-    msg.senderType = MYTYPE;
+    msg.senderType = _MYTYPE;
 
 
     I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
@@ -304,7 +304,7 @@ void processLANMessage(ESPNOW_type* msg) {
 
     
     if (msg->msgType== ESPNOW_MSG_WIFI_PW_REQUEST) {
-        if (MYTYPE<100) {
+        if (_MYTYPE<100) {
             storeError("ESPNow: peripheral cannot process WiFi password request");
             return; //only servers can provide WiFi password
         }
@@ -313,7 +313,7 @@ void processLANMessage(ESPNOW_type* msg) {
         uint64ToMAC(Prefs.PROCID, resp.senderMAC);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "WiFi request from %s", MACToString(MACToUint64(msg->senderMAC)).c_str());
         resp.senderIP = WiFi.localIP();
-        resp.senderType = MYTYPE;
+        resp.senderType = _MYTYPE;
         memcpy(resp.targetMAC, msg->senderMAC, 6);
         resp.msgType = ESPNOW_MSG_WIFI_PW_RESPONSE;
         // Encrypt password using provided key and IV
@@ -493,7 +493,7 @@ void processLANMessage(ESPNOW_type* msg) {
 // --- Broadcast Server Presence (Type 1) ---
 bool broadcastServerPresence(bool broadcastPeripheral) {
 
-    if (MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, except under certain circumstances when peripherals specifically requested to do so
+    if (_MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, except under certain circumstances when peripherals specifically requested to do so
 
     ESPNOW_type msg = {};
 
@@ -513,7 +513,7 @@ bool broadcastServerPresence(bool broadcastPeripheral) {
 
 // --- Broadcast Server List (Type 1) ---
 bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count) {
-    if (MYTYPE<100) return false; //only servers broadcast, unless peripherals specifically request it
+    if (_MYTYPE<100) return false; //only servers broadcast, unless peripherals specifically request it
     
     // If user provided a list, use it
     if (serverMACs && serverIPs && count > 0) {

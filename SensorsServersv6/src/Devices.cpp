@@ -219,13 +219,17 @@ int16_t  Devices_Sensors::initDevice(int16_t index) {
         devices[index].expired = false;
     }
 
+    //count remaining sensors and devices
+    getNumDevices();
+    getNumSensors();
+
     return sensorsinitialized;
 }
 
 // Sensor management functions
 int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                                  uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType) {
+                                  uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType, int16_t snsPin, int16_t powerPin) {
     //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
     // Find or create device
     int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, 0, 0, devType);
@@ -252,6 +256,12 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
         sensor->expired = false;
         sensor->IsSet=1;
         Sensors.lastUpdatedTime = I.currentTime;
+        #ifdef _ISPERIPHERAL
+        if (snsPin !=0 && snsPin != -9999) {
+            sensor->snsPin = snsPin;
+            sensor->powerPin = powerPin;
+        }
+        #endif
         return existingIndex;
     }
     
@@ -275,6 +285,11 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].SendingInt = sendingInt;
             sensors[i].IsSet = 1;
             sensors[i].expired = false;
+            #ifdef _ISPERIPHERAL
+            sensors[i].snsPin = snsPin;
+            sensors[i].powerPin = powerPin;
+            #endif
+    
             
             if (i >= numSensors) {
                 numSensors = i + 1;
@@ -394,47 +409,17 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
 
 uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
     ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored and expired- alert if no updates received within time limit specified)
-    //special case for snsType = -1000, which means use I.showTheseFlags
-    //if snsType is 0, then count all sensors
+    //if snsType is 0, then count all sensors (meeting the flag criteria)
+    //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
+    //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
+    //if snsType is -3, then count all soil sensors (meeting the flag criteria)
+    //if snsType is -9, then count all pressure sensors (meeting the flag criteria)
+    //if snstype is -54 to -57, then count all HVAC sensors (meeting the flag criteria)
+    //if snsType is <=-100, then count all server sensors (meeting the flag criteria)
+
     uint16_t count = 0;
-    #ifndef _ISPERIPHERAL
-    if (snsType == -1000) {
-        //use I.showTheseFlags to count the number of sensors that match the flags
+    
 
-        if (bitRead(I.showTheseFlags, 0) == 0) {//count everything that is flagged
-            return numSensors;
-        } 
-        //has to be flagged or expired
-        if (bitRead(I.showTheseFlags, 1) == 1 || bitRead(I.showTheseFlags, 0) == 1) {//include expired or flagged
-
-            if (bitRead(I.showTheseFlags, 2) == 1) {//include soil dry
-                count += countFlagged(3,0b00000011,0b00000011,MoreRecentThan);
-                count += countFlagged(33,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 3) == 1) {//include leak
-                count += countFlagged(58,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 4) == 1) {//include temperature
-                count += countFlagged(-1,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 5) == 1) {//include humidity
-                count += countFlagged(-2,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 6) == 1) {//include pressure
-                count += countFlagged(-9,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 7) == 1) {//include battery
-                count += countFlagged(61,0b00000011,0b00000011,MoreRecentThan);
-            }
-            if (bitRead(I.showTheseFlags, 8) == 1) {//include HVAC
-                count += countFlagged(55,0b00000011,0b00000011,MoreRecentThan);
-                count += countFlagged(56,0b00000011,0b00000011,MoreRecentThan);
-                count += countFlagged(57,0b00000011,0b00000011,MoreRecentThan);
-            }
-        }
-        return count;
-    }
-    #endif
     //count the number of sensors that match the flags
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
@@ -444,9 +429,10 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         if (snsType > 0 && sensors[i].snsType != snsType) continue;
         if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
         if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
-        if ((snsType == -3 || snsType == -33) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
+        if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
         if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
-        if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
+        if (snsType <= -54 && snsType >= -57 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
+        if (snsType <= -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
         }
         if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;
@@ -596,7 +582,7 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
         int16_t ismine = findMyDeviceIndex();
         if (ismine == -1) {
             //I am not registered as a device, so register me
-            ismine = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+            ismine = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
             if (ismine == -1) {
                 //failed to register me, so return invalid
                 return -2;
@@ -751,13 +737,21 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
         if (Prefs.DEVICENAME[0] == 0) {
             snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "Temporary Name");
         }
-        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, MYTYPE);
+        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
     }
      
     return index;
 }
 
 #ifdef _ISPERIPHERAL
+
+uint32_t Devices_Sensors::makeSensorID(uint8_t snsType, uint8_t snsID, int16_t devID) {
+    if (devID == -1) devID = findMyDeviceIndex();
+    if (devID == -1) return 0;
+    
+    return (devID<<16) + (snsType<<8) + snsID;
+}
+
 int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
     //this always references me as the device, unless devID is provided and is not -1
     //returns -2 if I am not registered,  -1 if no Prefsindex found, otherwise the index to Prefs values 
@@ -768,8 +762,10 @@ int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t d
     
 
     byte sensorHistoryIndex=0; //index of the sensor in the SensorHistory array
-    uint32_t sensorID = devID<<16 + snsType<<8 + snsID;
-    for (sensorHistoryIndex=0; sensorHistoryIndex<SENSORNUM; sensorHistoryIndex++) {
+    uint32_t sensorID = makeSensorID(snsType, snsID, devID);
+    for (sensorHistoryIndex=0; sensorHistoryIndex<_SENSORNUM; sensorHistoryIndex++) {
+    
+    uint32_t tempID = SensorHistory.SensorIDs[sensorHistoryIndex];
       if (SensorHistory.SensorIDs[sensorHistoryIndex] == sensorID) {
         return sensorHistoryIndex;
       }  

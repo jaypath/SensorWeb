@@ -21,7 +21,6 @@ bool loadSensorData();
 bool loadScreenFlags();
 void initGsheetHandler();
 void handleESPNOWPeriodicBroadcast(uint8_t interval);
-void handleStoreCoreData();
 
 #ifdef _ISPERIPHERAL
 bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder);
@@ -48,7 +47,9 @@ uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet
 void failedToRegister();
 int16_t updateMyDevice();
 void initScreenFlags(bool completeInit = false);
-void storeCoreData();
+void storeCoreData(bool forceStore = true);
+void handleStoreCoreData();
+
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
 String lastReset2String(bool addtime=true);
 String getRebootDebugInfo();

@@ -37,6 +37,9 @@ class Devices_Sensors;
 #ifdef _USEUDP
 #include <WiFiUdp.h>
 #endif
+#ifdef _USEI2C
+#include <Wire.h>
+#endif
 
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
 
@@ -149,11 +152,11 @@ typedef enum {
     double LONGITUDE;
     
     #ifdef _ISPERIPHERAL
-    double SNS_LIMIT_MAX[SENSORNUM] = {0}; //store max values for each sensor in NVS
-    double SNS_LIMIT_MIN[SENSORNUM] = {0}; //store min values for each sensor in NVS
-    uint16_t SNS_FLAGS[SENSORNUM] = {0}; //store this, as user may have changed some settings here
-    uint16_t SNS_INTERVAL_POLL[SENSORNUM] = {0};
-    uint16_t SNS_INTERVAL_SEND[SENSORNUM] = {0};
+    double SNS_LIMIT_MAX[_SENSORNUM] = {0}; //store max values for each sensor in NVS
+    double SNS_LIMIT_MIN[_SENSORNUM] = {0}; //store min values for each sensor in NVS
+    uint16_t SNS_FLAGS[_SENSORNUM] = {0}; //store this, as user may have changed some settings here
+    uint16_t SNS_INTERVAL_POLL[_SENSORNUM] = {0};
+    uint16_t SNS_INTERVAL_SEND[_SENSORNUM] = {0};
     #endif
   };
   
@@ -262,10 +265,10 @@ typedef enum {
       uint8_t isCold;
       uint8_t isSoilDry;
       uint8_t isLeak;
+      #endif
 
       uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
       
-      #endif
   
       char lastError[76];
       time_t lastErrorTime;

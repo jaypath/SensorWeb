@@ -41,6 +41,10 @@ struct SnsType {
     bool expired;           // Whether sensor has expired
     uint32_t lastCloudUploadTime; // Time sensor data was last uploaded to cloud
     uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
+    #ifdef _ISPERIPHERAL
+    int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
+    int16_t powerPin;          // pin number for the power pin, if applicable. -9999 means no power pin If -9999 then there is no power pin, if -200 then it is a special case
+    #endif
 };
 
 // Devices_Sensors class
@@ -79,7 +83,7 @@ public:
     uint16_t isSensorIndexInvalid(int16_t index);
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0);
+                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0, int16_t snsPin = -9999, int16_t powerPin = -9999);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     SnsType* getSensorBySnsIndex(int16_t snsindex);
@@ -105,6 +109,7 @@ public:
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
     int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
+    uint32_t makeSensorID(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //make the sensor ID for this sensor
     #endif
     int16_t findMyDeviceIndex();
     bool isMySensor(int16_t index);

@@ -100,7 +100,7 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
 // Helper function for grid coordinates fetching
 bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
     char cbuf[100];
-    snprintf(cbuf, 99, "https://api.weather.gov/points/%.4f,%.4f", this->lat, this->lon);
+    snprintf(cbuf, 99, "https://api.weather.gov/points/%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
     String url = String(cbuf);
     
     JsonDocument doc;
@@ -504,7 +504,7 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
 
 bool WeatherInfoOptimized::fetchSunriseSunset() {
     char cbuf[100];
-    snprintf(cbuf, 99, "https://api.sunrisesunset.io/json?lat=%f&lng=%f", this->lat, this->lon);
+    snprintf(cbuf, 99, "https://api.sunrisesunset.io/json?lat=%f&lng=%f", Prefs.LATITUDE, Prefs.LONGITUDE);
     String url = String(cbuf);
     
     JsonDocument doc;
