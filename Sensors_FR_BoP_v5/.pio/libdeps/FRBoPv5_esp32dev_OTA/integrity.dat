@@ -1,0 +1,4 @@
+bblanchon/ArduinoJson@^7.0.4
+fastled/FastLED@^3.6.0
+paulstoffregen/Time@^1.6.1
+arduino-libraries/NTPClient@^3.2.1

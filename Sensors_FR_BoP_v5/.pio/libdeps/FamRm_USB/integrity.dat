@@ -1,0 +1,4 @@
+arduino-libraries/NTPClient@^3.2.1
+bblanchon/ArduinoJson@^7.0.3
+paulstoffregen/Time@^1.6.1
+SPI
