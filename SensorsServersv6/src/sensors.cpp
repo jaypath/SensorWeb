@@ -333,6 +333,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
         }
 
         if (pintype == 1 || pintype == 2) {
+          pinMode(correctedPin, INPUT);
           for (byte ii=0;ii<nsamps;ii++) {
             val += analogRead(correctedPin); //analog pin, no power
             delay(10);
@@ -350,6 +351,15 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           val = readMUX(correctedPin, nsamps);
           #endif
         }
+
+        //has power pin?
+        if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
+          pinMode(P->powerPin, OUTPUT);
+          digitalWrite(P->powerPin, LOW);
+        }
+ 
+        SerialPrint("val: " + String(val) + " sensor type: " + String(P->snsType),true);
+
 
         P->snsValue =  val;
         if (P->snsType==3 && isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
