@@ -1,0 +1,31 @@
+.pio/build/FRBoP_OTA/libc63/FastLED/fl/ptr.cpp.o: \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/ptr.cpp \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/ptr.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/namespace.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/scoped_ptr.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/unique_ptr.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/type_traits.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/stdint.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/move.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/int.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/platforms/int.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/platforms/arm/is_arm.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/platforms/esp/int.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/utility.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/cstddef.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/initializer_list.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/scoped_array.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/allocator.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/inplacenew.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/memfill.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/unused.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/bit_cast.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/bitset.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/bitset_dynamic.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/math_macros.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/has_include.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/compiler_control.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/variant.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/deprecated.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/referent.h \
+ .pio/libdeps/FRBoP_OTA/FastLED/src/fl/ptr_impl.h
