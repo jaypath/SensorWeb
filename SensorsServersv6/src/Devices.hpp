@@ -76,6 +76,8 @@ public:
     uint8_t getNumDevices();
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
+    int16_t firstDeviceIndex();
+    int16_t lastDeviceIndex();
     bool isDeviceInit(int16_t devindex);
     int16_t initDevice(int16_t devindex);
     bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);

@@ -66,7 +66,8 @@ void base64_decode(const char* input, uint8_t* output) {
 
 //server
 String WEBHTML;
-byte CURRENT_DEVICE_VIEWER = 0;  // Track current device in device viewer
+byte CURRENT_DEVICEVIEWER_DEVINDEX = 0;  // Track current device index in device viewer
+byte CURRENT_DEVICEVIEWER_DEVNUMBER = 0; // track the number of devices, which may not align with the index
 
 extern STRUCT_PrefsH Prefs;
 //extern bool requestWiFiPassword(const uint8_t* serverMAC);
@@ -1601,6 +1602,12 @@ void rootTableFill(byte j) {
         WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(sensor->snsType) + "\">";
         WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
         
+        // Sensor Name
+        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Sensor Name:</label>";
+        WEBHTML = WEBHTML + "<input type=\"text\" name=\"sensorName\" maxlength=\"29\" value=\"" + String(sensor->snsName) + "\" style=\"width: 200px; padding: 4px;\">";
+        WEBHTML = WEBHTML + "</div>";
+        
         // Limits
         WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
         WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Max Limit:</label>";
@@ -3020,6 +3027,23 @@ void handleSENSOR_UPDATE_POST() {
     return;
   }
   
+  // First, get the sensor object so we can update it
+  int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+  SnsType* sensor = nullptr;
+  if (snsIndex >= 0) {
+    sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  }
+  
+  // Update sensor name
+  if (server.hasArg("sensorName") && sensor) {
+    String newName = server.arg("sensorName");
+    if (newName.length() > 0 && newName.length() < 30) {
+      strncpy(sensor->snsName, newName.c_str(), 29);
+      sensor->snsName[29] = '\0'; // Ensure null termination
+      SerialPrint("Updated sensor name to: " + newName, true);
+    }
+  }
+  
   // Update sensor limits
   if (server.hasArg("limitMax")) {
     Prefs.SNS_LIMIT_MAX[prefsIndex] = server.arg("limitMax").toDouble();
@@ -3047,13 +3071,9 @@ void handleSENSOR_UPDATE_POST() {
   Prefs.SNS_FLAGS[prefsIndex] = flags;
   
   // Also update the sensor's flags in the Sensors array
-  int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
-  if (snsIndex >= 0) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
-    if (sensor) {
-      sensor->Flags = flags;
-      sensor->SendingInt = Prefs.SNS_INTERVAL_SEND[prefsIndex];
-    }
+  if (sensor) {
+    sensor->Flags = flags;
+    sensor->SendingInt = Prefs.SNS_INTERVAL_SEND[prefsIndex];
   }
   
   // Mark Prefs as needing to be saved
@@ -4773,7 +4793,8 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Success:</strong> Device '" + deviceName + "' and " + sensorCount + " associated sensors have been deleted.";
             WEBHTML = WEBHTML + "</div>";
-            CURRENT_DEVICE_VIEWER = 0;
+            CURRENT_DEVICEVIEWER_DEVINDEX = 0;
+            CURRENT_DEVICEVIEWER_DEVNUMBER = 0;  //reset the device number
         }
     }
     
@@ -4819,13 +4840,17 @@ void handleDeviceViewer() {
         return;
     }
 
-    while (Sensors.isDeviceInit(CURRENT_DEVICE_VIEWER)==false) {
-        CURRENT_DEVICE_VIEWER++;
-        if (CURRENT_DEVICE_VIEWER >= NUMDEVICES ) CURRENT_DEVICE_VIEWER = 0;
+    while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
+        CURRENT_DEVICEVIEWER_DEVINDEX++;
+        CURRENT_DEVICEVIEWER_DEVNUMBER++;
+        if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES ) {
+          CURRENT_DEVICEVIEWER_DEVINDEX = 0;
+          CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
+        }
     }
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
         WEBHTML = WEBHTML + "<strong>Error:</strong> Could not retrieve device information.";
@@ -4838,7 +4863,7 @@ void handleDeviceViewer() {
     
     // Device information header
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
-    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICE_VIEWER + 1) + " of " + String(Sensors.getNumDevices()) + ((CURRENT_DEVICE_VIEWER == myDeviceIndex) ? " (this device)" : "") +"</h3>";
+    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex) ? " (this device)" : "") +"</h3>";
     WEBHTML = WEBHTML + "</div>";
     
     // Device details
@@ -4860,7 +4885,7 @@ void handleDeviceViewer() {
     uint8_t sensorCount = 0;
     for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
         SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-        if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
+        if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
             sensorCount++;
         }
     }
@@ -4885,7 +4910,7 @@ void handleDeviceViewer() {
         // Add sensor rows
         for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
             SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-            if (sensor && sensor->deviceIndex == CURRENT_DEVICE_VIEWER) {
+            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
                 // Determine sensor type name
                 String typeName = "Unknown";
                 if (Sensors.isSensorOfType(i, "temperature")) typeName = "Temperature";
@@ -4921,7 +4946,22 @@ void handleDeviceViewerNext() {
     I.lastServerStatusUpdate = I.currentTime;
     
     if (Sensors.getNumDevices() > 0) {
-        CURRENT_DEVICE_VIEWER = (CURRENT_DEVICE_VIEWER + 1) % Sensors.getNumDevices();
+        
+        CURRENT_DEVICEVIEWER_DEVINDEX++;
+        CURRENT_DEVICEVIEWER_DEVNUMBER++;
+        if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
+          CURRENT_DEVICEVIEWER_DEVINDEX = 0;
+          CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
+        }
+        //move forward until we find a valid  device 
+        while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
+          CURRENT_DEVICEVIEWER_DEVINDEX++; 
+          //note that we do not increment device number here, because we have not found another valid device yet!
+          if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES-1) {
+            CURRENT_DEVICEVIEWER_DEVINDEX = 0;
+            CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
+          }
+        }
     }
     
     server.sendHeader("Location", "/DEVICEVIEWER");
@@ -4931,13 +4971,31 @@ void handleDeviceViewerNext() {
 void handleDeviceViewerPrev() {
     I.lastServerStatusUpdate = I.currentTime;
     
-    if (Sensors.getNumDevices() > 0) {
-        if (CURRENT_DEVICE_VIEWER == 0) {
-            CURRENT_DEVICE_VIEWER = Sensors.getNumDevices() - 1;
-        } else {
-            CURRENT_DEVICE_VIEWER--;
-        }
+    if (Sensors.getNumDevices() == 0) {
+      
+      server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+      server.send(302, "text/plain", "No devices available to view.");
     }
+
+    if (CURRENT_DEVICEVIEWER_DEVINDEX == 0) {
+      CURRENT_DEVICEVIEWER_DEVINDEX = NUMDEVICES - 1;
+      CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices();
+    } else {
+      CURRENT_DEVICEVIEWER_DEVINDEX--;
+      CURRENT_DEVICEVIEWER_DEVNUMBER--;
+    }
+
+    //now move back until we find a valid  device 
+    while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
+      if (CURRENT_DEVICEVIEWER_DEVINDEX <= 0) {
+        CURRENT_DEVICEVIEWER_DEVINDEX = NUMDEVICES - 1;
+        CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices();
+      } else {
+        //note that we only decrement viewer, not number
+        CURRENT_DEVICEVIEWER_DEVINDEX--;      
+      }
+    }
+
     
     server.sendHeader("Location", "/DEVICEVIEWER");
     server.send(302, "text/plain", "Redirecting to previous device...");
@@ -4954,12 +5012,12 @@ void handleDeviceViewerPing() {
     }
     
     // Ensure current device index is valid
-    if (CURRENT_DEVICE_VIEWER >= Sensors.getNumDevices()) {
-        CURRENT_DEVICE_VIEWER = 0;
+    if (CURRENT_DEVICEVIEWER_DEVINDEX >= Sensors.getNumDevices()) {
+        CURRENT_DEVICEVIEWER_DEVINDEX = 0;
     }
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
@@ -4994,8 +5052,8 @@ void handleDeviceViewerDelete() {
 
     
     // Ensure current device index is valid
-    if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
-        CURRENT_DEVICE_VIEWER = 0;
+    if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
+        CURRENT_DEVICEVIEWER_DEVINDEX = 0;
         server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
         server.send(302, "text/plain", "Invalid device index.");
         return;
@@ -5003,7 +5061,7 @@ void handleDeviceViewerDelete() {
     
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICE_VIEWER);
+    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
@@ -5018,11 +5076,11 @@ void handleDeviceViewerDelete() {
 
     // Store device name for confirmation message
     String deviceName = String(device->devName);
-    uint8_t deletedSensors = Sensors.initDevice(CURRENT_DEVICE_VIEWER);
+    uint8_t deletedSensors = Sensors.initDevice(CURRENT_DEVICEVIEWER_DEVINDEX);
     
     // Adjust current device index if needed
-    if (CURRENT_DEVICE_VIEWER >= NUMDEVICES) {
-        CURRENT_DEVICE_VIEWER = 0;
+    if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
+        CURRENT_DEVICEVIEWER_DEVINDEX = 0;
     }
     
     // Redirect back to device viewer with success message

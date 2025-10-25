@@ -571,6 +571,25 @@ bool Devices_Sensors::isDeviceInit(int16_t index) {
     return (index >= 0 && index < NUMDEVICES  && devices[index].IsSet);
 }
 
+int16_t Devices_Sensors::firstDeviceIndex() {
+    //returns the index to the first device that is set and initialized
+    uint16_t index = 0;
+    while (isDeviceInit(index)==false) {
+        if (index >= NUMDEVICES - 1) return -1;
+        index++;
+    }
+    return index;
+}
+
+int16_t Devices_Sensors::lastDeviceIndex() {
+    //returns the index to the last device that is set and initialized
+    uint16_t index = NUMDEVICES - 1;
+    while (isDeviceInit(index)==false) {
+        if (index == 0) return -1;
+        index--;
+    }
+    return index;
+}
 
 int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
     //returns more info than isDeviceInit : -2 = I am not registered and could not be registered (fatal error, regardless of whether the provided index is valid or not),-1 = not set, 0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine
