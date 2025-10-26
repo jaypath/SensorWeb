@@ -196,7 +196,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 10: //high sparkle red
       LED_animation_defaults(5);
-      this->MaxBrightness = 30;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       this->sin_T = 1000;
       r1=255;
@@ -208,7 +208,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 9: 
       LED_animation_defaults(5);
-      this->MaxBrightness = 30;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=255;
       g1=0;
@@ -219,7 +219,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 8:
       LED_animation_defaults(5);
-      this->MaxBrightness = 25;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=255;
       g1=50;
@@ -230,7 +230,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 7:
       LED_animation_defaults(5);
-      this->MaxBrightness = 25;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=255;
       g1=255;
@@ -241,7 +241,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 6:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=150;
       g1=255;
@@ -252,7 +252,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 5:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=50;
       g1=255;
@@ -263,7 +263,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 4:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=0;
       g1=255;
@@ -274,7 +274,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 3:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=0;
       g1=255;
@@ -285,7 +285,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 2:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=0;
       g1=255;
@@ -296,7 +296,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 1:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=0;
       g1=255;
@@ -307,7 +307,7 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
       break;
     case 0:
       LED_animation_defaults(5);
-      this->MaxBrightness = 15;
+      this->MaxBrightness = 50;
       this->MinBrightness = 5;
       r1=0;
       g1=0;

@@ -47,7 +47,8 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
         // Update existing device
         DevType* device = &devices[existingIndex];
         device->IP = IP;
-        device->timeRead = I.currentTime;
+        device->dataReceived = I.currentTime;
+        //do not change time logged
         if (devName && strcmp(device->devName, devName) != 0) {
             strncpy(device->devName, devName, sizeof(device->devName) - 1);
             device->devName[sizeof(device->devName) - 1] = '\0';
@@ -65,8 +66,8 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
         if (!devices[i].IsSet) {
             devices[i].MAC = MAC;
             devices[i].IP = IP;
-            devices[i].timeLogged = now();
-            devices[i].timeRead = I.currentTime;
+            devices[i].dataSent = 0; //time logged is set to 0, because we have not sent data to this device yet
+            devices[i].dataReceived = I.currentTime;
             devices[i].IsSet = 1;
             if (devName) {
                 strncpy(devices[i].devName, devName, sizeof(devices[i].devName) - 1);
@@ -319,6 +320,20 @@ int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t
     return -1;
 }
 
+int16_t Devices_Sensors::findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID) {
+    if (deviceIndex < 0 || deviceIndex >= NUMDEVICES) {
+        return -1;
+    }
+    
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (sensors[i].IsSet && sensors[i].deviceIndex == deviceIndex && 
+            sensors[i].snsType == snsType && sensors[i].snsID == snsID) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID) {
     int16_t deviceIndex = findDevice(deviceIP);
     if (deviceIndex < 0) {
@@ -361,8 +376,8 @@ int16_t Devices_Sensors::findOldestDevice() {
     uint32_t oldestTime = 0xFFFFFFFF;
     
     for (int16_t i = 0; i < NUMDEVICES ; i++) {
-        if (devices[i].IsSet && devices[i].timeLogged < oldestTime) {
-            oldestTime = devices[i].timeLogged;
+        if (devices[i].IsSet && devices[i].dataReceived < oldestTime) {
+            oldestTime = devices[i].dataReceived;
             oldestIndex = i;
         }
     }
@@ -435,7 +450,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         if (snsType <= -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
         // Check time filter
         }
-        if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;
+        if (MoreRecentThan > 0 && sensors[i].timeRead < MoreRecentThan) continue;
         
         // Check flags
         uint8_t sensorFlags = sensors[i].Flags & flagsthatmatter;
@@ -490,7 +505,8 @@ uint8_t Devices_Sensors::findSensorByName(String snsname, uint8_t snsType, uint8
     return 255;
 }
 
-int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest) {
+int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest, int16_t startIndex) {
+    if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
     
@@ -521,8 +537,8 @@ int16_t Devices_Sensors::storeAllSensorsSD(uint8_t intervalMinutes) {
     uint8_t count = 0;
 
     if (intervalMinutes==0) intervalMinutes=10;//never write to SD card more than once per minute
-    if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSensorSaveTime+intervalMinutes*60<I.currentTime) { 
-        lastSensorSaveTime = I.currentTime;    
+    if (Sensors.lastSensorSaveTime+intervalMinutes*60<I.currentTime) { 
+        Sensors.lastSensorSaveTime = I.currentTime;    
         for (int16_t i = 0; i < NUMSENSORS; i++) {
             if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
               storeSensorDataSD(i);
@@ -535,6 +551,8 @@ int16_t Devices_Sensors::storeAllSensorsSD(uint8_t intervalMinutes) {
     return -1; //not time yet
     
   }
+
+
   
 bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten) {
     if (isSensorIndexInvalid(sensorIndex)!=0) {
@@ -549,12 +567,12 @@ bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritte
 uint8_t Devices_Sensors::storeDevicesSensorsArrayToSD(uint8_t intervalMinutes) {
     //stores devicesensors array to sd
     if (intervalMinutes==0) intervalMinutes=1;//never write to SD card more than once per minute
-    if (lastUpdatedTime+intervalMinutes*60<I.currentTime && lastSDSaveTime+intervalMinutes*60<I.currentTime) { 
+    if (lastSDSaveTime+intervalMinutes*60<I.currentTime) {
         lastSDSaveTime = I.currentTime;    
-        if (storeDevicesSensorsSD()==false) return 0;
-    return 1;
+        if (storeDevicesSensorsSD()==false) return -1; //failed to save
+        return 1;
     }
-    return 0;
+    return 0; //not time yet
 }
 
 bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
@@ -671,8 +689,15 @@ byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, b
         return 0;
     }
     
+    if (currentTime == 0) currentTime = I.currentTime;
+
     DevType* device = &devices[index];
-    uint32_t expirationTime = device->timeLogged + device->SendingInt * 2; // 2x sending interval
+
+    uint32_t expirationTime = device->dataReceived;
+    if (expirationTime < device->dataSent) expirationTime = device->dataSent;  //expiration time is the more recent of the data received or data sent
+
+
+    expirationTime += device->SendingInt * 2; // 2x sending interval
     
     if (currentTime > expirationTime) {
         if (onlyCritical && !bitRead(device->Flags, 7)) {
@@ -767,11 +792,15 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
 uint32_t Devices_Sensors::makeSensorID(uint8_t snsType, uint8_t snsID, int16_t devID) {
     if (devID == -1) devID = findMyDeviceIndex();
     if (devID == -1) return 0;
+
+    if (snsID == -1) snsID = countSensors(snsType, devID)+1;
+
     
     return (devID<<16) + (snsType<<8) + snsID;
 }
 
 int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
+    //find the index to the Prefs values for the given sensor type, sensor ID, and device index
     //this always references me as the device, unless devID is provided and is not -1
     //returns -2 if I am not registered,  -1 if no Prefsindex found, otherwise the index to Prefs values 
 
@@ -784,8 +813,7 @@ int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t d
     uint32_t sensorID = makeSensorID(snsType, snsID, devID);
     for (sensorHistoryIndex=0; sensorHistoryIndex<_SENSORNUM; sensorHistoryIndex++) {
     
-    uint32_t tempID = SensorHistory.SensorIDs[sensorHistoryIndex];
-      if (SensorHistory.SensorIDs[sensorHistoryIndex] == sensorID) {
+      if (SensorHistory.PrefsSensorIDs[sensorHistoryIndex] == sensorID) {
         return sensorHistoryIndex;
       }  
     }

@@ -30,6 +30,15 @@ int8_t BootSecure::setup() {
 
         #endif
     }
+
+    #ifdef _MYDEVICENAME
+    if (Prefs.DEVICENAME[0] == '\0') {
+        strncpy(Prefs.DEVICENAME, _MYDEVICENAME, sizeof(Prefs.DEVICENAME));
+        Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+        Prefs.isUpToDate = false;
+    }
+    #endif
+
     return prefs_status;
 }
 

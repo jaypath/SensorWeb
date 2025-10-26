@@ -1,5 +1,5 @@
-#include "globals.hpp"
 #ifdef _ISPERIPHERAL
+#include "globals.hpp"
 #include "sensors.hpp"
 
 /*sens types - see hpp file
@@ -18,13 +18,7 @@ uint8_t HVACSNSNUM = 0;
 #endif
 
 
-// No local Sensors[] array; use Sensors exclusively
 
-#ifdef _USETFLUNA
-TFLunaType LocalTF;
-uint8_t tfAddr = _USETFLUNA;
-TFLI2C tflI2C;
-#endif
 
 #ifdef _WEBCHART
   SensorChart SensorCharts[_WEBCHART];
@@ -83,37 +77,30 @@ TFLI2C tflI2C;
   SSD1306AsciiWire oled;
 #endif
 
+
+
 extern int16_t MY_DEVICE_INDEX;
 
 
-void initPeripheralSensors() {
+void UpdateSensorHistory() {
   //this performs several functions:
   //updates the SensorHistory array to reflect the current sensors on this device
   //updates the the global value, mydeviceindex, to reflect the current device index
 
 
-
-  //update mysensorindices array
-  byte count = 0;
   MY_DEVICE_INDEX = Sensors.findMyDeviceIndex();
-  for (int16_t i = 0; i < NUMSENSORS; i++) {
-      uint16_t snsvalid = Sensors.isSensorIndexValid(i);
-      if (snsvalid == 1 || snsvalid == 3) { //my sensors
-        SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-        SensorHistory.SensorIDs[count] = Sensors.makeSensorID(sensor->snsType, sensor->snsID, MY_DEVICE_INDEX);
-        SensorHistory.sensorIndex[count] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensor->snsType, sensor->snsID, String(sensor->snsName).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], sensor->Flags, Prefs.DEVICENAME, _MYTYPE, sensor->snsPin, sensor->powerPin);
-        count++;
-        if (count >= _SENSORNUM) break;
-      }
-  }
 
- 
+  byte count = 0;
+
+
+  //The rest of the sensorhistory array should not fall out of sync because I do not add or remove my sensors
+  //update this if that changes
+
 }
 
 
 
 void setupSensors() {
-/* legacy template removed; Sensors is now the source of truth */
 
 #ifdef _USE32
 analogSetAttenuation(ADC_11db); //this sets the voltage range to 3.3v
@@ -214,8 +201,10 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
       } 
     }
 
-    SensorHistory.SensorIDs[i] = Sensors.makeSensorID(sensortypes[i], snsID, MY_DEVICE_INDEX); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
+    //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
+    SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(sensortypes[i], snsID, MY_DEVICE_INDEX); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
     SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname+String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
+    SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index
 
     switch (sensortypes[i]) {
       
@@ -436,12 +425,10 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           P->snsValue = (duration / USONIC_DIV); 
         #endif
         #ifdef _USETFLUNA
-          int16_t tempval;
-          tflI2C.getData(tempval, tfAddr);
-          if (tempval <= 0)           P->snsValue = -1000;
-          else           P->snsValue = tempval; //in cm
-
-
+          //find the index to the TFLUNA sensor and then call checkTFLuna with the index, which will update the sensor value
+          int16_t tflunaIndex = Sensors.findSensor(P->deviceIndex, P->snsType, P->snsID);
+          if (tflunaIndex == -1) return -10;
+          checkTFLuna(tflunaIndex);
         #endif
    
       break;
@@ -1241,5 +1228,7 @@ double readMUX(int16_t pin, byte nsamps) {
   return val;
 }
 #endif
+
+
 
 #endif

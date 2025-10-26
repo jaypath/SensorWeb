@@ -247,7 +247,6 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
     // Read all data points and filter by time range
     SensorDataPoint dataPoint;
     
-    uint32_t j;
     uint32_t endOffset =  sizeof(SensorDataPoint);
     if (endOffset > fileSize) {
       SerialPrint("loadSensorDataFromFile: endOffset > fileSize, skipping",true);
@@ -258,7 +257,8 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
 
 
     file.seek(fileSize); //go to the end of the file
-    for (j = 0; j < pointsToRead; j++) {
+    uint16_t arrindex = 0;
+    while (file.position() >  endOffset && arrindex < pointsToRead) {
       
       file.seek(file.position()-endOffset); //rewind 1 record
       if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) != sizeof(SensorDataPoint)) {
@@ -281,17 +281,18 @@ int16_t loadSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t s
         // Check if within time range
         if (dataPoint.timeLogged > timeEnd) continue;
         if (dataPoint.timeLogged >= timeStart) {
-            t[j] = dataPoint.timeLogged;
-            v[j] = dataPoint.snsValue;
-            f[j] = dataPoint.Flags;
-            
+            t[arrindex] = dataPoint.timeLogged;
+            v[arrindex] = dataPoint.snsValue;
+            f[arrindex] = dataPoint.Flags;
+            arrindex++;
+            if (arrindex >= pointsToRead) break; //we have read enough data
         } else break; //no more valid data       
       
     }
 
     file.close();
 
-    return j;
+    return arrindex;
 }
 
 int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX) {
@@ -748,7 +749,6 @@ bool retrieveSensorDataFromSD(uint64_t deviceMAC, uint8_t sensorType, uint8_t se
     storeError("retrieveSensorDataFromSD: Invalid parameters", ERROR_SD_RETRIEVEDATAPARMS);
     return false;
   }
-
 
   int16_t n = loadSensorDataFromFile(deviceMAC, sensorType, sensorID, t, v, f, timeStart, timeEnd, *N);
 

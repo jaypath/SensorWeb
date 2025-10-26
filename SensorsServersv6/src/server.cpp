@@ -1971,15 +1971,19 @@ void handleRETRIEVEDATA() {
   if (starttime>0) {
     #ifdef _ISPERIPHERAL
     success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
+    
     #else
     success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
+    
     #endif
   
   } else    {
     #ifdef _ISPERIPHERAL
     success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true);
+    
     #else
     success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
+    
     #endif
   }
   if (success == false)  {
@@ -2108,6 +2112,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
     WEBHTML += "['t','val'],\n";
 
     for (byte jj = 0;jj<N;jj++) {
+      if (isTimeValid(t[jj])==false) continue;
       WEBHTML += "[" + (String) t[jj] + "," + (String) v[jj] + "]";
       if (jj<N-1) WEBHTML += ",";
       WEBHTML += "\n";
@@ -2283,31 +2288,35 @@ void handlePost() {
     timeLogged = I.currentTime; //always set timelogged to current time, regardless of what is sent
 
     bool addToSD = false;
-    if ((deviceMAC!=0 || deviceIP!=IPAddress(0,0,0,0)) && snsType!=0 ) {
-      if (devName.length() > 0) Sensors.addDevice(deviceMAC, deviceIP, devName.c_str(),0,devFlags,devType);
-      else Sensors.addDevice(deviceMAC, deviceIP, "",0,devFlags,devType);
-        sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
-        if (sensorIndex < 0) {
-          SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
-          addToSD = true;
-        } else {
-          if (Sensors.getSensorFlag(sensorIndex) != flags) {
-            SerialPrint("Sensor found, flags changed, adding to SD",true);
-            addToSD = true;
-          }
-        }
+    if (deviceMAC!=0 && deviceIP!=IPAddress(0,0,0,0) && snsType!=0 ) {
+      if (devName.length() == 0) devName = "Unknown";
 
-        // Add sensor to Devices_Sensors class
-        sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
-                                              snsName.c_str(), snsValue, 
-                                              timeRead, timeLogged, sendingInt, flags, devName.c_str());
-        if (sensorIndex < 0) {
-          SerialPrint("Failed to add sensor",true);
-          responseMsg = "Failed to add sensor";
-        } else {
-          //message was successfully added to Devices_Sensors class
-          responseMsg = "OK";
+      //is this sensor already in the database?
+      int16_t sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
+      if (sensorIndex >= 0) {
+        if (Sensors.getSensorFlag(sensorIndex) != flags) {
+          SerialPrint("Sensor found, flags changed, adding to SD",true);
+          addToSD = true;
         }
+      } else {
+        SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
+        addToSD = true;
+      }
+
+      // Add sensor to Devices_Sensors class
+      sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
+                                            snsName.c_str(), snsValue, 
+                                            timeRead, timeLogged, sendingInt, flags, devName.c_str());
+
+      if (sensorIndex < 0) {
+        SerialPrint("Failed to add sensor",true);
+        responseMsg = "Failed to add sensor";
+      } else {
+        //message was successfully added to Devices_Sensors class
+        Sensors.getDeviceBySnsIndex(sensorIndex)->dataReceived = timeLogged; //device sent data to me now
+        responseMsg = "OK";
+      }      
+      
     }
 
     #ifdef _USESDCARD
@@ -4863,7 +4872,8 @@ void handleDeviceViewer() {
     
     // Device information header
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
-    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex) ? " (this device)" : "") +"</h3>";
+    bool isThisDevice = (CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex);
+    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((isThisDevice) ? " (this device)" : "") +"</h3>";
     WEBHTML = WEBHTML + "</div>";
     
     // Device details
@@ -4874,10 +4884,15 @@ void handleDeviceViewer() {
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Seen:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeLogged ? dateify(device->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Data:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->timeRead ? dateify(device->timeRead, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Sending Interval:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->SendingInt) + " seconds</td></tr>";
-    WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Status:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->expired ? "Expired" : "Active") + "</td></tr>";
+    if (isThisDevice) {
+      //show alive since
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(I.ALIVESINCE ? dateify(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+    } else {
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Sent:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataSent ? dateify(device->dataSent, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Received:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataReceived ? dateify(device->dataReceived, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Sending Interval:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->SendingInt) + " seconds</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Status:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->expired ? "Expired" : "Active") + "</td></tr>";
+    }
     WEBHTML = WEBHTML + "</table>";
     WEBHTML = WEBHTML + "</div>";
     
@@ -4979,7 +4994,7 @@ void handleDeviceViewerPrev() {
 
     if (CURRENT_DEVICEVIEWER_DEVINDEX == 0) {
       CURRENT_DEVICEVIEWER_DEVINDEX = NUMDEVICES - 1;
-      CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices();
+      CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices()-1;
     } else {
       CURRENT_DEVICEVIEWER_DEVINDEX--;
       CURRENT_DEVICEVIEWER_DEVNUMBER--;
@@ -4989,7 +5004,7 @@ void handleDeviceViewerPrev() {
     while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
       if (CURRENT_DEVICEVIEWER_DEVINDEX <= 0) {
         CURRENT_DEVICEVIEWER_DEVINDEX = NUMDEVICES - 1;
-        CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices();
+        CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices()-1;
       } else {
         //note that we only decrement viewer, not number
         CURRENT_DEVICEVIEWER_DEVINDEX--;      
@@ -5179,11 +5194,24 @@ void setupServerRoutes() {
     server.onNotFound(handleNotFound);
 }
 
-bool SendData(struct SnsType *S, bool forceSend) {
+bool SendData(struct SnsType *S, bool forceSend, int16_t sendToDeviceIndex) {
   //newstyle json message
   if (!forceSend) {
     if (bitRead(S->Flags,1) == 0) return false; //not monitored
-    if (!(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
+
+    bool newServerFound = false;
+    //check if there are any new servers that I have not sent data to yet
+    for (int16_t i=0; i<NUMDEVICES ; i++) {
+      DevType* d = Sensors.getDeviceByDevIndex(i);
+      if (!d || !d->IsSet || d->devType < 100) continue;
+      if (d->dataSent == 0) {
+        SerialPrint("New server found, force sending data", true);
+        newServerFound=true;
+        sendToDeviceIndex = i;
+      }
+    }
+
+    if (newServerFound == false && !(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
   }
 
   S->timeLogged = I.currentTime;
@@ -5212,11 +5240,15 @@ bool isGood = false;
     // now send to any servers I know of. iterate all known devices to find servers  (devType >=100)
     for (int16_t i=0; i<NUMDEVICES ; i++) {
       DevType* d = Sensors.getDeviceByDevIndex(i);
-      if (!d || !d->IsSet || d->devType < 100) continue;
+      if (!d || !d->IsSet || (d->devType < 100 && i!=sendToDeviceIndex)) continue; //send to device if it is not set or is not a server
+      if (forceSend == false) {
+        if (i!=sendToDeviceIndex) {
+          if (d->dataSent > 0 && d->dataSent + d->SendingInt > I.currentTime) continue; //not time to send to this server yet
+        }
+      } 
       
       snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", d->IP.toString().c_str());
 
-      SerialPrint("SENDDATA: POST to " + String(urlBuffer) , true);
 
       // Create HTTP client with proper cleanup
       WiFiClient wfclient;
@@ -5240,6 +5272,7 @@ bool isGood = false;
       http.end();
         
         if (httpCode == 200) { 
+          d->dataSent = I.currentTime;
           isGood = true; 
         }
         else SerialPrint("SENDDATA: POST to " + String(urlBuffer) + " failed with code " + String(httpCode), true);

@@ -428,6 +428,7 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
 }
 
 void handleStoreCoreData() {
+  //use the handle version of storeCoreData for regular timed storage. use storeCoreData directly for forced manual storage.
   storeCoreData(false);
 
 
@@ -868,6 +869,7 @@ void storeCoreData(bool forceStore) {
     I.isUpToDate = true;
     #ifdef _USESDCARD
     storeScreenInfoSD();
+    storeDevicesSensorsSD();
     #endif
   }
 }

@@ -16,8 +16,8 @@ struct DevType {
     uint64_t MAC;           // Device MAC address
     IPAddress IP;            // Device IP address
     uint8_t devType;        // Device type (server, sensor, etc.)
-    uint32_t timeLogged;    // Last time device was seen
-    uint32_t timeRead;      // Last time device sent data
+    uint32_t dataReceived;    // Last time data sent to device
+    uint32_t dataSent;      // Last time device received from device
     uint8_t IsSet;          // Whether this device is initialized
     char devName[30];       // Device name
     uint8_t Flags;          // Device flags
@@ -88,6 +88,7 @@ public:
                      uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0, int16_t snsPin = -9999, int16_t powerPin = -9999);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
+    int16_t findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID);
     SnsType* getSensorBySnsIndex(int16_t snsindex);
     uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
@@ -106,12 +107,12 @@ public:
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
     uint8_t find_sensor_count(String snsname, uint8_t snsType);
     uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
-    int16_t findSnsOfType(uint8_t snstype, bool newest = false);
+    int16_t findSnsOfType(uint8_t snstype, bool newest = false, int16_t startIndex = -1);
 
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
     int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
-    uint32_t makeSensorID(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //make the sensor ID for this sensor
+    uint32_t makeSensorID(uint8_t snsType, uint8_t snsID=-1, int16_t devID=-1); //make the sensor ID for this sensor. If snsID is -1, then it will be the next available sensor ID for the given sensor type
     #endif
     int16_t findMyDeviceIndex();
     bool isMySensor(int16_t index);

@@ -177,29 +177,8 @@ class Devices_Sensors;
   #define I2C_OLED 0x3C
 #endif
 
-
 #ifdef _USETFLUNA
-  #include <TFLI2C.h> // TFLuna-I2C Library v.0.1.0
-  extern TFLI2C tflI2C;
-  extern uint8_t tfAddr; // Default I2C address for Tfluna
-  struct TFLunaType {
-    uint8_t MIN_DIST_CHANGE = 2; //this is how many cm must have changed to register movement
-    uint8_t BASEOFFSET=68; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna)
-    uint8_t ZONE_SHORTRANGE = 61; //cm from BASEOFFSET that is considered short range (show measures in inches now)
-    uint8_t ZONE_GOLDILOCKS = 10; //cm from BASEOFFSET that are considered to have entered the perfect distance; 3 in ~ 8 cm
-    uint8_t ZONE_CRITICAL = 4; //cm from BASEOFFSET at which you are too close
-    uint32_t LAST_DRAW = 0; //last time screen ws drawn, millis()!
-    int32_t LAST_DISTANCE=0; //cm of last distance
-    bool INVERTED = false; //sjhould  the screen be inverted now?
-    uint32_t SCREENRATE = 500; //in ms
-    bool ALLOWINVERT=false; //if true, do inversions
-    uint16_t CHANGETOCLOCK = 30; //in seconds, time to change to clock if dist hasn't changed
-    bool CLOCKMODE = false; //show clock until distance change
-    uint8_t TFLUNASNS=3; //sensor number of TFLUNA
-    char MSG[20] = {0}; //screen message
-  };
-
-  extern TFLunaType LocalTF;
+  #include "TFLuna.hpp"
 #endif
 
 
@@ -277,7 +256,7 @@ extern  Adafruit_BME280 bme; // I2C
 extern   SSD1306AsciiWire oled;
 #endif
 
-void initPeripheralSensors();
+void UpdateSensorHistory();
 int8_t ReadData(struct SnsType *P, bool forceRead=false, int16_t mydeviceindex=-1);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 void setupSensors();
@@ -299,13 +278,14 @@ double readMUX(int16_t pin, byte nsamps);
   //create a struct type to hold sensor history
   struct STRUCT_SNSHISTORY {
     int16_t sensorIndex[_SENSORNUM]; //index to the sensor array
-    uint32_t SensorIDs[_SENSORNUM]; //ID of the sensor, which is devID<<16 + snsType<<8 + snsID
+    uint32_t PrefsSensorIDs[_SENSORNUM]; //Prefs based sensor ID, which is devID<<16 + snsType<<8 + snsID
     uint8_t HistoryIndex[_SENSORNUM]; //point in array that we are at for each sensor's history
+    uint8_t PrefsIndex[_SENSORNUM]; //index to the Prefs array for the sensor
     uint32_t TimeStamps[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     double Values[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     uint8_t Flags[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
 
-    bool recordSentValue(struct SnsType *S, int16_t hIndex) {
+    bool recordSentValue(SnsType *S, int16_t hIndex) {
       if (hIndex < 0 || hIndex >= _SENSORNUM) return false;
       HistoryIndex[hIndex]++;
       if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;

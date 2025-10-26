@@ -129,7 +129,7 @@ void handleDeviceViewerPrev();
 void handleDeviceViewerPing();
 void handleDeviceViewerDelete();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
-bool SendData(struct SnsType *S, bool forceSend=false);
+bool SendData(struct SnsType *S, bool forceSend=false, int16_t sendToDeviceIndex=-1);
 bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);
 void apiConnectToWiFi();
 void apiScanWiFi();

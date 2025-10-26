@@ -180,7 +180,8 @@ void setup() {
 
 
     #ifdef _USESERIAL
-    Serial.begin(115200);
+    
+    Serial.begin(_USESERIAL);
     Serial.println("Serial started");
     SerialPrint("SerialPrint started",true);
     #endif
@@ -191,6 +192,12 @@ void setup() {
 
     initSensor(-256); //clear all sensors
 
+    #ifdef _USESERIAL
+    tftPrint("Using Serial.", true);
+    SerialPrint("Using Serial.",true);
+    #else
+    tftPrint("Serial disabled.", true);
+    #endif
 
     int8_t sdResult = initSDCard();
     if (sdResult==0) return;
@@ -243,37 +250,6 @@ void setup() {
     delay(100);
     tftPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
     SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
-    I.currentTime = now();
-    I.ALIVESINCE = I.currentTime;
-    
-    // Check for unexpected reboot by comparing previous ALIVESINCE with current time
-    // The logic works as follows:
-    // 1. On normal operation, ALIVESINCE is set to current time during setup
-    // 2. If an unexpected reboot occurs, the previous ALIVESINCE value will be loaded from SD
-    // 3. When we set ALIVESINCE again, if it's significantly different from the loaded value,
-    //    it indicates an unexpected reboot occurred
-    if (I.lastResetTime != 0 && I.ALIVESINCE != 0) {
-        // If the previous ALIVESINCE is significantly different from current time, 
-        // this indicates an unexpected reboot occurred
-        time_t timeDiff = I.currentTime - I.ALIVESINCE;
-        if (timeDiff > 300) { // If more than 5 minutes difference, consider it unexpected
-            I.resetInfo = RESET_UNKNOWN;
-            I.lastResetTime = I.currentTime;
-            SerialPrint("Unexpected reboot detected! Previous ALIVESINCE: " + String(I.ALIVESINCE) + 
-                       ", Current time: " + String(I.currentTime) + 
-                       ", Time difference: " + String(timeDiff) + " seconds", true);
-            #ifdef _USESDCARD
-            storeScreenInfoSD(); // Save the updated reset info
-            #endif
-        }
-    } else if (I.lastResetTime == 0) {
-        // This is likely the first boot, set initial values
-        I.resetInfo = RESET_DEFAULT;
-        I.lastResetTime = I.currentTime;
-        #ifndef _ISPERIPHERAL
-        SerialPrint("First boot detected, setting initial reset info", true);
-        #endif
-    }
     
     
 
@@ -313,6 +289,45 @@ void setup() {
 
     initOTA();
 
+    //check time and ensure validity
+    I.currentTime = now();
+    if (isTimeValid(I.currentTime)==false) {
+        tftPrint("Current time is not valid", true, TFT_RED);
+        SerialPrint("Current time is not valid",true);        
+    }
+
+    I.ALIVESINCE = I.currentTime;
+    
+    // Check for unexpected reboot by comparing previous ALIVESINCE with current time
+    // The logic works as follows:
+    // 1. On normal operation, ALIVESINCE is set to current time during setup
+    // 2. If an unexpected reboot occurs, the previous ALIVESINCE value will be loaded from SD
+    // 3. When we set ALIVESINCE again, if it's significantly different from the loaded value,
+    //    it indicates an unexpected reboot occurred
+    if (I.lastResetTime != 0 && I.ALIVESINCE != 0) {
+        // If the previous ALIVESINCE is significantly different from current time, 
+        // this indicates an unexpected reboot occurred
+        time_t timeDiff = I.currentTime - I.ALIVESINCE;
+        if (timeDiff > 300) { // If more than 5 minutes difference, consider it unexpected
+            I.resetInfo = RESET_UNKNOWN;
+            I.lastResetTime = I.currentTime;
+            SerialPrint("Unexpected reboot detected! Previous ALIVESINCE: " + String(I.ALIVESINCE) + 
+                       ", Current time: " + String(I.currentTime) + 
+                       ", Time difference: " + String(timeDiff) + " seconds", true);
+            #ifdef _USESDCARD
+            storeScreenInfoSD(); // Save the updated reset info
+            #endif
+        }
+    } else if (I.lastResetTime == 0) {
+        // This is likely the first boot, set initial values
+        I.resetInfo = RESET_DEFAULT;
+        I.lastResetTime = I.currentTime;
+        #ifndef _ISPERIPHERAL
+        SerialPrint("First boot detected, setting initial reset info", true);
+        #endif
+    }
+    
+
     #ifdef _USEGSHEET
     if (GSheetInfo.useGsheet) {
         tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
@@ -332,7 +347,7 @@ void setup() {
 
     #ifdef _ISPERIPHERAL
     initHardwareSensors(); //initialize the hardware sensors
-    initPeripheralSensors(); //initialize the peripheral sensors
+    
     #endif
 
     #ifdef _USELED
@@ -390,6 +405,10 @@ void loop() {
     
     #ifdef _USELED
     LEDs.LED_update();
+    #endif
+
+    #ifdef _USETFLUNASCREEN
+    checkTFLuna(dateify(I.currentTime,"hh:nn"));
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -533,7 +552,7 @@ void loop() {
 
         updateMyDevice(); //update mydeviceindex and ip
         #ifdef _ISPERIPHERAL
-        initPeripheralSensors(); //update the SensorHistory array to reflect the current sensors on this device
+        UpdateSensorHistory(); //update the SensorHistory array to reflect the current sensors on this device
         #endif
         
         #ifdef _USE32
