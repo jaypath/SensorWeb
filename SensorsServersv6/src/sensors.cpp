@@ -82,24 +82,6 @@ uint8_t HVACSNSNUM = 0;
 extern int16_t MY_DEVICE_INDEX;
 
 
-void UpdateSensorHistory() {
-  //this performs several functions:
-  //updates the SensorHistory array to reflect the current sensors on this device
-  //updates the the global value, mydeviceindex, to reflect the current device index
-
-
-  MY_DEVICE_INDEX = Sensors.findMyDeviceIndex();
-
-  byte count = 0;
-
-
-  //The rest of the sensorhistory array should not fall out of sync because I do not add or remove my sensors
-  //update this if that changes
-
-}
-
-
-
 void setupSensors() {
 
 #ifdef _USE32
@@ -118,7 +100,7 @@ if (myname == "") {
 }
 
 
-MY_DEVICE_INDEX = updateMyDevice(); //update my index
+MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my index
 
 uint16_t flagstates[] = _FLAGSTATES;
 uint16_t interval_poll[] = _INTERVAL_POLL;
@@ -258,16 +240,62 @@ int peak_to_peak(int pin, int ms) {
 }
 
 
+int8_t readAllSensors(bool forceRead) {
+//returns the number of sensors that were read successfully
+  int8_t numGood = 0;
+  for (int16_t i = 0; i < _SENSORNUM; i++) {
+    SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+    if (sensor && sensor->IsSet) {
+      if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
+      String sensorString = (String) sensor->snsType + (String) "." + (String) sensor->snsID;
+      int8_t readResult = ReadData(sensor, forceRead);
+      
+      if (readResult == -1) {
+          SerialPrint((String) "Could not find index to prefs or history for " + sensorString, true);
+          storeError((String) "Could not find index to prefs or history for " + sensorString, ERROR_SENSOR_READ, true);
+      } else if (readResult == -2) {
+          SerialPrint((String) "Could not register" + sensorString + " as a device.", true);
+          storeError((String) "Could not register" + sensorString + " as a device.", ERROR_DEVICE_ADD, true);
+      } else {
+        numGood++;
+        #ifdef _USELED
+          if (sensor->snsType == 3 || sensor->snsType == 33)           LEDs.LED_set_color_soil(sensor);
+        #endif
+      }
+                      
+      delay(50);
+    }
+  }
+  return numGood;
+}
 
-int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
+int8_t sendAllSensors(bool forceSend) {
+  //returns the number of sensors that were sent successfully
+  int8_t numGood = 0;
+  for (int16_t i = 0; i < _SENSORNUM; i++) {
+    SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+    if (sensor && sensor->IsSet) {
+      if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
+      String sensorString = (String) sensor->snsType + (String) "." + (String) sensor->snsID;
+      bool sendResult = SendData(sensor, forceSend);
+      if (sendResult == false) {
+        SerialPrint((String) "Could not send data for " + sensorString, true);
+        storeError((String) "Could not send data for " + sensorString, ERROR_SENSOR_SEND, true);
+      } else numGood++;
+      delay(100); //the delays between reads and sends are to prevent the ESP from overloading
+    }
+  }
+  return numGood;
+}
+
+int8_t ReadData(struct SnsType *P, bool forceRead) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
   
-  if (mydeviceindex == -1) mydeviceindex = Sensors.findMyDeviceIndex();
   //is this my sensor?
-  if (P->deviceIndex != mydeviceindex) return -1;
+  if (P->deviceIndex != MY_DEVICE_INDEX) return -1;
 
   // need the index to the Prefs arrays for the sensor
-  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID, mydeviceindex);
+  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID, MY_DEVICE_INDEX);
   if (prefs_index == -2) return -2;
   if (prefs_index == -1) return -1;
 
@@ -346,6 +374,8 @@ int8_t ReadData(struct SnsType *P, bool forceRead, int16_t mydeviceindex) {
           pinMode(P->powerPin, OUTPUT);
           digitalWrite(P->powerPin, LOW);
         }
+
+        delay(10);
  
         SerialPrint("val: " + String(val) + " sensor type: " + String(P->snsType),true);
 

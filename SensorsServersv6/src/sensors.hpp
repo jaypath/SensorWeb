@@ -256,14 +256,15 @@ extern  Adafruit_BME280 bme; // I2C
 extern   SSD1306AsciiWire oled;
 #endif
 
-void UpdateSensorHistory();
-int8_t ReadData(struct SnsType *P, bool forceRead=false, int16_t mydeviceindex=-1);
+int8_t ReadData(struct SnsType *P, bool forceRead=false);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);
 int peak_to_peak(int pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
+int8_t readAllSensors(bool forceRead=false);
+int8_t sendAllSensors(bool forceSend=false);
 #ifdef _USESSD1306
 void redrawOled(void);
 #endif

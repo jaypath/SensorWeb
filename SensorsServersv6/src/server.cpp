@@ -2210,7 +2210,7 @@ void handlePost() {
                       snsName = sensor["name"].as<String>();
                       snsValue = sensor["value"];
                       timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
-                      timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime;
+                      timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime; //should not be sent by the device. should be set by the server as the time this message was received. Legacy devices may still send this.
                       sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
                       flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
                     }
@@ -3119,7 +3119,7 @@ void handleSENSOR_READ_SEND_NOW() {
   }
   
   // Force read the sensor data
-  int8_t readResult = ReadData(sensor, true, MY_DEVICE_INDEX); // forceRead = true
+  int8_t readResult = ReadData(sensor, true); // forceRead = true
 
   SendData(sensor,true); //send the data to the servers
 
@@ -5195,27 +5195,15 @@ void setupServerRoutes() {
 }
 
 bool SendData(struct SnsType *S, bool forceSend, int16_t sendToDeviceIndex) {
-  //newstyle json message
+  //forcesend will always send. If sentodeviceindex is >=0, it will send to the device at that index.
   if (!forceSend) {
-    if (bitRead(S->Flags,1) == 0) return false; //not monitored
-
-    bool newServerFound = false;
-    //check if there are any new servers that I have not sent data to yet
-    for (int16_t i=0; i<NUMDEVICES ; i++) {
-      DevType* d = Sensors.getDeviceByDevIndex(i);
-      if (!d || !d->IsSet || d->devType < 100) continue;
-      if (d->dataSent == 0) {
-        SerialPrint("New server found, force sending data", true);
-        newServerFound=true;
-        sendToDeviceIndex = i;
-      }
+    if (sendToDeviceIndex < 0) {
+      if (bitRead(S->Flags,1) == 0) return false; //not monitored
+      if ( !(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
     }
-
-    if (newServerFound == false && !(S->timeLogged ==0 || S->timeLogged>I.currentTime || S->timeLogged + S->SendingInt < I.currentTime || bitRead(S->Flags,6) /* isflagged changed since last read*/ || I.currentTime - S->timeLogged >60*60*24)) return false; //not time
   }
-
   S->timeLogged = I.currentTime;
-bool isGood = false;
+  bool isGood = false;
 
   if(WiFi.status() == WL_CONNECTED){
     // Use static buffers to reduce memory fragmentation
@@ -5230,22 +5218,18 @@ bool isGood = false;
     }
 
     // Build JSON more efficiently using snprintf. should be device object, which holds all sensor objects
-    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"devType\":%d,\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"devType\":%d,\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
       deviceMAC.c_str(),
       device->IP.toString().c_str(),
       device->devName,
       device->devType,
-      S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->timeLogged, S->SendingInt, S->Flags);
+      S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->SendingInt, S->Flags); //timeLogged is not sent
 
     // now send to any servers I know of. iterate all known devices to find servers  (devType >=100)
     for (int16_t i=0; i<NUMDEVICES ; i++) {
       DevType* d = Sensors.getDeviceByDevIndex(i);
       if (!d || !d->IsSet || (d->devType < 100 && i!=sendToDeviceIndex)) continue; //send to device if it is not set or is not a server
-      if (forceSend == false) {
-        if (i!=sendToDeviceIndex) {
-          if (d->dataSent > 0 && d->dataSent + d->SendingInt > I.currentTime) continue; //not time to send to this server yet
-        }
-      } 
+      if (forceSend == false && d->dataSent > 0 && S->timeLogged + S->SendingInt > I.currentTime && i!=sendToDeviceIndex) continue; //not time to send to this server yet because we have recently sent data
       
       snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", d->IP.toString().c_str());
 
@@ -5275,8 +5259,11 @@ bool isGood = false;
           d->dataSent = I.currentTime;
           isGood = true; 
         }
-        else SerialPrint("SENDDATA: POST to " + String(urlBuffer) + " failed with code " + String(httpCode), true);
-
+        else {
+          SerialPrint("SENDDATA: POST to " + String(urlBuffer) + " failed with code " + String(httpCode), true);
+          //set the sent time such that it will trigger a retry send in 10 minutes
+          d->dataSent = I.currentTime -d->SendingInt + 10*60;
+        }
       } else {
         SerialPrint("Failed to begin HTTP connection", true);
         http.end(); // Ensure cleanup even on failure
@@ -5290,6 +5277,7 @@ bool isGood = false;
 
   if (isGood) {
     bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I wrote the value so set bit 6 (change in flag) to zero
+    S->timeLogged = I.currentTime;
   }  else {
     I.makeBroadcast = true; //broadcast my presence if I failed to send the data
   }

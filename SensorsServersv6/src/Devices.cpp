@@ -431,9 +431,14 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
     //if snsType is -9, then count all pressure sensors (meeting the flag criteria)
     //if snstype is -54 to -57, then count all HVAC sensors (meeting the flag criteria)
     //if snsType is <=-100, then count all server sensors (meeting the flag criteria)
+    //if snsType is <=-1000 then use flags to specify multiple types: 0 = all EXCEPT the specified types , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary...
 
     uint16_t count = 0;
-    
+    int16_t snsFlagType;
+    if (snsType < -1000) {
+        snsFlagType = (-1 *snsType)-1000;
+        //flags are as follows: but 0 means all types, 1 means temp, 2 means humidity, 3 means soil, 4 means pressure, 5 means HVAC, 6 means server, 7 means dist, 8 means binary...
+    } else snsFlagType = 0;
 
     //count the number of sensors that match the flags
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
@@ -441,15 +446,37 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         
         // Check sensor type filter
         if (snsType != 0) { //special case for all sensors
-        if (snsType > 0 && sensors[i].snsType != snsType) continue;
-        if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
-        if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
-        if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
-        if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
-        if (snsType <= -54 && snsType >= -57 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
-        if (snsType <= -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
-        // Check time filter
+            if (snsType > 0 && sensors[i].snsType != snsType) continue;
+            if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
+            if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
+            if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
+            if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
+            if (snsType <= -54 && snsType >= -57 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
+            if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
+            if (snsType <-1000) {
+                //multiple types specified using flags
+                bool isgood = false;
+                bool isgoodupdated = false;
+
+                if (bitRead(snsFlagType, 0)) {
+                    isgood = true;
+                    isgoodupdated = false;
+                } else {
+                    isgood = false;
+                    isgoodupdated = true;
+                }
+                if (bitRead(snsFlagType, 1) && isSensorOfType(i,"temperature") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 2) && isSensorOfType(i,"humidity") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 3) && isSensorOfType(i,"soil") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 4) && isSensorOfType(i,"pressure") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 5) && isSensorOfType(i,"HVAC") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 6) && isSensorOfType(i,"server") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 7) && isSensorOfType(i,"dist") == true) isgood = isgoodupdated;
+                if (bitRead(snsFlagType, 8) && isSensorOfType(i,"binary") == true) isgood = isgoodupdated;
+                if (isgood == false) continue; //sensor does not meet the criteria
+            }
         }
+        // Check time filter
         if (MoreRecentThan > 0 && sensors[i].timeRead < MoreRecentThan) continue;
         
         // Check flags

@@ -440,6 +440,21 @@ void loop() {
 
         if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
+        MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
+
+        #ifdef _ISPERIPHERAL
+        bool newServerFound = false;
+        //check if there are any new servers (that I have not sent data to yet), and if so reset the timelogged for all my sensors
+        for (int16_t i=0; i<NUMDEVICES ; i++) {
+          DevType* d = Sensors.getDeviceByDevIndex(i);
+          if (!d || !d->IsSet || d->devType < 100) continue;
+          if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
+            newServerFound=true;
+          }
+        }
+        if (newServerFound)  sendAllSensors(true);
+        
+        #endif
 
         #ifdef _USEWEATHER
         // WEATHER OPTIMIZATION - Use optimized weather update method
@@ -548,12 +563,6 @@ void loop() {
 
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
-
-
-        updateMyDevice(); //update mydeviceindex and ip
-        #ifdef _ISPERIPHERAL
-        UpdateSensorHistory(); //update the SensorHistory array to reflect the current sensors on this device
-        #endif
         
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
@@ -632,22 +641,11 @@ void loop() {
         #ifdef _ISPERIPHERAL
             //run through all my sensors and try and update them
 
-            for (int16_t i = 0; i < _SENSORNUM; i++) {
-                SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
-                if (sensor && sensor->IsSet) {
-                    int8_t readResult = ReadData(sensor, false, MY_DEVICE_INDEX);
-                    
-                    bool sendResult = SendData(sensor, false);
-                    if (sendResult)                     SensorHistory.recordSentValue(sensor,i);
 
-                    #ifdef _USELED
-                        if (sensor->snsType == 3) { // soil sensor
-                        LEDs.LED_set_color_soil(sensor);
-                        }
-                    #endif
-                    
-                }
-            }
+            readAllSensors(false);
+            sendAllSensors(false);
+
+                  
 
         #endif
     }

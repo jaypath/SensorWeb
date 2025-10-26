@@ -105,7 +105,9 @@ typedef enum {
     ERROR_FAILED_ENCRYPTION, //failed to encrypt data
     ERROR_FAILED_DECRYPTION, //failed to decrypt data
     ERROR_HARDWARE_MEMORY, //hardware memory error
-    ERROR_TIME
+    ERROR_TIME, 
+    ERROR_SENSOR_READ, //could not read a sensor
+    ERROR_SENSOR_SEND //could not write a sensor
   } ERRORCODES;
 
 

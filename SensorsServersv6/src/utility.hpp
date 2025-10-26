@@ -49,7 +49,7 @@ int16_t updateMyDevice();
 void initScreenFlags(bool completeInit = false);
 void storeCoreData(bool forceStore = true);
 void handleStoreCoreData();
-
+void storeError(String E, ERRORCODES CODE, bool writeToSD = true);
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
 String lastReset2String(bool addtime=true);
 String getRebootDebugInfo();

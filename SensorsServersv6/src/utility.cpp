@@ -828,6 +828,10 @@ String enumErrorToName(ERRORCODES E) {
 
 }
 
+void storeError(String E, ERRORCODES CODE, bool writeToSD) {
+  storeError(E.c_str(), CODE, writeToSD);
+}
+
 void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
     
     if (E && strlen(E) < 75) {
