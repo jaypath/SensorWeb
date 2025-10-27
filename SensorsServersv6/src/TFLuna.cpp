@@ -16,7 +16,7 @@
 #define CLK_PIN     18
 #define DATA_PIN    23
 
-MD_Parola screen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
+MD_Parola MAXscreen = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); //hardware spi
 //MD_Parola screen = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES); // Software spi
 
  TFLunaType LocalTF;
@@ -26,6 +26,7 @@ void checkTFLuna(int16_t snsindex) {
   uint32_t m = millis();
   if (snsindex != -1)     LocalTF.TFLUNASNS = snsindex;
   if (LocalTF.TFLUNASNS == -1)     LocalTF.TFLUNASNS = Sensors.findSnsOfType(7,true);
+
     //get sensor number of TFLUNA   if it is not found, return
   SnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
   if (P == NULL || !P->IsSet) {
@@ -51,6 +52,7 @@ void updateTFLunaDisplay(char* datestring) {
   //check tfluna distance if it is time
   if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_RATE) {
     LocalTF.LAST_DISTANCE_TIME = m;
+    checkTFLuna(-1);
     SnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);    
     if (P == NULL || !P->IsSet) {
     LocalTF.TFLUNASNS = -1;
@@ -58,8 +60,9 @@ void updateTFLunaDisplay(char* datestring) {
     MD_Draw();
     return;
     }
+
     float tempdist = P->snsValue-LocalTF.BASEOFFSET;
-    if (tempdist<-3000) {
+    if (tempdist<-1000) {
       snprintf(LocalTF.MSG,19,"SLOW");
       LocalTF.ALLOWINVERT=true;
       LocalTF.SCREENRATE=250;
@@ -135,11 +138,11 @@ else       LocalTF.INVERTED = false;
 
 
 
-screen.displayClear();
-screen.setTextAlignment(PA_CENTER);       
-screen.setInvert(LocalTF.INVERTED);
+MAXscreen.displayClear();
+MAXscreen.setTextAlignment(PA_CENTER);       
+MAXscreen.setInvert(LocalTF.INVERTED);
 //screen.print(LocalTF.MSG);
-screen.printf("%s",LocalTF.MSG);
+MAXscreen.printf("%s",LocalTF.MSG);
 LocalTF.LAST_DRAW = m;    
 
   

@@ -380,6 +380,10 @@ class LGFX;
 #include "FirebaseUpload.hpp"
 #endif
 
+#ifdef _USETFLUNA
+#include "TFLuna.hpp"
+#endif
+
 
 //general libraries
 #include <Arduino.h>

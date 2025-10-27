@@ -407,8 +407,9 @@ void loop() {
     LEDs.LED_update();
     #endif
 
-    #ifdef _USETFLUNASCREEN
-    checkTFLuna(dateify(I.currentTime,"hh:nn"));
+    #ifdef _USETFLUNA
+    snprintf(LocalTF.MSG,19,"%s",dateify(I.currentTime,"hh:nn"));
+    updateTFLunaDisplay(LocalTF.MSG);
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {

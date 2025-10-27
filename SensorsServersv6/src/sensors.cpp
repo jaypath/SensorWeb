@@ -7,6 +7,10 @@
 
 */
 
+#ifdef _USETFLUNA
+extern MD_Parola MAXscreen;
+#endif
+
 extern Devices_Sensors Sensors;
 #ifdef _ISPERIPHERAL
 STRUCT_SNSHISTORY SensorHistory;
@@ -209,6 +213,17 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
         }
     }
   }
+
+  #ifdef _USETFLUNA
+  MAXscreen.begin();
+  MAXscreen.setIntensity(10);
+  MAXscreen.displayClear();
+  MAXscreen.setTextAlignment(PA_CENTER);       
+  MAXscreen.setInvert(false);
+  MAXscreen.printf("INIT",LocalTF.MSG);
+  LocalTF.TFLUNASNS = Sensors.findSnsOfType(7,true);
+  #endif
+
 
   SerialPrint("Sensors setup complete",true);
 }
@@ -460,9 +475,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         #endif
         #ifdef _USETFLUNA
           //find the index to the TFLUNA sensor and then call checkTFLuna with the index, which will update the sensor value
-          int16_t tflunaIndex = Sensors.findSensor(P->deviceIndex, P->snsType, P->snsID);
-          if (tflunaIndex == -1) return -10;
-          checkTFLuna(tflunaIndex);
+            checkTFLuna(-1);          
         #endif
    
       break;
