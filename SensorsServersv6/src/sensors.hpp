@@ -37,7 +37,7 @@ class Devices_Sensors;
 18 - BME680 rh
 19 - BME680 air press
 20  - BME680 gas sensor
-21 - human present (mmwave)
+21 - 
 
 50 - HVAC, total heating time (use for a multizone system) (ie heat on)
 51 - HVAC, Heat zone 

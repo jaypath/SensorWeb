@@ -1604,7 +1604,7 @@ void rootTableFill(byte j) {
     // Add editable sensor configuration if this is my sensor
     if (Sensors.isMySensor(j)) {
     
-      int16_t prefsIndex = Sensors.getPrefsIndex(sensor->snsType, sensor->snsID,-1);
+      int16_t prefsIndex = Sensors.getPrefsIndex(j);
       
       if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
         // Add a configuration cell with expandable form
@@ -1680,9 +1680,14 @@ void rootTableFill(byte j) {
         WEBHTML = WEBHTML + "</details>";
         WEBHTML = WEBHTML + "</td>";
     
+      } else {
+        WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
       }
           
+    } else {
+      WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Sensor " + String(j) + " is not my sensor" + "</td>";
     }
+
     #endif
     
     WEBHTML = WEBHTML + "</tr>";
@@ -4911,23 +4916,11 @@ void handleDeviceViewer() {
         // Add sensor rows
         for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
             SnsType* sensor = Sensors.getSensorBySnsIndex(i);
-            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
-                // Determine sensor type name
-                String typeName = "Unknown";
-                if (Sensors.isSensorOfType(i, "temperature")) typeName = "Temperature";
-                else if (Sensors.isSensorOfType(i, "humidity")) typeName = "Humidity";
-                else if (Sensors.isSensorOfType(i, "pressure")) typeName = "Pressure";
-                else if (Sensors.isSensorOfType(i, "battery")) typeName = "Battery";
-                else if (Sensors.isSensorOfType(i, "HVAC")) typeName = "HVAC";
-                else if (Sensors.isSensorOfType(i, "soil")) typeName = "Soil";
-                else if (Sensors.isSensorOfType(i, "leak")) typeName = "Leak";
-                else if (Sensors.isSensorOfType(i, "human")) typeName = "Human";
-                else if (Sensors.isSensorOfType(i, "server")) typeName = "Server";
-                
+            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {                
                 WEBHTML = WEBHTML + "<tr>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsType) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + typeName + "</td>";
+                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + Sensors.sensorIsOfType(sensor) + "</td>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsID) + "</td>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsValue, 2) + "</td>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->timeLogged ? dateify(sensor->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td>";

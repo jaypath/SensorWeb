@@ -82,7 +82,6 @@ public:
     int16_t initDevice(int16_t devindex);
     bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
     // Sensor management
-    uint16_t isSensorIndexInvalid(int16_t index);
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                      uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0, int16_t snsPin = -9999, int16_t powerPin = -9999);
@@ -111,19 +110,35 @@ public:
     uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
     int16_t findSnsOfType(uint8_t snstype, bool newest = false, int16_t startIndex = -1);
     int16_t findSnsOfType(const char* snstype, bool newest = false, int16_t startIndex = -1);
-    bool isSensorOfType(int16_t index, String type);
-    bool isSensorOfType(SnsType* sensor, String type);
-    bool isSensorOfType(uint8_t snsType, String type);
-    
+    int16_t findMyDeviceIndex();
+
+
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
-    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
     uint32_t makeSensorID(uint8_t snsType, uint8_t snsID=-1, int16_t devID=-1); //make the sensor ID for this sensor. If snsID is -1, then it will be the next available sensor ID for the given sensor type
+    uint32_t makeSensorID(SnsType* sensor); //make the sensor ID for this sensor
+    uint32_t makeSensorID(int16_t index); //make the sensor ID for this sensor
+    int16_t getPrefsIndex(int16_t index); //get the preferences index for this sensor
+    int16_t getPrefsIndex(SnsType* sensor); //get the preferences index for this sensor
+    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
+    int16_t getSensorHistoryIndex(int16_t index); //get the sensor history index for this sensor
+    int16_t getSensorHistoryIndex(SnsType* sensor); //get the sensor history index for this sensor
+    int16_t getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the sensor history index for this sensor
     #endif
-    int16_t findMyDeviceIndex();
+    
+    //informational functions
     bool isMySensor(int16_t index);
     int16_t isDeviceIndexValid(int16_t index);
     int16_t isSensorIndexValid(int16_t index);
+    uint16_t isSensorIndexInvalid(int16_t index, bool checkExpired=false);
+    bool isSensorOfType(int16_t index, String type);
+    bool isSensorOfType(SnsType* sensor, String type);
+    bool isSensorOfType(uint8_t snsType, String type);
+    String sensorIsOfType(int16_t index);
+    String sensorIsOfType(SnsType* sensor);
+    String sensorIsOfType(uint8_t snsType);
+
+
     #ifdef _USESDCARD
     // Data storage
     bool setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritten=0);

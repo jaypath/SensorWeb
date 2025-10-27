@@ -184,8 +184,8 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     }
 
     //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
-    SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(sensortypes[i], snsID, MY_DEVICE_INDEX); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
     SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
+    SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index
 
     switch (sensortypes[i]) {

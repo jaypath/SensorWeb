@@ -255,7 +255,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
         sensor->Flags = flags;
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
-        sensor->IsSet=1;
+        sensor->IsSet=true;
         Sensors.lastUpdatedTime = I.currentTime;
         #ifdef _ISPERIPHERAL
         if (snsPin !=0 && snsPin != -9999) {
@@ -719,7 +719,7 @@ int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
 }
 
 
-uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
+uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index, bool checkExpired) {
     //returns 1 if invalid (out of bounds), 2 if not set, 3 if expired, 0 if valid
     if (index < 0 || index >= NUMSENSORS ) {
         return 1;
@@ -727,7 +727,7 @@ uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
     if (!sensors[index].IsSet) {
         return 2;
     }
-    if (sensors[index].expired) {
+    if (checkExpired && sensors[index].expired) {
         return 3;
     }
     return 0;
@@ -793,7 +793,32 @@ uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
     return sensors[index].Flags;
 }
 
-    
+String Devices_Sensors::sensorIsOfType(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS ) return "Invalid index";
+    return sensorIsOfType(sensors[index].snsType);
+}
+
+String Devices_Sensors::sensorIsOfType(SnsType* sensor) {
+    if (sensor == NULL) return "Invalid sensor";
+    return sensorIsOfType(sensor->snsType);
+}
+
+String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
+    if (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17) return "temperature";
+    if (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18) return "humidity";
+    if (snsType == 9 || snsType == 13 || snsType == 19) return "pressure";
+    if (snsType == 60 || snsType == 61) return "battery";
+    if (snsType >= 50 && snsType < 60) return "HVAC";
+    if (snsType == 3 || snsType == 33) return "soil";
+    if (snsType == 70) return "leak";
+    if (snsType == 8) return "human";
+    if (snsType == 7) return "distance";
+    if (snsType == 12 ) return "weather";
+    if (snsType == 11 || snsType == 16) return "altitude";
+    if (snsType == 98) return "clock";
+    if (snsType >= 100) return "server";
+    return "unknown";
+}
 
 bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
     return isSensorOfType(sensors[index].snsType, type);
@@ -828,10 +853,19 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
         return (snsType == 70);
     }
     if (type == "human") {//human
-        return (snsType == 21);
+        return (snsType == 8);
     }
     if (type == "distance") {//binary
         return (snsType == 7 );
+    }
+    if (type == "weather") {//weather
+        return (snsType == 12);
+    }
+    if (type == "altitude") {//altitude
+        return (snsType == 11 || snsType == 16);
+    }
+    if (type == "clock") {//clock
+        return (snsType == 98);
     }
     if (type == "all" || type == "any") {//all
         return true;
@@ -842,7 +876,7 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
 
 int16_t Devices_Sensors::findMyDeviceIndex() {
     //returns -1 if I am not found and could not be registered (that's a problem), or the index to devices for me
-    int16_t index = findDevice(ESP.getEfuseMac());
+    int16_t index = findDevice((uint64_t) ESP.getEfuseMac());
     if (index == -1) {
         SerialPrint("I am not registered as a device, registering...",true);
         if (Prefs.DEVICENAME[0] == 0) {
@@ -866,11 +900,55 @@ uint32_t Devices_Sensors::makeSensorID(uint8_t snsType, uint8_t snsID, int16_t d
     return (devID<<16) + (snsType<<8) + snsID;
 }
 
+uint32_t Devices_Sensors::makeSensorID(SnsType* sensor) {
+    if (sensor == NULL) return 0;
+    if (sensor->IsSet == false) return 0;
+    return makeSensorID(sensor->snsType, sensor->snsID, sensor->deviceIndex);
+}
+
+uint32_t Devices_Sensors::makeSensorID(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS ) return 0;
+    if (sensors[index].IsSet == false) return 0;
+    return makeSensorID(&sensors[index]);
+}
+
+
+int16_t Devices_Sensors::getPrefsIndex(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS ) return -1;
+    if (sensors[index].IsSet == false) return -1;
+    return getPrefsIndex(&sensors[index]);
+}
+
+
+int16_t Devices_Sensors::getPrefsIndex(SnsType* sensor) {
+    if (sensor == NULL) return -1;
+    if (sensor->IsSet == false) return -1;
+    return getPrefsIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);
+}
+
+
 int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
     //find the index to the Prefs values for the given sensor type, sensor ID, and device index
     //this always references me as the device, unless devID is provided and is not -1
     //returns -2 if I am not registered,  -1 if no Prefsindex found, otherwise the index to Prefs values 
 
+    return SensorHistory.PrefsIndex[getSensorHistoryIndex(snsType, snsID, devID)];
+}
+
+
+int16_t Devices_Sensors::getSensorHistoryIndex(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS ) return -1;
+    if (sensors[index].IsSet == false) return -1;
+    return getSensorHistoryIndex(&sensors[index]);
+}
+
+int16_t Devices_Sensors::getSensorHistoryIndex(SnsType* sensor) {
+    if (sensor == NULL) return -1;
+    if (sensor->IsSet == false) return -1;
+    return getSensorHistoryIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);
+}
+
+int16_t Devices_Sensors::getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
     if (devID == -1) devID = findMyDeviceIndex();
 
     if (devID == -1) return -2;
@@ -891,8 +969,10 @@ int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t d
 #endif
 
 bool Devices_Sensors::isMySensor(int16_t index) {
+    if (index < 0 || index >= NUMSENSORS ) return false;
+    if (sensors[index].IsSet == false) return false;
     if (isSensorIndexInvalid(index)!=0) return false;
-    return sensors[index].deviceIndex == findMyDeviceIndex();
+    return  sensors[index].deviceIndex ==  findMyDeviceIndex();
 }
 
 bool Devices_Sensors::updateDeviceName(int16_t index, String newDeviceName) {
