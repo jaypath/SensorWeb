@@ -545,7 +545,7 @@ void loop() {
         I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         
-        I.isExpired = checkExpiration(-1, I.currentTime, true);
+        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true); //this is where sensors are checked for expiration. Returns number of expired sensors
         
         
         handleESPNOWPeriodicBroadcast(10);
@@ -583,11 +583,6 @@ void loop() {
           ESP.restart();
         }
         #endif
-
-        #ifndef _ISPERIPHERAL
-        checkExpiration(-1, I.currentTime, false);
-        #endif
-
 
 
         if (OldTime[2] == 4) {

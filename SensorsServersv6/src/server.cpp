@@ -1581,16 +1581,29 @@ void rootTableFill(byte j) {
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType+"."+ (String) sensor->snsID + "</td>";
+    WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
+    
+    #ifndef _ISPERIPHERAL
+    //print flags as a binary string
+    String flagsString = "";
+    for (int i = 0; i <8 ; i++) {
+      flagsString = flagsString + (String) bitRead(sensor->Flags, i);
+    }
+    WEBHTML = WEBHTML + "<td>" + flagsString + "</td>";    
+    #endif
+    WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
+    #ifdef _ISPERIPHERAL
+    WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
+    #else
+    WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
+    #endif
+    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";    
+    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
     
     #ifdef _ISPERIPHERAL
     // Add editable sensor configuration if this is my sensor
     if (Sensors.isMySensor(j)) {
-      WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
-      WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";    
-      WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-  
+    
       int16_t prefsIndex = Sensors.getPrefsIndex(sensor->snsType, sensor->snsID,-1);
       
       if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
@@ -1666,31 +1679,12 @@ void rootTableFill(byte j) {
         
         WEBHTML = WEBHTML + "</details>";
         WEBHTML = WEBHTML + "</td>";
-      } else {
-        // If we can't get prefs index, show normal cells
-        WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
-        WEBHTML = WEBHTML + "<td>" + (String) dateify(sensor->timeLogged,"mm/dd hh:nn:ss") + "</td>";
-        WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-        WEBHTML = WEBHTML + "<td></td>";
+    
       }
-    } else {
-      // Not my sensor, show normal cells
-      WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) dateify(sensor->timeLogged,"mm/dd hh:nn:ss") + "</td>";
-      WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-      
-      
+          
     }
-    #else
-    // Non-peripheral build, show normal cells
-    WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) dateify(sensor->timeLogged,"mm/dd hh:nn:ss") + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";    
-    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-    
-    
     #endif
+    
     WEBHTML = WEBHTML + "</tr>";
   }
 }
@@ -1813,7 +1807,7 @@ void handlerForRoot(bool allsensors) {
   #ifdef _ISPERIPHERAL
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:100px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:100px\">Last Send</th><th style=\"width:50px\">Critical</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th><th style=\"width:300px\">Config</th></tr>"; 
   #else
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:100px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:100px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:250px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:100px\">Plot Avg</th><th style=\"width:100px\">Plot Raw</th>Config</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>"; 
   #endif
   for (byte j=0;j<NUMSENSORS;j++)  {
     SnsType* sensor = Sensors.getSensorBySnsIndex(j);    

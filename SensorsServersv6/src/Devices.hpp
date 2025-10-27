@@ -98,10 +98,12 @@ public:
     // Utility functions
     int16_t findOldestDevice();
     int16_t findOldestSensor();
-    byte checkExpiration(int16_t index, time_t currentTime, bool onlyCritical);
     uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false);
-    bool isSensorOfType(int16_t index, String type);
     uint8_t getSensorFlag(int16_t index);
+    byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical);
+    int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical);
+    int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical);
+    
 
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
@@ -109,7 +111,10 @@ public:
     uint8_t findSensorByName(String snsname, uint8_t snsType, uint8_t snsID = 0);
     int16_t findSnsOfType(uint8_t snstype, bool newest = false, int16_t startIndex = -1);
     int16_t findSnsOfType(const char* snstype, bool newest = false, int16_t startIndex = -1);
-
+    bool isSensorOfType(int16_t index, String type);
+    bool isSensorOfType(SnsType* sensor, String type);
+    bool isSensorOfType(uint8_t snsType, String type);
+    
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
     int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
@@ -128,9 +133,6 @@ public:
     #endif
     
 
-    // Helper functions for expiration checking
-    byte checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical);
-    byte checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical);
     
     // Legacy compatibility functions (now removed)
     // All SensorVal-based functions have been eliminated

@@ -215,9 +215,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
   } else {
 
     //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
-    byte snstype = sensor->snsType;
-    if (snstype==1 || snstype==4 || snstype==10 || snstype==14 || snstype==17) {
-      //temperature
+    if (Sensors.isSensorOfType(sensor, "temperature")) {
       box_border = set_color(150,150,20);
       if (isnan(sensor->snsValue)) {
         box_text += (String) ("???_");
@@ -241,7 +239,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
         }
       }
     }
-    if (snstype==3) {
+    if (Sensors.isSensorOfType(sensor, "soil")) {
       //soil
       box_text += (String) ((int) sensor->snsValue) + "_";
 
@@ -263,7 +261,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       }
     }
 
-    if (snstype==2 || snstype==5 || snstype==15 || snstype==18) {
+    if (Sensors.isSensorOfType(sensor, "humidity")) {
       //humidity
       box_text += (String) ((int) sensor->snsValue) + "%RH_";
       if (bitRead(sensor->Flags,0)==1) {
@@ -283,7 +281,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       }
     }
 
-    if (snstype==58) {
+    if (Sensors.isSensorOfType(sensor, "leak")) {
       //leak
       box_text += "LEAK_";
       box_border = set_color(0,0,255);
@@ -291,7 +289,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       text_color = set_color(255-0,255-190,255-255);
     }
 
-    if (snstype==61) {
+    if (Sensors.isSensorOfType(sensor, "bat")) {
       //bat
       box_text += (String) ((int) sensor->snsValue) + "%_";
       box_border = set_color(200,200,200);
@@ -305,7 +303,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
     }
 
 
-    if (snstype==9 || snstype==13 || snstype==19) {
+    if (Sensors.isSensorOfType(sensor, "pressure")) {
       //air pressure
       box_border = set_color(192, 222, 233);
       box_text += (String) ((int) sensor->snsValue) + "hPA_";
@@ -943,7 +941,7 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
   byte SensorIndex = I.alarmIndex;
 
   if (whichSensors == -1) whichSensors = I.showTheseFlags;
-  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensors are allowed if whichSensors is 0
+  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensor types are allowed if whichSensors is 0
   String sensorType[10] = {"","","","","","","","","",""};
   //populate sensorType based on whichSensors
     if (bitRead(whichSensors, 3) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[0] = "leak";
@@ -975,23 +973,26 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
       if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
     }      
   } 
-  I.alarmIndex = SensorIndex;
   
-  alarmArrayInd=0;
-  for (byte r=0;r<rows;r++) {
-    if (alarms[alarmArrayInd] == 255) break;
-    for (byte c=0;c<cols;c++) {
-      //draw each alarm index in a box
+  I.alarmIndex = SensorIndex;
+
+  if (alarmArrayInd!=0) {
+
+    alarmArrayInd=0;
+    for (byte r=0;r<rows;r++) {
       if (alarms[alarmArrayInd] == 255) break;
-      drawBox(alarms[alarmArrayInd++], X, Y, boxsize_x, boxsize_y);
-        
-      X=X+boxsize_x+gapx;
+      for (byte c=0;c<cols;c++) {
+        //draw each alarm index in a box
+        if (alarms[alarmArrayInd] == 255) break;
+        drawBox(alarms[alarmArrayInd++], X, Y, boxsize_x, boxsize_y);
+          
+        X=X+boxsize_x+gapx;
+      }
+      Y+=boxsize_y + gapy;
+      X=init_X;
     }
-    Y+=boxsize_y + gapy;
-    X=init_X;
+
   }
-
-
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
 }
@@ -1134,7 +1135,7 @@ else {
   if (I.isFlagged>0) {
     //but not all flags matter - depends on which are flagged and when
     if (Sensors.countFlagged(-1000,0b10000011,0b10000011,I.currentTime-86400,true,false)>0) {
-      //ok, critical sensors are flagged, were we already showing flags?
+      //critical sensors are flagged, were we already showing flags?
 
       if (I.lastFlagViewTime==0) forceflags=true;
       else {

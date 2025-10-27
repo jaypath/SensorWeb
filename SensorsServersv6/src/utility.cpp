@@ -715,10 +715,6 @@ bool isSensorInit(int i) {
   return Sensors.isSensorInit(i);
 }
 
-byte checkExpiration(int i, time_t t, bool onlyCritical) {
-  //i is -1 for all sensors, or the specific sensor index. Checks expiration of sensors, not devices.
-  return Sensors.checkExpiration(i, t, onlyCritical);
-}
 
 uint8_t countDev() {
   return Sensors.getNumDevices();

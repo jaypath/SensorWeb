@@ -399,27 +399,6 @@ int16_t Devices_Sensors::findOldestSensor() {
     return oldestIndex;
 }
 
-byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool onlyCritical) {
-    if (index >= 0) {
-        if (index < NUMSENSORS ) {
-            if (sensors[index].IsSet) {
-                return checkExpirationSensor(index, currentTime, onlyCritical);
-            }
-        }
-        return 0;
-    }
-    
-    // Check all devices and sensors
-    byte expiredCount = 0;
-    
-    for (int16_t i = 0; i < NUMSENSORS ; i++) {
-        if (sensors[i].IsSet) {
-            expiredCount += checkExpirationSensor(i, currentTime, onlyCritical);
-        }
-    }
-    
-    return expiredCount;
-}
 
 
 uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
@@ -697,7 +676,7 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
         }
 
         if (index == ismine ) {
-            //check if expired
+            //check if expired jspxx
             if (devices[index].expired) {
                 return 3; //expired and is mine
             } else {
@@ -716,7 +695,7 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
 
 int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
     //checks if the sensor index is VALID
-    //0 = invalid, 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine, -1 = not set
+    //0 = invalid (out of bounds), 1 = set and mine, 2 = set and not mine, 3 = expired and mine, 4 = expired and not mine, -1 = not set
     if (index < 0 || index >= NUMSENSORS ) {
         //index is invalid
         return 0;
@@ -724,7 +703,7 @@ int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
     if (sensors[index].IsSet) {
         if (isMySensor(index)) {
             if (sensors[index].expired) {
-                return 3; //expired and is mine
+                return 3; //expired and is mine //jspxx
             } else {
                 return 1; //set and is mine
             }
@@ -741,7 +720,7 @@ int16_t Devices_Sensors::isSensorIndexValid(int16_t index) {
 
 
 uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
-    //returns 1 if invalid, 2 if not set, 3 if expired, 0 if valid
+    //returns 1 if invalid (out of bounds), 2 if not set, 3 if expired, 0 if valid
     if (index < 0 || index >= NUMSENSORS ) {
         return 1;
     }
@@ -754,7 +733,7 @@ uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index) {
     return 0;
 }
 
-byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
+int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
     if (index < 0 || index >= NUMDEVICES  || !devices[index].IsSet) {
         return 0;
     }
@@ -781,25 +760,32 @@ byte Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, b
     return 0;
 }
 
-byte Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical) {
-    if (index < 0 || index >= NUMSENSORS  || !sensors[index].IsSet) {
-        return 0;
-    }
-    
-    SnsType* sensor = &sensors[index];
-    uint16_t sendint = sensor->SendingInt;
-    if (sendint==0) sendint = 300; //default to 5 minutes
-    uint32_t expirationTime = sensor->timeLogged + sendint * 3; // 3x sending interval
-    
-    if (currentTime > expirationTime) {
-        if (onlyCritical && !bitRead(sensor->Flags, 7)) {
-            return 0; // Only check critical sensors
+byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical) {
+    byte count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+        if (checkExpirationSensor(i, currentTime, onlyCritical) == 1) {
+            count++;
         }
-        sensor->expired = true;
+    }
+    return count;
+}
+
+int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical) {
+    //returns -1 if invalid (out of bounds), -2 if not set, -3 if expired,-5 if this is not a critical sensor and onlyCritical is true, -10 if indeterminate (no sending interval set), 0 if valid not expired, 1 if expired
+    
+    int16_t result = isSensorIndexInvalid(index);
+    if (result != 0) return -1*result;
+    if (onlyCritical && !bitRead(sensors[index].Flags, 7)) return -5;
+
+    uint16_t sendint = sensors[index].SendingInt;
+    if (sendint==0) return -10;
+    uint32_t expirationTime = sensors[index].timeLogged + sendint + 120; // 2 minute buffer
+
+    if (currentTime > expirationTime) {
+        sensors[index].expired = true;
         return 1;
     }
-    
-    sensor->expired = false;
+
     return 0;
 }
 
@@ -807,8 +793,19 @@ uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
     return sensors[index].Flags;
 }
 
+    
+
 bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
-    uint8_t snsType = sensors[index].snsType;
+    return isSensorOfType(sensors[index].snsType, type);
+}
+
+bool Devices_Sensors::isSensorOfType(SnsType* sensor, String type) {
+    if (sensor == NULL) return false;
+    return isSensorOfType(sensor->snsType, type);
+}
+
+bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
+
     if (type == "temperature") {//temperature
         return (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17);
     }
