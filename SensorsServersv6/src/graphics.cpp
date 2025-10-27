@@ -207,6 +207,8 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
   box_text = (String) sensor->snsName + (String) "_";
 
+  if (bitRead(sensor->Flags,0)==1)   box_border = set_color(255,20,20); //generic border for flagged sensors
+
   if (sensor->expired) {
     box_text += "EXP!_";
     box_border = set_color(150,150,150);
@@ -227,6 +229,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
         if (bitRead(sensor->Flags,0)==1) { //flagged
           if (bitRead(sensor->Flags,5)==1) {        
             box_fill = set_color(255,100,100);
+            box_border = set_color(255,20,20);
             text_color = convertColor565ToGrayscale(invert_color(box_fill));
           }
           else {
@@ -245,12 +248,12 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
       if (bitRead(sensor->Flags,0)==1) {
         if (bitRead(sensor->Flags,5)==1) { //too dry
-          box_border = set_color(150,20,20);
+          box_border = set_color(255,20,20);
           box_fill = set_color(250,170,100);
           text_color = convertColor565ToGrayscale(invert_color(box_fill));
         }
         else { //too wet
-          box_border = set_color(111, 15, 46);
+          box_border = set_color(255, 15, 46);
           box_fill = set_color(11, 15, 46);
           text_color = convertColor565ToGrayscale(invert_color(box_fill));
         }
@@ -266,11 +269,11 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       box_text += (String) ((int) sensor->snsValue) + "%RH_";
       if (bitRead(sensor->Flags,0)==1) {
         if (bitRead(sensor->Flags,5)==0) { //too dry
-          box_border = set_color(201, 216, 221);
+          box_border = set_color(255,20,20);
           box_fill = set_color(205, 235, 250);
           text_color = convertColor565ToGrayscale(invert_color(box_fill));
         }        else { //too wet
-          box_border = set_color(201, 216, 221);
+          box_border = set_color(255,20,20);
           box_fill = set_color(70, 168, 179);
           text_color = convertColor565ToGrayscale(invert_color(box_fill));
         }
@@ -284,7 +287,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
     if (Sensors.isSensorOfType(sensor, "leak")) {
       //leak
       box_text += "LEAK_";
-      box_border = set_color(0,0,255);
+      box_border = set_color(255,20,20);
       box_fill = set_color(0,190,255);
       text_color = set_color(255-0,255-190,255-255);
     }
@@ -294,6 +297,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       box_text += (String) ((int) sensor->snsValue) + "%_";
       box_border = set_color(200,200,200);
       if (bitRead(sensor->Flags,0)==1) {        
+        box_border = set_color(255,20,20);
         box_fill = set_color(228, 70, 110);
         text_color = set_color(0,0,0);
       } else {
@@ -308,6 +312,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       box_border = set_color(192, 222, 233);
       box_text += (String) ((int) sensor->snsValue) + "hPA_";
       if (bitRead(sensor->Flags,0)==1) {
+        box_border = set_color(255,20,20);
         if (bitRead(sensor->Flags,5)==0) { //low pressure              
           box_fill = set_color(99, 151, 223);
           text_color = convertColor565ToGrayscale(invert_color(box_fill));
@@ -776,7 +781,8 @@ void fcnDrawSensorScreen() {
       tft.setTextColor(FG_COLOR,BG_COLOR);
       tft.setCursor(0,0);
       tft.printf("Sensors (Devices: %d; Sensors: %d)",Sensors.numDevices,Sensors.numSensors);
-      fcnDrawSensors(0,18,8,6,0);
+      byte alarmcount = fcnGetAlarms(0,8,6);
+      fcnDrawSensors(0,18,8,6);
 
       //draw a box at the bottom right corner of screen, that when pushed moves to next previous screen
       tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
@@ -904,34 +910,23 @@ void fcnDrawStatus() {
 
 }
 
-void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensors) { //set whichsensors to -1 to show I.showTheseFlags
-  /*
-  going to show rowsxcols flagged sensors (so up to rows*cols)
-  starting at X,Y
 
-  note that the alarms array will be filled up to MAXALARMS sensors, but we may only be able to display rows*cols of these. In that case only fill alarms array up to rows*cols
-*/
-
-
-  int16_t init_X = X;
-  if (rows==0) rows = 2;
-  if (cols==0) cols = 6;
-
-  
-  byte alarmsToDisplay = rows*cols;
-  if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
-
-
-  byte boxsize_x=50,boxsize_y=50;
-  byte gapx = 4;
-  byte gapy = 2;
-
-  String roomname;
-
+byte fcnGetAlarms(int32_t whichSensors, byte rows, byte cols) {
   //fill an array with next row*cols alarm entries
 //  byte alarms[rows*cols];
-  byte alarmArrayInd = 0;
-  
+
+
+if (whichSensors == -1) whichSensors = I.showTheseFlags;
+
+if (whichSensors != 0) {
+  if ((whichSensors != I.showTheseFlags) && Sensors.countFlagged(0,0b10000011,0b10000011,0,true,false)==0) return 0; //no critical flagged sensors, don't bother checking for other flagged sensors
+
+  if ((whichSensors == I.showTheseFlags) && Sensors.countFlagged(-1000,0b10000011,0b10000011,0,true,false)==0)     return 0; //no critical flagged sensors per I.showTheseFlags
+}
+
+byte alarmsToDisplay = rows*cols;
+if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
+
 //init alarms
   for (byte k = 0;k<(MAXALARMS);k++) {
     alarms[k] = 255;
@@ -940,10 +935,10 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
 //fill up to alarmsToDisplay alarm spots, and remember where we left off. Also, fill each sensor type before moving to the next sensor type
   byte SensorIndex = I.alarmIndex;
 
-  if (whichSensors == -1) whichSensors = I.showTheseFlags;
-  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensor types are allowed if whichSensors is 0
+  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensor types and flag states are allowed if whichSensors is 0
   String sensorType[10] = {"","","","","","","","","",""};
   //populate sensorType based on whichSensors
+  //note that if bit 11 is set, we still want to add each sensor type individually, as this creates the order of sensors to display. The ending all just adds all other sensors in no particular order.
     if (bitRead(whichSensors, 3) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[0] = "leak";
     if (bitRead(whichSensors, 2) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[1] = "soil";
     if (bitRead(whichSensors, 4) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[2] = "temperature";
@@ -955,44 +950,72 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols, int32_t whichSensor
     if (bitRead(whichSensors, 10) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[8] = "distance";
     if (bitRead(whichSensors, 11) == 1) sensorType[9] = "all"; //this bit only set if whichSensors is 0
     
-  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = distance, 9 = all others (if whichSensors is not 0)
+  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = distance, 9 = all others (if whichSensors is not 0), but in no particular order
 
+  byte alarmArrayInd = 0;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
     while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       SnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
-      if (!Sensors.isSensorOfType(SensorIndex,sensorType[snstypeindex])) continue; //only check sensors of this type
+      if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type
       bool isgood = true;
         
       if (bitRead(whichSensors,11)==0) {
         //this only applies if whichSensors was not 0
         if ((bitRead(whichSensors, 0) == 1) && (bitRead(sensor->Flags, 0) == 0)) isgood = false; //not flagged, exclude
-        if ((bitRead(whichSensors, 1) == 1) && (sensor->expired) && (bitRead(sensor->Flags,1) == 1)) isgood = true; //expired and monitored, so include
+        if ((bitRead(whichSensors, 1) == 1) && (sensor->expired) && (bitRead(sensor->Flags,7) == 1)) isgood = true; //expired and critical/monitored, so include
       }
-      if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
+      if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) {
+        alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
+      }
     }      
   } 
-  
+  byte count = alarmArrayInd;   
   I.alarmIndex = SensorIndex;
 
-  if (alarmArrayInd!=0) {
+  return count;
+}
 
-    alarmArrayInd=0;
-    for (byte r=0;r<rows;r++) {
+void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { //set whichsensors to -1 to show I.showTheseFlags
+    /*
+    going to show rowsxcols flagged sensors (so up to rows*cols)
+    starting at X,Y
+  
+    returns the number of sensors to display
+  
+    note that the alarms array will be filled up to MAXALARMS sensors, but we may only be able to display rows*cols of these. In that case only fill alarms array up to rows*cols
+  */
+  
+    int16_t init_X = X;
+    if (rows==0) rows = 2;
+    if (cols==0) cols = 6;
+  
+  
+
+    
+    byte boxsize_x=50,boxsize_y=50;
+    byte gapx = 4;
+    byte gapy = 2;
+  
+    String roomname;
+  
+
+
+  byte alarmArrayInd=0;
+  for (byte r=0;r<rows;r++) {
+    if (alarms[alarmArrayInd] == 255) break;
+    for (byte c=0;c<cols;c++) {
+      //draw each alarm index in a box
       if (alarms[alarmArrayInd] == 255) break;
-      for (byte c=0;c<cols;c++) {
-        //draw each alarm index in a box
-        if (alarms[alarmArrayInd] == 255) break;
-        drawBox(alarms[alarmArrayInd++], X, Y, boxsize_x, boxsize_y);
-          
-        X=X+boxsize_x+gapx;
-      }
-      Y+=boxsize_y + gapy;
-      X=init_X;
+      drawBox(alarms[alarmArrayInd++], X, Y, boxsize_x, boxsize_y);
+        
+      X=X+boxsize_x+gapx;
     }
-
+    Y+=boxsize_y + gapy;
+    X=init_X;
   }
+
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
 }
@@ -1128,44 +1151,38 @@ void fcnDrawCurrentWeather() {
 bool forceweather = false;
 bool forceflags = false;
 
+byte alarmcount = 0;
 
 if (I.lastWeatherTime==0) forceweather=true;
 else {
-  //are we flagged?
-  if (I.isFlagged>0) {
-    //but not all flags matter - depends on which are flagged and when
-    if (Sensors.countFlagged(-1000,0b10000011,0b10000011,I.currentTime-86400,true,false)>0) {
-      //critical sensors are flagged, were we already showing flags?
-
-      if (I.lastFlagViewTime==0) forceflags=true;
-      else {
-        if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
-          if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) forceflags=true; //showed weather for at least the cycle time and flags are due)
-          else return; //not time to do anything yet
-        } else {
-          //we are showing flags, not weather
-          if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
-          else return; //not time to do anything yet
-        }
-      }       
+  //are we flagged or expired? - depends on which are flagged and when
+  if (I.isFlagged>0 || I.isExpired>0) {
+    if (I.lastFlagViewTime==0) {
+      alarmcount = fcnGetAlarms(-1,3,3);
+      if (alarmcount>0) forceflags=true;
     } else {
-      // No critical flagged sensors, show weather if flags were previously shown
-      if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
-        forceweather = true;
+      if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
+        if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) {
+          alarmcount = fcnGetAlarms(-1,3,3);
+          if (alarmcount>0) forceflags=true;
+        }          else return; //not time to do anything yet
+      } else {        //we are showing flags, not weather
+        if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
+        else return; //not time to do anything yet
       }
-    }
-  } else {
-    // No flags at all, show weather if flags were previously shown
+    }       
+  } else {       // No critical flagged sensors, show weather if flags were previously shown
     if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
       forceweather = true;
     }
   }
-}
+} 
 
 if (forceflags) {
   I.lastFlagViewTime = I.currentTime;
+  //check if alarm
   tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-  fcnDrawSensors(8,I.HEADER_Y,3,3,-1);      
+  fcnDrawSensors(8,I.HEADER_Y,3,3);      
   return;
 }
 

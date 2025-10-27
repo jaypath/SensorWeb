@@ -45,6 +45,7 @@ uint16_t convertColor565ToGrayscale(uint16_t color) ;
 // Drawing functions
 void drawBmp(const char* filename, int16_t x, int16_t y, uint16_t alpha = TRANSPARENT_COLOR);
 void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x, byte boxsize_y);
+byte fcnGetAlarms(int32_t whichSensors=-1, byte rows=0, byte cols=0);
 
 // Text drawing functions
 void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR);
@@ -59,7 +60,7 @@ void fcnDrawHeader();
 void fcnDrawClock();
 void fcnDrawCurrentWeather();
 void fcnDrawFutureWeather();
-void fcnDrawSensors(int X,int Y, uint8_t rows=0, uint8_t cols=0, int32_t whichSensors = -1);
+void fcnDrawSensors(int X,int Y, uint8_t rows=0, uint8_t cols=0);
 void fncDrawCurrentCondition();
 void fcnDrawStatus();
 void fcnDrawSensorScreen();

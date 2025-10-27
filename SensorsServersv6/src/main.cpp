@@ -438,6 +438,8 @@ void loop() {
 
         OldTime[1] = minute();
 
+        if (I.ALIVESINCE == 0) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not set, set it to the current time
+
         if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
         MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
@@ -539,13 +541,13 @@ void loop() {
         I.isCold = 0;
         I.isLeak = 0;
         I.isExpired = 0;
-        I.isFlagged = countFlagged(0, 0b10000111, 0b10000011, 0);
+        I.isFlagged = countFlagged(0, 0b10000111, 0b10000011, 0); //only count flagged sensors if they are critical (bit 7 is set) and monitored (bit 1 is set)
         I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         
-        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true); //this is where sensors are checked for expiration. Returns number of expired sensors
+        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
         
         
         handleESPNOWPeriodicBroadcast(10);
