@@ -1133,7 +1133,7 @@ else {
   //are we flagged?
   if (I.isFlagged>0) {
     //but not all flags matter - depends on which are flagged and when
-    if (Sensors.countFlagged(-1*(1000+0b00011010),0b00000011,0b00000011,I.currentTime-86400)>0) {
+    if (Sensors.countFlagged(-1000,0b10000011,0b10000011,I.currentTime-86400,true,false)>0) {
       //ok, critical sensors are flagged, were we already showing flags?
 
       if (I.lastFlagViewTime==0) forceflags=true;

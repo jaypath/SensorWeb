@@ -529,25 +529,25 @@ void loop() {
         }
         #endif
 
+        
         #ifndef _ISPERIPHERAL
-
+        checkHeat();
+        #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;
         I.isHot = 0;
         I.isCold = 0;
         I.isLeak = 0;
         I.isExpired = 0;
-        I.isFlagged = countFlagged(-1, 0b00000111, 0b00000011, 0);
-        checkHeat();
-        I.isSoilDry = countFlagged(3, 0b00000111, 0b00000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isHot = countFlagged(-2, 0b00100111, 0b00100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isCold = countFlagged(-2, 0b00100111, 0b00000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isLeak = countFlagged(70, 0b00000001, 0b00000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        I.isFlagged = countFlagged(0, 0b10000111, 0b10000011, 0);
+        I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        
         I.isExpired = checkExpiration(-1, I.currentTime, true);
-        I.isFlagged += I.isExpired;
-
-        #endif
-
+        
+        
         handleESPNOWPeriodicBroadcast(10);
         handleStoreCoreData();
         

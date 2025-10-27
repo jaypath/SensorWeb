@@ -747,32 +747,30 @@ void checkHeat() {
   I.isFan = 0;
   
   // Iterate through all devices and sensors with bounds checking
-  for (int16_t deviceIndex = 0; deviceIndex < NUMDEVICES && deviceIndex < Sensors.getNumDevices(); deviceIndex++) {
-    DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
-    if (!device || !device->IsSet) continue;
-    
-    for (int16_t sensorIndex = 0; sensorIndex < NUMSENSORS && sensorIndex < Sensors.getNumSensors(); sensorIndex++) {
-      SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
-      if (!sensor || !sensor->IsSet) continue;
-      
-      // Check HVAC sensors (types 50-59)
-      if (sensor->snsType >= 50 && sensor->snsType < 60) {
-        if (sensor->snsValue > 0) {
-          switch (sensor->snsType) {
-            case 50: // Heat
-              I.isHeat = 1;
-              break;
-            case 51: // AC
-              I.isAC = 1;
-              break;
-            case 52: // Fan
-              I.isFan = 1;
-              break;
-          }
-        }
+
+  if (Sensors.getNumDevices() == 0) return;
+  if (Sensors.getNumSensors() == 0) return;
+  int16_t snsindex = Sensors.findSnsOfType("HVAC", false, -1);
+  if (snsindex == -1) return;
+  while (snsindex != -1) {
+    SnsType* sensor = Sensors.getSensorBySnsIndex(snsindex);
+    if (!sensor || !sensor->IsSet) continue;
+    if (sensor->snsValue > 0) {
+      switch (sensor->snsType) {
+        case 50: // Heat
+          I.isHeat = 1;
+          break;
+        case 51: // AC
+          I.isAC = 1;
+          break;
+        case 52: // Fan
+          I.isFan = 1;
+          break;
       }
     }
+    snsindex = Sensors.findSnsOfType("HVAC", false, snsindex+1);
   }
+  return;
 }
 #endif
 

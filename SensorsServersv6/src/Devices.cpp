@@ -422,7 +422,7 @@ byte Devices_Sensors::checkExpiration(int16_t index, time_t currentTime, bool on
 }
 
 
-uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
+uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
     ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored and expired- alert if no updates received within time limit specified)
     //if snsType is 0, then count all sensors (meeting the flag criteria)
     //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
@@ -453,8 +453,23 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
             if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
             if (snsType <= -54 && snsType >= -57 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
             if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
-            if (snsType <-1000) {
-                //multiple types specified using flags
+            if (snsType == -1000) {
+                //use I.showTheseFlags to determine which types to count
+                bool isgood = false;
+                if (bitRead(I.showTheseFlags, 11) == 1) isgood = true;
+                if (bitRead(I.showTheseFlags, 3) == 1 && isSensorOfType(i,"leak") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 2) == 1 && isSensorOfType(i,"soil") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 4) == 1 && isSensorOfType(i,"temperature") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 5) == 1 && isSensorOfType(i,"humidity") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 6) == 1 && isSensorOfType(i,"pressure") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 8) == 1 && isSensorOfType(i,"HVAC") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 9) == 1 && isSensorOfType(i,"human") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 10) == 1 && isSensorOfType(i,"distance") == true)   isgood = true;
+                if (isgood == false) continue; //sensor does not meet the criteria
+            }
+            if (snsType  < -1000) {
+                //multiple selectable types, based on provided value
                 bool isgood = false;
                 bool isgoodupdated = false;
 
@@ -481,7 +496,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
         
         // Check flags
         uint8_t sensorFlags = sensors[i].Flags & flagsthatmatter;
-        if (sensorFlags == flagsettings) {
+        if (sensorFlags == flagsettings || (countCriticalExpired && bitRead(sensors[i].Flags,7) && sensors[i].expired) || (countAnyExpired && sensors[i].expired)) {
             count++;
         }
     }
@@ -532,12 +547,40 @@ uint8_t Devices_Sensors::findSensorByName(String snsname, uint8_t snsType, uint8
     return 255;
 }
 
+
+int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t startIndex) {
+    if (startIndex == -1) startIndex = 0;
+    int16_t targetIndex = -1;
+    uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
+    
+    for (int16_t i = startIndex; i < NUMSENSORS ; i++) {
+        if (!sensors[i].IsSet) continue;
+        if (isSensorOfType(i, snstype) == false) continue;
+        
+        if (newest) {
+            if (sensors[i].timeLogged > targetTime) {
+                targetTime = sensors[i].timeLogged;
+                targetIndex = i;
+            }
+        } else {
+            if (sensors[i].timeLogged < targetTime) {
+                targetTime = sensors[i].timeLogged;
+                targetIndex = i;
+            }
+        }
+    }
+    
+    return targetIndex;
+}
+
+
+
 int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest, int16_t startIndex) {
     if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
     
-    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+    for (int16_t i = startIndex; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
         if (sensors[i].snsType != snstype) continue;
         
@@ -779,7 +822,7 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
         return (snsType == 60 || snsType == 61);
     }
     if (type == "HVAC") {//HVAC
-        return (snsType == 55 || snsType == 56 || snsType == 57);
+        return (snsType >= 50 && snsType < 60);
     }
     if (type == "soil") {//soil
         return (snsType == 3 || snsType == 33);

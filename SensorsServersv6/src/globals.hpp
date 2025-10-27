@@ -262,12 +262,11 @@ typedef enum {
       uint8_t wasHeat=false; //first bit is heat on, bits 1-6 are zones
       uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
       uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
-  
+      #endif
       uint8_t isHot;
       uint8_t isCold;
       uint8_t isSoilDry;
       uint8_t isLeak;
-      #endif
 
       uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
       

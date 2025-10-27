@@ -26,7 +26,7 @@ uint8_t HVACSNSNUM = 0;
 
 
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and must be monititored (including if a reading is delayed, so I must provide sendingInt)
 
 
 #ifdef _USEBME680
@@ -185,7 +185,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
 
     //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
     SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(sensortypes[i], snsID, MY_DEVICE_INDEX); //Sensors.countSensors(stype) returns a 1-based index, so no need to subtract 1      
-    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname+String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
+    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index
 
     switch (sensortypes[i]) {
@@ -249,14 +249,18 @@ int8_t readAllSensors(bool forceRead) {
       if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
       String sensorString = (String) sensor->snsType + (String) "." + (String) sensor->snsID;
       int8_t readResult = ReadData(sensor, forceRead);
-      
-      if (readResult == -1) {
+      //readresult = 0 means not time to read, not an error
+
+      if (readResult == -10) {
+        SerialPrint((String) "Invalid sensor reading for " + sensorString, true);
+        storeError((String) "Invalid sensor reading for " + sensorString, ERROR_SENSOR_READ, true);
+      } else if (readResult == -1) {
           SerialPrint((String) "Could not find index to prefs or history for " + sensorString, true);
           storeError((String) "Could not find index to prefs or history for " + sensorString, ERROR_SENSOR_READ, true);
       } else if (readResult == -2) {
           SerialPrint((String) "Could not register" + sensorString + " as a device.", true);
           storeError((String) "Could not register" + sensorString + " as a device.", ERROR_DEVICE_ADD, true);
-      } else {
+      } else if (readResult >0) { //success
         numGood++;
         #ifdef _USELED
           if (sensor->snsType == 3 || sensor->snsType == 33)           LEDs.LED_set_color_soil(sensor);
