@@ -18,6 +18,13 @@ extern int16_t MY_DEVICE_INDEX;
 
 
 //setup functions
+void initI2C() {
+  #ifdef _USEI2C
+  Wire.begin();
+  Wire.setClock(400000L);
+  SerialPrint("Wire initialized",true);
+  #endif
+}
 
 void initSystem() {
 
@@ -25,10 +32,6 @@ void initSystem() {
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
   #endif
 
-  #ifdef _USEI2C
-  Wire.begin();
-  Wire.setClock(400000L);
-  #endif
   
 
   #ifdef _USETFT
@@ -55,9 +58,15 @@ void initSystem() {
   } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
 
 
-
 }
 
+bool isI2CDeviceReady(byte address) {
+  #ifdef _USEI2C
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+  #endif
+  return false;
+}
 
 int8_t initSDCard() {
   //returns 1 if successful, 0 if not successful, -1 if not supported

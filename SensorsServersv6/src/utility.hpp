@@ -15,12 +15,15 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
  
 
 //setup functions
+void initI2C();
 void initSystem();
+bool isI2CDeviceReady(byte address);
 int8_t initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
 void initGsheetHandler();
 void handleESPNOWPeriodicBroadcast(uint8_t interval);
+
 
 #ifdef _ISPERIPHERAL
 bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder);

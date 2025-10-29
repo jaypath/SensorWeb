@@ -528,6 +528,15 @@ uint8_t Devices_Sensors::findSensorByName(String snsname, uint8_t snsType, uint8
 
 
 int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t startIndex) {
+    //find a sensor based on text type name
+    //if snstype is "temperature", then find a temperature sensor
+    //if snstype is "humidity", then find a humidity sensor
+    //if snstype is "soil", then find a soil sensor
+    //if snstype is "pressure", then find a pressure sensor
+    //if snstype is "HVAC", then find a HVAC sensor
+    //if snstype is "server", then find a server sensor
+    //if snstype is "dist", then find a distance sensor
+    //if snstype is "binary", then find a binary sensor
     if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;

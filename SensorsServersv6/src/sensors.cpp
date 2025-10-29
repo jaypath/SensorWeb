@@ -7,9 +7,6 @@
 
 */
 
-#ifdef _USETFLUNA
-extern MD_Parola MAXscreen;
-#endif
 
 extern Devices_Sensors Sensors;
 #ifdef _ISPERIPHERAL
@@ -215,13 +212,9 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   }
 
   #ifdef _USETFLUNA
-  MAXscreen.begin();
-  MAXscreen.setIntensity(10);
-  MAXscreen.displayClear();
-  MAXscreen.setTextAlignment(PA_CENTER);       
-  MAXscreen.setInvert(false);
-  MAXscreen.printf("INIT",LocalTF.MSG);
-  LocalTF.TFLUNASNS = Sensors.findSnsOfType(7,true);
+  Matrix_Init();
+  LocalTF.TFLUNASNS = Sensors.findSensor(MY_DEVICE_INDEX,7,1);
+  LocalTF.LAST_DRAW = Matrix_Draw(false, "INIT");
   #endif
 
 
@@ -282,7 +275,7 @@ int8_t readAllSensors(bool forceRead) {
         #endif
       }
                       
-      delay(50);
+      delay(20);
     }
   }
   return numGood;
@@ -301,7 +294,7 @@ int8_t sendAllSensors(bool forceSend) {
         SerialPrint((String) "Could not send data for " + sensorString, true);
         storeError((String) "Could not send data for " + sensorString, ERROR_SENSOR_SEND, true);
       } else numGood++;
-      delay(100); //the delays between reads and sends are to prevent the ESP from overloading
+      delay(20); //the delays between reads and sends are to prevent the ESP from overloading
     }
   }
   return numGood;
@@ -1104,10 +1097,48 @@ void initHardwareSensors() {
     #endif
     dht.begin();
   #endif
+  #ifdef _USEBARPRED
+    for (byte ii = 0; ii < 24; ii++) {
+      BAR_HX[ii] = -1;
+    }
+    LAST_BAR_READ = 0;
+  #endif
+  
+  // Initialize AHT sensor
+  #if defined(_USEAHT) || defined(_USEAHTADA)
+    byte AHTretry = 0;
+    while (!isI2CDeviceReady(AHTXX_ADDRESS_X38) && AHTretry < 100) {
+      SerialPrint("AHT not ready or connected. Retry number " + String(AHTretry),true);
+      delay(100);
+      AHTretry++;
+    }
+    AHTretry = 0;
+
+    while (aht.begin() != true && AHTretry < 10) {
+      
+      SerialPrint("AHT not connected. Retry number " + String(AHTretry),true);
+
+      #ifdef _USESSD1306  
+        oled.clear();
+        oled.setCursor(0,0);  
+        oled.printf("No aht x%d!", AHTretry);          
+      #endif
+      delay(250);
+      AHTretry++;
+    }
+    if (AHTretry >= 10) SerialPrint("AHT failed to connect after 10 attempts",true);
+    else SerialPrint("AHT connected after " + String(AHTretry) + " attempts",true);
+  #endif
 
   #ifdef _USEBMP
-    
     byte BMPretry = 0;
+    while (!isI2CDeviceReady(_USEBMP) && BMPretry < 50) {
+      SerialPrint("BMP not ready or connected. Retry number " + String(BMPretry),true);
+      delay(100);
+      BMPretry++;
+    }
+    BMPretry = 0;
+
     byte trybmp = _USEBMP;
     if (trybmp == 0) trybmp = 0x76;
     else if (trybmp == 1) trybmp = 0x77;
@@ -1126,9 +1157,11 @@ void initHardwareSensors() {
         else trybmp = 0x76;
       }
 
-      delay(250);
+      delay(100);
       BMPretry++;
     }
+    if (BMPretry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
+    else SerialPrint("BMP connected after " + String(BMPretry) + " attempts",true);
 
     /* Default settings from datasheet. */
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
@@ -1166,29 +1199,6 @@ void initHardwareSensors() {
   #endif
 
   // Initialize barometric prediction globals
-  #ifdef _USEBARPRED
-    for (byte ii = 0; ii < 24; ii++) {
-      BAR_HX[ii] = -1;
-    }
-    LAST_BAR_READ = 0;
-  #endif
-  
-  // Initialize AHT sensor
-  #if defined(_USEAHT) || defined(_USEAHTADA)
-    byte AHTretry = 0;
-    while (aht.begin() != true && AHTretry < 10) {
-      
-      SerialPrint("AHT not connected. Retry number " + String(AHTretry),true);
-
-      #ifdef _USESSD1306  
-        oled.clear();
-        oled.setCursor(0,0);  
-        oled.printf("No aht x%d!", AHTretry);          
-      #endif
-      delay(250);
-      AHTretry++;
-    }
-  #endif
 
   // Call sensor-specific setup
   setupSensors();

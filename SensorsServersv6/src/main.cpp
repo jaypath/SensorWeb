@@ -186,6 +186,8 @@ void setup() {
     SerialPrint("SerialPrint started",true);
     #endif
 
+    initI2C(); //initialize the I2C bus
+
     WEBHTML.reserve(20000);
 
     initSystem(); //among other things, loads the Prefs struct
@@ -408,8 +410,11 @@ void loop() {
     #endif
 
     #ifdef _USETFLUNA
-    snprintf(LocalTF.MSG,19,"%s",dateify(I.currentTime,"hh:nn"));
-    updateTFLunaDisplay(LocalTF.MSG);
+//    do nothing else until TFLuna is updated
+    bool updating = true;
+    while (updating) {
+        updating = TFLunaUpdateMAX();
+    }
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -620,7 +625,7 @@ void loop() {
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
-
+Serial.println("Second changed");
         //if time is invalid, completely reset the time
         if (isTimeValid(I.currentTime)==false) {
             SerialPrint("Time is invalid, completely resetting time",true);
