@@ -788,7 +788,7 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
 
     uint16_t sendint = sensors[index].SendingInt;
     if (sendint==0) return -10;
-    uint32_t expirationTime = sensors[index].timeLogged + sendint + 120; // 2 minute buffer
+    uint32_t expirationTime = sensors[index].timeLogged + sendint *2; // 2x sending interval buffer allows for missing one reading
 
     if (currentTime > expirationTime) {
         sensors[index].expired = true;

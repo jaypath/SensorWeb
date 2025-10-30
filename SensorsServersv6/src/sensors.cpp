@@ -188,6 +188,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
     SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index
+    SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
 
     switch (sensortypes[i]) {
       
@@ -892,6 +893,9 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
 
   checkSensorValFlag(P); //sets isFlagged
   P->timeRead = I.currentTime; //localtime
+
+  //add to sensor history
+  SensorHistory.recordSentValue(P, prefs_index);
 
   #ifdef _WEBCHART
     for (byte k=0;k<_WEBCHART;k++) {

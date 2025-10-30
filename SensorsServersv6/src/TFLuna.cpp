@@ -77,24 +77,25 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
     WiFi.disconnect(true); //disconnect from wifi to avoid distractions
     do {  
-      LocalTF.LAST_DISTANCE = actualdistance;
-      LocalTF.LAST_DISTANCE_TIME = m;
-      if (P->snsValue<-3000) {
+      if (abs(actualdistance - LocalTF.LAST_DISTANCE) > 1) {
+        LocalTF.LAST_DISTANCE = actualdistance;
+        LocalTF.LAST_DISTANCE_TIME = m;
+      }
+      if (P->snsValue<-1000) {
         snprintf(LocalTF.MSG,19,"OPEN");
         LocalTF.ALLOWINVERT=true;
         LocalTF.SCREENRATE=250;
       } else {
-    
-
-        //is the distance unreadable (which means no car/garage door open)
         if (actualdistance<0) {
-          snprintf(LocalTF.MSG,19,"SLOW");
+          snprintf(LocalTF.MSG,19,"STOP!");
+          LocalTF.ALLOWINVERT=true;
+          LocalTF.SCREENRATE=100;
           //but do not blink
         } else {
 
           if (actualdistance<criticalDistance) {
-            LocalTF.SCREENRATE=200;
-            snprintf(LocalTF.MSG,19,"STOP!");
+            LocalTF.SCREENRATE=250;
+            snprintf(LocalTF.MSG,19,"STOP");
             LocalTF.ALLOWINVERT=true;
           } else if (actualdistance<shortrangeDistance) {
             LocalTF.SCREENRATE=250;
@@ -112,7 +113,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
               LocalTF.SCREENRATE=250;
             } else {
               LocalTF.ALLOWINVERT=false;
-              LocalTF.SCREENRATE=500;
+              LocalTF.SCREENRATE=250;
             }
           }
         }
@@ -120,11 +121,11 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
       if (DrawNow()) {
         m=checkTFLuna(-1);
         actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
-        distance_change = actualdistance - LocalTF.LAST_DISTANCE;  
+        distance_change = abs(actualdistance - LocalTF.LAST_DISTANCE);  
       } else {
         m=millis();
       }
-    } while((distance_change)> 1 && m-LocalTF.LAST_DISTANCE_TIME >LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
+    } while((distance_change)> 1 || m-LocalTF.LAST_DISTANCE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
     WiFi.begin(); //reconnect to wifi          
   } else {
     //if it's been long enough, change to clock and redraw

@@ -280,14 +280,14 @@ double readMUX(int16_t pin, byte nsamps);
   struct STRUCT_SNSHISTORY {
     int16_t sensorIndex[_SENSORNUM]; //index to the sensor array
     uint32_t PrefsSensorIDs[_SENSORNUM]; //Prefs based sensor ID, which is devID<<16 + snsType<<8 + snsID
-    uint8_t HistoryIndex[_SENSORNUM]; //point in array that we are at for each sensor's history
+    uint8_t HistoryIndex[_SENSORNUM] = {0}; //point in array that we are at for each sensor's history
     uint8_t PrefsIndex[_SENSORNUM]; //index to the Prefs array for the sensor
     uint32_t TimeStamps[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     double Values[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     uint8_t Flags[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
 
     bool recordSentValue(SnsType *S, int16_t hIndex) {
-      if (hIndex < 0 || hIndex >= _SENSORNUM) return false;
+      if (hIndex < 0 || hIndex >= _SENSORNUM || isTimeValid(S->timeRead) == false) return false;
       HistoryIndex[hIndex]++;
       if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
       TimeStamps[hIndex][HistoryIndex[hIndex]] = S->timeRead;

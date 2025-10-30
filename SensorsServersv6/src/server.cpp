@@ -5176,7 +5176,8 @@ void setupServerRoutes() {
 bool SendData(struct SnsType *S, bool forceSend, int16_t sendToDeviceIndex) {
   //forcesend will always send. If sentodeviceindex is >=0, it will send to the device at that index.
   if (!forceSend) {
-    if (bitRead(S->Flags,1) == 0) return false; //not monitored
+    //should we send unmonitored sensors? Uncomment this to skip sending unmonitored sensors. The advantage of sending is that the server will have all sensor data, but these take up space.
+    //if (bitRead(S->Flags,1) == 0) return false; //not monitored
     if (S->timeLogged !=0 && S->timeLogged < I.currentTime && I.currentTime - S->timeLogged < 60*60*24 && bitRead(S->Flags,6) == 0 /* isflagged changed since last read*/) {
       if (sendToDeviceIndex < 0) {
        if (S->timeLogged + S->SendingInt > I.currentTime) return false; //not time

@@ -544,7 +544,7 @@ void loop() {
         I.isCold = 0;
         I.isLeak = 0;
         I.isExpired = 0;
-        I.isFlagged = countFlagged(0, 0b10000111, 0b10000011, 0); //only count flagged sensors if they are critical (bit 7 is set) and monitored (bit 1 is set)
+        I.isFlagged = countFlagged(0, 0b00000111, 0b00000011, 0); //only count flagged sensors if they are monitored (bit 1 is set)
         I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
