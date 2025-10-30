@@ -411,10 +411,7 @@ void loop() {
 
     #ifdef _USETFLUNA
 //    do nothing else until TFLuna is updated
-    bool updating = true;
-    while (updating) {
-        updating = TFLunaUpdateMAX();
-    }
+        TFLunaUpdateMAX();
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {
