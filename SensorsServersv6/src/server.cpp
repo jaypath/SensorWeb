@@ -8,7 +8,6 @@
 #endif
 #ifdef _USELEDMATRIX
 #include "LEDMatrix.hpp"
-extern LEDMatrix myDisplay;
 #endif
 
 #include "BootSecure.hpp"
@@ -232,7 +231,7 @@ void APStation_Mode() {
   SerialPrint("Init AP Station Mode... Please wait... ",false);
 
   #ifdef _USELEDMATRIX
-  Matrix_init();
+  Matrix_Init();
   Matrix_Draw(false, "WiFi?");
 
   #endif
