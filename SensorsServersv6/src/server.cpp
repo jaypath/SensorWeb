@@ -6,6 +6,11 @@
   #include "graphics.hpp"
   extern LGFX tft;
 #endif
+#ifdef _USELEDMATRIX
+#include "LEDMatrix.hpp"
+extern LEDMatrix myDisplay;
+#endif
+
 #include "BootSecure.hpp"
 
 extern int16_t MY_DEVICE_INDEX;
@@ -226,6 +231,11 @@ void APStation_Mode() {
 
   SerialPrint("Init AP Station Mode... Please wait... ",false);
 
+  #ifdef _USELEDMATRIX
+  Matrix_init();
+  Matrix_Draw(false, "WiFi?");
+
+  #endif
   // Add delay to ensure system is ready
   delay(500);
   
