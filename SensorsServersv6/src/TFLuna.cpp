@@ -10,8 +10,7 @@
  extern int16_t MY_DEVICE_INDEX;
 
 
-void checkTFLuna(int16_t snsindex) {
-  uint32_t m = millis();
+uint32_t checkTFLuna(int16_t snsindex) {
   if (snsindex != -1)     LocalTF.TFLUNASNS = snsindex;
   
   if (LocalTF.TFLUNASNS == -1)     LocalTF.TFLUNASNS = Sensors.findSensor(MY_DEVICE_INDEX,7,1);
@@ -22,44 +21,36 @@ void checkTFLuna(int16_t snsindex) {
     SerialPrint("CheckTFLuna: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
     LocalTF.TFLUNASNS = -1;
     snprintf(LocalTF.MSG,19,"No TF");
-    LocalTF.LAST_DRAW = DrawNow(m);
-    return;
+    LocalTF.LAST_DRAW = DrawNow();
+    return 0;
   }
 
-  int16_t prefs_index = Sensors.getPrefsIndex(P);
-  if (prefs_index == -1) {
-    SerialPrint("CheckTFLuna: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
-    LocalTF.TFLUNASNS = -1;
-    snprintf(LocalTF.MSG,19,"No TF");
-    LocalTF.LAST_DRAW = DrawNow(m);
-    return;
-  }
 
   int16_t tempval;
   if (tflI2C.getData(tempval, _USETFLUNA)) {
-    if (tempval <= 0)           P->snsValue = -3000;
+    if (tempval <= 0)           P->snsValue = -3000; //negative reading, but not failed
     else           P->snsValue = tempval ; //in actual cm, apply offsets later
   } else {
     P->snsValue = -5000; //failed
   }
 
+
+  return millis();
 }
 
-bool TFLunaUpdateMAX() {
+void TFLunaUpdateMAX() {
   uint32_t m = millis();
-  bool updating = false;
 //check tfluna distance if it is time
-if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_RATE) {
-  LocalTF.LAST_DISTANCE_TIME = m;
+if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
-  checkTFLuna(-1);
+  m = checkTFLuna(-1);
   SnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
   if (P == NULL || !P->IsSet) {
     SerialPrint("TFLunaUpdateMAX: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
     LocalTF.TFLUNASNS = -1;
     snprintf(LocalTF.MSG,19,"No TF");
     LocalTF.LAST_DRAW = DrawNow(m);
-    return false;
+    return;
   }
 
   int16_t prefs_index = Sensors.getPrefsIndex(P);
@@ -67,96 +58,103 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_RATE) {
     SerialPrint("TFLunaUpdateMAX: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
     LocalTF.TFLUNASNS = -1;
     snprintf(LocalTF.MSG,19,"No TF");
-    LocalTF.LAST_DRAW = DrawNow(m);
-    return false;
+    LocalTF.LAST_DRAW = DrawNow();
+    return;
   }
 
-  int16_t actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
+
+  double actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
+  double distance_change = abs(actualdistance - LocalTF.LAST_DISTANCE);
 
   //has dist changed by more than a real amount? If yes then allow high speed screen draws
-  if ((int32_t) abs((int32_t)LocalTF.LAST_DISTANCE-actualdistance)> 1) {
-    WiFi.disconnect(true); //disconnect from wifi to avoid distractions
-    LocalTF.ALLOWINVERT=false;
-    updating = true;
-    LocalTF.LAST_DISTANCE = actualdistance;
+  if ((distance_change)> 1) {
     LocalTF.CLOCKMODE = false; //leave clockmode
-  
-    if (P->snsValue<=-3000) {
-      snprintf(LocalTF.MSG,19,"SLOW");
-      LocalTF.ALLOWINVERT=true;
-      LocalTF.SCREENRATE=333;
-    } else {
-      int16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index];
-      int16_t criticalDistance = goldilockszone * _TFLUNA_CRITICAL + Prefs.SNS_LIMIT_MIN[prefs_index];
-      int16_t shortrangeDistance = goldilockszone * _TFLUNA_SHORTRANGE + Prefs.SNS_LIMIT_MIN[prefs_index];
-  
-      LocalTF.SCREENRATE=250;
-      LocalTF.CLOCKMODE = false; //leave clockmode
+    LocalTF.ALLOWINVERT=false;
+    uint16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index];
+    uint16_t criticalDistance = goldilockszone * _TFLUNA_CRITICAL + Prefs.SNS_LIMIT_MIN[prefs_index];
+    uint16_t shortrangeDistance = goldilockszone * _TFLUNA_SHORTRANGE + Prefs.SNS_LIMIT_MIN[prefs_index];
+    LocalTF.SCREENRATE=250;
 
-      //is the distance unreadable (which means no car/garage door open)
-      if (actualdistance<-900) {
-        snprintf(LocalTF.MSG,19,"SLOW");
-        //but do not blink
+    WiFi.disconnect(true); //disconnect from wifi to avoid distractions
+    do {  
+      LocalTF.LAST_DISTANCE = actualdistance;
+      LocalTF.LAST_DISTANCE_TIME = m;
+      if (P->snsValue<-3000) {
+        snprintf(LocalTF.MSG,19,"OPEN");
+        LocalTF.ALLOWINVERT=true;
+        LocalTF.SCREENRATE=250;
       } else {
-        //is the distance beyond 2 ft (24 in or 61 cm)
-        
+    
 
-        if (actualdistance<criticalDistance) {
-          LocalTF.SCREENRATE=200;
-          snprintf(LocalTF.MSG,19,"STOP!");
-          LocalTF.ALLOWINVERT=true;
-        } else if (actualdistance<shortrangeDistance) {
-          LocalTF.SCREENRATE=333;
-          snprintf(LocalTF.MSG,19,"GOOD");
-          LocalTF.ALLOWINVERT=true;
+        //is the distance unreadable (which means no car/garage door open)
+        if (actualdistance<0) {
+          snprintf(LocalTF.MSG,19,"SLOW");
+          //but do not blink
         } else {
-          if (actualdistance>61) {
-            snprintf(LocalTF.MSG,19,"%.1f ft", (float) actualdistance/2.54/12);        
-          }      else {
-            snprintf(LocalTF.MSG,19,"%f in", (float) actualdistance/2.54);        
-          }
 
-          if (actualdistance<goldilockszone) {
+          if (actualdistance<criticalDistance) {
+            LocalTF.SCREENRATE=200;
+            snprintf(LocalTF.MSG,19,"STOP!");
             LocalTF.ALLOWINVERT=true;
-            LocalTF.SCREENRATE=333;
+          } else if (actualdistance<shortrangeDistance) {
+            LocalTF.SCREENRATE=250;
+            snprintf(LocalTF.MSG,19,"GOOD");
+            LocalTF.ALLOWINVERT=true;
           } else {
-            LocalTF.ALLOWINVERT=false;
-            LocalTF.SCREENRATE=500;
+            if (actualdistance>61) {
+              snprintf(LocalTF.MSG,19,"%.1f ft", (float) actualdistance/2.54/12);        
+            }      else {
+              snprintf(LocalTF.MSG,19,"%f in", (float) actualdistance/2.54);        
+            }
+
+            if (actualdistance<goldilockszone) {
+              LocalTF.ALLOWINVERT=true;
+              LocalTF.SCREENRATE=250;
+            } else {
+              LocalTF.ALLOWINVERT=false;
+              LocalTF.SCREENRATE=500;
+            }
           }
         }
       }
-    }
+      if (DrawNow()) {
+        m=checkTFLuna(-1);
+        actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
+        distance_change = actualdistance - LocalTF.LAST_DISTANCE;  
+      } else {
+        m=millis();
+      }
+    } while((distance_change)> 1 && m-LocalTF.LAST_DISTANCE_TIME >LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
+    WiFi.begin(); //reconnect to wifi          
   } else {
     //if it's been long enough, change to clock and redraw
     if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
-      updating = false;
-      WiFi.begin(); //reconnect to wifi          
       snprintf(LocalTF.MSG,19,"%s",dateify(I.currentTime,"hh:nn"));      
       LocalTF.ALLOWINVERT=false;
       LocalTF.SCREENRATE=30000;
       LocalTF.CLOCKMODE = true;
+      DrawNow(m);
     } 
   }
 
-  DrawNow(m);
 }
 
-return updating;
+return;
 }
 
 
 
-uint32_t DrawNow(uint32_t m) {
+bool DrawNow(uint32_t m) {
+  if (m==0)   m = millis();
 
-
-  if (m-LocalTF.LAST_DRAW < LocalTF.SCREENRATE) return LocalTF.LAST_DRAW;
+  if (m-LocalTF.LAST_DRAW < LocalTF.SCREENRATE) return false;
 
   //should we flip the inversion?
   if (LocalTF.ALLOWINVERT) LocalTF.INVERTED = !LocalTF.INVERTED;      
   else       LocalTF.INVERTED = false;    
 
   LocalTF.LAST_DRAW = Matrix_Draw(LocalTF.INVERTED, (const char*) LocalTF.MSG);  
-  return LocalTF.LAST_DRAW;
+  return true;
 }
 
     
