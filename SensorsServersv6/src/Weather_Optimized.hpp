@@ -140,6 +140,8 @@ public:
 
     time_t breakNOAATimestamp(String tm);
     int16_t breakIconLink(String icon, uint32_t starttime, uint32_t endtime);
+    bool nameWeatherIcon(uint16_t icon, char* weathername);
+    String nameWeatherIcon(uint16_t icon);
     bool updateWeather(uint16_t synctime = 3600);
     bool initWeather();
     

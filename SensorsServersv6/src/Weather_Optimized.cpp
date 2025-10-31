@@ -726,6 +726,39 @@ int16_t WeatherInfoOptimized::breakIconLink(String icon, uint32_t starttime, uin
     return 999;
 }
 
+String WeatherInfoOptimized::nameWeatherIcon(uint16_t icon) {
+    char weathername[50];
+    if (nameWeatherIcon(icon, weathername)) return String(weathername);
+    return String();
+}
+
+bool WeatherInfoOptimized::nameWeatherIcon(uint16_t icon, char* weathername) {
+    switch (icon) {
+        case 200: strcpy(weathername, "Thunderstorm"); return true;
+        case 201: strcpy(weathername, "Heavy Thunderstorm"); return true;
+        case 301: strcpy(weathername, "Drizzle"); return true;
+        case 500: strcpy(weathername, "Light Rain"); return true;
+        case 501: strcpy(weathername, "Moderate Rain"); return true;
+        case 502: strcpy(weathername, "Heavy Rain"); return true;
+        case 503: strcpy(weathername, "Storm"); return true;
+        case 504: strcpy(weathername, "Hurricane"); return true;
+        case 600: strcpy(weathername, "Light Snow"); return true;
+        case 601: strcpy(weathername, "Moderate Snow"); return true;
+        case 602: strcpy(weathername, "Heavy Snow"); return true;
+        case 603: strcpy(weathername, "Blizzard"); return true;
+        case 611: strcpy(weathername, "Freezing Rain"); return true;
+        case 701: strcpy(weathername, "Cold"); return true;
+        case 741: strcpy(weathername, "Fog"); return true;
+        case 761: strcpy(weathername, "Dust"); return true;
+        case 800: strcpy(weathername, "Clear"); return true;
+        case 801: strcpy(weathername, "Partly Cloudy"); return true;
+        case 802: strcpy(weathername, "Cloudy"); return true;
+        case 803: strcpy(weathername, "Mostly Cloudy"); return true;
+        case 804: strcpy(weathername, "Overcast"); return true;
+    }
+    return false;
+}
+
 bool WeatherInfoOptimized::initWeather() {
     for (uint16_t i=0;i<NUMWTHRDAYS*24;i++) {
         this->dT[i] = 0;
