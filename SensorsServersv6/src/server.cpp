@@ -2079,7 +2079,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
   WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h1>Pleasant Weather Server</h1>";
+  WEBHTML = WEBHTML + "<h1>" + (String) Prefs.DEVICENAME + "</h1>";
   WEBHTML = WEBHTML + "<br>";
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
 
@@ -2112,7 +2112,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
 
     for (byte jj = 0;jj<N;jj++) {
       if (isTimeValid(t[jj])==false) continue;
-      WEBHTML += "[" + (String) t[jj] + "," + (String) v[jj] + "]";
+      WEBHTML += "[" + (String) (int64_t) (((int64_t) t[jj] - (int64_t) t[N-1])/60) + "," + (String) v[jj] + "]";
       if (jj<N-1) WEBHTML += ",";
       WEBHTML += "\n";
     }
@@ -2121,7 +2121,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
         // Set Options
     WEBHTML += "const options = {\n";
     if (sensor) {
-      WEBHTML += "hAxis: {title: 'Historical data for " + (String) sensor->snsName + " in hours'}, \n";
+      WEBHTML += "hAxis: {title: 'Historical data for " + (String) sensor->snsName + ", minutes from last'}, \n";
     } else {
       WEBHTML += "hAxis: {title: 'Historical data in hours'}, \n";
     }

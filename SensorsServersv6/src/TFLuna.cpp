@@ -65,6 +65,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
   double actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
   double distance_change = abs(actualdistance - LocalTF.LAST_DISTANCE);
+  LocalTF.CLOCKMODE = true;     //start in clockmode
 
   //has dist changed by more than a real amount? If yes then allow high speed screen draws
   if ((distance_change)> 1) {
@@ -126,7 +127,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
         m=millis();
       }
     } while((distance_change)> 1 || m-LocalTF.LAST_DISTANCE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
-    WiFi.begin(); //reconnect to wifi          
+    WiFi.begin(); //reconnect to wifi     
   } else {
     //if it's been long enough, change to clock and redraw
     if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
