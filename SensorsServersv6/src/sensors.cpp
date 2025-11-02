@@ -879,6 +879,13 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
       //I'm set manually!
       break;
       }
+
+    case 98:
+    {
+      //I am a clock sensor, return the current time in unix format
+      P->snsValue = I.currentTime;
+      break;
+    }
     
   }
 

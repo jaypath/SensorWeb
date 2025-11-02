@@ -68,7 +68,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
   LocalTF.CLOCKMODE = true;     //start in clockmode
 
   //has dist changed by more than a real amount? If yes then allow high speed screen draws
-  if ((distance_change)> 1) {
+  if ((distance_change)> 2) {
     LocalTF.CLOCKMODE = false; //leave clockmode
     LocalTF.ALLOWINVERT=false;
     uint16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index];
@@ -78,7 +78,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
     WiFi.disconnect(true); //disconnect from wifi to avoid distractions
     do {  
-      if (abs(actualdistance - LocalTF.LAST_DISTANCE) > 1) {
+      if (abs(actualdistance - LocalTF.LAST_DISTANCE) > 2) {
         LocalTF.LAST_DISTANCE = actualdistance;
         LocalTF.LAST_DISTANCE_TIME = m;
       }
@@ -126,7 +126,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
       } else {
         m=millis();
       }
-    } while((distance_change)> 1 || m-LocalTF.LAST_DISTANCE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
+    } while((distance_change)> 2 || m-LocalTF.LAST_DISTANCE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
     WiFi.begin(); //reconnect to wifi     
   } else {
     //if it's been long enough, change to clock and redraw

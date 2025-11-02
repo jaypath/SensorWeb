@@ -11,7 +11,7 @@
   extern TFLI2C tflI2C;
   extern uint8_t tfAddr; // Default I2C address for Tfluna
   struct TFLunaType {
-    uint16_t REFRESH_INTERVAL = 20; //ms between refreshes. I believe TFluna in i2c is max 100hz, so lowest is 10
+    uint16_t REFRESH_INTERVAL = 15; //ms between refreshes. I believe TFluna in i2c is max 100hz, so lowest is 10
     //removed - now using prefs values -- int8_t BASEOFFSET=_TFLUNA_BASEOFFSET; //the "zero point" from the mounting location of the TFLUNA to where zero is (because TFLUNA may be mounted recessed, or the zero location is in front of the tfluna), in cm
     uint8_t ZONE_SHORTRANGE = _TFLUNA_SHORTRANGE; //cm from BASEOFFSET that is considered short range (show measures in inches now)
     uint8_t ZONE_CRITICAL = _TFLUNA_CRITICAL; //cm from BASEOFFSET at which you are too close
