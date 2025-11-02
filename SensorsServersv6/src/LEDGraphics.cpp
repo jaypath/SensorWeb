@@ -9,7 +9,7 @@
   #define PI 3.14159265
 #endif
 
-CRGB LEDARRAY[LEDCOUNT];
+CRGB LEDARRAY[_USELED_SIZE];
 
 void Animation_type::LED_update(void) {
   uint32_t m = millis();
@@ -21,7 +21,7 @@ void Animation_type::LED_update(void) {
   double L1,T1;
   int8_t DIR = 0;
 
-  for (byte j=0;j<LEDCOUNT;j++) {
+  for (byte j=0;j<_USELED_SIZE;j++) {
 
     if (this->animation_style==1) {
       DIR=-1;
@@ -45,8 +45,14 @@ void Animation_type::LED_update(void) {
     }
     if (this->animation_style==5) {
       DIR=0;
-      L1=LEDCOUNT*300; //use L1 for limit of random chance
+      L1=_USELED_SIZE*300; //use L1 for limit of random chance
       T1=750; //use T1 for standard deviaiton of guassian, msec          
+    }
+    if (this->animation_style==6) {
+      DIR=0;
+      if (j>=this->sin_L && this->sin_T) {
+        L1=1; //use L1 to show or not 
+      } else L1=2;      //2 will be off, 1 will be on
     }
 
 
@@ -73,8 +79,12 @@ uint32_t Animation_type::LED_setLED(byte j, double L1, double T1, int8_t DIR, ui
     this->LED_BASE[0] = temp;
     return temp;
   }
-
-  if (this->animation_style==5) {
+  else if (this->animation_style==6) {
+    //we don't use LED_BASE for this animation style
+    if (L1==1) return LED_choose_color(this->MaxBrightness); //use L1 to show or not 
+    else  return 0;
+  }
+  else if (this->animation_style==5) {
     //guassian shimmering... LED_TIMING holds the times of the peak display
     if (this->LED_TIMING[j]==0) {
       //this LED position has completed a cycle. Reset the next peak time and choose a new color
@@ -99,7 +109,7 @@ uint32_t Animation_type::LED_setLED(byte j, double L1, double T1, int8_t DIR, ui
   brightness = (uint8_t) ((double) (this->MaxBrightness-this->MinBrightness) * (cos((double) 2*PI*(j*L1 +(DIR)* m*T1)) + 1)/2 + this->MinBrightness);
   if (brightness == this->MinBrightness) this->LED_BASE[0] = LED_choose_color(this->MaxBrightness); //completed a cycle of the cosine wave, choose new color. Only the first element needs to change.
 
-  temp =  LED_scale_brightness(this->LED_BASE[0],brightness); //only need the first value of LED_VASE, all the colors are the same
+  temp =  LED_scale_brightness(this->LED_BASE[0],brightness); //only need the first value of LED_BASE, all the colors are the same
 
 /*
   #ifdef _DEBUG
@@ -146,12 +156,17 @@ byte Animation_type::LED_scale_color(byte c1, byte c2) {
   return random(c1,c2+1);
 }
 
+void Animation_type::LED_set_color(uint32_t color1, uint32_t color2) {
+  this->color1 = color1;
+  this->color2 = color2;
+}
+
 
 void Animation_type::LED_set_color(byte r1, byte g1, byte b1, byte r2, byte g2, byte b2) {
   this->color1 =   (uint32_t) ((byte) r1 << 16 | (byte) (g1) << 8 | (byte) (b1));
   this->color2 =   (uint32_t) ((byte) r2 << 16 | (byte) (g2) << 8 | (byte) (b2));
 
-  #ifdef _DEBUG
+  #ifdef _USESERIAL
     Serial.printf("LED_set_color R color1 is now %d.\n",this->color1.red);
   #endif 
 
@@ -321,11 +336,26 @@ void Animation_type::LED_set_color_soil(struct SnsType *sns) {
   this->LED_set_color(r1,g1,b1,r2,g2,b2);
 }
 
+void Animation_type::LED_choose_animation_style(String style) {
+  if (style == "wave_clockwise") {
+    this->LED_animation_defaults(1);
+  } else if (style == "wave_counter") {
+    this->LED_animation_defaults(2);
+  } else if (style == "pulse") {
+    this->LED_animation_defaults(3);
+  } else if (style == "constant") {
+    this->LED_animation_defaults(4);
+  } else if (style == "random_gaussian") {
+    this->LED_animation_defaults(5);
+  }
+}
+
+
 void Animation_type::LED_animation_defaults(byte anim) {
   this->animation_style = anim;
   
   // Initialize LED_BASE and LED_TIMING arrays to prevent garbage values
-  for (byte i = 0; i < LEDCOUNT; i++) {
+  for (byte i = 0; i < _USELED_SIZE; i++) {
     this->LED_BASE[i] = 0; // Initialize to black
     this->LED_TIMING[i] = 0; // Initialize timing array
   }
@@ -333,19 +363,19 @@ void Animation_type::LED_animation_defaults(byte anim) {
   switch (anim) {
     case 1: //wave clockwise
       this->sin_T = 1500; //in other words, T, ms to move through one wavelength
-      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->sin_L = _USELED_SIZE/2; //wavelength, in number of LEDs
       this->MaxBrightness = 10; //sin amp - 10% brightness
       this->MinBrightness=5; 
       break;
     case 2: //wave counter-clockwise
       this->sin_T = 1500; //in other words, T, ms to move through one wavelength
-      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->sin_L = _USELED_SIZE/2; //wavelength, in number of LEDs
       this->MaxBrightness = 10; //sin amp
       this->MinBrightness=1; 
       break;
     case 3: //pulse
       this->sin_T = 30000; //in other words, T ms to move through one wavelength
-      this->sin_L = LEDCOUNT/2; //wavelength, in number of LEDs
+      this->sin_L = _USELED_SIZE/2; //wavelength, in number of LEDs
       this->MaxBrightness = 10; //sin amp
       this->MinBrightness=5; 
       break;
@@ -355,12 +385,29 @@ void Animation_type::LED_animation_defaults(byte anim) {
       break;
     case 5: //random gaussian
       this->MaxBrightness = 50;
-      this->MinBrightness = 5;
-        
+      this->MinBrightness = 5;        
       break;
+    case 6: //progress bar [WORK IN PROGRESS - NOT TESTED]
+      this->MaxBrightness = 50;
+      this->MinBrightness = 0;
+      break;
+
   }
 }
 
 Animation_type LEDs;
+
+void initLEDs() {
+  #ifdef _USELED
+  FastLED.addLeds<WS2813, _USELED, GRB>(LEDARRAY, _USELED_SIZE).setCorrection(TypicalLEDStrip);
+  LEDs.LED_animation_defaults(1);
+  LEDs.LEDredrawRefreshMS = 20;
+  LEDs.LED_set_color(255, 255, 255, 255, 255, 255); // default is white
+  #ifdef _USESERIAL
+    Serial.println("LED strip initialized");
+  #endif
+   #endif
+}
+
 
 #endif // _USELED

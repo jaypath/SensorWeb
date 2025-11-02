@@ -33,9 +33,10 @@ uint32_t checkTFLuna(int16_t snsindex) {
   } else {
     P->snsValue = -5000; //failed
   }
+  uint32_t m = millis();
+  LocalTF.LAST_DISTANCE_TIME = m;
 
-
-  return millis();
+  return m;
 }
 
 void TFLunaUpdateMAX() {
@@ -65,27 +66,30 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
   double actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
   double distance_change = abs(actualdistance - LocalTF.LAST_DISTANCE);
-  LocalTF.CLOCKMODE = true;     //start in clockmode
+  LocalTF.ALLOWINVERT=false;
+  LocalTF.SCREENRATE=1000; //default screen rate for clock
+
 
   //has dist changed by more than a real amount? If yes then allow high speed screen draws
   if ((distance_change)> 2) {
-    LocalTF.CLOCKMODE = false; //leave clockmode
-    LocalTF.ALLOWINVERT=false;
     uint16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index];
     uint16_t criticalDistance = goldilockszone * _TFLUNA_CRITICAL + Prefs.SNS_LIMIT_MIN[prefs_index];
     uint16_t shortrangeDistance = goldilockszone * _TFLUNA_SHORTRANGE + Prefs.SNS_LIMIT_MIN[prefs_index];
-    LocalTF.SCREENRATE=250;
-
+    
     WiFi.disconnect(true); //disconnect from wifi to avoid distractions
     do {  
+      LocalTF.LAST_MINUTE = 61; //this ensures a redraw when we leave this loop
+      LocalTF.ALLOWINVERT=false;
+      LocalTF.SCREENRATE=250;
+      
       if (abs(actualdistance - LocalTF.LAST_DISTANCE) > 2) {
         LocalTF.LAST_DISTANCE = actualdistance;
-        LocalTF.LAST_DISTANCE_TIME = m;
+        LocalTF.LAST_DISTANCE_CHANGE_TIME = m;
       }
       if (P->snsValue<-1000) {
         snprintf(LocalTF.MSG,19,"OPEN");
         LocalTF.ALLOWINVERT=true;
-        LocalTF.SCREENRATE=250;
+        LocalTF.SCREENRATE=500;
       } else {
         if (actualdistance<0) {
           snprintf(LocalTF.MSG,19,"STOP!");
@@ -95,11 +99,9 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
         } else {
 
           if (actualdistance<criticalDistance) {
-            LocalTF.SCREENRATE=250;
             snprintf(LocalTF.MSG,19,"STOP");
             LocalTF.ALLOWINVERT=true;
           } else if (actualdistance<shortrangeDistance) {
-            LocalTF.SCREENRATE=250;
             snprintf(LocalTF.MSG,19,"GOOD");
             LocalTF.ALLOWINVERT=true;
           } else {
@@ -111,10 +113,8 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
             if (actualdistance<goldilockszone) {
               LocalTF.ALLOWINVERT=true;
-              LocalTF.SCREENRATE=250;
             } else {
               LocalTF.ALLOWINVERT=false;
-              LocalTF.SCREENRATE=250;
             }
           }
         }
@@ -126,17 +126,19 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
       } else {
         m=millis();
       }
-    } while((distance_change)> 2 || m-LocalTF.LAST_DISTANCE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
-    WiFi.begin(); //reconnect to wifi     
+    } while((distance_change)> 2 || m-LocalTF.LAST_DISTANCE_CHANGE_TIME <LocalTF.CHANGETOCLOCK*1000); //keep repeating until distance has not changed and at least clocktime has passed  
+    WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
   } else {
-    //if it's been long enough, change to clock and redraw
-    if (LocalTF.CLOCKMODE || m-LocalTF.LAST_DRAW>LocalTF.CHANGETOCLOCK*1000) { //changetoclock is in seconds
-      snprintf(LocalTF.MSG,19,"%s",dateify(I.currentTime,"hh:nn"));      
-      LocalTF.ALLOWINVERT=false;
-      LocalTF.SCREENRATE=30000;
-      LocalTF.CLOCKMODE = true;
-      DrawNow(m);
-    } 
+    //draw clock, drawnow will check if the timing is correct
+    
+    if (minute()!=LocalTF.LAST_MINUTE) {
+      snprintf(LocalTF.MSG,19,"%s",dateify(I.currentTime,"h1:nn"));      
+      if (DrawNow(m)) LocalTF.LAST_MINUTE = minute();
+      if (WiFi.status() != WL_CONNECTED ) { //retry wifi every 1 minute
+        WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD); //retry wifi every 60 seconds
+      }
+      
+    }
   }
 
 }
@@ -149,7 +151,7 @@ return;
 bool DrawNow(uint32_t m) {
   if (m==0)   m = millis();
 
-  if (m-LocalTF.LAST_DRAW < LocalTF.SCREENRATE) return false;
+  if (m < LocalTF.LAST_DRAW+LocalTF.SCREENRATE) return false;
 
   //should we flip the inversion?
   if (LocalTF.ALLOWINVERT) LocalTF.INVERTED = !LocalTF.INVERTED;      

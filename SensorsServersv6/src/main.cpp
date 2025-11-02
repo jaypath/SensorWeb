@@ -110,7 +110,7 @@ void initOTA() {
         displayOTAProgress(0, 100); 
         #ifdef _USELED
         // Set all LEDs to green to indicate OTA start
-        for (byte j = 0; j < LEDCOUNT; j++) {
+        for (byte j = 0; j < _USELED_SIZE; j++) {
           LEDARRAY[j] = (uint32_t) 0 << 16 | 26 << 8 | 0; // green at 10% brightness
         }
         FastLED.show();
@@ -137,10 +137,10 @@ void initOTA() {
         #ifdef _USELED
           // Show OTA progress on LEDs as a filling bar
           if (progress%10==0) {
-            for (byte j = 0; j < LEDCOUNT; j++) {
-                LEDARRAY[LEDCOUNT - j - 1] = 0;
-                if (j <= (double) LEDCOUNT * progress / total) {
-                LEDARRAY[LEDCOUNT - j - 1] = (uint32_t) 64 << 16 | 64 << 8 | 64; // dim white
+            for (byte j = 0; j < _USELED_SIZE; j++) {
+                LEDARRAY[_USELED_SIZE - j - 1] = 0;
+                if (j <= (double) _USELED_SIZE * progress / total) {
+                LEDARRAY[_USELED_SIZE - j - 1] = (uint32_t) 128 << 16 | 128 << 8 | 128; // medium white
                 }
             }
             FastLED.show();
@@ -157,17 +157,6 @@ void initOTA() {
     tftPrint("OK.", true, TFT_GREEN);
 }
 
-void initLEDs() {
-    #ifdef _USELED
-    FastLED.addLeds<WS2813, _USELED, GRB>(LEDARRAY, LEDCOUNT).setCorrection(TypicalLEDStrip);
-    LEDs.LED_animation_defaults(1);
-    LEDs.LEDredrawRefreshMS = 20;
-    LEDs.LED_set_color(255, 255, 255, 255, 255, 255); // default is white
-    #ifdef _USESERIAL
-      Serial.println("LED strip initialized");
-    #endif
-     #endif
-}
 
 
 // --- Main Setup ---
@@ -410,8 +399,11 @@ void loop() {
     #endif
 
     #ifdef _USETFLUNA
-//    do nothing else until TFLuna is updated
-        TFLunaUpdateMAX();
+//    note that if disctace changes, this will enter a loop that locks out wifi
+//    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
+        do {
+            TFLunaUpdateMAX();        
+        } while (WiFi.status() != WL_CONNECTED);
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {
