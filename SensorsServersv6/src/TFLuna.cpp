@@ -9,7 +9,6 @@
 
  extern int16_t MY_DEVICE_INDEX;
 
-
 uint32_t checkTFLuna(int16_t snsindex) {
   if (snsindex != -1)     LocalTF.TFLUNASNS = snsindex;
   

@@ -38,6 +38,7 @@ bool DrawNow(uint32_t m=0);
 
 extern Devices_Sensors Sensors;
 extern STRUCT_CORE I;
+extern STRUCT_PrefsH Prefs;
 
 
 
