@@ -8,6 +8,8 @@
     #include <mbedtls/aes.h>
     #include <mbedtls/cipher.h>
     #include "esp_random.h"
+    #include <nvs_flash.h>
+
 
 // Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_PrefsH;

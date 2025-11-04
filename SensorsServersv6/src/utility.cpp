@@ -26,7 +26,7 @@ void initI2C() {
   #endif
 }
 
-void initSystem() {
+bool initSystem() {
 
   #ifdef _USESPI
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
@@ -34,28 +34,92 @@ void initSystem() {
 
   
 
+    #ifdef _USETFT
+    tft.init();
+    tft.setRotation(2);
+    tft.setCursor(0,0);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    tft.setTextFont(1);
+    tft.setTextDatum(TL_DATUM);
+    tft.printf("Running setup\n");
+    #endif
+
+
+    BootSecure bootSecure;
+    int8_t boot_status = bootSecure.setup();
+    if (boot_status <= 0) {
+        #ifdef SETSECURE
+            // Security check failed for any reason, halt device
+            while (1) { delay(1000); }
+        #endif
+        #ifdef _USETFT
+        tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
+        #endif
+        SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
+        delay(1000);
+        return false;
+    } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
+
+
+
+    //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
+    if (Prefs.DEVICENAME[0] == 0) {
+      //name the device sensor-MAC where MAC is in hex without spacers
+      #ifdef MYNAME
+      strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
+      Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+      #else
+      //name the device server-MAC where MAC is in hex without spacers
+      strncpy(Prefs.DEVICENAME, ("Dev" + String(ESP.getEfuseMac(), HEX)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
+      Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+      #endif
+      Prefs.isUpToDate = false;
+    }
+
+
+    tftPrint("Init Wifi... \n", true);
+    SerialPrint("Init Wifi... ",false);
+
+    if (Prefs.HAVECREDENTIALS) {
+
+      if (connectWiFi()<0) {
+          //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
+          SerialPrint("Failed to connect to Wifi",true);
+          if (connectWiFi()>-10000 && connectWiFi()<0) {
+              tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
+              delay(30000);  
+              Prefs.HAVECREDENTIALS = false;
+              APStation_Mode();
+          }        
+      } 
+  } else {
+      SerialPrint("No credentials, starting AP Station Mode",true);
+      APStation_Mode();
+  }
+
+  delay(250);
+
   #ifdef _USETFT
-  tft.init();
-  tft.setRotation(2);
-  tft.setCursor(0,0);
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  tft.setTextFont(1);
-  tft.setTextDatum(TL_DATUM);
-  tft.printf("Running setup\n");
+  displaySetupProgress( true);
   #endif
-  BootSecure bootSecure;
-  int8_t boot_status = bootSecure.setup();
-  if (boot_status <= 0) {
-      #ifdef SETSECURE
-          // Security check failed for any reason, halt device
-          while (1) { delay(1000); }
-      #endif
-      #ifdef _USETFT
-      tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
-      #endif
-      SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
-      delay(1000);
-  } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
+  SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true);
+
+
+  byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+  if (devIndex == -1) {
+    failedToRegister();
+    return false;
+  }
+  return true;
+
+  tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  if (initESPNOW()) {
+      tftPrint("OK.", true, TFT_GREEN);
+      broadcastServerPresence();
+  } else {
+      tftPrint("FAILED.", true, TFT_RED);
+      storeError("ESPNow initialization failed");
+  }
 
 
 }
@@ -869,6 +933,10 @@ void storeCoreData(bool forceStore) {
       SerialPrint("Failed Prefs security",true);
       storeError("Failed Prefs security", ERROR_FAILED_PREFS, true);  
     }      
+    if (ret == -100) {
+      SerialPrint("Failed to create prefs",true);
+      storeError("Failed to create prefs", ERROR_FAILED_PREFS, true);  
+    }
   }
 
   if (forceStore || (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime)) { //store if out of date and more than 5 minutes since last store

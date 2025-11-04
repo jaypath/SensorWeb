@@ -3,6 +3,7 @@
 #include "TFLuna.hpp"
 #include "globals.hpp"
 #include "Devices.hpp"
+#include "timesetup.hpp"
 
  TFLunaType LocalTF;
  TFLI2C tflI2C;
@@ -63,7 +64,7 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
   }
 
 
-  double actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index];
+  double actualdistance = P->snsValue - Prefs.SNS_LIMIT_MIN[prefs_index]; //Prefs.SNS_LIMIT_MIN[prefs_index] is zero for our calculations
   double distance_change = abs(actualdistance - LocalTF.LAST_DISTANCE);
   LocalTF.ALLOWINVERT=false;
   LocalTF.SCREENRATE=1000; //default screen rate for clock
@@ -71,9 +72,10 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
 
   //has dist changed by more than a real amount? If yes then allow high speed screen draws
   if ((distance_change)> 2) {
-    uint16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index];
-    uint16_t criticalDistance = goldilockszone * _TFLUNA_CRITICAL + Prefs.SNS_LIMIT_MIN[prefs_index];
-    uint16_t shortrangeDistance = goldilockszone * _TFLUNA_SHORTRANGE + Prefs.SNS_LIMIT_MIN[prefs_index];
+
+    uint16_t goldilockszone = Prefs.SNS_LIMIT_MAX[prefs_index] - Prefs.SNS_LIMIT_MIN[prefs_index]; //less than max, but more than min. Flash "GOOD" at this point.
+    uint16_t criticalDistance = goldilockszone * _TFLUNA_CRITICAL ; //flash very fast "STOP!" at this point. _TFLUNA+CRITICAL will be a percentage of the goldilockszone
+    uint16_t shortrangeDistance = goldilockszone * _TFLUNA_SHORTRANGE ; //getting too close to min, flash "STOP" at this point. _TFLUNA+SHORTRANGE will be a percentage of the goldilockszone
     
     WiFi.disconnect(true); //disconnect from wifi to avoid distractions
     do {  
@@ -88,33 +90,31 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
       if (P->snsValue<-1000) {
         snprintf(LocalTF.MSG,19,"OPEN");
         LocalTF.ALLOWINVERT=true;
-        LocalTF.SCREENRATE=500;
+        LocalTF.SCREENRATE=500; //slow blink open
       } else {
         if (actualdistance<0) {
-          snprintf(LocalTF.MSG,19,"STOP!");
+          snprintf(LocalTF.MSG,19,"STOP!!");
           LocalTF.ALLOWINVERT=true;
-          LocalTF.SCREENRATE=100;
-          //but do not blink
+          LocalTF.SCREENRATE=100; //very fast blink emergency          
         } else {
 
           if (actualdistance<criticalDistance) {
-            snprintf(LocalTF.MSG,19,"STOP");
+            snprintf(LocalTF.MSG,19,"STOP!");
             LocalTF.ALLOWINVERT=true;
+            LocalTF.SCREENRATE=200; //very fast blink emergency          
           } else if (actualdistance<shortrangeDistance) {
+            snprintf(LocalTF.MSG,19,"STOP");
+            LocalTF.ALLOWINVERT=true; //blinking at normal rate of 250            
+          } else if (actualdistance<goldilockszone) {
             snprintf(LocalTF.MSG,19,"GOOD");
             LocalTF.ALLOWINVERT=true;
           } else {
-            if (actualdistance>61) {
+            if (actualdistance>61) { //61 is 2 ft
               snprintf(LocalTF.MSG,19,"%.1f ft", (float) actualdistance/2.54/12);        
             }      else {
               snprintf(LocalTF.MSG,19,"%f in", (float) actualdistance/2.54);        
             }
 
-            if (actualdistance<goldilockszone) {
-              LocalTF.ALLOWINVERT=true;
-            } else {
-              LocalTF.ALLOWINVERT=false;
-            }
           }
         }
       }

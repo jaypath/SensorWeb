@@ -59,17 +59,8 @@ uint16_t BootSecure::CRCCalculator(uint8_t * data, uint16_t length) {
 
 int8_t BootSecure::flushPrefs(void) {
     //returns 1 if successful, -1 if could not open prefs, -2 if could not find key
-    Preferences p;
-    if (!p.begin("STARTUP", false)) return -1; //could not open prefs
-    if (p.isKey("Boot")) {        
-        p.clear();
-        p.end();
-        return 1;
-    } 
-      
-    p.end();
-    return -2;
-    
+    if (nvs_flash_erase() != ESP_OK) return -1;
+    return 1;
 }
 
 int8_t BootSecure::getPrefs() {
@@ -115,7 +106,7 @@ int8_t BootSecure::getPrefs() {
 }
 
 int8_t BootSecure::setPrefs(bool forceUpdate) {
-    //returns 0 if no update required, -1 if encryption failed, -10 if setsecure failed, and 1 if update
+    //returns 0 if no update required, -1 if encryption failed, -10 if setsecure failed, -100 if prefs could not create (for example no space), and 1 if update
     if (Prefs.isUpToDate == false && forceUpdate==false ) return 0; //don't need to update
     if (Prefs.PROCID != ESP.getEfuseMac()) {
         #ifdef SETSECURE

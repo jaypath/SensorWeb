@@ -16,7 +16,7 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
 
 //setup functions
 void initI2C();
-void initSystem();
+bool initSystem();
 bool isI2CDeviceReady(byte address);
 int8_t initSDCard();
 bool loadSensorData();

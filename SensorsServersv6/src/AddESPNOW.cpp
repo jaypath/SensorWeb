@@ -41,6 +41,11 @@ Messages will use the ESPNOW_type struct for their transmission
 WiFiUDP LAN_UDP;
 #endif
 
+#ifdef _USELOWPOWER
+#include "LowPower.hpp"
+extern LowPowerType LPStruct;
+#endif
+
 namespace {
     constexpr uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     // Default intervals (seconds)
@@ -172,8 +177,9 @@ bool sendESPNOW(ESPNOW_type& msg) {
     msg.senderIP = WiFi.localIP();
     msg.senderType = _MYTYPE;
 
-
+    #ifndef _USELOWPOWER
     I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
+    #endif
     if (msg.msgType>0) {
         if (isValidLMKKey()) {
             // Encrypt the message
@@ -293,12 +299,29 @@ void processLANMessage(ESPNOW_type* msg) {
         }
 
 
+        bool isNewDevice = false;
+        if (_MYTYPE >= 100 && Sensors.findDevice(msg->senderMAC) == -1) isNewDevice = true;
+
         Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+1, 0, 0, msg->senderType); //remove the type from the payload
-        
+
+        #ifdef _USELOWPOWER
+        if (msg->senderType >= 100 ) {
+            LPStruct.addServer(MACToUint64(msg->senderMAC), msg->senderIP);
+        }
+        #endif
+    
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg->payload+1);
-        
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
     
+
+        #ifndef _USELOWPOWER
+        if (msg->senderType < 100 && _MYTYPE >= 100 && isNewDevice) {
+            //delay a random number of milliseconds between 500 and 5000
+            delay(random(500, 5000)); //this is to prevent all servers from broadcasting at the same time
+            broadcastServerPresence(false); //if this is a new server, broadcast my presence
+        }
+        #endif
+
         return;
     }
 
@@ -504,9 +527,10 @@ bool broadcastServerPresence(bool broadcastPeripheral) {
     
     memcpy(msg.payload + 1, Prefs.DEVICENAME, 30);
     msg.payload[32]=0; //null terminate the server name, juts in case
+    #ifndef _USELOWPOWER
     snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server presence to all");
-    
     I.makeBroadcast = false;
+    #endif
     return sendESPNOW(msg);
 }
 
@@ -729,4 +753,20 @@ bool sendUDPMessage(ESPNOW_type* msg) {
     #else
     return false;
     #endif
+}
+
+
+uint8_t AnnounceMyself() {
+    //intended for peripherals to announce themselves to the servers, and receive a response from the servers. Can be used by servers as well, but not necessary and they will not trigger a response from other servers (so really just acts like a broadcast server call)
+    broadcastServerPresence(true);
+    uint32_t m = millis();
+    while (millis() - m < 6000) {
+        //wait for a response from the servers, which should arrive by 5 seconds
+        if (Sensors.countServers() > 0) break;
+        delay(100);
+    }
+    delay(100);
+
+    return Sensors.countServers();
+
 }

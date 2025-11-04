@@ -75,6 +75,9 @@ public:
     IPAddress getDeviceIPBySnsIndex(int16_t snsindex);
     uint8_t getNumDevices();
     uint8_t countDev(uint8_t devType); // count the devices of the given type
+    uint8_t countServers(); // count the servers
+    int16_t nextServerIndex(int16_t startIndex=0); // get the index of the next server
+
     uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
     int16_t firstDeviceIndex();
     int16_t lastDeviceIndex();

@@ -66,7 +66,7 @@ int16_t MY_DEVICE_INDEX = 0; //local stored index of my device
 extern LGFX tft;
 #endif
 
-#ifdef _ISPERIPHERAL
+#if defined(_ISPERIPHERAL) && !defined(_USELOWPOWER)
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
@@ -102,6 +102,11 @@ void initOTA();
  * @brief Initialize Arduino OTA update functionality.
  */
 void initOTA() {
+    #ifdef _USELOWPOWER
+    //low power devices do not support OTA
+    return;
+    #else
+
     tftPrint("Connecting ArduinoOTA... ", false);
     ArduinoOTA.setHostname("WeatherStation");
     ArduinoOTA.setPassword("12345678");
@@ -155,12 +160,37 @@ void initOTA() {
     ArduinoOTA.begin();
 
     tftPrint("OK.", true, TFT_GREEN);
+
+    #endif
+
 }
 
 
 
 // --- Main Setup ---
 void setup() {
+
+    #ifdef _USELOWPOWER
+    if (initSystem()==false) {
+        while (1) { 
+            SerialPrint("Critical error. Rebooting...", true);
+            delay(1000); 
+        }
+    }; //among other things, loads the Prefs struct. If this is false I could not load prefs or I could not register myself. Critical errors
+
+    initSensor(-256); //clear all sensors
+
+    initHardwareSensors(); //initialize the hardware sensors
+
+    LOWPOWER_SETUP();
+
+
+    readAllSensors(false);
+    sendAllSensors(false);
+
+    return;
+    #else
+
     // --- Boot Security Check ---
     // Watchdog
     esp_task_wdt_deinit();
@@ -200,8 +230,6 @@ void setup() {
     }
 
 
-    tftPrint("Init Wifi... \n", true);
-    SerialPrint("Init Wifi... ",false);
     SerialPrint("start server routes... ");
     setupServerRoutes();
     SerialPrint("Server routes OK",true);
@@ -223,12 +251,7 @@ void setup() {
         APStation_Mode();
     }
     
-    #ifdef _USETFT
-    displaySetupProgress( true);
-    #endif
-    SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true);
 
-    delay(250);
 
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     #ifdef _USETFT
@@ -243,40 +266,11 @@ void setup() {
     SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
     
     
-
-    //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
-    if (Prefs.DEVICENAME[0] == 0) {
-        //name the device sensor-MAC where MAC is in hex without spacers
-        #ifdef MYNAME
-        strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
-        Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
-        #else
-        //name the device server-MAC where MAC is in hex without spacers
-        strncpy(Prefs.DEVICENAME, ("Dev" + String(ESP.getEfuseMac(), HEX)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
-        Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
-        #endif
-    }
-    byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
-    
-    if (devIndex == -1) {
-        failedToRegister();
-        return;
-    }
-
-
     
     tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     server.begin();
     tftPrint(" OK.", true, TFT_GREEN);
 
-    tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-    if (initESPNOW()) {
-        tftPrint("OK.", true, TFT_GREEN);
-        broadcastServerPresence();
-    } else {
-        tftPrint("FAILED.", true, TFT_RED);
-        storeError("ESPNow initialization failed");
-    }
 
     initOTA();
 
@@ -370,6 +364,8 @@ void setup() {
     #endif
     #endif
 
+    AnnounceMyself(); //announce myself to the servers
+#endif //_USELOWPOWER
     
 }
 
@@ -380,6 +376,7 @@ void setup() {
 void loop() {
 
     esp_task_wdt_reset();
+
 
     #ifdef _USEUDP
     receiveUDPMessage(); //receive UDP messages, which are sent in parallel to ESPNow
@@ -641,6 +638,7 @@ Serial.println("Second changed");
 
         #endif
     }
+
 }
 
 

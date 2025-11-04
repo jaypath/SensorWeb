@@ -89,4 +89,6 @@ String generateAPSSID();
 
 bool receiveUDPMessage();
 bool sendUDPMessage(ESPNOW_type* msg);
+
+uint8_t AnnounceMyself();
 #endif

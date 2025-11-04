@@ -181,6 +181,28 @@ uint8_t Devices_Sensors::countSensors(uint8_t snsType,int16_t devIndex) {
     return count;
 }
 
+uint8_t Devices_Sensors::countServers() {
+    //returns the number of sensors of the given type
+    uint8_t count = 0;
+    for (int16_t i = 0; i < NUMDEVICES ; i++) {
+        if (devices[i].IsSet && devices[i].devType >= 100) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int16_t Devices_Sensors::nextServerIndex(int16_t startIndex) {
+    //returns the index of the next server
+    if (startIndex < 0) startIndex = 0;
+    for (int16_t i = startIndex; i < NUMDEVICES ; i++) {
+        if (devices[i].IsSet && devices[i].devType >= 100) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 uint8_t Devices_Sensors::countDev(uint8_t devType) {
     //returns the number of devices of the given type
     uint8_t count = 0;
