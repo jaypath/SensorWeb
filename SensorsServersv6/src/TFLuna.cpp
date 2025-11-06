@@ -109,10 +109,10 @@ if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
             snprintf(LocalTF.MSG,19,"GOOD");
             LocalTF.ALLOWINVERT=true;
           } else {
-            if (actualdistance>61) { //61 is 2 ft
-              snprintf(LocalTF.MSG,19,"%.1f ft", (float) actualdistance/2.54/12);        
+            if (actualdistance>183) { //183 is ~6ft
+              snprintf(LocalTF.MSG,19,"%d ft", (int) ((float) actualdistance/2.54/12));        
             }      else {
-              snprintf(LocalTF.MSG,19,"%f in", (float) actualdistance/2.54);        
+              snprintf(LocalTF.MSG,19,"%d in", (int) ((float) actualdistance/2.54));        
             }
 
           }

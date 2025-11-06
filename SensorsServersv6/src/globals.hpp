@@ -23,7 +23,7 @@
   #error Arduino architecture unrecognized by this code.
 #endif
 
-
+#define SNSDATA_JSON_BUFFER_SIZE 768
 
 // Forward declarations
 class LGFX;
@@ -107,7 +107,8 @@ typedef enum {
     ERROR_HARDWARE_MEMORY, //hardware memory error
     ERROR_TIME, 
     ERROR_SENSOR_READ, //could not read a sensor
-    ERROR_SENSOR_SEND //could not write a sensor
+    ERROR_SENSOR_SEND, //could not write a sensor
+    ERROR_ESPNOW_GENERAL //ESPNow general error
   } ERRORCODES;
 
 
@@ -223,8 +224,8 @@ typedef enum {
       
       //for UDP messages
       uint32_t UDP_LAST_MESSAGE_TIME; // time of last UDP message received
-      uint32_t UDP_LAST_PARSE_TIME; // time of last UDP  parsing
-      uint8_t UDP_PARSE_INTERVAL_MS = 50; //interval in ms for UDP parsing
+      bool UDP_LAST_STATUS; // status of last UDP status check
+      char UDP_LAST_STATUS_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
       
     //for messages received
     uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight

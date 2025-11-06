@@ -55,6 +55,10 @@
 #include "globals.hpp"
 #include <esp_task_wdt.h>
 
+#ifdef _USELOWPOWER
+#include "LowPower.hpp"
+#endif
+
 // --- WiFi Down Timer ---
 static uint32_t wifiDownSince = 0;
 static uint32_t lastPwdRequestMinute = 0;
@@ -171,6 +175,7 @@ void initOTA() {
 void setup() {
 
     #ifdef _USELOWPOWER
+    LOWPOWER_Initialize();
     if (initSystem()==false) {
         while (1) { 
             SerialPrint("Critical error. Rebooting...", true);
@@ -182,11 +187,7 @@ void setup() {
 
     initHardwareSensors(); //initialize the hardware sensors
 
-    LOWPOWER_SETUP();
-
-
-    readAllSensors(false);
-    sendAllSensors(false);
+    LOWPOWER_readAndSend();
 
     return;
     #else
@@ -198,12 +199,6 @@ void setup() {
     esp_task_wdt_add(NULL);
 
 
-    #ifdef _USESERIAL
-    
-    Serial.begin(_USESERIAL);
-    Serial.println("Serial started");
-    SerialPrint("SerialPrint started",true);
-    #endif
 
     initI2C(); //initialize the I2C bus
 
@@ -230,28 +225,6 @@ void setup() {
     }
 
 
-    SerialPrint("start server routes... ");
-    setupServerRoutes();
-    SerialPrint("Server routes OK",true);
-
-    if (Prefs.HAVECREDENTIALS) {
-
-        if (connectWiFi()<0) {
-            //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
-            SerialPrint("Failed to connect to Wifi",true);
-            if (connectWiFi()>-10000 && connectWiFi()<0) {
-                tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
-                delay(30000);  
-                Prefs.HAVECREDENTIALS = false;
-                APStation_Mode();
-            }        
-        } 
-    } else {
-        SerialPrint("No credentials, starting AP Station Mode",true);
-        APStation_Mode();
-    }
-    
-
 
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     #ifdef _USETFT
@@ -267,10 +240,6 @@ void setup() {
     
     
     
-    tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-    server.begin();
-    tftPrint(" OK.", true, TFT_GREEN);
-
 
     initOTA();
 
@@ -332,7 +301,6 @@ void setup() {
 
     #ifdef _ISPERIPHERAL
     initHardwareSensors(); //initialize the hardware sensors
-    
     #endif
 
     #ifdef _USELED
@@ -364,7 +332,7 @@ void setup() {
     #endif
     #endif
 
-    AnnounceMyself(); //announce myself to the servers
+
 #endif //_USELOWPOWER
     
 }
@@ -379,7 +347,7 @@ void loop() {
 
 
     #ifdef _USEUDP
-    receiveUDPMessage(); //receive UDP messages, which are sent in parallel to ESPNow
+    receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
     #endif
     updateTime(); //sets I.currenttime
 
@@ -446,7 +414,7 @@ void loop() {
             newServerFound=true;
           }
         }
-        if (newServerFound)  sendAllSensors(true);
+        if (newServerFound)  sendAllSensors(true,true,true); //udp broadcast to everyone
         
         #endif
 
@@ -542,7 +510,6 @@ void loop() {
         I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
         
         
-        handleESPNOWPeriodicBroadcast(10);
         handleStoreCoreData();
         
         #ifdef _USEGSHEET
@@ -558,6 +525,8 @@ void loop() {
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         
+        handleESPNOWPeriodicBroadcast(30);
+
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
         size_t minFreeHeap = ESP.getMinFreeHeap();
@@ -632,7 +601,7 @@ Serial.println("Second changed");
 
 
             readAllSensors(false);
-            sendAllSensors(false);
+            sendAllSensors(false, false, false);
 
                   
 

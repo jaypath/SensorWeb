@@ -13,7 +13,7 @@ struct DevType;
 struct SnsType;
 class Devices_Sensors;
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
   /*sens types
 //0 - not defined
@@ -264,7 +264,6 @@ int peak_to_peak(int pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
-int8_t sendAllSensors(bool forceSend=false);
 #ifdef _USESSD1306
 void redrawOled(void);
 #endif

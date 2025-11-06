@@ -69,6 +69,7 @@ public:
     int16_t findDevice(IPAddress IP);
     DevType* getDeviceByDevIndex(int16_t devindex);
     DevType* getDeviceBySnsIndex(int16_t snsindex);
+    DevType* getDeviceByMAC(uint64_t MAC);
     uint64_t getDeviceMACByDevIndex(int16_t devindex);
     uint64_t getDeviceMACBySnsIndex(int16_t snsindex);
     IPAddress getDeviceIPByDevIndex(int16_t devindex);
@@ -78,7 +79,7 @@ public:
     uint8_t countServers(); // count the servers
     int16_t nextServerIndex(int16_t startIndex=0); // get the index of the next server
 
-    uint8_t countSensors(uint8_t snsType,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device
+    uint8_t countSensors(int16_t snsType=-1,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device. If snsType is -1, then count all sensors.
     int16_t firstDeviceIndex();
     int16_t lastDeviceIndex();
     bool isDeviceInit(int16_t devindex);

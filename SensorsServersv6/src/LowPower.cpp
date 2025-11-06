@@ -1,56 +1,54 @@
 #ifdef _USELOWPOWER
-#include <nvs_flash.h>
+#include "LowPower.hpp"
 
-LowPowerType LPStruct;
+void LOWPOWER_readAndSend() {    
+    delay(500); //give time for wifi to connect
 
-void LOWPOWER_setup() {
 
-    //1. load the prefs data into the LowPowerType struct, if it exists
-    Preferences lowPowerPrefs;
-    if (lowPowerPrefs.begin("LOWPOWER", true))  {
-        if (lowPowerPrefs.isKey("ServerData")) {        
-            lowPowerPrefs.getBytes("ServerData", &LPStruct, sizeof(LPStruct));
-        }
-        lowPowerPrefs.end();
-    }
-    
-    if (LPStruct.Server_Count > 0) {
-        //add the servers in my memory to the devices and sensors list
-        for (int i = 0; i < LPStruct.Server_Count; i++) {
-            if (LPStruct.Server_IPs[i] == 0) continue;
-            Sensors.addDevice(LPStruct.Server_MACs[i], IPAddress(LPStruct.Server_IPs[i]), ((String) "Server" + String(i)).c_str(), 0, 0, 100);
+    // Ensure WiFi is fully connected before attempting to send
+    if (WiFi.status() != WL_CONNECTED) {
+        SerialPrint("WiFi not connected. Cannot send data.", true);        
+    } else {
+        byte snscount = readAllSensors(true);
+        if (snscount > 0) {
+            sendAllSensors(true, true, true);
+        } else {
+            SerialPrint("No sensors to send", true);        
         }
     }
-
-
-    //2. announce myself and get responses. These are automatically added to the LPStruct.Server_IPs array and to devices and sensors list
-    //note that announcemyself returns the number of servers that responded, so will pass if any were present, even those that did not respond!
-    while (AnnounceMyself() == 0) {        
-        SerialPrint("No servers responded to my presence. Retrying in 10s...", true);
-        delay(10000);        
-    }
-    
-    //3. check if servers were added to my list
-    if (LPStruct.IsUpToDate == false) saveLowPowerPrefs();
-
-    //return and store/send data!
-    return;
+    LOWPOWER_sleep();            
 }
 
+void LOWPOWER_sleep(uint64_t sleepTime) {
+    SerialPrint("Sleeping for " + String(sleepTime/1000000) + " seconds...", true);
 
-void saveLowPowerPrefs() {
-    Preferences lowPowerPrefs;
-    if (!lowPowerPrefs.begin("LOWPOWER", false))         {
-        SerialPrint("Failed to create LOWPOWER prefs. Clearing and recreating...", true);
-        nvs_flash_erase();
-
-        lowPowerPrefs.begin("LOWPOWER", false);
+    int8_t PowerPins[_SENSORNUM] = _POWERPINS;
+    for (byte i=0;i<_SENSORNUM;i++) {
+        if (PowerPins[i] >= 0) {
+            pinMode(PowerPins[i], OUTPUT);
+            digitalWrite(PowerPins[i], LOW);
+        }
     }
-    LPStruct.IsUpToDate = true;
-    lowPowerPrefs.putBytes("ServerData", &LPStruct, sizeof(LPStruct));
-    lowPowerPrefs.end();
+
+
+    esp_sleep_enable_timer_wakeup(sleepTime);
+    delay(100);
+    esp_deep_sleep_start();
 }
 
+void LOWPOWER_Initialize() {
+    SerialPrint("Initializing low power mode...", true);
+
+    //turn on all power pins to allow devices to initialize
+    int8_t PowerPins[_SENSORNUM] = _POWERPINS;
+    for (byte i=0;i<_SENSORNUM;i++) {
+        if (PowerPins[i] >= 0) {
+            pinMode(PowerPins[i], OUTPUT);
+            digitalWrite(PowerPins[i], HIGH);
+        }
+    }
 
 
+
+}
 #endif

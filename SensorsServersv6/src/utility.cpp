@@ -28,6 +28,15 @@ void initI2C() {
 
 bool initSystem() {
 
+
+  #ifdef _USESERIAL
+    
+  Serial.begin(_USESERIAL);
+  Serial.println("Serial started");
+  SerialPrint("SerialPrint started",true);
+  #endif
+
+
   #ifdef _USESPI
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
   #endif
@@ -56,8 +65,7 @@ bool initSystem() {
         tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
         #endif
         SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
-        delay(1000);
-        return false;
+        SerialPrint("Will redefine Prefs struct later...", true);
     } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
 
 
@@ -79,6 +87,7 @@ bool initSystem() {
 
     tftPrint("Init Wifi... \n", true);
     SerialPrint("Init Wifi... ",false);
+    setupServerRoutes();
 
     if (Prefs.HAVECREDENTIALS) {
 
@@ -86,18 +95,20 @@ bool initSystem() {
           //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
           SerialPrint("Failed to connect to Wifi",true);
           if (connectWiFi()>-10000 && connectWiFi()<0) {
-              tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nRebooting into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
-              delay(30000);  
+
+              tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEnering into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
+              SerialPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEntering local mode... login to my local wifi and go to http://192.168.4.1 to complete setup.", true);
+              delay(10000);  
               Prefs.HAVECREDENTIALS = false;
+
               APStation_Mode();
           }        
       } 
   } else {
-      SerialPrint("No credentials, starting AP Station Mode",true);
-      APStation_Mode();
+    SerialPrint("No credentials, starting AP Station Mode",true);
+    APStation_Mode();
   }
 
-  delay(250);
 
   #ifdef _USETFT
   displaySetupProgress( true);
@@ -110,17 +121,34 @@ bool initSystem() {
     failedToRegister();
     return false;
   }
-  return true;
 
-  tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-  if (initESPNOW()) {
-      tftPrint("OK.", true, TFT_GREEN);
-      broadcastServerPresence();
-  } else {
-      tftPrint("FAILED.", true, TFT_RED);
-      storeError("ESPNow initialization failed");
+
+  while(WifiStatus()==false) {
+    SerialPrint("Waiting for WiFi to be ready...", true);
+    delay(500);
   }
 
+  tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  server.begin();
+  tftPrint(" OK.", true, TFT_GREEN);
+
+
+
+  tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  int8_t errorCode = initESPNOW();
+  if (errorCode == 1) {
+      tftPrint("OK.", true, TFT_GREEN);
+      if (_MYTYPE >= 100) {
+        broadcastServerPresence(false);
+      } 
+      
+
+  } else {
+      tftPrint("FAILED with code " + String(errorCode) + ".", true, TFT_RED);
+      storeError("ESPNow init error: " + String(errorCode));
+  }
+
+  return true;
 
 }
 
@@ -185,6 +213,7 @@ bool loadSensorData() {
   #endif
   return false;
 }
+
 
 bool isTimeValid(uint32_t time) {
   if (time < TIMEZERO) return false;
@@ -494,6 +523,7 @@ void handleESPNOWPeriodicBroadcast(uint8_t interval) {
   #ifndef _ISPERIPHERAL
   if (I.makeBroadcast || (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime)) {        
       // ESPNow does not require WiFi connection; always broadcast
+      delay(random(100,2500)); //random delay to avoid flooding the network
       broadcastServerPresence();
   }
   #endif
@@ -596,9 +626,10 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
 
 
-  I.UDP_LAST_PARSE_TIME = 0;
-  I.UDP_PARSE_INTERVAL_MS = 100; //100 ms
-
+  I.UDP_LAST_MESSAGE_TIME = 0;
+  I.UDP_LAST_STATUS = false; // status of last UDP status check
+  I.UDP_LAST_STATUS_MESSAGE[0] = '\0'; // message of last UDP status check - [Sensor, System, etc]
+      
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;
   I.wifiFailCount=0;

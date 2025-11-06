@@ -41,10 +41,6 @@ Messages will use the ESPNOW_type struct for their transmission
 WiFiUDP LAN_UDP;
 #endif
 
-#ifdef _USELOWPOWER
-#include "LowPower.hpp"
-extern LowPowerType LPStruct;
-#endif
 
 namespace {
     constexpr uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -120,21 +116,30 @@ String getESPNOWEncryptionStatus() {
 }
 
 // --- ESPNow Initialization ---
-bool initESPNOW() {
-    if (esp_now_init() != ESP_OK) {
-        storeError("ESPNow: Failed to initialize");
-        return false;
+int8_t initESPNOW() {
+
+    if (WiFi.status() != WL_CONNECTED) {
+        storeError("ESPNow: WiFi not connected");
+        return -1;
+    }
+    esp_now_deinit(); //call this to reset the espnow state prior to reinitialization
+    esp_err_t result = esp_now_init();
+    if (result != ESP_OK) {
+        storeError("ESPNow: initialize failed " + ESPNowError(result));
+        return -2;
     }
     uint8_t MACB[6] = {0};
     memset(MACB,255,6);
     
-    // Register broadcast address (no encryption, I'll handle that separately)
-    addESPNOWPeer(MACB);
+    if (!esp_now_is_peer_exist(MACB)) {
+        // Register broadcast address (no encryption, I'll handle that separately)
+        addESPNOWPeer(MACB);
+    }
 
     esp_now_register_send_cb(OnESPNOWDataSent);
     esp_now_register_recv_cb(OnDataRecv);
     
-    return true;
+    return 1;
 }
 
 // --- Peer Management ---
@@ -153,7 +158,9 @@ esp_err_t addESPNOWPeer(uint8_t* macad) {
     esp_err_t result = esp_now_add_peer(&peerInfo);
     
     if (result != ESP_OK) {
-        SerialPrint("Failed to add ESPNow peer: " + MACToString(macad) + " Error: " + String(result), true);
+        String errormsg = "Failed to add ESPNow peer: " + MACToString(macad) + " Error: " + String(result);
+        SerialPrint(errormsg, true);
+        storeError(errormsg.c_str(),ERROR_ESPNOW_GENERAL);
     }
     
     return result;
@@ -206,18 +213,19 @@ bool sendESPNOW(ESPNOW_type& msg) {
         delESPNOWPeer(msg.targetMAC);
     }
     if (result != ESP_OK) {
-        SerialPrint((String) "ESPNow tried sending to " + MACToString(msg.targetMAC) + " and failed with code: " + result,true);
-        storeError(ESPNowError(result).c_str(),ERROR_ESPNOW_SEND);
+        String error = "SendESPNow: Error" + (String) result + ", to " + MACToString(msg.targetMAC);
+        SerialPrint(error,true);
+        storeError(error.c_str(),ERROR_ESPNOW_SEND);
         
         return false;
     }
     I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
     I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
-    SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " OK: " + result,true);
+    SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true);
 
     #ifdef _USEUDP
     if (isBroadcast) {
-      sendUDPMessage(&msg); //send broadcast messages via UDP as well
+      sendUDPMessage((uint8_t*)&msg, IPAddress(255,255,255,255), sizeof(ESPNOW_type)); //send broadcast messages via UDP as well
     }
     #endif
     return true;
@@ -237,6 +245,7 @@ String ESPNowError(esp_err_t result) {
         case ESP_ERR_INVALID_CRC: return "ESPNow: invalid CRC";
         case ESP_ERR_INVALID_MAC: return "ESPNow: invalid MAC";
         case ESP_ERR_ESPNOW_NOT_FOUND: return "ESPNow: MAC recipient not found";
+        case ESP_ERR_ESPNOW_ARG: return "ESPNow: Invalid argument";
         default: return "ESPNow: Error undefined";
         break;
     }
@@ -300,24 +309,21 @@ void processLANMessage(ESPNOW_type* msg) {
 
 
         bool isNewDevice = false;
+
         if (_MYTYPE >= 100 && Sensors.findDevice(msg->senderMAC) == -1) isNewDevice = true;
+        
+        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+1, 0, 0, msg->senderType); //remove the type from the payload, which is why it is +1
 
-        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+1, 0, 0, msg->senderType); //remove the type from the payload
-
-        #ifdef _USELOWPOWER
-        if (msg->senderType >= 100 ) {
-            LPStruct.addServer(MACToUint64(msg->senderMAC), msg->senderIP);
-        }
-        #endif
     
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg->payload+1);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
     
 
         #ifndef _USELOWPOWER
-        if (msg->senderType < 100 && _MYTYPE >= 100 && isNewDevice) {
+        //am I a server and did I get a message from a non server? If so, broadcast my presence
+        if (_MYTYPE >= 100 && msg->senderType < 100) {
             //delay a random number of milliseconds between 500 and 5000
-            delay(random(500, 5000)); //this is to prevent all servers from broadcasting at the same time
+            delay(random(1, 10)*100); //this is to prevent all servers from broadcasting at the same time
             broadcastServerPresence(false); //if this is a new server, broadcast my presence
         }
         #endif
@@ -711,34 +717,9 @@ bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
 }
 
 //---------------------------------
-//In addition to ESPnow, I will also use UDP for all of the above message types
-bool receiveUDPMessage() {
-    //receive a message via UDP
-    //return true if message is received, false if no message is received
-    #ifdef _USEUDP
-    uint32_t m = millis();
-    if (I.UDP_LAST_PARSE_TIME != 0 && (m - I.UDP_LAST_PARSE_TIME) < I.UDP_PARSE_INTERVAL_MS) {
-        return false;
-    }
-    I.UDP_LAST_PARSE_TIME = m;
-    ESPNOW_type msg = {};
-    int packetSize = LAN_UDP.parsePacket();
-    if (packetSize > 0) {
-        if (packetSize != sizeof(ESPNOW_type)) {
-            storeError("ESPNow: UDP message is not the correct size");
-            return false;
-        }
-        LAN_UDP.read((uint8_t*)&msg, packetSize);
-        I.UDP_LAST_MESSAGE_TIME = I.currentTime;
-        processLANMessage(&msg);
-        return true;
-    }
-    #endif
-    return false;
-    
-}
 
-bool sendUDPMessage(ESPNOW_type* msg) {
+
+bool sendESPNowUDPMessage(ESPNOW_type* msg) {
     //send the message via UDP
     //return true if successful, false if failed
     //the message is already encrypted, so we don't need to encrypt it again
@@ -746,27 +727,34 @@ bool sendUDPMessage(ESPNOW_type* msg) {
     //the message is already in the length field of the ESPNOW_type struct
     //the targetMAC field of the ESPNOW_type struct has the recipient MAC address
     #ifdef _USEUDP
-    LAN_UDP.beginPacket(msg->targetMAC, _USEUDP); //some random port that is unlikely to be used by any other device
-    LAN_UDP.write((uint8_t*)msg, sizeof(ESPNOW_type));
-    LAN_UDP.endPacket();
+    // Check if this is a broadcast message (all 0xFF in targetMAC)
+    bool isBroadcast = true;
+
+    IPAddress ip = IPAddress(255, 255, 255, 255);
+
+    for (int i = 0; i < 6; i++) {
+        if (msg->targetMAC[i] != 0xFF) {
+            isBroadcast = false;
+            break;
+        }
+    }
+    
+    if (!isBroadcast) {
+        // For unicast, look up IP from targetMAC   
+        DevType* d = Sensors.getDeviceByMAC(MACToUint64(msg->targetMAC));        
+        if (d) {
+            ip = d->IP;
+        } else {
+            storeError("No device found for UDP message");
+            return false;
+        }
+    } 
+    
+    sendUDPMessage((uint8_t*)msg,  ip, sizeof(ESPNOW_type));
+
     return true;
     #else
     return false;
     #endif
 }
 
-
-uint8_t AnnounceMyself() {
-    //intended for peripherals to announce themselves to the servers, and receive a response from the servers. Can be used by servers as well, but not necessary and they will not trigger a response from other servers (so really just acts like a broadcast server call)
-    broadcastServerPresence(true);
-    uint32_t m = millis();
-    while (millis() - m < 6000) {
-        //wait for a response from the servers, which should arrive by 5 seconds
-        if (Sensors.countServers() > 0) break;
-        delay(100);
-    }
-    delay(100);
-
-    return Sensors.countServers();
-
-}

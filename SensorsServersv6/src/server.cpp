@@ -205,7 +205,7 @@ int16_t connectWiFi() {
   retries = tryWifi(250,50,true);
   if (WifiStatus()) {
     #ifdef _USEUDP
-    LAN_UDP.begin(WiFi.localIP(),_USEUDP); //start the UDP server on port the port defined
+    LAN_UDP.begin(_USEUDP); //start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
     #endif
   
     return retries;
@@ -1472,7 +1472,9 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
   WEBHTML = WEBHTML + "---------------------<br>";      
   #ifdef _USEUDP
-  WEBHTML = WEBHTML + "Last LAN UDP Message Received at: " +  (String) (I.UDP_LAST_MESSAGE_TIME ? dateify(I.UDP_LAST_MESSAGE_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last UDP Message Received at: " +  (String) (I.UDP_LAST_MESSAGE_TIME>0 ? dateify(I.UDP_LAST_MESSAGE_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last UDP Message Status: " + (String) ((I.UDP_LAST_STATUS)?"Success":"Failure") + "<br>";
+  WEBHTML = WEBHTML + "Last UDP Message Status Message: " + (String) I.UDP_LAST_STATUS_MESSAGE + "<br>";
   #endif
   WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
   WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -1658,7 +1660,9 @@ void rootTableFill(byte j) {
         WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
         
         uint16_t currentFlags = Prefs.SNS_FLAGS[prefsIndex];
-        const char* flagNames[] = {"Flagged", "Monitored", "Outside", "Derived", "Predictive", "High/Low", "Changed", "Critical"};
+        const char* flagNames[] = {"Flagged", "Monitored", "LowPower", "Derived/Predictive", "Outside", "High/Low", "Changed", "Critical"};
+        // Bits 0, 2, 5, 6 are read-only (system-managed)
+        bool readOnlyBits[] = {true, false, true, false, false, true, true, false};
         
         for (int i = 0; i < 8; i++) {
           WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
@@ -1666,8 +1670,19 @@ void rootTableFill(byte j) {
           if (bitRead(currentFlags, i)) {
             WEBHTML = WEBHTML + " checked";
           }
+          if (readOnlyBits[i]) {
+            WEBHTML = WEBHTML + " disabled";
+          }
           WEBHTML = WEBHTML + ">";
-          WEBHTML = WEBHTML + "<span style=\"font-size: 11px;\">" + String(i) + ":" + String(flagNames[i]) + "</span>";
+          WEBHTML = WEBHTML + "<span style=\"font-size: 11px;";
+          if (readOnlyBits[i]) {
+            WEBHTML = WEBHTML + " color: #888;";  // Gray out read-only flags
+          }
+          WEBHTML = WEBHTML + "\">" + String(i) + ":" + String(flagNames[i]);
+          if (readOnlyBits[i]) {
+            WEBHTML = WEBHTML + " (auto)";  // Indicate it's automatically managed
+          }
+          WEBHTML = WEBHTML + "</span>";
           WEBHTML = WEBHTML + "</label>";
         }
         
@@ -2142,203 +2157,6 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
   serverTextClose(200);
 }
 
-
-
-
-void handlePost() {
-    String responseMsg = "";
-    String senderIP = "";
-    uint64_t deviceMAC = 0;
-    IPAddress deviceIP = IPAddress(0,0,0,0);
-    String devName = "";
-    uint8_t devType = 0;
-    uint8_t devFlags = 0;
-    int16_t sensorIndex = -1;
-
-    uint8_t ardID = 0; //legacy field, not used anymore
-    uint8_t snsType = 0;
-    uint8_t snsID = 0;
-    String snsName = "";
-    double snsValue = 0;
-    uint32_t timeRead = 0;
-    uint32_t timeLogged = 0;
-    uint32_t sendingInt = 0;
-    uint8_t flags = 0;
-
-    // Check if this is JSON data (new format)
-    if (server.hasArg("JSON")) {
-        String postData = server.arg("JSON");
-        SerialPrint("Received POST data in JSON format: " + postData,true);
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, postData);
-        if (!error) {
-            // New-style MAC-based messages have this format: "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}"
-            if (doc["device"].is<JsonObject>()) {
-              JsonObject device = doc["device"];
-              
-              if (device["ip"].is<JsonVariantConst>()==false && device["mac"].is<JsonVariantConst>()==false) {
-                SerialPrint("Invalid JSON message format - missing MAC and IP",true);
-                responseMsg = "Invalid JSON message format - missing MAC and IP";
-              }
-              if (device["ip"].is<JsonVariantConst>()) {
-                String ipStr = device["ip"];
-                deviceIP.fromString(ipStr);
-              }
-              if (device["mac"].is<JsonVariantConst>()) {
-                String macStr = device["mac"];                  
-                deviceMAC = strtoull(macStr.c_str(), NULL, 16);
-              } else {
-                deviceMAC = IPToMACID(deviceIP);
-              }
-              if (device["name"].is<JsonVariantConst>()) {
-                devName = device["name"].as<String>();
-              }
-              if (device["devType"].is<JsonVariantConst>()) {
-                devType = device["devType"];
-              }
-              if (device["devFlags"].is<JsonVariantConst>()) {
-                devFlags = device["devFlags"];
-              }
-              if (device["sensor"].is<JsonArray>()) {
-                JsonArray sensorArray = device["sensor"];
-                for (JsonObject sensor : sensorArray) {
-                  if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
-                      sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
-                      snsType = sensor["type"];
-                      snsID = sensor["id"];
-                      snsName = sensor["name"].as<String>();
-                      snsValue = sensor["value"];
-                      timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
-                      timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime; //should not be sent by the device. should be set by the server as the time this message was received. Legacy devices may still send this.
-                      sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
-                      flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
-                    }
-                }
-              }
-            } else {
-              SerialPrint("JSON message missing device object",true);
-              responseMsg = "JSON message missing device object";
-            }
-        } else {
-          SerialPrint("Could not deserialize JSON message",true);
-          responseMsg = "Could not deserialize JSON message";
-        }
-     } else {
-        // Handle old HTML form data (backward compatibility)
-        if (server.args() > 0) {
-          
-          // Parse old-style HTML form parameters
-          
-          for (byte k = 0; k < server.args(); k++) {
-              String argName = server.argName(k);
-              String argValue = server.arg(k);
-              
-              if (argName == "MAC") {
-                  deviceMAC = strtoull(argValue.c_str(), NULL, 16);//must be a uint64_t
-              } else if (argName == "IP") {
-                argValue.replace(",",""); //remove unneeded erroneous commas //this was an error in the old code
-                 deviceIP.fromString(argValue);              
-              } else if (argName == "logID") { //legacy code, still used by some devices
-                  ardID = breakString(&argValue,".",true).toInt(); //this is a legacy field, not used anymore
-                  snsType = breakString(&argValue,".",true).toInt();
-                  snsID = argValue.toInt();
-              } else if (argName == "devName") {
-                  devName = argValue;
-              } else if (argName == "snsType") {
-                  snsType = argValue.toInt();
-              } else if (argName == "snsID") {
-                  snsID = argValue.toInt();
-              } else if (argName == "varName"|| argName == "snsName") {
-                  snsName = argValue;
-              } else if (argName == "varValue" || argName == "snsValue") {
-                  snsValue = argValue.toDouble();
-              } else if (argName == "timeRead") {
-                  timeRead = argValue.toInt();
-              } else if (argName == "timeLogged") {
-                  timeLogged = argValue.toInt();
-              } else if (argName == "SendingInt") {
-                  sendingInt = argValue.toInt();
-              } else if (argName == "Flags") {
-                  flags = argValue.toInt();
-              }
-          }
-          
-          if (deviceMAC==0 && deviceIP!=IPAddress(0,0,0,0)) deviceMAC = IPToMACID(deviceIP);
-          if (deviceMAC==0 && deviceIP==IPAddress(0,0,0,0)) {
-            snsType = 0;
-            SerialPrint("No MAC or IP provided",true);
-            responseMsg = "No MAC or IP provided";
-          }
-          if (snsType == 0 || snsName.length() == 0 || (deviceIP==IPAddress(0,0,0,0) && deviceMAC==0)) {
-            snsType = 0;
-            deviceMAC = 0;
-            deviceIP = IPAddress(0,0,0,0);
-            SerialPrint("sensor missing critical elements, skipping.\n");
-            responseMsg = "Missing required fields: snsType and varName";
-          }  
-
-        } else {
-          SerialPrint("No data received",true);
-          responseMsg = "No valid HTML form data received";
-        }
-    }
-
-    if (timeRead == 0) timeRead = I.currentTime;
-    timeLogged = I.currentTime; //always set timelogged to current time, regardless of what is sent
-
-    bool addToSD = false;
-    if (deviceMAC!=0 && deviceIP!=IPAddress(0,0,0,0) && snsType!=0 ) {
-      if (devName.length() == 0) devName = "Unknown";
-
-      //is this sensor already in the database?
-      int16_t sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
-      if (sensorIndex >= 0) {
-        if (Sensors.getSensorFlag(sensorIndex) != flags) {
-          SerialPrint("Sensor found, flags changed, adding to SD",true);
-          addToSD = true;
-        }
-      } else {
-        SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
-        addToSD = true;
-      }
-
-      // Add sensor to Devices_Sensors class
-      sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
-                                            snsName.c_str(), snsValue, 
-                                            timeRead, timeLogged, sendingInt, flags, devName.c_str());
-
-      if (sensorIndex < 0) {
-        SerialPrint("Failed to add sensor",true);
-        responseMsg = "Failed to add sensor";
-      } else {
-        //message was successfully added to Devices_Sensors class
-        Sensors.getDeviceBySnsIndex(sensorIndex)->dataReceived = timeLogged; //device sent data to me now
-        responseMsg = "OK";
-      }      
-      
-    }
-
-    #ifdef _USESDCARD
-    if (sensorIndex >= 0 && addToSD) {
-      //message was successfully added to Devices_Sensors class
-      //save to SD card if addToSD is true [flag was changed]. Otherwise it will save hourly
-      if (storeSensorDataSD(sensorIndex)) {
-        SerialPrint("Individual sensor data saved to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
-      } else {
-        SerialPrint("Warning: Failed to save individual sensor data to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
-      }
-    }
-    #endif
-
-    if (responseMsg == "OK") {
-      server.send(200, "text/plain", responseMsg);
-    } else {
-        SerialPrint("Failed to add sensor with response message: " + responseMsg + "\n");
-        server.send(500, "text/plain", responseMsg);
-    }
-    return;
-
-}
 
 
 void handleCONFIG() {
@@ -4898,7 +4716,7 @@ void handleDeviceViewer() {
     
     // Count sensors for this device
     uint8_t sensorCount = 0;
-    for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
         SnsType* sensor = Sensors.getSensorBySnsIndex(i);
         if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
             sensorCount++;
@@ -4923,7 +4741,7 @@ void handleDeviceViewer() {
         WEBHTML = WEBHTML + "</tr>";
         
         // Add sensor rows
-        for (int16_t i = 0; i < Sensors.getNumSensors(); i++) {
+        for (int16_t i = 0; i < NUMSENSORS; i++) {
             SnsType* sensor = Sensors.getSensorBySnsIndex(i);
             if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {                
                 WEBHTML = WEBHTML + "<tr>";
@@ -5182,93 +5000,446 @@ void setupServerRoutes() {
     server.onNotFound(handleNotFound);
 }
 
-bool SendData(struct SnsType *S, bool forceSend, int16_t sendToDeviceIndex) {
+//handlers for receiving data
+String processSensorDataJSON(String& postData, String& responseMsg) {
+  IPAddress deviceIP = IPAddress(0,0,0,0);
+  uint64_t deviceMAC = 0;
+  String devName = "";
+  uint8_t devType = 0;
+  uint8_t devFlags = 0;
+  uint8_t snsType = 0;
+  uint8_t snsID = 0;
+  String snsName;
+  double snsValue = 0;
+  uint32_t timeRead = 0;
+  uint32_t timeLogged = I.currentTime;
+  uint32_t sendingInt = 0;
+  uint8_t flags = 0;
+ 
+   //process the sensor data JSON buffer
+   responseMsg = "OK";
+   JsonDocument doc;
+   DeserializationError error = deserializeJson(doc, postData);
+   if (!error) {
+     // New-style MAC-based messages have this format: "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"timeLogged\":%u,\"sendingInt\":%u,\"flags\":%d}]}}"
+     if (doc["device"].is<JsonObject>()) {
+       JsonObject device = doc["device"];
+       
+       if (device["ip"].is<JsonVariantConst>()==false && device["mac"].is<JsonVariantConst>()==false) {
+         SerialPrint("Invalid JSON message format - missing MAC and IP",true);
+         responseMsg = "Invalid JSON message format - missing MAC and IP";
+       } else {
+         if (device["ip"].is<JsonVariantConst>()) {
+           String ipStr = device["ip"];
+           deviceIP.fromString(ipStr);
+         }
+         if (device["mac"].is<JsonVariantConst>()) {
+           String macStr = device["mac"];                  
+           deviceMAC = strtoull(macStr.c_str(), NULL, 16);
+         } else {
+           deviceMAC = IPToMACID(deviceIP);
+         }
+         if (device["name"].is<JsonVariantConst>()) {
+           devName = device["name"].as<String>();
+         }
+         if (device["devType"].is<JsonVariantConst>()) {
+           devType = device["devType"];
+         }
+         if (device["devFlags"].is<JsonVariantConst>()) {
+           devFlags = device["devFlags"];
+         }
+         if (device["sensor"].is<JsonArray>()) {
+           JsonArray sensorArray = device["sensor"];
+           for (JsonObject sensor : sensorArray) {
+             if (sensor["type"].is<JsonVariantConst>() && sensor["id"].is<JsonVariantConst>() && 
+                 sensor["name"].is<JsonVariantConst>() && sensor["value"].is<JsonVariantConst>()) {
+                 snsType = sensor["type"];
+                 snsID = sensor["id"];
+                 snsName = sensor["name"].as<String>();
+                 snsValue = sensor["value"];
+                 timeRead = sensor["timeRead"].is<JsonVariantConst>() ? sensor["timeRead"] : 0;
+                 //timeLogged = sensor["timeLogged"].is<JsonVariantConst>() ? sensor["timeLogged"] : I.currentTime; //should not be sent by the device. should be set by the server as the time this message was received. Legacy devices may still send this.
+                 sendingInt = sensor["sendingInt"].is<JsonVariantConst>() ? sensor["sendingInt"] : 3600;
+                 flags = sensor["flags"].is<JsonVariantConst>() ? sensor["flags"] : 0;
+               }
+           }
+         }
+       }
+     } else {
+       SerialPrint("JSON message missing device object",true);
+       responseMsg = "JSON message missing device object";
+     }
+ 
+ 
+     if (timeRead == 0) timeRead = I.currentTime;
+ 
+   } else {
+     SerialPrint("Could not deserialize JSON message",true);
+     responseMsg = "Could not deserialize JSON message";
+   }
+ 
+ 
+   if (responseMsg == "OK") {
+     uint8_t ret = registerSensorData(deviceMAC, deviceIP, devName, devType, devFlags, snsType, snsID, snsName, snsValue, timeRead, timeLogged, sendingInt, flags);
+     if (ret == 0) {
+       responseMsg = "Failed to add sensor";
+     }
+   }
+ 
+   return responseMsg;
+ }
+ 
+ uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags) {
+   //returns 0 if failed to add sensor, 1 if sensor was added, 2 if sensor was already in the database and is updated
+ 
+   uint8_t ret = 0;
+   bool addToSD = false;
+   int16_t sensorIndex = -1;
+   if (deviceMAC!=0 && deviceIP!=IPAddress(0,0,0,0) && snsType!=0 ) {
+     if (devName.length() == 0) devName = "Unknown";
+ 
+     //is this sensor already in the database?
+     sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
+     if (sensorIndex >= 0) {
+       ret = 2; //sensor was found in the database and is updated
+       if (Sensors.getSensorFlag(sensorIndex) != flags) {
+         SerialPrint("Sensor found, flags changed, adding to SD",true);
+         addToSD = true;
+       }
+     } else {
+       ret =1; //sensor was not found in the database and is added
+       SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
+       addToSD = true;
+     }
+ 
+
+     //is this a low power sensor?
+     if (bitRead(flags,2) == 1) {
+      //low power sensors do not know if they switched flag status... get the last reading, which has not yet been updated
+      SnsType* OldS = Sensors.getSensorBySnsIndex(Sensors.findSensor(deviceMAC, snsType, snsID));
+      if (OldS) {
+        if (OldS->Flags != flags && (bitRead(flags,0) !=  bitRead(flags,0))) { //flag status changed
+          bitWrite(flags,6,1); //flag changed since last read
+        }          
+      }
+     }
+
+     // Add sensor to Devices_Sensors class
+     sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
+                                           snsName.c_str(), snsValue, 
+                                           timeRead, timeLogged, sendingInt, flags, devName.c_str(), devType);
+ 
+     if (sensorIndex < 0) {
+       SerialPrint("Failed to add sensor",true);
+       return 0; //failed to add sensor
+     } else {
+       //message was successfully added to Devices_Sensors class
+       
+       Sensors.getDeviceBySnsIndex(sensorIndex)->dataReceived = timeLogged; //device sent data to me now
+     }      
+     
+   }
+ 
+   #ifdef _USESDCARD
+   if (sensorIndex >= 0 && addToSD) {
+     //message was successfully added to Devices_Sensors class
+     //save to SD card if addToSD is true [flag was changed]. Otherwise it will save hourly
+     if (storeSensorDataSD(sensorIndex)) {
+       SerialPrint("Individual sensor data saved to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
+     } else {
+       SerialPrint("Warning: Failed to save individual sensor data to SD: " + snsName + " (index " + String(sensorIndex) + ")", true);
+     }
+   }
+   #endif
+ 
+  
+   return ret;
+ }
+ 
+ void handlePost() {
+     String responseMsg = "OK";
+ 
+     // Check if this is JSON data (new format)
+     if (server.hasArg("JSON")) {
+         String postData = server.arg("JSON");
+         responseMsg = processSensorDataJSON(postData, responseMsg); 
+      } else {
+         // Handle old HTML form data (backward compatibility)
+         if (server.args() > 0) {
+           String senderIP = "";
+           uint64_t deviceMAC = 0;
+           IPAddress deviceIP = IPAddress(0,0,0,0);
+           String devName = "";
+           uint8_t devType = 0;
+   
+           uint8_t ardID = 0; //legacy field, not used anymore
+           uint8_t snsType = 0;
+           uint8_t snsID = 0;
+           String snsName = "";
+           double snsValue = 0;
+           uint32_t timeRead = 0;
+           uint32_t timeLogged = I.currentTime;
+           uint32_t sendingInt = 0;
+           uint8_t flags = 0;
+           uint8_t devFlags = 0;
+                           
+           if (server.hasArg("MAC")) deviceMAC = strtoull(server.arg("MAC").c_str(), NULL, 16);//must be a uint64_t
+           if (server.hasArg("IP")) {
+             server.arg("IP").replace(",",""); //remove unneeded erroneous commas //this was an error in the old code
+             deviceIP.fromString(server.arg("IP"));
+           }
+           if (server.hasArg("logID")) { //legacy code, still used by some devices
+            String logID = server.arg("logID");
+             ardID = breakString(&logID,".",true).toInt(); //this is a legacy field, not used anymore
+             snsType = breakString(&logID,".",true).toInt();
+             snsID = logID.toInt();
+           }
+           if (server.hasArg("devName")) devName = server.arg("devName");
+           if (server.hasArg("devType")) devType = server.arg("devType").toInt();
+           if (server.hasArg("snsType")) snsType = server.arg("snsType").toInt();
+           if (server.hasArg("snsID")) snsID = server.arg("snsID").toInt();
+           if (server.hasArg("snsName")) snsName = server.arg("snsName");
+           if (server.hasArg("varName")) snsName = server.arg("varName");
+           if (server.hasArg("varValue")) snsValue = server.arg("varValue").toDouble();
+           if (server.hasArg("snsValue")) snsValue = server.arg("snsValue").toDouble();
+           if (server.hasArg("timeRead")) timeRead = server.arg("timeRead").toInt();
+           if (server.hasArg("devFlags")) devFlags = server.arg("devFlags").toInt();
+           //if (server.hasArg("timeLogged")) timeLogged = server.arg("timeLogged").toInt(); //legacy, use current time instead
+           if (server.hasArg("SendingInt")) sendingInt = server.arg("SendingInt").toInt();
+           if (server.hasArg("Flags")) flags = server.arg("Flags").toInt();
+           if (server.hasArg("devType")) devType = server.arg("devType").toInt();
+ 
+           
+           if (deviceMAC==0 && deviceIP!=IPAddress(0,0,0,0)) deviceMAC = IPToMACID(deviceIP);
+           if (deviceMAC==0 && deviceIP==IPAddress(0,0,0,0)) {
+             snsType = 0;
+             SerialPrint("No MAC or IP provided",true);
+             responseMsg = "No MAC or IP provided";
+           }
+           if (snsType == 0 || snsName.length() == 0 || (deviceIP==IPAddress(0,0,0,0) && deviceMAC==0)) {
+             snsType = 0;
+             deviceMAC = 0;
+             deviceIP = IPAddress(0,0,0,0);
+             SerialPrint("sensor missing critical elements, skipping.\n");
+             responseMsg = "Missing required fields: snsType and varName";
+           }  
+ 
+         
+         if (responseMsg == "OK") {
+           if (timeRead == 0) timeRead = I.currentTime;
+ 
+           uint8_t ret = registerSensorData(deviceMAC, deviceIP, devName, devType, devFlags, snsType, snsID, snsName, snsValue, timeRead, timeLogged, sendingInt, flags);
+           if (ret == 0) responseMsg = "Failed to add sensor";
+         }
+       } else {
+         SerialPrint("No data received",true);
+         responseMsg = "No valid HTML form data received";
+       }
+     }
+ 
+ 
+     if (responseMsg == "OK") {
+       server.send(200, "text/plain", responseMsg);
+     } else {
+         SerialPrint("Failed to add sensor with response message: " + responseMsg + "\n");
+         server.send(500, "text/plain", responseMsg);
+     }
+     return;
+ 
+ }
+ 
+
+
+//handlers for sending data
+bool isSensorSendTime(SnsType* S, int16_t sendToDeviceIndex) {
+  if (S->timeLogged !=0 && S->timeLogged < I.currentTime && I.currentTime - S->timeLogged < 60*60*24 && bitRead(S->Flags,6) == 0 /* isflagged changed since last read*/) {
+    if (sendToDeviceIndex < 0) {
+     if (S->timeLogged + S->SendingInt > I.currentTime) return false; //not time
+    }
+  }
+  return true;
+}
+
+bool isDeviceSendTime(DevType* D, bool forceSend) {
+  
+  //basic check - does this device exist?
+  if (!D || !D->IsSet) return false;
+  if (D->IP==WiFi.localIP()) return false; //do not send to myself
+  if (forceSend) return true;
+  if (D->devType < 100) return false; //not a server
+
+  return true;
+}
+
+
+void buildSensorDataJSON(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, bool forHTTP) {
+     // Build JSON more efficiently using snprintf. should be device object, which holds all sensor objects
+     String deviceMAC;
+     DevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
+     if (device) {
+       deviceMAC = MACToString(device->MAC, '\0', true); //send mac as 12 digit hex string without separators
+     } 
+
+     snprintf(jsonBuffer, jsonBufferSize, "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"devType\":%d,\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
+     deviceMAC.c_str(),
+     device->IP.toString().c_str(),
+     device->devName,
+     device->devType,
+     S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->SendingInt, S->Flags); //timeLogged is not sent
+
+      // Build http body if needed
+      if (forHTTP) {
+        String encodedJson = urlEncode(jsonBuffer);
+        uint16_t newLength = encodedJson.length();
+        if (newLength > jsonBufferSize) {
+          newLength = jsonBufferSize;
+        }
+        snprintf(jsonBuffer, jsonBufferSize, "JSON=%s", encodedJson.c_str());
+      } 
+      return;
+}
+
+void wrapupSendData(SnsType* S) {
+  bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
+  S->timeLogged = I.currentTime;
+}
+
+int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer) {
+  //http method
+
+  if (WifiStatus() ==false) return -1001; //not connected to wifi
+
+  static char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
+
+  // Create HTTP client with proper cleanup
+  WiFiClient wfclient;
+  HTTPClient http;
+  
+  // Set timeout to prevent hanging
+  http.setTimeout(5000); // 5 second timeout
+  
+  http.useHTTP10(true);
+
+  if (http.begin(wfclient, urlBuffer)) {
+  http.addHeader("Content-Type","application/x-www-form-urlencoded");
+  int httpCode = http.POST((uint8_t*)jsonBuffer, strlen(jsonBuffer));
+  //String payload = http.getString();
+    
+    // Always end the connection
+  http.end();
+  return httpCode;
+  }
+  return -1000; //failed to begin connection
+}  
+
+uint8_t sendAllSensors(bool forceSend, bool useUDP, bool UDPBroadcast) {
+  byte count = 0;
+  for (int16_t i = 0; i < NUMSENSORS; i++) {
+    SnsType* S = Sensors.getSensorBySnsIndex(i);
+    if (!S) continue;
+
+    if (UDPBroadcast) {
+      SendData(S, forceSend, -255, true);
+      count++;
+      continue;
+    }
+    
+    if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
+    if (SendData(S, forceSend, -1, useUDP)) count++;
+    
+  }
+  return count;
+}
+
+
+bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
+  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!S) return false;
+  return SendData(S, forceSend, sendToDeviceIndex, useUDP);
+}
+
+
+bool SendData(SnsType *S, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   //forcesend will always send. If sentodeviceindex is >=0, it will send to the device at that index.
   if (!forceSend) {
     //should we send unmonitored sensors? Uncomment this to skip sending unmonitored sensors. The advantage of sending is that the server will have all sensor data, but these take up space.
     //if (bitRead(S->Flags,1) == 0) return false; //not monitored
-    if (S->timeLogged !=0 && S->timeLogged < I.currentTime && I.currentTime - S->timeLogged < 60*60*24 && bitRead(S->Flags,6) == 0 /* isflagged changed since last read*/) {
-      if (sendToDeviceIndex < 0) {
-       if (S->timeLogged + S->SendingInt > I.currentTime) return false; //not time
-      }
-    }
+    if (!isSensorSendTime(S,sendToDeviceIndex)) return false; //not time to send
   }
+
+  #ifdef _SENDDATABYUDP
+  //some devices will only send data by UDP, so we force it to true
+  useUDP = true;
+  sendToDeviceIndex = -255;
+  #endif
 
   bool isGood = false;
 
   if(WiFi.status() == WL_CONNECTED){
     // Use static buffers to reduce memory fragmentation
-    static char jsonBuffer[512];
-    static char urlBuffer[64];
-    static char bodyBuffer[768];
+    static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
     
-    String deviceMAC;
-    DevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
-    if (device) {
-      deviceMAC = MACToString(device->MAC, '\0', true); //send mac as 12 digit hex string without separators
+    if (useUDP)  buildSensorDataJSON(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
+    else buildSensorDataJSON(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
+
+    if (useUDP && sendToDeviceIndex == -255) { //special value for sending to broadcast UDP to everyone
+      SerialPrint("Sending to all devices", true);
+      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(255,255,255,255), strlen(jsonBuffer));
+      #ifndef _USELOWPOWER
+      for (int16_t i=0; i<NUMDEVICES ; i++) {
+        DevType* d = Sensors.getDeviceByDevIndex(i);
+        if (d && d->IsSet && d->devType >= 100) d->dataSent = I.currentTime;
+      }
+      wrapupSendData(S);
+      #endif
+      return true;
     }
 
-    // Build JSON more efficiently using snprintf. should be device object, which holds all sensor objects
-    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"device\":{\"mac\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"devType\":%d,\"sensor\":[{\"type\":%d,\"id\":%d,\"name\":\"%s\",\"value\":%.6f,\"timeRead\":%u,\"sendingInt\":%u,\"flags\":%d}]}}",
-      deviceMAC.c_str(),
-      device->IP.toString().c_str(),
-      device->devName,
-      device->devType,
-      S->snsType, S->snsID, S->snsName, S->snsValue, S->timeRead, S->SendingInt, S->Flags); //timeLogged is not sent
-
-    // now send to any servers I know of. iterate all known devices to find servers  (devType >=100)
-    for (int16_t i=0; i<NUMDEVICES ; i++) {
-      DevType* d = Sensors.getDeviceByDevIndex(i);
-      if (!d || !d->IsSet || (d->devType < 100 && i!=sendToDeviceIndex)) continue; //send to device if it is not set or is not a server
-      if (forceSend == false && d->dataSent > 0 && S->timeLogged + S->SendingInt > I.currentTime && i!=sendToDeviceIndex) continue; //not time to send to this server yet because we have recently sent data
-      
-      snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", d->IP.toString().c_str());
-
-
-      // Create HTTP client with proper cleanup
-      WiFiClient wfclient;
-      HTTPClient http;
-      
-      // Set timeout to prevent hanging
-      http.setTimeout(5000); // 5 second timeout
-      http.useHTTP10(true);
-
-      if (http.begin(wfclient, urlBuffer)) {
-      http.addHeader("Content-Type","application/x-www-form-urlencoded");
-        
-        // Build body efficiently
-        String encodedJson = urlEncode(jsonBuffer);
-        snprintf(bodyBuffer, sizeof(bodyBuffer), "JSON=%s", encodedJson.c_str());
-        
-        int httpCode = http.POST(bodyBuffer);
-      String payload = http.getString();
-        
-        // Always end the connection
-      http.end();
-        
-        if (httpCode == 200) { 
-          d->dataSent = I.currentTime;
-          isGood = true; 
-        }
-        else {
-          SerialPrint("SENDDATA: POST to " + String(urlBuffer) + " failed with code " + String(httpCode), true);
-          //set the sent time such that it will trigger a retry send in 10 minutes
-          d->dataSent = I.currentTime -d->SendingInt + 10*60;
-        }
-      } else {
-        SerialPrint("Failed to begin HTTP connection", true);
-        http.end(); // Ensure cleanup even on failure
+    if (sendToDeviceIndex >= 0) {
+      //send data to a specific device
+      DevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+      if (isDeviceSendTime(d, forceSend)) {
+        if (useUDP)           isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer));
+        else if (sendHTTPJSON(d->IP, jsonBuffer) == 200) isGood = true;                  
+        if (isGood) d->dataSent = I.currentTime;
       }
-      
-      
-      // Small delay to prevent overwhelming servers
-      delay(10);
+    } else {
+      // now send to any servers I know of. iterate all known devices to find servers  (devType >=100). forcesend MUST be false here (we are not going to send to every device)
+      //iterate all known devices to find servers  (devType >=100). forcesend MUST be false here (we are not going to send to every device)
+      for (int16_t i=0; i<NUMDEVICES ; i++) {
+        DevType* d = Sensors.getDeviceByDevIndex(i);
+        if (!isDeviceSendTime(d, false)) continue; //not time to send to this server yet because we have recently sent data
+        
+        //udp method, targetted
+        if (useUDP) {
+          SerialPrint("Sending UDP sensor data to " + d->IP.toString(), true);
+          if (sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer)) == true) {
+            d->dataSent = I.currentTime;
+            isGood = true;
+          } else {
+            SerialPrint("Failed to send UDP sensor data to " + d->IP.toString(), true);
+            //set the sent time such that it will trigger a retry send in 10 minutes
+            d->dataSent = I.currentTime -d->SendingInt + 10*60;
+          }
+        } else {
+          if (sendHTTPJSON(d->IP, jsonBuffer) == 200) {
+            d->dataSent = I.currentTime;
+            isGood = true;
+          } else {
+            SerialPrint("Failed to send HTTP sensor data to " + d->IP.toString(), true);
+            //set the sent time such that it will trigger a retry send in 10 minutes
+            d->dataSent = I.currentTime -d->SendingInt + 10*60;
+          }
+        }
+        
+        // Small delay to prevent overwhelming servers
+        delay(10);
+      }
     }
   }
-
   if (isGood) {
-    bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
-    S->timeLogged = I.currentTime;
+    wrapupSendData(S);
   }  else {
     I.makeBroadcast = true; //broadcast my presence if I failed to send the data
   }
@@ -5565,3 +5736,77 @@ bool getCoordinatesFromZipCodeFallback(const String& zipCode) {
   SerialPrint("All geocoding methods failed for ZIP code: " + zipCode, true);
   return false;
 } 
+
+#ifdef _USEUDP
+//In addition to ESPnow, I will also use UDP for all of the above message types
+//In addition to ESPnow, I will also use UDP for all of the above message types
+
+bool receiveUDPMessage() {
+  //receive a message via UDP
+  //return true if message is received, false if no message is received
+  #ifdef _USEUDP
+
+  int packetSize = LAN_UDP.parsePacket(); //>0 if message received!
+  if (packetSize > 0) {
+    I.UDP_LAST_MESSAGE_TIME = I.currentTime;
+
+    if (packetSize == sizeof(ESPNOW_type)) {
+      ESPNOW_type msg = {};
+      LAN_UDP.read((uint8_t*)&msg, packetSize);        
+      processLANMessage(&msg);        
+      I.UDP_LAST_STATUS = true;
+      snprintf(I.UDP_LAST_STATUS_MESSAGE, sizeof(I.UDP_LAST_STATUS_MESSAGE), "System");
+        
+      return true;
+    } else {
+      //assume this is a sensor data json buffer
+      //am I a server type? Should I interpret this?
+      if (_MYTYPE < 100) {
+        I.UDP_LAST_STATUS = false;
+        snprintf(I.UDP_LAST_STATUS_MESSAGE, sizeof(I.UDP_LAST_STATUS_MESSAGE), "Ignored");
+        return false;
+      }
+      if (packetSize+1 > SNSDATA_JSON_BUFFER_SIZE) {
+        SerialPrint("UDP message is too large", true);
+        I.UDP_LAST_STATUS = false;
+        snprintf(I.UDP_LAST_STATUS_MESSAGE, sizeof(I.UDP_LAST_STATUS_MESSAGE), "TOOLARGE");
+        return false;
+      }
+      char buffer[packetSize+1];
+      LAN_UDP.read(buffer, packetSize);
+      buffer[packetSize] = '\0'; //ensure the buffer is null terminated
+      String responseMsg = "OK";
+      String postData = (String)buffer;
+      responseMsg = processSensorDataJSON(postData, responseMsg);
+      if (responseMsg == "OK") {
+        I.UDP_LAST_STATUS = true;
+        snprintf(I.UDP_LAST_STATUS_MESSAGE, sizeof(I.UDP_LAST_STATUS_MESSAGE), "Sensor");          
+        return true;
+      }
+      else {
+        I.UDP_LAST_STATUS = false;
+        snprintf(I.UDP_LAST_STATUS_MESSAGE, sizeof(I.UDP_LAST_STATUS_MESSAGE), "Sensor");          
+        return false;  
+      }
+    }
+  } 
+  return false;
+  #endif
+  return false;
+}
+
+bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize) {
+  //send the provided jsonbuffer via UDP
+  //return true if successful, false if failed
+  #ifdef _USEUDP
+  if (bufferSize==0) bufferSize = strlen((const char*)buffer);
+  if (ip == IPAddress(0,0,0,0)) ip = IPAddress(255,255,255,255); //broadcast if no ip is provided
+  LAN_UDP.beginPacket(ip, _USEUDP);
+  LAN_UDP.write(buffer, bufferSize);
+  LAN_UDP.endPacket();
+  return true;
+  #else
+  return false;
+  #endif
+}
+#endif

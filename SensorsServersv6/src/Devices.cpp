@@ -30,8 +30,6 @@ Devices_Sensors::Devices_Sensors() {
 
 bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
     
-
-
     bool cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
     while (isSensorInit(*currentPosition)==false && cycling==true) {
         cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
@@ -122,6 +120,15 @@ DevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
     return nullptr;
 }
 
+DevType* Devices_Sensors::getDeviceByMAC(uint64_t MAC) {
+    int16_t devindex = findDevice(MAC);
+    if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
+        return &devices[devindex];
+    }
+    return nullptr;
+}
+
+
 uint64_t Devices_Sensors::getDeviceMACBySnsIndex(int16_t snsindex) {
     if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceMACByDevIndex(sensors[snsindex].deviceIndex);
@@ -170,11 +177,11 @@ uint8_t Devices_Sensors::getNumSensors() {
     return numSensors;
 }
 
-uint8_t Devices_Sensors::countSensors(uint8_t snsType,int16_t devIndex) {
+uint8_t Devices_Sensors::countSensors(int16_t snsType,int16_t devIndex) {
     //returns the number of sensors of the given type
     uint8_t count = 0;
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
-        if (sensors[i].IsSet && sensors[i].snsType == snsType) {
+        if (sensors[i].IsSet && (sensors[i].snsType == snsType || snsType == -1)) {
             if (devIndex == -1 || sensors[i].deviceIndex == devIndex) count++;
         }
     }

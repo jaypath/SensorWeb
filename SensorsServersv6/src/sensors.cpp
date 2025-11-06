@@ -19,7 +19,11 @@ uint8_t HVACSNSNUM = 0;
 #endif
 
 
-
+#ifdef _USEBARPRED
+  double BAR_HX[_USEBARPRED];
+  char WEATHER[15]; //weather string, "sunny", "cloudy", "rain", "snow", "fog", "hail", "thunderstorm", "tornado", "other"
+  uint32_t LAST_BAR_READ; //last pressure reading in BAR_HX
+#endif
 
 #ifdef _WEBCHART
   SensorChart SensorCharts[_WEBCHART];
@@ -27,7 +31,7 @@ uint8_t HVACSNSNUM = 0;
 
 
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and must be monititored (including if a reading is delayed, so I must provide sendingInt)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated/predictive  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and must be monititored (including if a reading is delayed, so I must provide sendingInt)
 
 
 #ifdef _USEBME680
@@ -282,24 +286,6 @@ int8_t readAllSensors(bool forceRead) {
   return numGood;
 }
 
-int8_t sendAllSensors(bool forceSend) {
-  //returns the number of sensors that were sent successfully
-  int8_t numGood = 0;
-  for (int16_t i = 0; i < _SENSORNUM; i++) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
-    if (sensor && sensor->IsSet) {
-      if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
-      String sensorString = (String) sensor->snsType + (String) "." + (String) sensor->snsID;
-      bool sendResult = SendData(sensor, forceSend);
-      if (sendResult == false) {
-        SerialPrint((String) "Could not send data for " + sensorString, true);
-        storeError((String) "Could not send data for " + sensorString, ERROR_SENSOR_SEND, true);
-      } else numGood++;
-      delay(20); //the delays between reads and sends are to prevent the ESP from overloading
-    }
-  }
-  return numGood;
-}
 
 int8_t ReadData(struct SnsType *P, bool forceRead) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
@@ -924,7 +910,6 @@ return 1;
 
 
 bool checkSensorValFlag(struct SnsType *P) {
-  //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, 
   //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
   
   bool lastflag = bitRead(P->Flags,0);
