@@ -59,12 +59,23 @@ typedef enum {
   
   //errors in operation
   typedef enum {
-    ERROR_UNDEFINED,   
+    ERROR_UNDEFINED, 
+    ERROR_HTTP_GENERAL, //HTTP general error
+    ERROR_HTTP_REQUEST, //HTTP request error
+    ERROR_HTTP_RESPONSE, //HTTP response error
+    ERROR_HTTP_TIMEOUT, //HTTP timeout
+    ERROR_HTTP_NOT_FOUND, //HTTP not found
+    ERROR_HTTP_POST, //HTTP post error
+    ERROR_HTTP_GET, //HTTP get error
+    ERROR_HTTP_PUT, //HTTP put error
+    ERROR_HTTP_DELETE, //HTTP delete error
     ERROR_HTTPFAIL_BOX, //failed http request for grid  coordinates
     ERROR_HTTPFAIL_GRID, //failed http request for grid
     ERROR_HTTPFAIL_HOURLY, //failed http request for hourly
     ERROR_HTTPFAIL_DAILY, //failed http request for DAILY
     ERROR_HTTPFAIL_SUNRISE, //failed http request for sunrise
+    ERROR_JSON_PARSE, //failed json parse request
+    ERROR_JSON_GEOCODING, //failed json parse request for geocoding
     ERROR_JSON_BOX, //failed http request for grid  coordinates
     ERROR_JSON_GRID, //failed json parse request for grid
     ERROR_JSON_HOURLY, //failed json parse request for hourly
@@ -86,15 +97,17 @@ typedef enum {
     ERROR_SD_RETRIEVEDATAMISSING, //no data in time range
     ERROR_SD_OPENDIR, //could not open directory
     ERROR_SD_FILEDEL, //could not delete file
-    ERROR_DEVICE_ADD, //could not add a device
-    ERROR_SENSOR_ADD, //could not add a sensor
-    ERROR_ESPNOW_SEND, //could not send ESPNow message
     ERROR_SD_WEATHERDATAWRITE, //could not write weather data
     ERROR_SD_WEATHERDATAREAD, //could not read weather data
     ERROR_SD_WEATHERDATASIZE, //weather data file was the wrong size
     ERROR_SD_GSHEETINFOWRITE, //could not write GsheetInfo data
     ERROR_SD_GSHEETINFOREAD, //could not read GsheetInfo data
-    ERROR_JSON_GEOCODING, //failed json parse request for geocoding
+    ERROR_DEVICE_ADD, //could not add a device
+    ERROR_SENSOR_ADD, //could not add a sensor
+    ERROR_ESPNOW_GENERAL, //ESPNow general error
+    ERROR_ESPNOW_SEND, //could not send ESPNow message
+    ERROR_ESPNOW_SEND_UDP, //could not send ESPNow message via UDP
+    ERROR_ESPNOW_SEND_ESPNOW, //could not send ESPNow message via ESPNow
     ERROR_GSHEET_CREATE, //failed to create spreadsheet
     ERROR_GSHEET_UPLOAD, //failed to upload data to spreadsheet
     ERROR_GSHEET_DELETE, //failed to delete spreadsheet
@@ -107,8 +120,7 @@ typedef enum {
     ERROR_HARDWARE_MEMORY, //hardware memory error
     ERROR_TIME, 
     ERROR_SENSOR_READ, //could not read a sensor
-    ERROR_SENSOR_SEND, //could not write a sensor
-    ERROR_ESPNOW_GENERAL //ESPNow general error
+    ERROR_SENSOR_SEND //could not write a sensor
   } ERRORCODES;
 
 
@@ -223,9 +235,14 @@ typedef enum {
       
       
       //for UDP messages
-      uint32_t UDP_LAST_MESSAGE_TIME; // time of last UDP message received
-      bool UDP_LAST_STATUS; // status of last UDP status check
-      char UDP_LAST_STATUS_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
+      uint32_t UDP_LAST_INCOMING_MESSAGE_TIME; // time of last UDP message received
+      uint32_t UDP_LAST_OUTGOING_MESSAGE_TIME; // time of last UDP message sent
+      uint8_t UDP_LAST_STATUS; // status of last UDP status check
+      char UDP_LAST_INCOMING_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
+      IPAddress UDP_LAST_INCOMING_MESSAGE_FROM_IP; // IP address of last UDP message sender
+      char UDP_LAST_OUTGOING_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
+      IPAddress UDP_LAST_OUTGOING_MESSAGE_TO_IP; // IP address of last UDP message target
+
       
     //for messages received
     uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
@@ -250,8 +267,6 @@ typedef enum {
       uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
       uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
           
-  
-      
       uint8_t isExpired = false; //are any critical sensors expired?
       uint8_t isFlagged=false;
       uint8_t wasFlagged=false;
@@ -264,6 +279,8 @@ typedef enum {
       uint8_t wasAC=false; //first bit is compressor on, bits 1-6 are zones
       uint8_t wasFan=false; //first bit is fan on, bits 1-6 are zones
       #endif
+      uint8_t MyRandomSecond=0; //random second at which to send data
+      
       uint8_t isHot;
       uint8_t isCold;
       uint8_t isSoilDry;
@@ -271,7 +288,6 @@ typedef enum {
 
       uint16_t showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
       
-  
       char lastError[76];
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;

@@ -6,7 +6,7 @@
 
 #include <Arduino.h>
 #include <WiFiClient.h>
-
+#include <ArduinoJson.h>
 // Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_CORE;
 class WeatherInfoOptimized;
@@ -130,22 +130,46 @@ void handleDeviceViewerPing();
 void handleDeviceViewerDelete();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 
+void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks);
+uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
+
+
 //receiving data
 bool receiveUDPMessage();
 void handlePost();
-String processSensorDataJSON(String& postData, String& responseMsg);
-uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
 
 //sending data
-void buildSensorDataJSON(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, bool forHTTP=false);
 void wrapupSendData(SnsType* S);
 bool isDeviceSendTime(DevType* D, bool forceSend);
 bool isSensorSendTime(SnsType* S, int16_t sendToDeviceIndex=-1);
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer);
-uint8_t sendAllSensors(bool forceSend, bool useUDP, bool UDPBroadcast=false);
+int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer);
+uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
 bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
 bool SendData( SnsType *S, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
 bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize=0);
+
+//send json messages
+int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
+int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
+int16_t sendMSG_DataRequest(DevType* d, int16_t snsIndex, bool viaHTTP);
+
+//add json handlers
+void JSONbuilder_pingMSG(char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP, bool isAck);
+void JSONbuilder_DataRequestMSG(char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
+void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP);
+void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP);
+String JSONbuilder_sensorObject(SnsType* S);
+uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer);
+
+//json processors
+void processJSONMessage(String& postData, String& responseMsg);
+void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck=false);
+void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
+void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
+int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
+static void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg);
+
 
 bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);
 void apiConnectToWiFi();

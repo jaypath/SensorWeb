@@ -64,6 +64,8 @@ void pushDoubleArray(double arr[], byte N, double value);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 char* strPad(char* str, char* pad, byte L);
 bool stringToLong(String s, uint32_t* val);
+bool stringToUInt64(String s, uint64_t* val, bool isHex);
+bool uint64ToString(uint64_t val, char* str, bool strHex);
 int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
 uint16_t countSubstr(String orig, String token);

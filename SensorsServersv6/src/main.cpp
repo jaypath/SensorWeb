@@ -398,6 +398,11 @@ void loop() {
 
         OldTime[1] = minute();
 
+        I.MyRandomSecond = random(0, 59); //this is the random second at which I will send data. This prevents all devices from sending data at the same time, which could overload the network.
+        if (minute() % 10 == 0 && _MYTYPE >= 100) I.makeBroadcast = true; //have servers broadcast every 10 minutes
+        
+        if (Sensors.getNumDevices() ==1) I.makeBroadcast = true; //if there is only one device (including  me), broadcast my presence
+        
         if (I.ALIVESINCE == 0) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not set, set it to the current time
 
         if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
@@ -405,16 +410,15 @@ void loop() {
         MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
 
         #ifdef _ISPERIPHERAL
-        bool newServerFound = false;
         //check if there are any new servers (that I have not sent data to yet), and if so reset the timelogged for all my sensors
         for (int16_t i=0; i<NUMDEVICES ; i++) {
           DevType* d = Sensors.getDeviceByDevIndex(i);
           if (!d || !d->IsSet || d->devType < 100) continue;
           if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
-            newServerFound=true;
+            int16_t deviceIndex = Sensors.findDevice(d->MAC);
+            sendAllSensors(true,deviceIndex,false); //http message to server
           }
         }
-        if (newServerFound)  sendAllSensors(true,true,true); //udp broadcast to everyone
         
         #endif
 
@@ -507,8 +511,7 @@ void loop() {
         I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         
-        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
-        
+        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true,3,true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
         
         handleStoreCoreData();
         
@@ -525,7 +528,6 @@ void loop() {
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         
-        handleESPNOWPeriodicBroadcast(30);
 
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
@@ -580,7 +582,7 @@ void loop() {
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
-Serial.println("Second changed");
+        SerialPrint("Second changed",true);
         //if time is invalid, completely reset the time
         if (isTimeValid(I.currentTime)==false) {
             SerialPrint("Time is invalid, completely resetting time",true);
@@ -596,15 +598,49 @@ Serial.println("Second changed");
         else I.ScreenNum=0;
         #endif
 
+
+
         #ifdef _ISPERIPHERAL
             //run through all my sensors and try and update them
 
 
             readAllSensors(false);
-            sendAllSensors(false, false, false);
+            if (I.MyRandomSecond == second())             sendAllSensors(false, false, false);
 
-                  
+        #else
+            if (I.MyRandomSecond == second())   {
 
+                //at a random point every minute, check for expired devices/sensors, and determine how to communicate with them
+                //check for expired devices by determining if ANY sensors are expired
+                Sensors.checkExpirationAllSensors(I.currentTime, true,1,true); //parameter 2 is true for  only critical sensors, parameter 3 is the multiplier, parameter 4 is to expire the device if any sensors are expired
+
+                //now march through devices and send a ping to each if they are labeled as expired
+                int16_t startIndex = -1;
+                while (startIndex < NUMDEVICES) {
+                    DevType* device = Sensors.getNextExpiredDevice(startIndex);
+                    if (!device) break;
+                    if (device->devType >= 100) continue; //don't send a ping to servers
+                    if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
+                    if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
+                    SerialPrint("Sensor expired: Sending sensor data request to " + String(device->devName),true);
+                    
+                    //now decide how to communicate with the device. The tiers are: no data within 5 minutes, no data within 10 minutes, and no data beyond 10 minutes
+                    if (device->dataReceived < I.currentTime - 600) sendMSG_DataRequest(device, -1, true);
+                    else if (device->dataReceived < I.currentTime - 120) {
+                        sendMSG_DataRequest(device, -1, false);
+                    } else {
+                        sendESPNowSensorDataRequest(device, 1);
+                    }
+                    delayWithNetwork(10,50);
+                    
+                }
+                //at a random point every 10 minutes, broadcast my presence (but it will only happen once every 10 minutes)
+                if (I.makeBroadcast) {        //broadcast every 10 minutes, at some random second within the 10th minute        
+                    broadcastServerPresence(true, 2);
+                }
+                
+            }          
+            
         #endif
     }
 
