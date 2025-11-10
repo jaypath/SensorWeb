@@ -52,8 +52,12 @@ namespace {
 
 // --- Utility: Pack/Unpack server list ---
 void packServerList(uint8_t* payload, const uint8_t serverMACs[][6], const uint32_t* serverIPs, uint8_t count) {
-    memset(payload, 0, 60);
-    for (uint8_t i = 0; i < count && i < 6; ++i) {
+    //add my name to the payload
+    memcpy(payload+49, Prefs.DEVICENAME, 30);
+    payload[79]=0; //null terminate the server name, juts in case
+    
+    memset(payload, 0, 40);
+    for (uint8_t i = 0; i < count && i < 4; ++i) {
         memcpy(payload + i * 10, serverMACs[i], 6);
         uint32_t ip = serverIPs[i];
         memcpy(payload + i * 10 + 6, &ip, 4);
@@ -61,7 +65,7 @@ void packServerList(uint8_t* payload, const uint8_t serverMACs[][6], const uint3
 }
 void unpackServerList(const uint8_t* payload, uint8_t serverMACs[][6], uint32_t* serverIPs, uint8_t& count) {
     count = 0;
-    for (uint8_t i = 0; i < 6; ++i) {
+    for (uint8_t i = 0; i < 4 && i < count; ++i) {
         bool allZero = true;
         for (int j = 0; j < 10; ++j) if (payload[i*10+j] != 0) allZero = false;
         if (allZero) break;
@@ -176,8 +180,9 @@ esp_err_t delESPNOWPeer(uint64_t macad) {
 }
 
 
+
 // --- Send ESPNow Message ---
-bool sendESPNOW(ESPNOW_type& msg) {
+bool sendESPNOW(ESPNOW_type& msg, uint8_t method) {
     bool isBroadcast = true;
 
     uint64ToMAC(Prefs.PROCID, msg.senderMAC);
@@ -187,47 +192,41 @@ bool sendESPNOW(ESPNOW_type& msg) {
     #ifndef _USELOWPOWER
     I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
     #endif
-    if (msg.msgType>0) {
-        if (isValidLMKKey()) {
-            // Encrypt the message
-            encryptESPNOWMessage(msg, 80);
-        } else {
-            storeError("ESPNow: LMK not valid, message cannot be encrypted");
-            return false;
-        }
-    }
 
-    for (int i = 0; i < 6; ++i) if (msg.targetMAC[i] != 0xFF) isBroadcast = false;
-    
-    if (!isBroadcast) {
-        // Determine encryption based on message type and LMK availability
-        
+    if (!isBroadcastMAC(msg.targetMAC)) {
+
+      isBroadcast = false;
+      
         // Add peer 
         addESPNOWPeer(msg.targetMAC);
     }
 
-    
-    esp_err_t result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
+    if (msg.msgType>0 && encryptESPNOWMessage(msg, 80)==false) return false;;
+
+
+    esp_err_t result = ESP_OK;
+    if (method == 1 || method == 2) {
+        sendESPNowUDPMessage(msg, IPAddress(0,0,0,0), false); //send broadcast messages via UDP as well. Note that the third parameter is false because the message should is encrypted if needed
+        delay(100);
+    }
+
+    if (method == 0 || method == 2)         {
+         result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
+        if (result != ESP_OK) {
+            String error = "SendESPNow: Error" + (String) result + ", to " + MACToString(msg.targetMAC);
+            SerialPrint(error,true);
+            storeError(error.c_str(),ERROR_ESPNOW_SEND);
+        }    
+        I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
+        I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
+        SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true);
+    }
 
     if (!isBroadcast) {
         delESPNOWPeer(msg.targetMAC);
     }
-    if (result != ESP_OK) {
-        String error = "SendESPNow: Error" + (String) result + ", to " + MACToString(msg.targetMAC);
-        SerialPrint(error,true);
-        storeError(error.c_str(),ERROR_ESPNOW_SEND);
         
-        return false;
-    }
-    I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
-    I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
-    SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true);
 
-    #ifdef _USEUDP
-    if (isBroadcast) {
-      sendUDPMessage((uint8_t*)&msg, IPAddress(255,255,255,255), sizeof(ESPNOW_type)); //send broadcast messages via UDP as well
-    }
-    #endif
     return true;
 }
 
@@ -291,40 +290,38 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
 
 void processLANMessage(ESPNOW_type* msg) {
 
-
     if (msg->msgType>0) {
         decryptESPNOWMessage(*msg, 80);
     }
 
+    //in all cases, the payload will contain the sender's name from the payload+49 to payload+79
+    if (msg->payload[79]==0 && msg->payload[49]!=0) {
+        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+49, 0, 0, msg->senderType); //remove the type from the payload, which is why it is +1
+    }
+    
 
-    if (msg->msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
+
+    if (msg->msgType == ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED || msg->msgType == UDP_MSG_BROADCAST_ALIVE_ENCRYPTED) {
         // Received broadcast alive message (type 1) 
 
         //is this message valid, and decryptable? If so, the first byte of the payload will be the type, so we can verify decryption
-        if (msg->payload[0] != ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED) {
+        if (msg->payload[0] != ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED && msg->payload[0] != UDP_MSG_BROADCAST_ALIVE_ENCRYPTED) {
             storeError("ESPNow: Broadcast alive message is not valid");
             snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast alive message was invalid");
             return;
         }
-
-
-        bool isNewDevice = false;
-
-        if (_MYTYPE >= 100 && Sensors.findDevice(msg->senderMAC) == -1) isNewDevice = true;
-        
-        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+1, 0, 0, msg->senderType); //remove the type from the payload, which is why it is +1
 
     
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast: %s", (char*) msg->payload+1);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[30]=0; //null terminate the server name, juts in case
     
 
-        #ifndef _USELOWPOWER
+        #if !defined(_ISPERIPHERAL) && !defined(_USELOWPOWER)
         //am I a server and did I get a message from a non server? If so, broadcast my presence
         if (_MYTYPE >= 100 && msg->senderType < 100) {
             //delay a random number of milliseconds between 500 and 5000
             delay(random(1, 10)*100); //this is to prevent all servers from broadcasting at the same time
-            broadcastServerPresence(false); //if this is a new server, broadcast my presence
+            I.makeBroadcast = true;
         }
         #endif
 
@@ -354,7 +351,7 @@ void processLANMessage(ESPNOW_type* msg) {
         // Echo nonce back from request to response for replay attack prevention
         memcpy(resp.payload + 32, msg->payload + 32, 8);
         
-        if (!sendESPNOW(resp)) {
+        if (!sendESPNOW(resp,0)) { //0 = ESPNow only
             storeError("ESPNow: Failed to send WiFi password response");
             return;
         }
@@ -458,16 +455,18 @@ void processLANMessage(ESPNOW_type* msg) {
         uint64ToMAC(I.TEMP_AES_MAC, mac);
         requestWiFiPassword(mac, nullptr);
     }
-    else if (msg->msgType== ESPNOW_MSG_PING_RESPONSE_REQUIRED) {
+    else if (msg->msgType== ESPNOW_MSG_PING_RESPONSE_REQUIRED || msg->msgType== UDP_MSG_PING_REQUEST) {
         // Received ping request (type 5) - payload contains a uint32_t unix timestamp followed by the server name
-        // The payload has already been decrypted by decryptESPNOWMessage above
+        // The payload has  been decrypted 
+        // Response must be a type 6 message, with the current unix timestamp in the payload. If peripheral sensor, follow this with sending sensor data.
+        
+
         uint32_t originalSendTime;
+
 
         memcpy(&originalSendTime, msg->payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping recv: %s", (char*)msg->payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+4, 0, 0, msg->senderType); //remove "ping recv: " from the server name
-        
         
         // Prepare ping response (type 6) with current unix timestamp
         ESPNOW_type resp = {};
@@ -481,11 +480,14 @@ void processLANMessage(ESPNOW_type* msg) {
         resp.payload[34]=0; //null terminate the server name, juts in case
         snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping response to %s", (char*)msg->payload + 4);
         
-        if (!sendESPNOW(resp)) {
+        bool ok = false;
+        if (msg->msgType== ESPNOW_MSG_PING_RESPONSE_REQUIRED) ok = sendESPNOW(resp,0);
+        else ok = sendESPNowUDPMessage(resp, msg->senderIP, true); //true because the message is not encrypted yet
+
+        if (!ok) {
             storeError("ESPNow: Failed to send ping response");
             return;
-        }
-        
+        } 
         #ifdef _DEBUG
         SerialPrint("ESPNow: Sent ping response to " + MACToString(msg->senderMAC), true);
         #endif
@@ -497,12 +499,25 @@ void processLANMessage(ESPNOW_type* msg) {
         memcpy(&responseTime, msg->payload, 4);
         snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Ping response: %s", (char*)msg->payload + 4);
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
-        Sensors.addDevice(MACToUint64(msg->senderMAC), msg->senderIP, (char*)msg->payload+4, 0, 0, msg->senderType); //remove "ping response: " from the server name
         
         #ifdef _DEBUG
         SerialPrint("ESPNow: Received ping response from " + MACToString(msg->senderMAC) + " at time " + String(responseTime), true);
         #endif
     }
+    else if (msg->msgType== ESPNOW_MSG_REQUEST_SENSOR_DATA || msg->msgType== UDP_MSG_REQUEST_SENSOR_DATA) {
+        
+        if (MACToUint64(msg->targetMAC) != (uint64_t)(ESP.getEfuseMac())) {
+            return; //not for me
+        }
+
+        #ifdef _ISPERIPHERAL
+        delay(random(10,2000)); //pause a random number so that the sensors are not all sent at the same time
+        sendAllSensors(true, -1, true); //send all sensors as a broadcast
+        #endif
+        return;
+        
+    }
+        
     else if (msg->msgType== ESPNOW_MSG_TERMINATE) {
         // Terminate communication, delete peer if needed
         delESPNOWPeer(msg->senderMAC);
@@ -520,24 +535,27 @@ void processLANMessage(ESPNOW_type* msg) {
 
 //at present I do not offer a type 0 message, so all messages are encrypted
 // --- Broadcast Server Presence (Type 1) ---
-bool broadcastServerPresence(bool broadcastPeripheral) {
+bool broadcastServerPresence(bool broadcastPeripheral, uint8_t method) {
+    //methods are 0 = ESPNow, 1 = UDP, 2 = both
 
     if (_MYTYPE<100 && broadcastPeripheral==false) return false; //only servers broadcast, except under certain circumstances when peripherals specifically requested to do so
-
+    
     ESPNOW_type msg = {};
 
-    memset(msg.targetMAC, 0xFF, sizeof(msg.targetMAC));
+    makeBroadcastMAC(msg.targetMAC);
     msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
     memset(msg.payload, 0, 80);
     memcpy(msg.payload, &msg.msgType, 1); //the first byte of the message is the type, so we can verify decryption
+
+    //add my name to the payload
+    memcpy(msg.payload+49, Prefs.DEVICENAME, 30);
+    msg.payload[79]=0; //null terminate the server name, juts in case
     
-    memcpy(msg.payload + 1, Prefs.DEVICENAME, 30);
-    msg.payload[32]=0; //null terminate the server name, juts in case
     #ifndef _USELOWPOWER
     snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Broadcast server presence to all");
     I.makeBroadcast = false;
     #endif
-    return sendESPNOW(msg);
+    return sendESPNOW(msg, method);
 }
 
 
@@ -548,7 +566,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     // If user provided a list, use it
     if (serverMACs && serverIPs && count > 0) {
         ESPNOW_type msg = {};
-        memset(msg.targetMAC, 0xFF, 6);
+        makeBroadcastMAC(msg.targetMAC);
         msg.msgType = ESPNOW_MSG_SERVER_LIST;
         packServerList(msg.payload, serverMACs, serverIPs, count);
         
@@ -603,6 +621,10 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
         memset(I.WIFI_RECOVERY_NONCE, 0, 8);
     }
     memset(msg.payload + 40, 0, 20); // zero rest
+    //add my name to the payload
+    memcpy(msg.payload+49, Prefs.DEVICENAME, 30);
+    msg.payload[79]=0; //null terminate the server name, juts in case
+    
     // Find server MAC if not provided
     uint8_t destMAC[6] = {0};
     if (serverMAC) {
@@ -642,29 +664,78 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
 }
 
 // --- Send Ping Request (Type 5) ---
-bool sendPingRequest(const uint8_t* targetMAC) {
-    // Prepare ping request message (type 5) with current unix timestamp
-    ESPNOW_type msg = {};
-
-    memcpy(msg.targetMAC, targetMAC, 6);
-    msg.msgType = ESPNOW_MSG_PING_RESPONSE_REQUIRED;
-    
-    // Encrypt current unix timestamp followed by the server name in payload
+void makeESPNowPingMsg(ESPNOW_type& msg, uint64_t targetMAC, uint8_t tier) {
+    // Prepare ping request message  with current unix timestamp
+    //tier is 1 = ESPNow directed ping, tier 2 = directed UDP
+    byte tempMAC[6] = {0};
+    uint64ToMAC(targetMAC, tempMAC);
+    memcpy(msg.targetMAC, tempMAC, 6);
+    if (tier == 2) {
+        msg.msgType = UDP_MSG_PING_REQUEST;
+    } else {
+        msg.msgType = ESPNOW_MSG_PING_RESPONSE_REQUIRED;
+    }
     uint32_t currentTime = (uint32_t)I.currentTime;
     memcpy(msg.payload, &currentTime, sizeof(uint32_t));
-    memcpy(msg.payload + sizeof(uint32_t), Prefs.DEVICENAME, 30);
-    msg.payload[34]=0; //null terminate the server name, juts in case
+    //add my name to the payload
+    memcpy(msg.payload+49, Prefs.DEVICENAME, 30);
+    msg.payload[79]=0; //null terminate the server name, juts in case
+}
+
+
+bool sendESPNowSensorDataRequest(DevType* targetDevice,uint8_t tier) {
+    // Prepare sensor data request message (type 7) with current unix timestamp
+    //tier is 1 = ESPNow directed ping, tier 2 = directed UDP, tier 3 = both ESP and UDP Directed ping (for HTTP or UDP use http specific code) 
     
-    bool ok = sendESPNOW(msg);
-    if (!ok) {
-        snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request failed to %s", MACToString(targetMAC).c_str());
-        storeError("ESPNow: Failed to send ping request");
+
+    return sendESPNowPingRequest(targetDevice, tier, true);
+    
+}
+
+bool sendESPNowPingRequest(DevType* targetDevice, uint8_t tier, bool dataRequest) {
+    // Prepare ping request message (type 5) with current unix timestamp
+    //tier is 1 = ESPNow directed ping, tier 2 = directed UDP, tier 3 = both ESP and UDP Directed ping (for HTTP or UDP use http specific code) 
+    ESPNOW_type msg = {};
+        
+    bool ok;
+    if (tier == 2 || tier == 3) {
+        makeESPNowPingMsg(msg, targetDevice->MAC, 2);
+        if (dataRequest) {
+            msg.msgType = UDP_MSG_REQUEST_SENSOR_DATA;            
+        } else {
+            msg.msgType = UDP_MSG_PING_REQUEST;
+        }
+        
+        ok |= sendESPNowUDPMessage(msg, targetDevice->IP, true);
+    } 
+    if (tier == 1 || tier == 3) {
+        makeESPNowPingMsg(msg, targetDevice->MAC, 1);
+
+        if (dataRequest) {
+            msg.msgType = ESPNOW_MSG_REQUEST_SENSOR_DATA;
+        } else {
+            msg.msgType = ESPNOW_MSG_PING_RESPONSE_REQUIRED;
+        }
+        
+        ok |= sendESPNOW(msg);
     }
     
-    #ifdef _DEBUG
-    SerialPrint("ESPNow: Sent ping request to " + MACToString(targetMAC), true);
-    #endif
-    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request to %s", MACToString(targetMAC).c_str());
+    if (!ok) {
+        if (tier == 2 || tier == 3) {
+            snprintf(I.UDP_LAST_OUTGOING_MESSAGE, 10, "Ping UDP fail");
+        } 
+        if (tier == 1 || tier == 3) {
+            snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request failed to %s", MACToString(targetDevice->MAC).c_str());
+        }
+        storeError("ESPNow: Failed to send ping request");
+    } else {
+        if (tier == 2 || tier == 3) {
+            snprintf(I.UDP_LAST_OUTGOING_MESSAGE, 10, "Ping UDP sent");
+        } 
+        if (tier == 1 || tier == 3) {
+            snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request to %s", MACToString(targetDevice->MAC).c_str());
+        }
+    }
     return ok;
 }
 
@@ -673,9 +744,15 @@ bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
     //user must know that the message must be 64 bytes or less (so that the encrypted message is 64 bytes + 16 bytes for the IV)
     //returns 1 if successful, 0 if encryption failed, -1 if payload is too large
 
+    if (msg.msgType==0) return false; //not encrytable as type 0
+
+    if (!isValidLMKKey()) {
+        storeError("ESPNow: LMK not valid, message cannot be encrypted");
+        return false;
+    }
+    
     uint8_t encrypted[msglen] = {0};
     uint16_t outlen = 0;
-
 
     int8_t ret = BootSecure::encrypt((const unsigned char*)msg.payload, msglen-16, (char*)Prefs.KEYS.ESPNOW_KEY, encrypted, &outlen,16);
     if (ret == -2) {
@@ -716,10 +793,22 @@ bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen) {
 
 }
 
+void makeBroadcastMAC(uint8_t* mac) {
+    memset(mac, 0xFF, 6);
+}
+
+bool isBroadcastMAC(uint8_t* mac) {
+    for (int i = 0; i < 6; i++) {
+        if (mac[i] != 0xFF) {
+            return false;
+        }
+    }
+    return true;
+}
 //---------------------------------
 
 
-bool sendESPNowUDPMessage(ESPNOW_type* msg) {
+bool sendESPNowUDPMessage(ESPNOW_type& msg, IPAddress targetIP, bool encrypt) {
     //send the message via UDP
     //return true if successful, false if failed
     //the message is already encrypted, so we don't need to encrypt it again
@@ -727,30 +816,35 @@ bool sendESPNowUDPMessage(ESPNOW_type* msg) {
     //the message is already in the length field of the ESPNOW_type struct
     //the targetMAC field of the ESPNOW_type struct has the recipient MAC address
     #ifdef _USEUDP
-    // Check if this is a broadcast message (all 0xFF in targetMAC)
-    bool isBroadcast = true;
 
-    IPAddress ip = IPAddress(255, 255, 255, 255);
+    //since this is ESPNow type, will use esp tracking variables from I
+    I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
+    I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
+    I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
+    snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, sizeof(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD), (char*)msg.payload);
 
-    for (int i = 0; i < 6; i++) {
-        if (msg->targetMAC[i] != 0xFF) {
-            isBroadcast = false;
-            break;
-        }
-    }
+    if (encrypt && msg.msgType>0 && encryptESPNOWMessage(msg,80)==false) return false;
+
+// Check if this is a broadcast message (all 0xFF in targetMAC)
+    bool isBroadcast = false;
+    if (isBroadcastMAC(msg.targetMAC)) isBroadcast = true;
+
     
-    if (!isBroadcast) {
-        // For unicast, look up IP from targetMAC   
-        DevType* d = Sensors.getDeviceByMAC(MACToUint64(msg->targetMAC));        
-        if (d) {
-            ip = d->IP;
-        } else {
-            storeError("No device found for UDP message");
-            return false;
-        }
+    if (isBroadcast) {
+        targetIP = IPAddress(255,255,255,255);
+    } else {
+        if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0)) {
+            DevType* d = Sensors.getDeviceByMAC(MACToUint64(msg.targetMAC));        
+            if (d) {
+                targetIP = d->IP;
+            } else {
+                storeError("No device found for UDP message");
+                return false;
+            }
+        } 
     } 
     
-    sendUDPMessage((uint8_t*)msg,  ip, sizeof(ESPNOW_type));
+    sendUDPMessage((uint8_t*)&msg, targetIP, sizeof(ESPNOW_type));
 
     return true;
     #else

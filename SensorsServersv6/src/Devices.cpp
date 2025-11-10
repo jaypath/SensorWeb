@@ -40,6 +40,8 @@ bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
 // Device management functions
 int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devName, uint32_t sendingInt, uint8_t flags, uint8_t devType) {
     // Check if device already exists
+
+    if (MAC == 0) return -1;
     int16_t existingIndex = findDevice(MAC);
     if (existingIndex >= 0) {
         // Update existing device
@@ -47,13 +49,15 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
         device->IP = IP;
         device->dataReceived = I.currentTime;
         //do not change time logged
-        if (devName && strcmp(device->devName, devName) != 0) {
-            strncpy(device->devName, devName, sizeof(device->devName) - 1);
+
+        if (devName[0] != '\0') {
+            strncpy(device->devName, devName, sizeof(device->devName));
             device->devName[sizeof(device->devName) - 1] = '\0';
         }
         if (flags != 0) device->Flags = flags;
         if (sendingInt != 0)         device->SendingInt = sendingInt;
         device->expired = false;
+        if (sendingInt != 0 && (sendingInt < device->SendingInt || device->SendingInt == 0)) device->SendingInt = sendingInt; //sending interval is the shortest of all attached sensors. Therefore, I should get a message at least this often!        
         device->IsSet = 1;
         if (devType != 0) device->devType = devType;
         return existingIndex;
@@ -74,13 +78,13 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
                 devices[i].devName[0] = '\0';
             }
             devices[i].Flags = flags;
-            if (sendingInt == 0)         devices[i].SendingInt = 3600;
-            else            devices[i].SendingInt = sendingInt;
+            if (sendingInt == 0)         devices[i].SendingInt = 86400; //86400 seconds = 24 hours
+            else devices[i].SendingInt = sendingInt;
             devices[i].expired = false;
             devices[i].devType = devType;
-            if (i >= numDevices) {
-                numDevices = i + 1;
-            }
+            
+            numDevices++;
+            
             return i;
         }
     }
@@ -262,7 +266,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
                                   uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType, int16_t snsPin, int16_t powerPin) {
     //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
     // Find or create device
-    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, 0, 0, devType);
+    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, sendingInt, 0, devType);
     if (deviceIndex < 0) {
         storeError("Addsensor: Could not create device", ERROR_DEVICE_ADD);
         return -2; // Could not create device
@@ -318,12 +322,8 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             #ifdef _ISPERIPHERAL
             sensors[i].snsPin = snsPin;
             sensors[i].powerPin = powerPin;
-            #endif
-    
-            
-            if (i >= numSensors) {
-                numSensors = i + 1;
-            }
+            #endif            
+            numSensors++;
             Sensors.lastUpdatedTime = I.currentTime;
             return i;
         }
@@ -332,6 +332,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
     storeError("No space for sensor",ERROR_SENSOR_ADD);
     return -1; // No space available
 }
+
 
 int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID) {
     int16_t deviceIndex = findDevice(deviceMAC);
@@ -771,55 +772,67 @@ uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index, bool checkExpired)
     return 0;
 }
 
-int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical) {
-    if (index < 0 || index >= NUMDEVICES  || !devices[index].IsSet) {
-        return 0;
+DevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
+    //takes a start index and finds the NEXT expired device. usage: Start at -1.
+    //if it reaches the end of the list, no more expired devices
+    startIndex++;
+    if (startIndex < 0) startIndex = 0;
+    for (int16_t i = startIndex; i < NUMDEVICES; i++) {
+        DevType* device = &devices[i];
+        if (!device->IsSet) continue;
+        if (device->expired) {
+            return device;
+        }
     }
-    
-    if (currentTime == 0) currentTime = I.currentTime;
+    return NULL;
+}
+
+
+//there are two ways to check expiration of device:
+//1. check if any sensors are expired, and if the last read was multiplier x the sending interval ago then also label the device expired. This ensures that a device is expired even if only one sensor is missing (otherwise, other sensors could mask the expiration of one missing sensor)
+//1a. call checkExpirationAllSensors(currentTime, onlyCritical, multiplier, expireDevice)
+//1b. then call any device expiration checker function, such as checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
+//2. check the devie directly, assuming that sendingInt has been registered as the shortest sending interval of all attached sensors. If the last read was multiplier x the sending interval ago then label the device expired. This is simpler and faster, but may miss a sensor if others are present.
+//2a. call checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
+int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier) {
 
     DevType* device = &devices[index];
+    if (!device->IsSet) return 0;
 
-    uint32_t expirationTime = device->dataReceived;
-    if (expirationTime < device->dataSent) expirationTime = device->dataSent;  //expiration time is the more recent of the data received or data sent
+    if (currentTime == 0) currentTime = I.currentTime;
 
 
-    expirationTime += device->SendingInt * 2; // 2x sending interval
-    
-    if (currentTime > expirationTime) {
-        if (onlyCritical && !bitRead(device->Flags, 7)) {
-            return 0; // Only check critical devices
-        }
+    if (device->dataReceived + device->SendingInt * multiplier < currentTime) {
         device->expired = true;
         return 1;
     }
-    
-    device->expired = false;
-    return 0;
+
+    return 0;    
 }
 
-byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical) {
+byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
     byte count = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-        if (checkExpirationSensor(i, currentTime, onlyCritical) == 1) {
-            count++;
-        }
+        if (checkExpirationSensor(i, currentTime, onlyCritical, 3, expireDevice) == 1)    count++; //check if any sensors are expired
+        
     }
     return count;
 }
 
-int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical) {
+int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
     //returns -1 if invalid (out of bounds), -2 if not set, -3 if expired,-5 if this is not a critical sensor and onlyCritical is true, -10 if indeterminate (no sending interval set), 0 if valid not expired, 1 if expired
     
     int16_t result = isSensorIndexInvalid(index);
     if (result != 0) return -1*result;
     if (onlyCritical && !bitRead(sensors[index].Flags, 7)) return -5;
-
+    
+    if (multiplier == 0) multiplier = 3;
     uint16_t sendint = sensors[index].SendingInt;
     if (sendint==0) return -10;
-    uint32_t expirationTime = sensors[index].timeLogged + sendint *2; // 2x sending interval buffer allows for missing one reading
+    uint32_t expirationTime = sensors[index].timeLogged + sendint * multiplier; // 2x sending interval buffer allows for missing one reading
 
     if (currentTime > expirationTime) {
+        if (expireDevice) devices[sensors[index].deviceIndex].expired = true;
         sensors[index].expired = true;
         return 1;
     }
@@ -1005,6 +1018,7 @@ int16_t Devices_Sensors::getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, i
 
 }
 #endif
+
 
 bool Devices_Sensors::isMySensor(int16_t index) {
     if (index < 0 || index >= NUMSENSORS ) return false;

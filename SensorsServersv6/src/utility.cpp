@@ -521,9 +521,8 @@ void initGsheetHandler() {
 
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
   #ifndef _ISPERIPHERAL
-  if (I.makeBroadcast || (minute() % interval == 0 && I.ESPNOW_LAST_OUTGOINGMSG_TIME!=I.currentTime)) {        
-      // ESPNow does not require WiFi connection; always broadcast
-      delay(random(100,2500)); //random delay to avoid flooding the network
+  if (I.makeBroadcast || (minute() % interval == 0)) {        
+      // ESPNow does not require WiFi connection; always broadcast      
       broadcastServerPresence();
   }
   #endif
@@ -626,9 +625,14 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
 
 
-  I.UDP_LAST_MESSAGE_TIME = 0;
-  I.UDP_LAST_STATUS = false; // status of last UDP status check
-  I.UDP_LAST_STATUS_MESSAGE[0] = '\0'; // message of last UDP status check - [Sensor, System, etc]
+  I.UDP_LAST_INCOMING_MESSAGE_TIME = 0;
+  I.UDP_LAST_OUTGOING_MESSAGE_TIME = 0;
+  I.UDP_LAST_STATUS = 0; // status of last UDP status check
+  memset(I.UDP_LAST_INCOMING_MESSAGE,0,10); // message of last UDP status check - [Sensor, System, etc]
+  memset(I.UDP_LAST_OUTGOING_MESSAGE,0,10); // message of last UDP status check - [Sensor, System, etc]
+  I.UDP_LAST_INCOMING_MESSAGE_FROM_IP = IPAddress(0,0,0,0);
+  I.UDP_LAST_OUTGOING_MESSAGE_TO_IP = IPAddress(0,0,0,0);
+
       
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;
@@ -743,8 +747,33 @@ char* strPad(char* str, char* pad, byte L)     // Simple C string function
   return str;
 }
 
+bool uint64ToString(uint64_t val, char* str, bool strHex) {
+  if (strHex) {
+    snprintf(str, 16, "%012llX", val);
+  } else {
+    snprintf(str, 16, "%012llu", val);
+  }
+  return true;
+}
+
+bool stringToUInt64(String s, uint64_t* val, bool isHex) {
+  char* e;
+  uint64_t myint = 0;
+  if (isHex) {
+    myint = strtoull(s.c_str(), &e, 16);    
+  } else {
+    myint = strtoull(s.c_str(), &e, 0);
+  }
+
+  if (e != s.c_str()) { // check if strtoull actually found some digits
+    *val = myint;
+    return true;
+  } else {
+    return false;
+  }
 
 
+}
 
 bool stringToLong(String s, uint32_t* val) {
  

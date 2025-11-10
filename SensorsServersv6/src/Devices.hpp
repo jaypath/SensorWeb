@@ -64,7 +64,7 @@ public:
     
     // Device management
     bool updateDeviceName(int16_t index, String newDeviceName);
-    int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 3600, uint8_t flags = 0, uint8_t devType = 0);
+    int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 86400, uint8_t flags = 0, uint8_t devType = 0);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);
     DevType* getDeviceByDevIndex(int16_t devindex);
@@ -103,9 +103,10 @@ public:
     int16_t findOldestSensor();
     uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false);
     uint8_t getSensorFlag(int16_t index);
-    byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical);
-    int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical);
-    int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical);
+    byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
+    DevType* getNextExpiredDevice(int16_t& startIndex);
+    int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
+    int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     
 
     // Search functions
