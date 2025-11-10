@@ -90,7 +90,7 @@ extern int16_t MY_DEVICE_INDEX;
 void setupSensors() {
 
 #ifdef _USE32
-analogSetAttenuation(ADC_11db); //this sets the voltage range to 3.3v
+analogSetAttenuation(ADC_ATTEN_DB_6); //this sets the voltage range to 3.3v
 #endif
 
 String myname = String(Prefs.DEVICENAME);
@@ -380,8 +380,11 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
 
 
         P->snsValue =  val;
-        if (P->snsType==3 && isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
+        if (P->snsType==3) {
+          P->snsValue = readResistanceDivider(10000, 3.3, val);
+          if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
         
+        } 
         if (P->snsType==33 && isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
       break;
       }
@@ -970,7 +973,9 @@ bool checkSensorValFlag(struct SnsType *P) {
 
 }
 
-
+float readResistanceDivider(float R1, float Vsupply, float Vread) {
+  return R1 * Vread/(Vsupply - Vread) ;
+}
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN) {
   /*
     R1 is first resistor
