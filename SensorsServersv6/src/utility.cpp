@@ -236,7 +236,7 @@ bool isRHValid(double rh) {
 }
 
 bool isSoilCapacitanceValid(double soil) {
-  if (soil < 0 || soil > 4095) return false;
+  if (soil < 0 || soil > 100) return false;
   return true;
 }
 

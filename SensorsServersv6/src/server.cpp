@@ -2947,7 +2947,7 @@ void handleSENSOR_READ_SEND_NOW() {
   // Force read the sensor data
   int8_t readResult = ReadData(sensor, true); // forceRead = true
 
-  SendData(sensor,true,-1,true); //send the data to the servers using broadcast udp
+  SendData(snsIndex,true,-1,true); //send the data to the servers using broadcast udp
 
   String resultMsg = "";
   if (readResult == 1) {
@@ -5076,9 +5076,9 @@ void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, 
 }
 
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP) {
-  deviceIndex = Sensors.findDevice(device->MAC);
-
-  DevType* device = Sensors.getDeviceByDevIndex(deviceIndex);
+   
+  int16_t mydeviceIndex = Sensors.findMyDeviceIndex();
+  DevType* device = Sensors.getDeviceByDevIndex(mydeviceIndex);
   if (!device) {
     SerialPrint("JSONbuilder_sensorMSG_all: My device not found", true);
     storeError("JSONbuilder_sensorMSG_all: My device not found", ERROR_JSON_PARSE, true);
@@ -5092,7 +5092,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool for
   bool first = true;
   for (int16_t i = 0; i < NUMSENSORS; ++i) {
     SnsType* S = Sensors.getSensorBySnsIndex(i);
-    if (!S || S->deviceIndex != deviceIndex) continue;
+    if (!S || S->deviceIndex != mydeviceIndex) continue;
 
     if (!first) tempJSON += ",";
     tempJSON += JSONbuilder_sensorObject(S);
@@ -5450,7 +5450,9 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
 
 
 //handlers for sending data
-bool isSensorSendTime(SnsType* S, int16_t sendToDeviceIndex) {
+bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex) {
+  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!S) return false;
   if (S->timeLogged !=0 && S->timeLogged < I.currentTime && I.currentTime - S->timeLogged < 60*60*24 && bitRead(S->Flags,6) == 0 /* isflagged changed since last read*/) {
     if (sendToDeviceIndex < 0) {
      if (S->timeLogged + S->SendingInt > I.currentTime) return false; //not time
@@ -5473,6 +5475,17 @@ bool isDeviceSendTime(DevType* D, bool forceSend) {
 //___________________START OF HTTP SEND HANDLERS___________________
 
 void wrapupSendData(SnsType* S) {
+  if (!S) {
+    //special case, all sensors sent
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+      SnsType* S = Sensors.getSensorBySnsIndex(i);
+      if (!S) continue;
+      if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
+      bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
+      S->timeLogged = I.currentTime;
+    }
+    return;
+  }
   bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
   S->timeLogged = I.currentTime;
 }
@@ -5526,45 +5539,20 @@ uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
     if (!S) continue;
     if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
     
-    if (SendData(S, forceSend, sendToDeviceIndex, useUDP)) count++;
+    if (SendData(i, forceSend, sendToDeviceIndex, useUDP)) count++;
     delayWithNetwork(10,50);
     
   }
   return count;
 }
 
-//need to combine senddata versions, and only use snsindex
+
 bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
-
-  if (snsIndex <0) { //send all sensors
-    if (sendToDeviceIndex <0) {
-      useUDP = true;
-      IPAddress ip = IPAddress(255,255,255,255);
-    } else {
-      DevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
-      if (!d) return false;
-      ip = d->IP;
-    }
-
-    char buf[SNSDATA_JSON_BUFFER_SIZE];
-    JSONbuilder_sensorMSG_all(buf, sizeof(buf), /*forHTTP=*/!useUDP);    
-    if (useUDP) sendUDPMessage((uint8_t*)buf, ip, strlen(buf));
-    else sendHTTPJSON(ip, buf);
-    return true;
-  }
-
-  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
-  if (!S) return false;
-  return SendData(S, forceSend, sendToDeviceIndex, useUDP);
-}
-
-
-bool SendData(SnsType *S, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   //forcesend will always send. If sentodeviceindex is >=0, it will send to the device at that index.
   if (!forceSend) {
     //should we send unmonitored sensors? Uncomment this to skip sending unmonitored sensors. The advantage of sending is that the server will have all sensor data, but these take up space.
     //if (bitRead(S->Flags,1) == 0) return false; //not monitored
-    if (!isSensorSendTime(S,sendToDeviceIndex)) return false; //not time to send
+    if (!isSensorSendTime(snsIndex,sendToDeviceIndex)) return false; //not time to send
   }
 
 
@@ -5573,9 +5561,18 @@ bool SendData(SnsType *S, bool forceSend, int16_t sendToDeviceIndex, bool useUDP
   if(WiFi.status() == WL_CONNECTED){
     // Use static buffers to reduce memory fragmentation
     static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
-    
-    if (useUDP)  JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
-    else JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
+
+    SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+    if (S == nullptr) { //send all sensors
+      if (useUDP)  JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
+      else JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
+  
+    } else {
+      if (useUDP)  JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
+      else JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
+  
+    }
+  
 
     if (useUDP && sendToDeviceIndex <0) { //special value for sending to broadcast UDP to everyone
       SerialPrint("Sending to all devices", true);
@@ -5583,7 +5580,7 @@ bool SendData(SnsType *S, bool forceSend, int16_t sendToDeviceIndex, bool useUDP
       #ifndef _USELOWPOWER
       for (int16_t i=0; i<NUMDEVICES ; i++) {
         DevType* d = Sensors.getDeviceByDevIndex(i);
-        if (d && d->IsSet) d->dataSent = I.currentTime;
+        if (d && d->IsSet && d->IP != WiFi.localIP()) d->dataSent = I.currentTime;
       }
       wrapupSendData(S);
       #endif

@@ -86,11 +86,26 @@ uint8_t HVACSNSNUM = 0;
 
 extern int16_t MY_DEVICE_INDEX;
 
+const uint16_t ADCRATE = 2^_ADCBITS-1;
+
+struct esp_adc_cal_characteristics_t adc_chars;
 
 void setupSensors() {
 
-#ifdef _USE32
-analogSetAttenuation(ADC_ATTEN_DB_6); //this sets the voltage range to 3.3v
+
+  #ifdef _USE32
+#ifdef _USEADCATTEN
+analogSetAttenuation(_USEADCATTEN); //this sets the voltage range to 1.7v roughly
+#endif
+
+#ifdef _ADCBITS
+analogSetWidth(_USEADCBITS); //this sets the number of bits to 12
+#endif
+
+adc_chars.adc_num = ;
+adc_chars.atten = _USEADCATTEN;
+adc_chars.bit_width = _USEADCBITS;
+
 #endif
 
 String myname = String(Prefs.DEVICENAME);
@@ -226,14 +241,14 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   SerialPrint("Sensors setup complete",true);
 }
 
-int peak_to_peak(int pin, int ms) {
+double peak_to_peak(int pin, int ms) {
   
   //check n (samples) over ms milliseconds, then return the max-min value (peak to peak value) 
 
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
   
-  int maxVal = 0;
-  int minVal=6000;
+  double maxVal = 0;
+  double minVal=6000;
   uint16_t buffer = 0;
   uint32_t t0;
   
@@ -241,7 +256,7 @@ int peak_to_peak(int pin, int ms) {
   t0 = millis();
 
   while (millis()<=t0+ms) { 
-    buffer = analogRead(pin);
+    buffer = analogRead(pin)/ADCRATE;
     if (maxVal<buffer) maxVal = buffer;
     if (minVal>buffer) minVal = buffer;
 
@@ -351,7 +366,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         if (pintype == 1 || pintype == 2) {
           pinMode(correctedPin, INPUT);
           for (byte ii=0;ii<nsamps;ii++) {
-            val += analogRead(correctedPin); //analog pin, no power
+            val += analogRead(correctedPin)/ADCRATE; //analog pin, no power
             delay(10);
           }
           val=val/nsamps;
@@ -379,13 +394,15 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         SerialPrint("val: " + String(val) + " sensor type: " + String(P->snsType),true);
 
 
-        P->snsValue =  val;
         if (P->snsType==3) {
           P->snsValue = readResistanceDivider(10000, 3.3, val);
           if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
         
         } 
-        if (P->snsType==33 && isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+        if (P->snsType==33) {
+          P->snsValue = map(val, 0, ADCRATE, 0, 100);
+          if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+        } 
       break;
       }
 
@@ -812,7 +829,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
       case 60: // battery
         {
           #ifdef _USELIBATTERY
-          //note that esp32 ranges 0 to 4095, while 8266 is 1023. This is set in header.hpp
+          //note that esp32 ranges 0 to ADCRATE, while 8266 is 1023. This is set in header.hpp
           P->snsValue = readVoltageDivider( 1,1,  _USELIBATTERY, 3.3, 3); //if R1=R2 then the divider is 50%
           
         #endif
@@ -989,7 +1006,8 @@ float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN
   float Vo = 0;
 
   for (byte i=0;i<avgN;i++) {
-    Vo += (float) Vm * ((R2+R1)/R2) * analogRead(snsPin)/_ADCRATE;
+    esp_adc_cal_get_voltage(snsPin, &adc_chars, &Vo);
+    Vo += (float) Vm * ((R2+R1)/R2) * analogRead(snsPin)/ADCRATE;
   }
 
   return  Vo/avgN;
@@ -1278,7 +1296,7 @@ double readMUX(int16_t pin, byte nsamps) {
     val += analogRead(MUXPINS[4]);
     delay(10);
   }
-  val=val/nsamps;
+  val=val/nsamps/ADCRATE;
   digitalWrite(MUXPINS[0],HIGH);
   digitalWrite(MUXPINS[1],HIGH);
   digitalWrite(MUXPINS[2],HIGH);

@@ -141,12 +141,11 @@ void handlePost();
 //sending data
 void wrapupSendData(SnsType* S);
 bool isDeviceSendTime(DevType* D, bool forceSend);
-bool isSensorSendTime(SnsType* S, int16_t sendToDeviceIndex=-1);
+bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex=-1);
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer);
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
 bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
-bool SendData( SnsType *S, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
 bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize=0);
 
 //send json messages

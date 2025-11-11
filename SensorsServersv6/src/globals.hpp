@@ -18,8 +18,8 @@
   #define _ADCRATE 1023
 #elif defined(ESP32)
   #define _USE32
-  #define _ADCRATE 4095
-#else
+//note that ADCrate is now automatically detected based on the ADC_BITS and ADC_ATTEN settings
+  #else
   #error Arduino architecture unrecognized by this code.
 #endif
 

@@ -257,6 +257,7 @@ extern   SSD1306AsciiWire oled;
 #endif
 
 int8_t ReadData(struct SnsType *P, bool forceRead=false);
+float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
 void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);
