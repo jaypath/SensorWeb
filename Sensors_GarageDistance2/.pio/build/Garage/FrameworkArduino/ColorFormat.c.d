@@ -1,0 +1,3 @@
+.pio/build/Garage/FrameworkArduino/ColorFormat.c.o: \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32@src-77c8e93767360b28deee4aedf5d0a1ab/cores/esp32/ColorFormat.c \
+ C:/Users/Jaypath/.platformio/packages/framework-arduinoespressif32@src-77c8e93767360b28deee4aedf5d0a1ab/cores/esp32/ColorFormat.h
