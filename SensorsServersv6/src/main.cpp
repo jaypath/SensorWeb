@@ -354,9 +354,12 @@ void loop() {
 
     #ifdef _USETFLUNA    
 //    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
-    ArduinoOTA.handle();
-
-    if (TFLunaUpdateMAX()) return; //if tfluna is reading, then skip everything else        
+    
+    if (TFLunaUpdateMAX()) {
+        server.handleClient();
+        ArduinoOTA.handle();
+        return; //if tfluna is reading, then skip everything else        
+    }
     #endif
 
     if (WiFi.status() != WL_CONNECTED) {
