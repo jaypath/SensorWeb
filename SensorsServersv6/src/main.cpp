@@ -357,7 +357,7 @@ void loop() {
     ArduinoOTA.handle();
 
     if (TFLunaUpdateMAX()) return; //if tfluna is reading, then skip everything else        
-    #else
+    #endif
 
     if (WiFi.status() != WL_CONNECTED) {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
@@ -379,7 +379,7 @@ void loop() {
         ArduinoOTA.handle();
         server.handleClient();
     }
-    #endif
+    
 
     #ifdef _USEUDP
     receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
