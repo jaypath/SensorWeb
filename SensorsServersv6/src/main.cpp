@@ -120,7 +120,9 @@ void initOTA() {
         #ifdef _USELED
         // Set all LEDs to green to indicate OTA start
         for (byte j = 0; j < _USELED_SIZE; j++) {
-          LEDARRAY[j] = (uint32_t) 0 << 16 | 26 << 8 | 0; // green at 10% brightness
+          if (j%3==0) LEDARRAY[j] = (uint32_t) 50 << 16 | 0 << 8 | 0; 
+          else if (j%3==1) LEDARRAY[j] = (uint32_t) 0 << 16 | 50 << 8 | 0;
+          else  LEDARRAY[j] = (uint32_t) 0 << 16 | 0 << 8 | 50;          
         }
         FastLED.show();
         #endif
@@ -143,7 +145,7 @@ void initOTA() {
         #ifdef _USESSD1306
           if ((int)(progress) % 10 == 0) oled.print(".");   
         #endif
-        #ifdef _USELED
+        #ifdef _DONNOTUSE
           // Show OTA progress on LEDs as a filling bar
           if (progress%10==0) {
             for (byte j = 0; j < _USELED_SIZE; j++) {
@@ -307,6 +309,11 @@ void setup() {
     initLEDs();
     #endif
     
+
+    #ifdef _USETFLUNA
+    setupTFLuna();
+    #endif
+
     #ifdef _USEWEATHER
     tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
 //load weather data from SD card
@@ -345,31 +352,12 @@ void loop() {
 
     esp_task_wdt_reset();
 
-
-    #ifdef _USEUDP
-    receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
-    #endif
-    updateTime(); //sets I.currenttime
-
-    #ifdef _USETFT
-    checkTouchScreen();
-    #endif
-
-    #ifdef _USEGSHEET
-    GSheet.ready(); //maintains authentication
-    #endif
-    
-    #ifdef _USELED
-    LEDs.LED_update();
-    #endif
-
-    #ifdef _USETFLUNA
-//    note that if disctace changes, this will enter a loop that locks out wifi
+    #ifdef _USETFLUNA    
 //    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
-        do {
-            TFLunaUpdateMAX();        
-        } while (WiFi.status() != WL_CONNECTED);
-    #endif
+    ArduinoOTA.handle();
+
+    if (TFLunaUpdateMAX()) return; //if tfluna is reading, then skip everything else        
+    #else
 
     if (WiFi.status() != WL_CONNECTED) {
         if (wifiDownSince == 0) wifiDownSince = I.currentTime;
@@ -391,7 +379,24 @@ void loop() {
         ArduinoOTA.handle();
         server.handleClient();
     }
+    #endif
 
+    #ifdef _USEUDP
+    receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
+    #endif
+    updateTime(); //sets I.currenttime
+
+    #ifdef _USETFT
+    checkTouchScreen();
+    #endif
+
+    #ifdef _USEGSHEET
+    GSheet.ready(); //maintains authentication
+    #endif
+    
+    #ifdef _USELED
+    LEDs.LED_update();
+    #endif
 
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
@@ -560,7 +565,17 @@ void loop() {
         checkTimezoneUpdate();
         I.ESPNOW_SENDS = 0;
         I.ESPNOW_RECEIVES = 0;
+        I.UDP_RECEIVES = 0;
+        I.UDP_SENDS = 0;
+        I.HTTP_RECEIVES = 0;
+        I.HTTP_SENDS = 0;
 
+        I.ESPNOW_INCOMING_ERRORS = 0;
+        I.ESPNOW_OUTGOING_ERRORS = 0;
+        I.UDP_INCOMING_ERRORS = 0;
+        I.UDP_OUTGOING_ERRORS = 0;
+        I.HTTP_INCOMING_ERRORS = 0;
+        I.HTTP_OUTGOING_ERRORS = 0;
 
         #ifdef _REBOOTDAILY
         SerialPrint("Rebooting daily...",true);
@@ -577,8 +592,6 @@ void loop() {
 
             #endif
         #endif
-
-      
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
@@ -605,7 +618,7 @@ void loop() {
 
 
             readAllSensors(false);
-            if (I.MyRandomSecond == second())             sendAllSensors(false, false, false);
+            if (I.MyRandomSecond == second())             sendAllSensors(false, -1, true);
 
         #else
             if (I.MyRandomSecond == second())   {
@@ -631,8 +644,8 @@ void loop() {
                     } else {
                         sendESPNowSensorDataRequest(device, 1);
                     }
-                    delayWithNetwork(10,50);
-                    
+                    device->dataSent = I.currentTime;
+                    delayWithNetwork(10,50);                    
                 }
                 //at a random point every 10 minutes, broadcast my presence (but it will only happen once every 10 minutes)
                 if (I.makeBroadcast) {        //broadcast every 10 minutes, at some random second within the 10th minute        

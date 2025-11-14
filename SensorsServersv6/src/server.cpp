@@ -220,7 +220,7 @@ int16_t connectWiFi() {
 }
 
 void APStation_Mode() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("APStation");
   
   //wifi ID and pwd will be set in connectsoftap
   String wifiPWD;
@@ -275,8 +275,8 @@ void APStation_Mode() {
     uint32_t startTime = m;
     const uint32_t timeoutMs = 600000; // 10 minute timeout
     uint32_t last60Seconds = m;
-    uint32_t lastServerStatusUpdate = I.lastServerStatusUpdate;
-
+    uint32_t lastServerStatusUpdate = I.HTTP_LAST_INCOMINGMSG_TIME;
+    
     do {
       //reset the watchdog timer
       esp_task_wdt_reset();
@@ -304,8 +304,8 @@ void APStation_Mode() {
       }
 
       //reset the start time if the server status has been updated
-      if (I.lastServerStatusUpdate != lastServerStatusUpdate) {
-        lastServerStatusUpdate = I.lastServerStatusUpdate;
+      if (I.HTTP_LAST_INCOMINGMSG_TIME != lastServerStatusUpdate) {
+        lastServerStatusUpdate = I.HTTP_LAST_INCOMINGMSG_TIME;
         startTime = m;
       }
       
@@ -532,7 +532,7 @@ void saveTimezoneSettings(int32_t utc_offset, bool dst_enabled, uint8_t dst_star
  * Returns: JSON with status
  */
 void apiConnectToWiFi() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("API_WiFi");
   
   String ssid = "";
   String password = "";
@@ -588,7 +588,7 @@ void apiConnectToWiFi() {
  * Returns: JSON with lat/lon
  */
 void apiLookupLocation() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("API_Loc");
   
   String street = server.hasArg("street") ? server.arg("street") : "";
   String city = server.hasArg("city") ? server.arg("city") : "";
@@ -613,8 +613,7 @@ void apiLookupLocation() {
  * Returns: JSON with timezone info
  */
 void apiDetectTimezone() {
-  I.lastServerStatusUpdate = I.currentTime;
-  
+  registerHTTPMessage("API_TZ");
   int32_t utc_offset;
   bool dst_enabled;
   uint8_t dst_start_month, dst_start_day, dst_end_month, dst_end_day;
@@ -639,7 +638,7 @@ void apiDetectTimezone() {
  * Returns: JSON with status
  */
 void apiSaveTimezone() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("API_TZ");
   
   int32_t utc_offset = server.hasArg("utc_offset") ? server.arg("utc_offset").toInt() : 0;
   bool dst_enabled = server.hasArg("dst_enabled") ? (server.arg("dst_enabled") == "true" || server.arg("dst_enabled") == "1") : false;
@@ -659,8 +658,8 @@ void apiSaveTimezone() {
  * Returns: JSON with current setup completion status
  */
 void apiGetSetupStatus() {
-  I.lastServerStatusUpdate = I.currentTime;
-  
+  registerHTTPMessage("API_Setup");
+
   bool wifi_configured = Prefs.HAVECREDENTIALS && WifiStatus();
   bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
   bool timezone_configured = (Prefs.TimeZoneOffset != 0);
@@ -692,7 +691,7 @@ void apiGetSetupStatus() {
 }
 
 void handleApiCompleteSetup() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("API_OK");
 
   if (!WifiStatus()) {
     #ifdef _USETFT
@@ -733,8 +732,8 @@ void handleApiCompleteSetup() {
  * Returns: JSON array of available WiFi networks
  */
 void apiScanWiFi() {
-  I.lastServerStatusUpdate = I.currentTime;
-  
+  registerHTTPMessage("API_Scan");
+
   SerialPrint("Scanning for WiFi networks...", true);
   #ifdef _USETFT
     tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
@@ -797,7 +796,8 @@ void apiScanWiFi() {
  * GET /InitialSetup
  */
 void handleInitialSetup() {
-  I.lastServerStatusUpdate = I.currentTime;
+
+  registerHTTPMessage("Init");
   WEBHTML = "";
   serverTextHeader();
   
@@ -1286,6 +1286,7 @@ initSetup();
 }
 
 void handleReboot() {
+  snprintf(I.HTTP_LAST_INCOMINGMSG_TYPE, sizeof(I.HTTP_LAST_INCOMINGMSG_TYPE), "REBOOT");
   WEBHTML = "Rebooting in 3 sec";
   
   handleStoreCoreData();
@@ -1338,6 +1339,7 @@ void handleREQUESTUPDATE() {
 
 void handleREQUESTWEATHER() {
   #ifdef _USEWEATHER
+  registerHTTPMessage("WTHRREQ");
 //if no parameters passed, return current temp, max, min, today weather ID, pop, and snow amount
 //otherwise, return the index value for the requested value
 
@@ -1394,7 +1396,7 @@ void handleREQUESTWEATHER() {
 }
 
 void handleTIMEUPDATE() {
-
+  registerHTTPMessage("TIMEUPD");
 
   timeClient.forceUpdate();
 
@@ -1409,7 +1411,7 @@ void handleTIMEUPDATE() {
 
 
 void handleSTATUS() {
-  I.lastServerStatusUpdate = I.currentTime;
+  //registerHTTPMessage("STATUS");
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -1472,36 +1474,54 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
   WEBHTML = WEBHTML + "---------------------<br>";      
   #ifdef _USEUDP  
-  char statetemp[9];
-  Byte2Bin(I.UDP_LAST_STATUS, statetemp, false);
-  WEBHTML = WEBHTML + "Last UDP Message State: " + (String) statetemp + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Outgoing Message Sent at: " +  (String) (I.UDP_LAST_OUTGOING_MESSAGE_TIME>0 ? dateify(I.UDP_LAST_OUTGOING_MESSAGE_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Outgoing Message target IP: " + (String) I.UDP_LAST_OUTGOING_MESSAGE_TO_IP.toString() + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Outgoing Message: " + (String) I.UDP_LAST_OUTGOING_MESSAGE + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Incoming Message Received at: " +  (String) (I.UDP_LAST_INCOMING_MESSAGE_TIME>0 ? dateify(I.UDP_LAST_INCOMING_MESSAGE_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Incoming Message from IP: " + (String) I.UDP_LAST_INCOMING_MESSAGE_FROM_IP.toString() + "<br>";
-  WEBHTML = WEBHTML + "Last UDP Incoming Message: " + (String) I.UDP_LAST_INCOMING_MESSAGE + "<br>";
-  WEBHTML = WEBHTML + "---------------------<br>";      
-  
+  //in this section we will show incoming and then outgoing UDP message traffic info  
+  WEBHTML = WEBHTML + "<h3>UDP Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.UDP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message target IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_OUTGOING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_SENDS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.UDP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_RECEIVES + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + "---------------------<br>";       
   #endif
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Sent at: " +  (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender: " + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender IP: " + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString() + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Sender Type: " + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE + "<br>";
-  I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //just in case
-  WEBHTML = WEBHTML + "Last LAN Incoming Message Payload: " + (String) I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Incoming Message State: " + (String) ((I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown"))))) + "<br>";
-  WEBHTML = WEBHTML + "<br>";      
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message Type: " + (String)  I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message Sent at: " +  (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message To MAC: " + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "<br>";
-  I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[63]=0; //just in case
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message Payload: " + (String) I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD + "<br>";
-  WEBHTML = WEBHTML + "Last LAN Outgoing Message State: " + (String) ((I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown"))) + "<br>";
-  WEBHTML = WEBHTML + "<br>";      
-  WEBHTML = WEBHTML + "LAN Messages Sent today: " + (String) I.ESPNOW_SENDS + "<br>";
-  WEBHTML = WEBHTML + "LAN Messages Received today: " + (String) I.ESPNOW_RECEIVES + "<br>";
+//in this section show HTTP traffic info
+  WEBHTML = WEBHTML + "<h3>HTTP Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.HTTP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_OUTGOING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_SENDS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_RECEIVES + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + "---------------------<br>";       
+
+  //in this section we will show incoming and then outgoing ESPNOW message traffic info  
+  WEBHTML = WEBHTML + "<h3>LocalLAN Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message To MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNOW Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_OUTGOING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_SENDS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Sender:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNOW Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_RECEIVES + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
   //add a button here to trigger a broadcast (I'm alive) message
   // Button to trigger a broadcast ("I'm alive") message
   WEBHTML = WEBHTML + R"===(
@@ -1562,6 +1582,7 @@ void handleSTATUS() {
 
 
 void handleRoot(void) {
+//  registerHTTPMessage("MainPage");
     handlerForRoot(false);
 }
 
@@ -1729,7 +1750,6 @@ void rootTableFill(byte j) {
 
 
 void handlerForRoot(bool allsensors) {
-  I.lastServerStatusUpdate = I.currentTime;
   WEBHTML.clear();
   WEBHTML = "";
   
@@ -1939,13 +1959,16 @@ serverTextClose(200);
 
 
 void handleNotFound(){
+  registerHTTPMessage("404");
+  I.HTTP_INCOMING_ERRORS++;
   WEBHTML= "404: Not found"; // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
   serverTextClose(404,false);
 
 }
 
 void handleRETRIEVEDATA() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("DataHx");
+  
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2020,7 +2043,7 @@ void handleRETRIEVEDATA() {
 }
 
 void handleRETRIEVEDATA_MOVINGAVERAGE() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("AvgHx");
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2168,7 +2191,8 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
 
 
 void handleCONFIG() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("CONFIG");
+  
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2301,7 +2325,8 @@ void handleCONFIG() {
 }
 
 void handleREADONLYCOREFLAGS() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("CoreFlags");
+
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2339,38 +2364,43 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorCode</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastErrorCode + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME  ?  dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME ) : "???")+ "</div>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageState</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_STATE + "</div>";
+  //HTTP message traffic
+  WEBHTML = WEBHTML + "<h3>HTTP Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.HTTP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageType</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</div>";
+  //LAN message traffic
+  WEBHTML = WEBHTML + "<h3>LAN Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME>0 ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message from MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message To MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_OUTGOING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageFromMAC</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</div>";
+  //UDP message traffic
+  WEBHTML = WEBHTML + "<h3>UDP Message Traffic</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.UDP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_INCOMING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.UDP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_OUTGOING_ERRORS + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANIncomingMessageFromIP</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString() + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME  ?  dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME ) : "???")+ "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageState</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_STATE + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageType</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastLANOutgoingMessageToMAC</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">LAN Messages Received since 00:00</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_RECEIVES + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">LAN Messages Sent since 00:00</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_SENDS + "</div>";
 
   // Remaining non-editable fields from I in order of appearance
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
@@ -2495,7 +2525,8 @@ void handleREADONLYCOREFLAGS() {
 }
 
 void handleGSHEET() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("GSHEET");
+  
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -2602,7 +2633,8 @@ void handleGSHEET() {
 }
 
 void handleGSHEET_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("GSHEETOut");
+
   #if defined(_USEGSHEET) 
   // Process Google Sheets configuration
   if (server.hasArg("useGsheet")) {
@@ -2641,7 +2673,7 @@ void handleGSHEET_POST() {
 }
 
 void handleGSHEET_UPLOAD_NOW() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("GSHEETUp");
   #ifdef _USEGSHEET
   int8_t result = Gsheet_uploadData();
   String msg = "Triggered immediate upload. Result: " + String(result) + ", " + GsheetUploadErrorString();
@@ -2653,7 +2685,7 @@ void handleGSHEET_UPLOAD_NOW() {
 }
 
 void handleREQUEST_BROADCAST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("Broadcast");
   
   // Trigger broadcast by calling the broadcastServerPresence function
   bool result = broadcastServerPresence(true,2);
@@ -2705,7 +2737,7 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
 }
 
 void handleCONFIG_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("ConfigIn");
   
   // Process form submissions and update editable fields
   // Timezone configuration is now handled through the timezone setup page
@@ -2830,7 +2862,7 @@ if (I.IntervalHourlyWeather > 4) {
 }
 
 void handleCONFIG_DELETE() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("ConfigDel");
   
   // Delete all config data
   int8_t ret =delete_all_core_data(true,true); 
@@ -2842,7 +2874,7 @@ void handleCONFIG_DELETE() {
 
 #ifdef _ISPERIPHERAL
 void handleSENSOR_UPDATE_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SnsUpd");
   
   // Get sensor identifiers from form
   if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
@@ -2920,8 +2952,8 @@ void handleSENSOR_UPDATE_POST() {
 }
 
 void handleSENSOR_READ_SEND_NOW() {
-  I.lastServerStatusUpdate = I.currentTime;
-  
+  registerHTTPMessage("ReadReq");
+    
   // Get sensor identifiers from form
   if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
     server.send(400, "text/plain", "Missing sensor identifiers");
@@ -3031,10 +3063,8 @@ bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_
 }
 
 
-
-
 void handleTimezoneSetup() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("TZSetup");
   WEBHTML = "";
   serverTextHeader();
 
@@ -3129,7 +3159,7 @@ void handleTimezoneSetup() {
 }
 
 void handleTimezoneSetup_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("TZSetupP");
   #ifdef _USETFT
   tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
   tft.setCursor(0, tft.height()-200);
@@ -3215,7 +3245,7 @@ void handleTimezoneSetup_POST() {
 
 
 void handleWeather() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("Weather");
   WEBHTML = "";
   serverTextHeader();
   WEBHTML = WEBHTML + "<body>";
@@ -3355,7 +3385,7 @@ void handleWeather() {
 }
 
 void handleWeather_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("WthrLoc");
   #ifdef _USEWEATHER
   // Handle location update
   if (server.hasArg("lat") && server.hasArg("lon")) {
@@ -3399,7 +3429,7 @@ void handleWeather_POST() {
 }
 
 void handleWeatherRefresh() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("WthrRef");
   #ifdef _USEWEATHER
   
   // Force immediate weather update
@@ -3420,7 +3450,7 @@ void handleWeatherRefresh() {
 }
 
 void handleWeatherZip() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("WthrZip");
   
   // Handle ZIP code lookup (legacy function for backward compatibility)
   if (server.hasArg("zipcode")) {
@@ -3461,7 +3491,7 @@ void handleWeatherZip() {
 
 
 void handleWeatherAddress() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("WthrAddr");
 
   if (server.hasArg("street") && server.hasArg("city") && server.hasArg("state") && server.hasArg("zipcode")) {
     String street = server.arg("street");
@@ -3548,7 +3578,7 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
 void handleSDCARD() {
   
   
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDCard");
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -3930,7 +3960,7 @@ void handleSDCARD_DELETE_DEVICES() {
   #ifdef _USESDCARD
 
   
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDDelDev");
   
   // Delete the sensors data file
   uint32_t nDeleted = deleteDataFiles(false, false, false, true);
@@ -3954,7 +3984,7 @@ void handleSDCARD_DELETE_DEVICES() {
 
 void handleSDCARD_DELETE_SENSORS() {
   #ifdef _USESDCARD
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDDelSns");
   
   uint16_t deletedCount = deleteSensorDataSD();
   if (deletedCount > 0) {
@@ -3977,7 +4007,7 @@ void handleSDCARD_DELETE_SENSORS() {
 
 void handleSDCARD_STORE_DEVICES() {
   #ifdef _USESDCARD
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDStoreDev");
   
   // Store the devices and sensors data to SD card
   if (storeDevicesSensorsSD()) {
@@ -3992,7 +4022,7 @@ void handleSDCARD_STORE_DEVICES() {
 
 void handleSDCARD_DELETE_SCREENFLAGS() {
   #ifdef _USESDCARD
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDDelScr");
 
   
   // Delete the ScreenFlags.dat file
@@ -4022,7 +4052,7 @@ void handleSDCARD_DELETE_SCREENFLAGS() {
 }
 
 void handleSDCARD_DELETE_WEATHERDATA() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDDelWthr");
   #ifdef _USESDCARD
   // Delete the WeatherData.dat file
   uint32_t nDeleted = deleteDataFiles(false, true, false, false);
@@ -4045,7 +4075,7 @@ void handleSDCARD_DELETE_WEATHERDATA() {
 
 void handleSDCARD_SAVE_SCREENFLAGS() {
   #ifdef _USESDCARD
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDSaveScr");
   
   // Save ScreenFlags.dat immediately
   if (storeScreenInfoSD()) {
@@ -4069,7 +4099,7 @@ void handleSDCARD_SAVE_SCREENFLAGS() {
 void handleSDCARD_SAVE_WEATHERDATA() {
   #ifdef _USESDCARD
   #ifdef _USEWEATHER
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDSaveWthr");
   
   // Save WeatherData.dat immediately
   if (storeWeatherDataSD()) {
@@ -4092,7 +4122,7 @@ void handleSDCARD_SAVE_WEATHERDATA() {
 }
 
 void handleSDCARD_TIMESTAMPS() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("SDTmStmp");
 
   #ifdef _USESDCARD
   // Open and read the FileTimestamps.dat file
@@ -4198,7 +4228,7 @@ void handleSDCARD_TIMESTAMPS() {
 }
 
 void handleERROR_LOG() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("ErrorLog");
 
   #ifdef _USESDCARD
   // Format the content for display
@@ -4301,7 +4331,7 @@ void handleERROR_LOG() {
 }
 
 void handleSDCARD_DELETE_ERRORLOG() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("DelErrLg");
   #ifdef _USESDCARD
   
   // Delete the DeviceErrors.txt file
@@ -4334,7 +4364,7 @@ void handleSDCARD_DELETE_ERRORLOG() {
 }
 
 void handleSDCARD_DELETE_TIMESTAMPS() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("DelTmStmp");
   #ifdef _USESDCARD
   
   // Delete the FileTimestamps.dat file
@@ -4364,7 +4394,7 @@ void handleSDCARD_DELETE_TIMESTAMPS() {
 }
 
 void handleSDCARD_DELETE_GSHEET() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("DelGsheet");
   #ifdef _USESDCARD
   
   // Delete the GsheetInfo.dat file
@@ -4398,7 +4428,7 @@ void handleSDCARD_DELETE_GSHEET() {
 
 
 void handleREBOOT_DEBUG() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("RebootDebug");
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader();
@@ -4432,7 +4462,7 @@ void handleREBOOT_DEBUG() {
  * instead of having the routes defined there.
  */
 void handleUPDATETIMEZONE() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("TZUpdate");
   
   // Check if WiFi is connected
   if (WiFi.status() != WL_CONNECTED) {
@@ -4515,7 +4545,7 @@ void handleUPDATETIMEZONE() {
 }
 
 void handleUPDATETIMEZONE_POST() {
-  I.lastServerStatusUpdate = I.currentTime;
+  registerHTTPMessage("TZUpdateP");
   
   // Parse timezone settings
   if (server.hasArg("utc_offset_seconds")) {
@@ -4578,7 +4608,7 @@ void handleUPDATETIMEZONE_POST() {
 // ==================== DEVICE VIEWER FUNCTIONS ====================
 
 void handleDeviceViewer() {
-    I.lastServerStatusUpdate = I.currentTime;
+    registerHTTPMessage("DeviceViewer");
     WEBHTML = "";
     serverTextHeader();
     
@@ -4700,6 +4730,7 @@ void handleDeviceViewer() {
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
     bool isThisDevice = (CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex);
     WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((isThisDevice) ? " (this device)" : "") +"</h3>";
+    WEBHTML = WEBHTML + "Local Device Index: " + String(CURRENT_DEVICEVIEWER_DEVINDEX);
     WEBHTML = WEBHTML + "</div>";
     
     // Device details
@@ -4772,7 +4803,7 @@ void handleDeviceViewer() {
 }
 
 void handleDeviceViewerNext() {
-    I.lastServerStatusUpdate = I.currentTime;
+    registerHTTPMessage("DVNext");
     
     if (Sensors.getNumDevices() > 0) {
         
@@ -4798,7 +4829,7 @@ void handleDeviceViewerNext() {
 }
 
 void handleDeviceViewerPrev() {
-    I.lastServerStatusUpdate = I.currentTime;
+    registerHTTPMessage("DVPrev");
     
     if (Sensors.getNumDevices() == 0) {
       
@@ -4831,7 +4862,7 @@ void handleDeviceViewerPrev() {
 }
 
 void handleDeviceViewerPing() {
-    I.lastServerStatusUpdate = I.currentTime;
+    registerHTTPMessage("DVPing");
     
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
@@ -4866,7 +4897,7 @@ void handleDeviceViewerPing() {
 }
 
 void handleDeviceViewerDelete() {
-    I.lastServerStatusUpdate = I.currentTime;  
+    registerHTTPMessage("DVDelete");  
     
     // Check if we have any devices
     if (Sensors.getNumDevices() == 0) {
@@ -5020,21 +5051,7 @@ String JSONbuilder_device(DevType* device) {
 }
 
 String JSONbuilder_sensorData(SnsType* S) {
-  String sensorJSON = "\"sensorData\":{\"type\":";
-  sensorJSON += S->snsType;
-  sensorJSON += ",\"id\":";
-  sensorJSON += S->snsID;
-  sensorJSON += ",\"name\":\"";
-  sensorJSON += String(S->snsName);
-  sensorJSON += "\",\"value\":";
-  sensorJSON += S->snsValue;
-  sensorJSON += ",\"timeRead\":";
-  sensorJSON += S->timeRead;
-  sensorJSON += ",\"sendingInt\":";
-  sensorJSON += S->SendingInt;
-  sensorJSON += ",\"flags\":";
-  sensorJSON += S->Flags;
-  sensorJSON += "}";
+  String sensorJSON = "\"sensorData\":" + JSONbuilder_sensorObject(S);
   return sensorJSON;
 }
 
@@ -5046,7 +5063,8 @@ String JSONbuilder_sensorObject(SnsType* S) {
   sensorJSON += ",\"name\":\"";
   sensorJSON += String(S->snsName);
   sensorJSON += "\",\"value\":";
-  sensorJSON += S->snsValue;
+  if (isnan(S->snsValue)) sensorJSON += "null";
+  else sensorJSON += S->snsValue;
   sensorJSON += ",\"timeRead\":";
   sensorJSON += S->timeRead;
   sensorJSON += ",\"sendingInt\":";
@@ -5057,7 +5075,7 @@ String JSONbuilder_sensorObject(SnsType* S) {
   return sensorJSON;
 }
 
-void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, bool forHTTP) {
+void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
   // Build full json sensor type message
   DevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
   if (!device) {
@@ -5075,7 +5093,7 @@ void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, 
    return;
 }
 
-void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP) {
+void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
    
   int16_t mydeviceIndex = Sensors.findMyDeviceIndex();
   DevType* device = Sensors.getDeviceByDevIndex(mydeviceIndex);
@@ -5112,7 +5130,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool for
   snprintf(jsonBuffer, jsonBufferSize, "%s", tempJSON.c_str());
 }
 
-void JSONbuilder_DataRequestMSG(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP, int16_t snsIndex) {
+void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, int16_t snsIndex) {
   DevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
   if (!device) {
     SerialPrint("JSONbuilder_DataRequestMSG: My Device not found",true);
@@ -5131,6 +5149,10 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, size_t jsonBufferSize, bool fo
     }
     snsType = S->snsType;
     snsID = S->snsID;
+  } else {
+    //indicate all sensors for that device should be sent
+    snsType = -1;
+    snsID = -1;
   }
 
   String tempJSON = "{\"msgType\":\"sendSensorDataNow\",\"snsType\":" + String(snsType) + ",\"snsID\":" + String(snsID) + "," + JSONbuilder_device(device) + "}";
@@ -5141,7 +5163,7 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, size_t jsonBufferSize, bool fo
   return;
 }
 
-void JSONbuilder_pingMSG(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP, bool isAck) {
+void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, bool isAck) {
   DevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
   if (!device) {
     SerialPrint("JSONbuilder_pingMSG: Device not found",true);
@@ -5257,7 +5279,7 @@ void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck) {
     //not the ack, respond with a ping ack
     char jsonBuffer[512];
     JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), true, true);
-    if (sendHTTPJSON(senderIndex, jsonBuffer)==false) {      
+    if (sendHTTPJSON(senderIndex, jsonBuffer, "pingAck")==false) {      
       responseMsg = "Failed to return HTTP ping";
       storeError("Failed to return HTTP ping", ERROR_JSON_PARSE, true);
       return;
@@ -5339,7 +5361,7 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
 
 
 void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
-  if (!sensor["type"] || !sensor["id"] || !sensor["name"] || !sensor["value"]) {
+  if (!sensor.containsKey("type") || !sensor.containsKey("id") || !sensor.containsKey("name") || !sensor.containsKey("value")) {
       responseMsg = "Invalid sensor entry";
       return;
   }
@@ -5347,7 +5369,10 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
   uint8_t snsType = sensor["type"];
   uint8_t snsID   = sensor["id"];
   String snsName  = sensor["name"].as<String>();
-  double value    = sensor["value"];
+  double value = NAN;
+  if (sensor.containsKey("value")) {
+    (sensor["value"].isNull()) ? value = NAN : value =  sensor["value"].as<double>();
+  }
   uint32_t timeRead   = sensor["timeRead"]   | I.currentTime;
   uint32_t sendingInt = sensor["sendingInt"] | 3600;
   uint8_t flags       = sensor["flags"]      | 0;
@@ -5427,6 +5452,7 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
  void handlePost() {
     String responseMsg = "OK";
 
+    registerHTTPMessage("snsData");
     // Check if this is JSON data (new format)
     if (server.hasArg("JSON")) {
         String postData = server.arg("JSON");
@@ -5490,16 +5516,19 @@ void wrapupSendData(SnsType* S) {
   S->timeLogged = I.currentTime;
 }
 
-int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer) {
+int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
   DevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002; //device not found
-  return sendHTTPJSON(d->IP, jsonBuffer);
+  return sendHTTPJSON(d->IP, jsonBuffer, msgType);
 }
 
-int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer) {
+int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
   //http method
 
-  if (WifiStatus() ==false) return -1001; //not connected to wifi
+  if (WifiStatus() ==false) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1001; //not connected to wifi
+  }
 
   static char urlBuffer[64];
   snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
@@ -5520,30 +5549,20 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer) {
     
     // Always end the connection
   http.end();
+
+  registerHTTPSend(ip, msgType);
   return httpCode;
   }
+  I.HTTP_OUTGOING_ERRORS++;
   return -1000; //failed to begin connection
 }  
 
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   //can use -1 to send to broadcast (if using HTTP, then send to all servers), or a specific device index to send to a specific device
   
-  if (sendToDeviceIndex <0 && useUDP == true) {
-    SendData(-1,true,-1,true);
-    return 1;
-  }
+  return SendData(-1,forceSend,sendToDeviceIndex,useUDP);
 
-  byte count = 0;
-  for (int16_t i = 0; i < NUMSENSORS; i++) {
-    SnsType* S = Sensors.getSensorBySnsIndex(i);
-    if (!S) continue;
-    if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
-    
-    if (SendData(i, forceSend, sendToDeviceIndex, useUDP)) count++;
-    delayWithNetwork(10,50);
-    
-  }
-  return count;
+  
 }
 
 
@@ -5576,7 +5595,8 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
 
     if (useUDP && sendToDeviceIndex <0) { //special value for sending to broadcast UDP to everyone
       SerialPrint("Sending to all devices", true);
-      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(255,255,255,255), strlen(jsonBuffer));
+  
+      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(255,255,255,255), strlen(jsonBuffer),"snsBrdcst");
       #ifndef _USELOWPOWER
       for (int16_t i=0; i<NUMDEVICES ; i++) {
         DevType* d = Sensors.getDeviceByDevIndex(i);
@@ -5591,8 +5611,12 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
       //send data to a specific device
       DevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
       if (isDeviceSendTime(d, forceSend)) {
-        if (useUDP)           isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer));
-        else if (sendHTTPJSON(d->IP, jsonBuffer) == 200) isGood = true;                  
+        if (useUDP) {
+          isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer),"snsMsg");
+        }
+        else if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
+          isGood = true;                  
+        }
         if (isGood) d->dataSent = I.currentTime;
       }
     } else {
@@ -5604,7 +5628,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
         //udp method, targetted
         if (useUDP) {
           SerialPrint("Sending UDP sensor data to " + d->IP.toString(), true);
-          if (sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer)) == true) {
+          if (sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsMsg") == true) {
             d->dataSent = I.currentTime;
             isGood = true;
           } else {
@@ -5613,7 +5637,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
             d->dataSent = I.currentTime -d->SendingInt + 10*60;
           }
         } else {
-          if (sendHTTPJSON(d->IP, jsonBuffer) == 200) {
+          if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
             d->dataSent = I.currentTime;
             isGood = true;
           } else {
@@ -5643,8 +5667,11 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP) {
   char jsonBuffer[512];
   JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), viaHTTP, false);
-  if (viaHTTP) return sendHTTPJSON(ip, jsonBuffer);
-  else return sendUDPMessage((uint8_t*)jsonBuffer, ip, strlen(jsonBuffer));
+  if (viaHTTP) {
+    return sendHTTPJSON(ip, jsonBuffer, "pingMsg");
+  } else {
+    return sendUDPMessage((uint8_t*)jsonBuffer, ip, strlen(jsonBuffer), "pingMsg");
+  }
 }
 
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP) {
@@ -5662,8 +5689,12 @@ int16_t sendMSG_DataRequest(DevType* d, int16_t snsIndex, bool viaHTTP) { //snsi
   JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), viaHTTP, snsIndex);
   SerialPrint("sendMSG_DataRequest: " + String(jsonBuffer), true);
   SerialPrint("sendMSG_DataRequest sent to: " + String(d->IP.toString()), true);
-  if (viaHTTP) return sendHTTPJSON(d->IP, jsonBuffer);
-  else return sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer));
+  d->dataSent = I.currentTime;
+  if (viaHTTP) {
+    return sendHTTPJSON(d->IP, jsonBuffer, "snsReq");
+  } else {
+    return sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsReq");
+  }
 }
 
 //___________________END OF HTTP SEND HANDLERS___________________
@@ -5969,48 +6000,39 @@ bool receiveUDPMessage() {
 
   int packetSize = LAN_UDP.parsePacket(); //>0 if message received!
   if (packetSize > 0) {
-    I.UDP_LAST_STATUS = 2; //bit 1 is set if this is a UDP message, value =2
     IPAddress remoteIP = LAN_UDP.remoteIP();
     if (remoteIP == WiFi.localIP()) {
       return false;
     }
-    I.UDP_LAST_INCOMING_MESSAGE_FROM_IP = remoteIP;
     SerialPrint("UDP message from: " + remoteIP.toString(),true);
+    registerUDPMessage(remoteIP,0);
 
-    I.UDP_LAST_INCOMING_MESSAGE_TIME = I.currentTime;
 
     if (packetSize == sizeof(ESPNOW_type)) {
       ESPNOW_type msg = {};
       LAN_UDP.read((uint8_t*)&msg, packetSize);        
       processLANMessage(&msg);        
-
-      bitSet(I.UDP_LAST_STATUS, 2); //bit 2 is set if this is a ESPNOW message
-      snprintf(I.UDP_LAST_INCOMING_MESSAGE, sizeof(I.UDP_LAST_INCOMING_MESSAGE), (char*) msg.payload);
+      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP:%d", msg.msgType);
         
       return true;
     } else {
       //assume this is a sensor data json buffer
       //am I a server type? Should I interpret this?
       if (_MYTYPE < 100) {
-        bitSet(I.UDP_LAST_STATUS, 7); //bit 7 is set if this is a sensor data json buffer that is ignored 
-        snprintf(I.UDP_LAST_INCOMING_MESSAGE, sizeof(I.UDP_LAST_INCOMING_MESSAGE), "Ignored");
-        return false;
+          return false;
       }
       if (packetSize+1 > SNSDATA_JSON_BUFFER_SIZE) {
-        bitSet(I.UDP_LAST_STATUS, 6); //bit 6 is set if this is a sensor data json buffer that is too large
         SerialPrint("UDP message is too large", true);
-        bitClear(I.UDP_LAST_STATUS, 1);
-        snprintf(I.UDP_LAST_INCOMING_MESSAGE, sizeof(I.UDP_LAST_INCOMING_MESSAGE), "TOOLARGE");
+        snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "TooLarge");
         return false;
       }
       char buffer[packetSize+1];
-      bitSet(I.UDP_LAST_STATUS, 3); //bit 3 is set if this is a sensor data json buffer
       LAN_UDP.read(buffer, packetSize);
       buffer[packetSize] = '\0'; //ensure the buffer is null terminated
       String responseMsg = "OK";
       String postData = (String)buffer;
       processJSONMessage(postData, responseMsg);
-      snprintf(I.UDP_LAST_INCOMING_MESSAGE, sizeof(I.UDP_LAST_INCOMING_MESSAGE), buffer);          
+      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "JSON");
 
       if (responseMsg == "OK") {
         return true;
@@ -6025,35 +6047,60 @@ bool receiveUDPMessage() {
   return false;
 }
 
-bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize) {
+bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, const char* msgType) {
   //send the provided jsonbuffer via UDP
   //return true if successful, false if failed
   #ifdef _USEUDP
   SerialPrint("Sending UDP message to " + ip.toString(),true);
-  if (I.UDP_LAST_OUTGOING_MESSAGE_TIME == I.currentTime) delay(50); //wait if the last message was sent within the last second
-  I.UDP_LAST_STATUS = 1; //bit 1 is set if this is a UDP message, value =1
+  SerialPrint("Buffer contains: " + String((char*)buffer),true);
+  if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(50); //wait if the last message was sent within the last second
   if (bufferSize==0) bufferSize = strlen((const char*)buffer);
   if (ip == IPAddress(0,0,0,0)) ip = IPAddress(255,255,255,255); //broadcast if no ip is provided
   LAN_UDP.beginPacket(ip, _USEUDP);
   LAN_UDP.write(buffer, bufferSize);
   LAN_UDP.endPacket();
-  I.UDP_LAST_OUTGOING_MESSAGE_TIME = I.currentTime;
-  snprintf(I.UDP_LAST_OUTGOING_MESSAGE, sizeof(I.UDP_LAST_OUTGOING_MESSAGE), (char*) buffer);
-  I.UDP_LAST_OUTGOING_MESSAGE_TO_IP = ip;
+  registerUDPSend(ip, msgType);
+
   return true;
   #else
+  I.UDP_OUTGOING_ERRORS++;
   return false;
   #endif
 }
 
+void registerUDPMessage(IPAddress ip, const char* messageType) {
+  I.UDP_LAST_INCOMINGMSG_FROM_IP = ip;
+  if (messageType != 0)   snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), messageType);
+  I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+  I.UDP_RECEIVES++;
+}
+
+void registerUDPSend(IPAddress ip, const char* messageType) {
+  I.UDP_LAST_OUTGOINGMSG_TO_IP = ip;
+  snprintf(I.UDP_LAST_OUTGOINGMSG_TYPE, sizeof(I.UDP_LAST_OUTGOINGMSG_TYPE), messageType);
+  I.UDP_LAST_OUTGOINGMSG_TIME = I.currentTime;  
+  I.UDP_SENDS++;
+}
+
+void registerHTTPMessage(const char* messageType) {
+  I.HTTP_LAST_INCOMINGMSG_TIME = I.currentTime;
+  snprintf(I.HTTP_LAST_INCOMINGMSG_TYPE, sizeof(I.HTTP_LAST_INCOMINGMSG_TYPE), messageType);
+  I.HTTP_LAST_INCOMINGMSG_FROM_IP = server.client().remoteIP();
+  I.HTTP_RECEIVES++;
+}
+
+void registerHTTPSend(IPAddress ip, const char* messageType) {
+  I.HTTP_LAST_OUTGOINGMSG_TO_IP = ip;
+  I.HTTP_LAST_OUTGOINGMSG_TIME = I.currentTime;
+  I.HTTP_SENDS++;
+  snprintf(I.HTTP_LAST_OUTGOINGMSG_TYPE, sizeof(I.HTTP_LAST_OUTGOINGMSG_TYPE), messageType);
+}
 void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks) {
 //do not delay a highspeed device, such as a TFLuna, as it will lock out wifi
-  #ifndef _HIGHSPEED
   for (uint8_t i=0; i<maxChecks; i++) {
     delay(delayTime);
     receiveUDPMessage();
     server.handleClient();
   }
-  #endif
 }
 #endif

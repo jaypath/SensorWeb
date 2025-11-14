@@ -236,7 +236,7 @@ bool isRHValid(double rh) {
 }
 
 bool isSoilCapacitanceValid(double soil) {
-  if (soil < 0 || soil > 100) return false;
+  if (soil < 0 || soil > 200) return false;
   return true;
 }
 
@@ -611,29 +611,37 @@ void initScreenFlags(bool completeInit) {
   I.ESPNOW_RECEIVES = 0;
 
   I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
-  I.ESPNOW_LAST_INCOMINGMSG_FROM_IP=IPAddress(0,0,0,0);
   I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
-  I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE=0;
   memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
   I.ESPNOW_LAST_INCOMINGMSG_TIME=0;
-  I.ESPNOW_LAST_INCOMINGMSG_STATE=0;
+  I.ESPNOW_INCOMING_ERRORS = 0;
+
 
   I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC=0;
   I.ESPNOW_LAST_OUTGOINGMSG_TYPE=0;
   memset(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD,0,80);
   I.ESPNOW_LAST_OUTGOINGMSG_TIME=0;
-  I.ESPNOW_LAST_OUTGOINGMSG_STATE=0;
+  I.ESPNOW_OUTGOING_ERRORS = 0;
 
 
-  I.UDP_LAST_INCOMING_MESSAGE_TIME = 0;
-  I.UDP_LAST_OUTGOING_MESSAGE_TIME = 0;
-  I.UDP_LAST_STATUS = 0; // status of last UDP status check
-  memset(I.UDP_LAST_INCOMING_MESSAGE,0,10); // message of last UDP status check - [Sensor, System, etc]
-  memset(I.UDP_LAST_OUTGOING_MESSAGE,0,10); // message of last UDP status check - [Sensor, System, etc]
-  I.UDP_LAST_INCOMING_MESSAGE_FROM_IP = IPAddress(0,0,0,0);
-  I.UDP_LAST_OUTGOING_MESSAGE_TO_IP = IPAddress(0,0,0,0);
+  I.UDP_LAST_INCOMINGMSG_TIME = 0;
+  I.UDP_LAST_OUTGOINGMSG_TIME = 0;
+  memset(I.UDP_LAST_INCOMINGMSG_TYPE,0,10); // message of last UDP status check - [Sensor, System, etc]
+  memset(I.UDP_LAST_OUTGOINGMSG_TYPE,0,10); // message of last UDP status check - [Sensor, System, etc]
+  I.UDP_LAST_INCOMINGMSG_FROM_IP = IPAddress(0,0,0,0);
+  I.UDP_LAST_OUTGOINGMSG_TO_IP = IPAddress(0,0,0,0);
+  I.UDP_INCOMING_ERRORS = 0;
+  I.UDP_OUTGOING_ERRORS = 0;
 
-      
+  I.HTTP_LAST_INCOMINGMSG_TIME = 0;
+  I.HTTP_LAST_OUTGOINGMSG_TIME = 0;
+  memset(I.HTTP_LAST_INCOMINGMSG_TYPE,0,10); // message of last HTTP status check - [Sensor, System, etc]
+  memset(I.HTTP_LAST_OUTGOINGMSG_TYPE,0,10); // message of last HTTP status check - [Sensor, System, etc]
+  I.HTTP_LAST_INCOMINGMSG_FROM_IP = IPAddress(0,0,0,0);
+  I.HTTP_LAST_OUTGOINGMSG_TO_IP = IPAddress(0,0,0,0);
+  I.HTTP_INCOMING_ERRORS = 0;
+  I.HTTP_OUTGOING_ERRORS = 0;
+
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;
   I.wifiFailCount=0;
@@ -797,6 +805,9 @@ int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2) {
   return output;
 }
 
+float mapfloat(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
 
 
@@ -998,6 +1009,11 @@ void storeCoreData(bool forceStore) {
       storeError("Failed to create prefs", ERROR_FAILED_PREFS, true);  
     }
   }
+  
+  //setup TFLuna is needed in case the distances have changed
+  #ifdef _USETFLUNA
+  if (ret>0) setupTFLuna();
+  #endif
 
   if (forceStore || (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime)) { //store if out of date and more than 5 minutes since last store
     I.isUpToDate = true;

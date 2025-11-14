@@ -813,23 +813,12 @@ void fcnDrawStatus() {
     tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("-----------------------\n");
-    tft.printf("Last LAN Msg Time: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_TIME!=0)?dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_INCOMINGMSG_TYPE);
-    tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_STATE==2)?"Receive Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_INCOMINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-1)?"Send Fail":((I.ESPNOW_LAST_INCOMINGMSG_STATE==-2)?"Receive Fail": "Unknown")))));
-    tft.printf("Last LAN Msg Sender: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC!=0)?MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC).c_str():"???");
-    tft.printf("Last LAN Msg Sender IP: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_FROM_IP!=IPAddress(0,0,0,0))?I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString().c_str():"???");
-    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD!=0)?I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD:"???");
-    tft.printf("\n");
-    
-    tft.printf("Last LAN Msg Time: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TIME!=0)?dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last LAN Msg SentType: %d\n",I.ESPNOW_LAST_OUTGOINGMSG_TYPE);
-    tft.printf("Last LAN Msg State: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_STATE==1)?"Send Success":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==0)?"Indeterminate":((I.ESPNOW_LAST_OUTGOINGMSG_STATE==-1)?"Send Fail": "Unknown")));
-    tft.printf("Last LAN Msg To MAC: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC!=0)?MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC).c_str():"???");
-    tft.printf("Last LAN Msg Payload: %s\n",(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD!=0)?I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD:"???");
-    tft.printf("\n");
-    
-    tft.printf("LAN Messages Sent since 00:00: %d\n",I.ESPNOW_SENDS);
-    tft.printf("LAN Messages Received since 00:00: %d\n",I.ESPNOW_RECEIVES);
+    tft.printf("LAN Messages Received today: %d\n",I.UDP_RECEIVES);    
+    tft.printf("LAN Messages Sent today: %d\n",I.UDP_SENDS);
+    tft.printf("HTTP Messages Received today: %d\n",I.HTTP_RECEIVES);
+    tft.printf("HTTP Messages Sent today: %d\n",I.HTTP_SENDS);
+    tft.printf("UDP Messages Received today: %d\n",I.UDP_RECEIVES);    
+    tft.printf("UDP Messages Sent today: %d\n",I.UDP_SENDS);
     tft.printf("-----------------------\n");
     
     tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
@@ -1348,6 +1337,12 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
     
     if (device && sensor && device->IsSet && sensor->IsSet) {
       tempval = sensor->snsValue;
+      if (isnan(tempval)) {
+        snprintf(tempPres,10,"??? hPa");
+        *fg=FG_COLOR;
+        *bg=BG_COLOR;
+        return;
+      }
       if (tempval>LAST_BAR+.5) {
         snprintf(tempPres,10,"%dhPa^",(int) tempval);
         *fg=tft.color565(255,0,0);

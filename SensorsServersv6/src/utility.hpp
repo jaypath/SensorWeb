@@ -61,6 +61,7 @@ int inArrayBytes(byte arr[], int N, byte value,bool returncount=false);
 int inArray(int arr[], int N, int value,bool returncount=false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 void pushDoubleArray(double arr[], byte N, double value);
+float mapfloat(float x, float in_min, float in_max, float out_min, float out_max);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 char* strPad(char* str, char* pad, byte L);
 bool stringToLong(String s, uint32_t* val);

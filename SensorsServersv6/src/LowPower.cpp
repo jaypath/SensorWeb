@@ -12,7 +12,7 @@ void LOWPOWER_readAndSend() {
         byte snscount = readAllSensors(true);
         if (snscount > 0) {
             
-            sendAllSensors(true, true, true);
+            sendAllSensors(true, -1, true);
         } else {
             SerialPrint("No sensors to send", true);        
         }

@@ -201,7 +201,11 @@ bool sendESPNOW(ESPNOW_type& msg, uint8_t method) {
         addESPNOWPeer(msg.targetMAC);
     }
 
-    if (msg.msgType>0 && encryptESPNOWMessage(msg, 80)==false) return false;;
+    if (msg.msgType>0 && encryptESPNOWMessage(msg, 80)==false) {
+        storeError("ESPNow: Failed to encrypt message");
+        I.ESPNOW_OUTGOING_ERRORS++;
+        return false;
+    }
 
 
     esp_err_t result = ESP_OK;
@@ -256,11 +260,10 @@ void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (status == ESP_NOW_SEND_SUCCESS) {
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
         I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64((byte*) mac_addr);        
-        I.ESPNOW_LAST_OUTGOINGMSG_STATE = 1; //mesage sent successfully
         I.ESPNOW_SENDS++;
         I.isUpToDate = false;
     } else {
-        I.ESPNOW_LAST_OUTGOINGMSG_STATE = -1; //message send failed
+        I.ESPNOW_OUTGOING_ERRORS++;
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
         storeError("ESPNow: Failed to send data");
     }
@@ -271,7 +274,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
         storeError("ESPNow: Received message too short");
-        I.ESPNOW_LAST_INCOMINGMSG_STATE = -2; //message received but too short
+        I.ESPNOW_INCOMING_ERRORS++;
         return;
     }
     ESPNOW_type msg;
@@ -282,7 +285,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     I.ESPNOW_LAST_INCOMINGMSG_FROM_TYPE = msg.senderType;
     I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg.msgType;
     I.ESPNOW_RECEIVES++;
-    I.ESPNOW_LAST_INCOMINGMSG_STATE = 2; //message received and processed
     I.isUpToDate = false;
 
     processLANMessage(&msg);
@@ -308,6 +310,7 @@ void processLANMessage(ESPNOW_type* msg) {
         if (msg->payload[0] != ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED && msg->payload[0] != UDP_MSG_BROADCAST_ALIVE_ENCRYPTED) {
             storeError("ESPNow: Broadcast alive message is not valid");
             snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast alive message was invalid");
+            I.ESPNOW_INCOMING_ERRORS++;
             return;
         }
 
@@ -352,7 +355,7 @@ void processLANMessage(ESPNOW_type* msg) {
         memcpy(resp.payload + 32, msg->payload + 32, 8);
         
         if (!sendESPNOW(resp,0)) { //0 = ESPNow only
-            storeError("ESPNow: Failed to send WiFi password response");
+            storeError("ESPNow: Failed to send WiFi password response");            
             return;
         }
     }
@@ -379,6 +382,7 @@ void processLANMessage(ESPNOW_type* msg) {
             I.TEMP_AES_TIME = 0;
             I.TEMP_AES_MAC = 0;
             memset(I.WIFI_RECOVERY_NONCE, 0, 8);
+            I.ESPNOW_INCOMING_ERRORS++;
             storeError("WiFi PW response: No valid TEMP_AES, expired, MAC mismatch, or nonce mismatch");
             return;
         }
@@ -394,6 +398,7 @@ void processLANMessage(ESPNOW_type* msg) {
             I.TEMP_AES_MAC = 0;
             memset(I.WIFI_RECOVERY_NONCE, 0, 8);
             I.isUpToDate = false;
+            I.ESPNOW_INCOMING_ERRORS++;
             storeError("WiFi PW response: Decryption failed");
             return;
         }
@@ -486,6 +491,7 @@ void processLANMessage(ESPNOW_type* msg) {
 
         if (!ok) {
             storeError("ESPNow: Failed to send ping response");
+            I.ESPNOW_OUTGOING_ERRORS++;
             return;
         } 
         #ifdef _DEBUG
@@ -722,7 +728,7 @@ bool sendESPNowPingRequest(DevType* targetDevice, uint8_t tier, bool dataRequest
     
     if (!ok) {
         if (tier == 2 || tier == 3) {
-            snprintf(I.UDP_LAST_OUTGOING_MESSAGE, 10, "Ping UDP fail");
+            snprintf(I.UDP_LAST_OUTGOINGMSG_TYPE, 10, "PingFail");
         } 
         if (tier == 1 || tier == 3) {
             snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request failed to %s", MACToString(targetDevice->MAC).c_str());
@@ -730,7 +736,7 @@ bool sendESPNowPingRequest(DevType* targetDevice, uint8_t tier, bool dataRequest
         storeError("ESPNow: Failed to send ping request");
     } else {
         if (tier == 2 || tier == 3) {
-            snprintf(I.UDP_LAST_OUTGOING_MESSAGE, 10, "Ping UDP sent");
+            snprintf(I.UDP_LAST_OUTGOINGMSG_TYPE, 10, "PingSent");
         } 
         if (tier == 1 || tier == 3) {
             snprintf(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD, 64, "Ping request to %s", MACToString(targetDevice->MAC).c_str());
@@ -843,8 +849,8 @@ bool sendESPNowUDPMessage(ESPNOW_type& msg, IPAddress targetIP, bool encrypt) {
             }
         } 
     } 
-    
-    sendUDPMessage((uint8_t*)&msg, targetIP, sizeof(ESPNOW_type));
+    String msgType = "LAN:" + String(msg.msgType);
+    sendUDPMessage((uint8_t*)&msg, targetIP, sizeof(ESPNOW_type), msgType.c_str());
 
     return true;
     #else

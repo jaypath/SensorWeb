@@ -23,7 +23,7 @@
   #error Arduino architecture unrecognized by this code.
 #endif
 
-#define SNSDATA_JSON_BUFFER_SIZE 768
+#define SNSDATA_JSON_BUFFER_SIZE 1024
 
 // Forward declarations
 class LGFX;
@@ -177,7 +177,6 @@ typedef enum {
   
   
   struct STRUCT_CORE {
-      uint32_t lastServerStatusUpdate;
       bool makeBroadcast=false;
       time_t lastStoreCoreDataTime;
       bool isUpToDate;  // Core has been saved to memory
@@ -235,33 +234,47 @@ typedef enum {
       
       
       //for UDP messages
-      uint32_t UDP_LAST_INCOMING_MESSAGE_TIME; // time of last UDP message received
-      uint32_t UDP_LAST_OUTGOING_MESSAGE_TIME; // time of last UDP message sent
-      uint8_t UDP_LAST_STATUS; // status of last UDP status check
-      char UDP_LAST_INCOMING_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
-      IPAddress UDP_LAST_INCOMING_MESSAGE_FROM_IP; // IP address of last UDP message sender
-      char UDP_LAST_OUTGOING_MESSAGE[10]; // message of last UDP status check - [Sensor, System, etc]      
-      IPAddress UDP_LAST_OUTGOING_MESSAGE_TO_IP; // IP address of last UDP message target
+      uint16_t UDP_RECEIVES; //number of UDP receives since midnight
+      uint16_t UDP_SENDS; //number of UDP sends since midnight
+      uint32_t UDP_LAST_INCOMINGMSG_TIME; // time of last UDP message received
+      char UDP_LAST_INCOMINGMSG_TYPE[10]; // message of last UDP status check - [Sensor, System, etc]      
+      IPAddress UDP_LAST_INCOMINGMSG_FROM_IP; // IP address of last UDP message sender
+      uint8_t UDP_INCOMING_ERRORS; //number of UDP incoming errors since midnight
+      uint32_t UDP_LAST_OUTGOINGMSG_TIME; // time of last UDP message sent
+      char UDP_LAST_OUTGOINGMSG_TYPE[10]; // message of last UDP status check - [Sensor, System, etc]      
+      IPAddress UDP_LAST_OUTGOINGMSG_TO_IP; // IP address of last UDP message target
+      uint8_t UDP_OUTGOING_ERRORS; //number of UDP outgoing errors since midnight
+      
 
+      //for HTTP messages
+      uint16_t HTTP_RECEIVES; //number of HTTP receives since midnight
+      uint16_t HTTP_SENDS; //number of HTTP sends since midnight
+      uint32_t HTTP_LAST_INCOMINGMSG_TIME; // time of last HTTP message received
+      char HTTP_LAST_INCOMINGMSG_TYPE[10]; // message of last HTTP status check - [Sensor, System, etc]      
+      IPAddress HTTP_LAST_INCOMINGMSG_FROM_IP; // IP address of last HTTP message sender
+      uint8_t HTTP_INCOMING_ERRORS; //number of HTTP incoming errors since midnight
+      uint32_t HTTP_LAST_OUTGOINGMSG_TIME; // time of last HTTP message sent
+      char HTTP_LAST_OUTGOINGMSG_TYPE[10]; // message of last HTTP status check - [Sensor, System, etc]      
+      IPAddress HTTP_LAST_OUTGOINGMSG_TO_IP; // IP address of last HTTP message target
+      uint8_t HTTP_OUTGOING_ERRORS; //number of HTTP outgoing errors since midnight
       
     //for messages received
     uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
-    uint8_t ESPNOW_LAST_INCOMINGMSG_STATE; //-1 if receive failure, 0 if indeterminate, 1 if send success
     uint32_t ESPNOW_LAST_INCOMINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
       uint64_t ESPNOW_LAST_INCOMINGMSG_FROM_MAC; // MAC of last ESPnow message sender
-      IPAddress ESPNOW_LAST_INCOMINGMSG_FROM_IP;
-      uint8_t ESPNOW_LAST_INCOMINGMSG_FROM_TYPE; // type of last ESPnow message sender
-      uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of last ESPnow message sender
+      IPAddress ESPNOW_LAST_INCOMINGMSG_FROM_IP; // IP address of last ESPnow message sender
+      uint8_t ESPNOW_LAST_INCOMINGMSG_FROM_TYPE; // type of device that sent the message      
+      uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of message sent
       char ESPNOW_LAST_INCOMINGMSG_PAYLOAD[64]; // text portion of payload of last ESPnow message received
-      
+      uint8_t ESPNOW_INCOMING_ERRORS; //number of ESPNow incoming errors since midnight
     
     //for messages sent
     uint16_t ESPNOW_SENDS; //number of ESPNow sends since midnight
-    bool ESPNOW_LAST_OUTGOINGMSG_STATE; //-1 if send failure, 0 if indeterminate, 1 if send success
     uint32_t ESPNOW_LAST_OUTGOINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
       uint64_t ESPNOW_LAST_OUTGOINGMSG_TO_MAC; // MAC of last ESPnow message sender
       uint8_t ESPNOW_LAST_OUTGOINGMSG_TYPE; // type of last ESPnow message sender
       char  ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[64]; //text portion of payload of last ESPnow message received
+      uint8_t ESPNOW_OUTGOING_ERRORS; //number of ESPNow outgoing errors since midnight
 
       uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
       uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling

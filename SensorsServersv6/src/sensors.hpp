@@ -258,13 +258,16 @@ extern   SSD1306AsciiWire oled;
 
 int8_t ReadData(struct SnsType *P, bool forceRead=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
-float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm=3.3, byte avgN=1);
+float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN=1);
 void setupSensors();
 bool checkSensorValFlag(struct SnsType *P);
-int peak_to_peak(int pin, int ms = 50);
+double peak_to_peak(int pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
+float readAnalogVoltage(int16_t pin, byte nsamps);
+
+
 #ifdef _USESSD1306
 void redrawOled(void);
 #endif

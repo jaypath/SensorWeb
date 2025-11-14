@@ -134,19 +134,24 @@ void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks);
 uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
 
 
-//receiving data
+//raw send/receiving data
+bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize=0, const char* msgType="Unknown");
 bool receiveUDPMessage();
 void handlePost();
+void registerUDPMessage(IPAddress ip, const char* messageType);
+void registerUDPSend(IPAddress ip, const char* messageType);
+void registerHTTPSend(IPAddress ip, const char* messageType);
+void registerHTTPMessage(const char* messageType);
+
 
 //sending data
 void wrapupSendData(SnsType* S);
 bool isDeviceSendTime(DevType* D, bool forceSend);
 bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex=-1);
-int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer);
-int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer);
+int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
+int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
 bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
-bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize=0);
 
 //send json messages
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
@@ -154,10 +159,10 @@ int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP)
 int16_t sendMSG_DataRequest(DevType* d, int16_t snsIndex, bool viaHTTP);
 
 //add json handlers
-void JSONbuilder_pingMSG(char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP, bool isAck);
-void JSONbuilder_DataRequestMSG(char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
-void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, size_t jsonBufferSize, bool viaHTTP);
-void JSONbuilder_sensorMSG_all(char* jsonBuffer, size_t jsonBufferSize, bool forHTTP);
+void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);
+void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
+void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP);
+void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 String JSONbuilder_sensorObject(SnsType* S);
 uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer);
 
@@ -179,7 +184,6 @@ void apiSaveTimezone();
 void apiGetSetupStatus();
 void handleInitialSetup();
 void handleApiCompleteSetup();
-
 String getWiFiModeString();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex

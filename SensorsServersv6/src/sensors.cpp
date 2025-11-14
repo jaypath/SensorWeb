@@ -86,25 +86,19 @@ uint8_t HVACSNSNUM = 0;
 
 extern int16_t MY_DEVICE_INDEX;
 
-const uint16_t ADCRATE = 2^_ADCBITS-1;
-
-struct esp_adc_cal_characteristics_t adc_chars;
 
 void setupSensors() {
 
 
-  #ifdef _USE32
+#ifdef _USE32
 #ifdef _USEADCATTEN
-analogSetAttenuation(_USEADCATTEN); //this sets the voltage range to 1.7v roughly
+analogSetAttenuation(_USEADCATTEN);
 #endif
 
-#ifdef _ADCBITS
+#ifdef _USEADCBITS
 analogSetWidth(_USEADCBITS); //this sets the number of bits to 12
 #endif
 
-adc_chars.adc_num = ;
-adc_chars.atten = _USEADCATTEN;
-adc_chars.bit_width = _USEADCBITS;
 
 #endif
 
@@ -249,21 +243,22 @@ double peak_to_peak(int pin, int ms) {
   
   double maxVal = 0;
   double minVal=6000;
-  uint16_t buffer = 0;
+  uint32_t buffer = 0;
   uint32_t t0;
   
 
   t0 = millis();
 
   while (millis()<=t0+ms) { 
-    buffer = analogRead(pin)/ADCRATE;
+
+    buffer = readAnalogVoltage(pin, 1);
     if (maxVal<buffer) maxVal = buffer;
     if (minVal>buffer) minVal = buffer;
 
   }
   
 
-  return maxVal-minVal;
+  return ((double)maxVal-minVal)/1000; //return value in volts
 
 }
 
@@ -275,19 +270,25 @@ int8_t readAllSensors(bool forceRead) {
     SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
     if (sensor && sensor->IsSet) {
       if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
-      String sensorString = (String) sensor->snsType + (String) "." + (String) sensor->snsID;
+      
       int8_t readResult = ReadData(sensor, forceRead);
       //readresult = 0 means not time to read, not an error
 
       if (readResult == -10) {
-        SerialPrint((String) "Invalid sensor reading for " + sensorString, true);
-        storeError((String) "Invalid sensor reading for " + sensorString, ERROR_SENSOR_READ, true);
+        #ifdef _USESERIAL
+        SerialPrint((String) "Invalid sensor reading for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, true);
+        #endif
+        storeError((String) "Invalid sensor reading for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, ERROR_SENSOR_READ, true);
       } else if (readResult == -1) {
-          SerialPrint((String) "Could not find index to prefs or history for " + sensorString, true);
-          storeError((String) "Could not find index to prefs or history for " + sensorString, ERROR_SENSOR_READ, true);
+          #ifdef _USESERIAL
+          SerialPrint((String) "Could not find index to prefs or history for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, true);
+          #endif
+          storeError((String) "Could not find index to prefs or history for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, ERROR_SENSOR_READ, true);
       } else if (readResult == -2) {
-          SerialPrint((String) "Could not register" + sensorString + " as a device.", true);
-          storeError((String) "Could not register" + sensorString + " as a device.", ERROR_DEVICE_ADD, true);
+          #ifdef _USESERIAL
+          SerialPrint((String) "Could not register" + (String) sensor->snsType + (String) "." + (String) sensor->snsID + " as a device.", true);
+          #endif
+          storeError((String) "Could not register" + (String) sensor->snsType + (String) "." + (String) sensor->snsID + " as a device.", ERROR_DEVICE_ADD, true);
       } else if (readResult >0) { //success
         numGood++;
         #ifdef _USELED
@@ -360,16 +361,13 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
           pinMode(P->powerPin, OUTPUT);
           digitalWrite(P->powerPin, HIGH);
-          delay(100); //wait X ms for reading to settle
+          delay(200); //wait X ms for reading to settle
         }
 
         if (pintype == 1 || pintype == 2) {
           pinMode(correctedPin, INPUT);
-          for (byte ii=0;ii<nsamps;ii++) {
-            val += analogRead(correctedPin)/ADCRATE; //analog pin, no power
-            delay(10);
-          }
-          val=val/nsamps;
+          val = readAnalogVoltage(correctedPin, nsamps);
+          
         }
 
         if (pintype == 3 || pintype == 4) {
@@ -400,7 +398,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         
         } 
         if (P->snsType==33) {
-          P->snsValue = map(val, 0, ADCRATE, 0, 100);
+          P->snsValue = mapfloat(val, 0.15, 1.75, 0, 100); //this is the effective measurement range
           if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
         } 
       break;
@@ -714,7 +712,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
             //read values from the mux and find p2p
             val = peak_to_peak(MUXPINS[4],50); //50 ms is 3 clock cycles at 60 Hz
           #else
-            //use the DIO pins directly
+            //use the ESP32 pins directly
             val = peak_to_peak(snspin,50);
           #endif
 
@@ -830,11 +828,11 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         {
           #ifdef _USELIBATTERY
           //note that esp32 ranges 0 to ADCRATE, while 8266 is 1023. This is set in header.hpp
-          P->snsValue = readVoltageDivider( 1,1,  _USELIBATTERY, 3.3, 3); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USELIBATTERY, 20); //if R1=R2 then the divider is 50%
           
         #endif
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( 100,  6,  _USESLABATTERY, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USESLABATTERY, 20); 
           
         #endif
 
@@ -845,7 +843,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         {
           //_USEBATPCNT
         #ifdef _USELIBATTERY
-          P->snsValue = readVoltageDivider( 1,1,  _USELIBATTERY, 3.3, 3); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USELIBATTERY, 20); //if R1=R2 then the divider is 50%
 
           #define VOLTAGETABLE 21
           static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
@@ -862,7 +860,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         #endif
 
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( 100,  6,  _USESLABATTERY, 1, 3); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USESLABATTERY, 20); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
 
           #define VOLTAGETABLE 11
           static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
@@ -993,24 +991,19 @@ bool checkSensorValFlag(struct SnsType *P) {
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
 }
-float readVoltageDivider(float R1, float R2, uint8_t snsPin, float Vm, byte avgN) {
+float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN) {
   /*
     R1 is first resistor
     R2 is second resistor (which we are measuring voltage across)
     snsPin is the pin to measure the voltage, Vo
     ADCRATE is the max ADCRATE
-    Vm is the ADC max voltage (1 for esp12e, 3.3 for NodeMCU, 3.3 for ESP)
+    Vm is the ADC max voltage 
     avgN is the number of times to avg
     */
+ 
 
-  float Vo = 0;
+  return (float)  readAnalogVoltage(snsPin, avgN) / ((float)R2 / (R1 + R2));
 
-  for (byte i=0;i<avgN;i++) {
-    esp_adc_cal_get_voltage(snsPin, &adc_chars, &Vo);
-    Vo += (float) Vm * ((R2+R1)/R2) * analogRead(snsPin)/ADCRATE;
-  }
-
-  return  Vo/avgN;
 }
 
 
@@ -1285,6 +1278,27 @@ uint8_t getPinType(int16_t pin, int8_t* correctedPin) {
   return 0;
 }
 
+
+float readAnalogVoltage(int16_t pin, byte nsamps) {
+  pinMode(pin, INPUT);
+  double val = 0;
+  for (byte ii=0;ii<nsamps;ii++) {
+    val += analogRead(pin); //analog pin. Note that not all ESP32 boards have the correct internal lookup for analogReadMilliVolts(), so we use analogRead() instead.
+    if (ii<nsamps-1) delay(10);
+  }
+  //output range depends on the attenuation settings. 
+  if (_USEADCATTEN == ADC_6db) {
+    val= ((double) val/nsamps)/(4095)*1.75; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+  } else if (_USEADCATTEN == ADC_11db) {
+    val= ((double) val/nsamps)/(4095)*2.450; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+  } else if (_USEADCATTEN == ADC_2_5db) {
+    val= ((double) val/nsamps)/(4095)*1.25; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+  } else if (_USEADCATTEN == ADC_0db) {
+    val= ((double) val/nsamps)/(4095)*0.95; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+  }
+  return val;
+}
+
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps) {
   double val = 0;
@@ -1292,11 +1306,7 @@ double readMUX(int16_t pin, byte nsamps) {
   digitalWrite(MUXPINS[1],bitRead(pin,1));
   digitalWrite(MUXPINS[2],bitRead(pin,2));
   digitalWrite(MUXPINS[3],bitRead(pin,3));  
-  for (byte ii=0;ii<nsamps;ii++) {
-    val += analogRead(MUXPINS[4]);
-    delay(10);
-  }
-  val=val/nsamps/ADCRATE;
+  val = readAnalogVoltage(MUXPINS[4],nsamps);
   digitalWrite(MUXPINS[0],HIGH);
   digitalWrite(MUXPINS[1],HIGH);
   digitalWrite(MUXPINS[2],HIGH);
