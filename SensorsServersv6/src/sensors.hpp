@@ -9,8 +9,8 @@
 // Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_CORE;
 struct STRUCT_PrefsH;
-struct DevType;
-struct SnsType;
+struct ArborysDevType;
+struct ArborysSnsType;
 class Devices_Sensors;
 
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
@@ -94,11 +94,6 @@ class Devices_Sensors;
       #define ECHOPIN 3
     #endif
 
-    #ifdef _USESSD1306
-      #define _OLEDTYPE &Adafruit128x64
-      //#define _OLEDTYPE &Adafruit128x32
-      //#define _OLEDINVERT 0
-    #endif
 
     #ifdef _USEDHT
 
@@ -145,12 +140,6 @@ class Devices_Sensors;
 
 #endif
 
-#ifdef  _USESSD1306
-  #include "SSD1306Ascii.h"
-  #include "SSD1306AsciiWire.h"
-  #define RST_PIN -1
-  #define I2C_OLED 0x3C
-#endif
 
 #ifdef _USETFLUNA
   #include "TFLuna.hpp"
@@ -226,12 +215,8 @@ extern  Adafruit_BME280 bme; // I2C
 
 #endif
 
-#ifdef  _USESSD1306
 
-extern   SSD1306AsciiWire oled;
-#endif
-
-int8_t ReadData(struct SnsType *P, bool forceRead=false);
+int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN=1);
 void setupSensors();
@@ -240,11 +225,8 @@ void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
 float readAnalogVoltage(int16_t pin, byte nsamps);
-float readPinValue(SnsType* P, byte nsamps);
+float readPinValue(ArborysSnsType* P, byte nsamps);
 
-#ifdef _USESSD1306
-void redrawOled(void);
-#endif
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps);
 #endif
@@ -263,15 +245,7 @@ double readMUX(int16_t pin, byte nsamps);
     double Values[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     uint8_t Flags[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
 
-    bool recordSentValue(SnsType *S, int16_t hIndex) {
-      if (hIndex < 0 || hIndex >= _SENSORNUM || isTimeValid(S->timeRead) == false) return false;
-      HistoryIndex[hIndex]++;
-      if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
-      TimeStamps[hIndex][HistoryIndex[hIndex]] = S->timeRead;
-      Values[hIndex][HistoryIndex[hIndex]] = S->snsValue;
-      Flags[hIndex][HistoryIndex[hIndex]] = S->Flags;
-      return true;
-    }
+    bool recordSentValue(ArborysSnsType *S, int16_t hIndex);
   };
 
 

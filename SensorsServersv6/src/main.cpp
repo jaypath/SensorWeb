@@ -202,7 +202,6 @@ void setup() {
 
 
 
-    initI2C(); //initialize the I2C bus
 
     WEBHTML.reserve(20000);
 
@@ -424,7 +423,7 @@ void loop() {
         #ifdef _ISPERIPHERAL
         //check if there are any new servers (that I have not sent data to yet), and if so reset the timelogged for all my sensors
         for (int16_t i=0; i<NUMDEVICES ; i++) {
-          DevType* d = Sensors.getDeviceByDevIndex(i);
+          ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
           if (!d || !d->IsSet || d->devType < 100) continue;
           if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
             int16_t deviceIndex = Sensors.findDevice(d->MAC);
@@ -458,7 +457,7 @@ void loop() {
 
 
         if (I.localWeatherIndex!=255) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
+            ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
             if (!sensor || !sensor->IsSet) {
                 I.localWeatherIndex = 255;
             } else {
@@ -484,8 +483,8 @@ void loop() {
     
         if (I.localBatteryIndex<255 && I.localBatteryIndex >= 0 && I.localBatteryIndex < NUMDEVICES * NUMSENSORS) {
             // Find the battery sensor
-            DevType* batDevice = Sensors.getDeviceBySnsIndex(I.localBatteryIndex);
-            SnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
+            ArborysDevType* batDevice = Sensors.getDeviceBySnsIndex(I.localBatteryIndex);
+            ArborysSnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
             if (batDevice && batSensor && batDevice->IsSet && batSensor->IsSet && batSensor->timeLogged + 3600 > I.currentTime) {
                 I.localBatteryLevel = batSensor->snsValue;
                 //SerialPrint((String) "Local battery device found, snsindex" + I.localBatteryIndex, true + ", snsValue=" + I.localBatteryLevel);
@@ -637,7 +636,7 @@ void loop() {
                 //now march through devices and send a ping to each if they are labeled as expired
                 int16_t startIndex = -1;
                 while (startIndex < NUMDEVICES) {
-                    DevType* device = Sensors.getNextExpiredDevice(startIndex);
+                    ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
                     if (!device) break;
                     if (device->devType >= 100) continue; //don't send a ping to servers
                     if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently

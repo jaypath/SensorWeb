@@ -81,6 +81,16 @@ uint8_t HVACSNSNUM = 0;
 
 extern int16_t MY_DEVICE_INDEX;
 
+bool STRUCT_SNSHISTORY::recordSentValue(ArborysSnsType *S, int16_t hIndex) {
+  if (hIndex < 0 || hIndex >= _SENSORNUM || isTimeValid(S->timeRead) == false) return false;
+  HistoryIndex[hIndex]++;
+  if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
+  TimeStamps[hIndex][HistoryIndex[hIndex]] = S->timeRead;
+  Values[hIndex][HistoryIndex[hIndex]] = S->snsValue;
+  Flags[hIndex][HistoryIndex[hIndex]] = S->Flags;
+  return true;
+}
+
 
 void setupSensors() {
 
@@ -256,7 +266,7 @@ int8_t readAllSensors(bool forceRead) {
 //returns the number of sensors that were read successfully
   int8_t numGood = 0;
   for (int16_t i = 0; i < _SENSORNUM; i++) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
     if (sensor && sensor->IsSet) {
       if (sensor->deviceIndex != MY_DEVICE_INDEX) continue;
       
@@ -292,7 +302,7 @@ int8_t readAllSensors(bool forceRead) {
 }
 
 
-int8_t ReadData(struct SnsType *P, bool forceRead) {
+int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
   
   //is this my sensor?
@@ -1143,7 +1153,7 @@ float readAnalogVoltage(int16_t pin, byte nsamps) {
   return val;
 }
 
-float readPinValue(SnsType* P, byte nsamps) {
+float readPinValue(ArborysSnsType* P, byte nsamps) {
   float val=0;
 
   int8_t correctedPin=-1;
@@ -1199,39 +1209,6 @@ double readMUX(int16_t pin, byte nsamps) {
 }
 #endif
 
-
-
 #endif
 
 
-#ifdef  _USESSD1306
-
-  SSD1306AsciiWire oled;
-#endif
-
-
-#ifdef _USESSD1306
-
-void redrawOled() {
-
-
-  oled.clear();
-  oled.setCursor(0,0);
-  oled.printf("[%u] %d:%02d\n",WiFi.localIP()[3],hour(),minute());
-
-  byte j=0;
-  while (j<Sensors.getNumSensors()) {
-    for (byte jj=0;jj<2;jj++) {
-      SnsType* s = Sensors.getSensorBySnsIndex(j);
-      if (s) {
-        oled.printf("%d.%d=%d%s",s->snsType,s->snsID,(int) s->snsValue, (bitRead(s->Flags,0)==1)?"! ":" ");
-      }
-      j++;
-    }
-    oled.println("");    
-  }
-
-  return;    
-}
-
-#endif

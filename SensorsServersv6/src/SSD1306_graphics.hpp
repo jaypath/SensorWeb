@@ -4,16 +4,19 @@
 #define SSD1306_GRAPHICS_HPP
 
 
-#include "globals.hpp"
 #include "sensors.hpp"
+#include <SSD1306Ascii.h>
 #include <SSD1306AsciiWire.h>
 
+#define RST_PIN -1
+#define I2C_OLED 0x3C
+#define _OLEDTYPE &Adafruit128x64
 
-  SSD1306AsciiWire oled;
+extern SSD1306AsciiWire oled;
 
 void redrawOled();
-
-
+void invertOled();
+void initOled();
 
 
 

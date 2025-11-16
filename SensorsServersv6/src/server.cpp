@@ -1323,7 +1323,7 @@ void handleREQUESTUPDATE() {
   int httpCode;
   
   // Get the device IP for the specified sensor
-  DevType* device = Sensors.getDeviceBySnsIndex(j);
+  ArborysDevType* device = Sensors.getDeviceBySnsIndex(j);
   if (device) {
     String URL = device->IP.toString() + "/UPDATEALLSENSORREADS";
     Server_Message(URL, payload, httpCode);
@@ -1613,7 +1613,7 @@ void serverTextClose(int htmlcode, bool asHTML) {
 
 void rootTableFill(byte j) {
 //j is the snsindex
-  SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);    
   if (sensor) {
 
     WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "</a></td>";
@@ -1867,7 +1867,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>"; 
   #endif
   for (byte j=0;j<NUMSENSORS;j++)  {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(j);    
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);    
     if (sensor && sensor->IsSet) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
       if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
@@ -1875,7 +1875,7 @@ void handlerForRoot(bool allsensors) {
         rootTableFill(j);
         
         for (byte jj=j+1;jj<NUMSENSORS;jj++) {
-          SnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);    
+          ArborysSnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);    
           if (sensor2 && sensor2->IsSet) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
             if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
@@ -2116,7 +2116,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
 
   // Find sensor in Devices_Sensors class
   int16_t sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
-  SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
 
   WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>\n";
   WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
@@ -2896,7 +2896,7 @@ void handleSENSOR_UPDATE_POST() {
   
   // First, get the sensor object so we can update it
   int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
-  SnsType* sensor = nullptr;
+  ArborysSnsType* sensor = nullptr;
   if (snsIndex >= 0) {
     sensor = Sensors.getSensorBySnsIndex(snsIndex);
   }
@@ -2970,7 +2970,7 @@ void handleSENSOR_READ_SEND_NOW() {
     return;
   }
   
-  SnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
   if (!sensor) {
     server.send(400, "text/plain", "Invalid sensor");
     return;
@@ -4715,7 +4715,7 @@ void handleDeviceViewer() {
     }
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
+    ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
         WEBHTML = WEBHTML + "<strong>Error:</strong> Could not retrieve device information.";
@@ -4756,7 +4756,7 @@ void handleDeviceViewer() {
     // Count sensors for this device
     uint8_t sensorCount = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-        SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+        ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
         if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
             sensorCount++;
         }
@@ -4781,7 +4781,7 @@ void handleDeviceViewer() {
         
         // Add sensor rows
         for (int16_t i = 0; i < NUMSENSORS; i++) {
-            SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+            ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
             if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {                
                 WEBHTML = WEBHTML + "<tr>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
@@ -4877,7 +4877,7 @@ void handleDeviceViewerPing() {
     }
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
+    ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
@@ -4917,7 +4917,7 @@ void handleDeviceViewerDelete() {
     
     
     // Get current device
-    DevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
+    ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
@@ -5037,7 +5037,7 @@ void setupServerRoutes() {
 
 //___________________START OF JSON___________________
 //json builders 
-String JSONbuilder_device(DevType* device) {
+String JSONbuilder_device(ArborysDevType* device) {
   String deviceJSON = "\"senderDevice\":{\"mac\":\"";
   deviceJSON += MACToString(device->MAC, '\0', true);
   deviceJSON += "\",\"ip\":\"";
@@ -5050,12 +5050,12 @@ String JSONbuilder_device(DevType* device) {
   return deviceJSON;
 }
 
-String JSONbuilder_sensorData(SnsType* S) {
+String JSONbuilder_sensorData(ArborysSnsType* S) {
   String sensorJSON = "\"sensorData\":" + JSONbuilder_sensorObject(S);
   return sensorJSON;
 }
 
-String JSONbuilder_sensorObject(SnsType* S) {
+String JSONbuilder_sensorObject(ArborysSnsType* S) {
   String sensorJSON = "{\"type\":";
   sensorJSON += S->snsType;
   sensorJSON += ",\"id\":";
@@ -5075,9 +5075,9 @@ String JSONbuilder_sensorObject(SnsType* S) {
   return sensorJSON;
 }
 
-void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
+void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
   // Build full json sensor type message
-  DevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(S->deviceIndex);
   if (!device) {
     SerialPrint("JSONbuilder_sensorMSG: Device not found",true);
     storeError("JSONbuilder_sensorMSG: Device not found", ERROR_JSON_PARSE, true);
@@ -5096,7 +5096,7 @@ void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, uint16_t jsonBufferSize
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
    
   int16_t mydeviceIndex = Sensors.findMyDeviceIndex();
-  DevType* device = Sensors.getDeviceByDevIndex(mydeviceIndex);
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(mydeviceIndex);
   if (!device) {
     SerialPrint("JSONbuilder_sensorMSG_all: My device not found", true);
     storeError("JSONbuilder_sensorMSG_all: My device not found", ERROR_JSON_PARSE, true);
@@ -5109,7 +5109,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool f
 
   bool first = true;
   for (int16_t i = 0; i < NUMSENSORS; ++i) {
-    SnsType* S = Sensors.getSensorBySnsIndex(i);
+    ArborysSnsType* S = Sensors.getSensorBySnsIndex(i);
     if (!S || S->deviceIndex != mydeviceIndex) continue;
 
     if (!first) tempJSON += ",";
@@ -5131,7 +5131,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool f
 }
 
 void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, int16_t snsIndex) {
-  DevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
+  ArborysDevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
   if (!device) {
     SerialPrint("JSONbuilder_DataRequestMSG: My Device not found",true);
     storeError("JSONbuilder_DataRequestMSG: My Device not found", ERROR_JSON_PARSE, true);
@@ -5141,7 +5141,7 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool 
   int16_t snsType = -1;
   int16_t snsID = -1;
   if (snsIndex >= 0) {
-    SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
     if (!S) {
       SerialPrint("JSONbuilder_DataRequestMSG: Sensor " + String(snsIndex) + " not found",true);
       storeError("JSONbuilder_DataRequestMSG: Sensor " + String(snsIndex) + " not found", ERROR_JSON_PARSE, true);
@@ -5164,7 +5164,7 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool 
 }
 
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, bool isAck) {
-  DevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
+  ArborysDevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
   if (!device) {
     SerialPrint("JSONbuilder_pingMSG: Device not found",true);
     storeError("JSONbuilder_pingMSG: Device not found", ERROR_JSON_PARSE, true);
@@ -5332,7 +5332,7 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
     return;
   }
   
-  DevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) {
     responseMsg = "Sender device not found";
     storeError("Sender device not found while processing sensor data", ERROR_JSON_PARSE, true);
@@ -5363,7 +5363,7 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
 }
 
 
-void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
+void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg) {
   if (!sensor.containsKey("type") || !sensor.containsKey("id") || !sensor.containsKey("name") || !sensor.containsKey("value")) {
       responseMsg = "Invalid sensor entry";
       return;
@@ -5415,7 +5415,7 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
      //is this a low power sensor?
      if (bitRead(flags,2) == 1) {
       //low power sensors do not know if they switched flag status... get the last reading, which has not yet been updated
-      SnsType* OldS = Sensors.getSensorBySnsIndex(Sensors.findSensor(deviceMAC, snsType, snsID));
+      ArborysSnsType* OldS = Sensors.getSensorBySnsIndex(Sensors.findSensor(deviceMAC, snsType, snsID));
       if (OldS) {
         if (OldS->Flags != flags && (bitRead(flags,0) !=  bitRead(flags,0))) { //flag status changed
           bitWrite(flags,6,1); //flag changed since last read
@@ -5479,7 +5479,7 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
 
 
 //handlers for sending data
-bool checkThisSensorTime(SnsType* Si) {
+bool checkThisSensorTime(ArborysSnsType* Si) {
   //return true if it is time to send this sensor
   if (!Si || Si->deviceIndex != MY_DEVICE_INDEX) return false;
   if (Si->timeLogged != 0 && Si->timeLogged < I.currentTime && I.currentTime - Si->timeLogged < 60*60*24 && bitRead(Si->Flags, 6) == 0 ) {
@@ -5492,19 +5492,19 @@ bool isSensorSendTime(int16_t snsIndex) {
   // When snsIndex == -1, check all sensors and return true if ANY sensor is due
   if (snsIndex < 0) {
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-      SnsType* Si = Sensors.getSensorBySnsIndex(i);
+      ArborysSnsType* Si = Sensors.getSensorBySnsIndex(i);
       if (checkThisSensorTime(Si)) return true;
     }
     return false;
   }
 
   // Single sensor path
-  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+  ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
   if (checkThisSensorTime(S)) return true;
   return false;
 }
 
-bool isDeviceSendTime(DevType* D, bool forceSend) {
+bool isDeviceSendTime(ArborysDevType* D, bool forceSend) {
   
   //basic check - does this device exist?
   if (!D || !D->IsSet) return false;
@@ -5517,11 +5517,11 @@ bool isDeviceSendTime(DevType* D, bool forceSend) {
 
 //___________________START OF HTTP SEND HANDLERS___________________
 
-void wrapupSendData(SnsType* S) {
+void wrapupSendData(ArborysSnsType* S) {
   if (!S) {
     //special case, all sensors sent
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-      SnsType* S = Sensors.getSensorBySnsIndex(i);
+      ArborysSnsType* S = Sensors.getSensorBySnsIndex(i);
       if (!S) continue;
       if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
@@ -5534,7 +5534,7 @@ void wrapupSendData(SnsType* S) {
 }
 
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
-  DevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002; //device not found
   return sendHTTPJSON(d->IP, jsonBuffer, msgType);
 }
@@ -5598,7 +5598,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     // Use static buffers to reduce memory fragmentation
     static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
 
-    SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
     if (S == nullptr) { //send all sensors
       if (useUDP)  JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
       else JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
@@ -5616,7 +5616,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
       sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(255,255,255,255), strlen(jsonBuffer),"snsBrdcst");
       #ifndef _USELOWPOWER
       for (int16_t i=0; i<NUMDEVICES ; i++) {
-        DevType* d = Sensors.getDeviceByDevIndex(i);
+        ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
         if (d && d->IsSet && d->IP != WiFi.localIP()) d->dataSent = I.currentTime;
       }
       wrapupSendData(S);
@@ -5626,7 +5626,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
 
     if (sendToDeviceIndex >= 0) {
       //send data to a specific device
-      DevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+      ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
       if (isDeviceSendTime(d, forceSend)) {
         if (useUDP) {
           isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer),"snsMsg");
@@ -5639,7 +5639,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     } else {
       // now send to all servers I know of. iterate all known devices to find servers  (devType >=100). forcesend MUST be false here (we are not going to send to every device)
       for (int16_t i=0; i<NUMDEVICES ; i++) {
-        DevType* d = Sensors.getDeviceByDevIndex(i);
+        ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
         if (!isDeviceSendTime(d, false)) continue; //not time to send to this server yet because we have recently sent data
         
         //udp method, targetted
@@ -5693,11 +5693,11 @@ int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP) {
 
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP) {
   //send a data request to a specific device and sensor, or use snsIndex = -1 to request all sensors
-  DevType* d = Sensors.getDeviceByDevIndex(deviceIndex);  
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);  
   return sendMSG_DataRequest(d, snsIndex, viaHTTP);
 }
 
-int16_t sendMSG_DataRequest(DevType* d, int16_t snsIndex, bool viaHTTP) { //snsindex is which sensor we want, or -1 for all sensors
+int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP) { //snsindex is which sensor we want, or -1 for all sensors
   if (!d) {
     SerialPrint("sendMSG_DataRequest: Device not found: " + String(d->devName), true);
     return -1002; //device not found

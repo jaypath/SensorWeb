@@ -41,9 +41,10 @@ bool initSystem() {
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
   #endif
 
+  initI2C(); //initialize the I2C bus
+
   #ifdef _USESSD1306
-  oled.begin();
-  oled.setFont(ArialMT_Plain_10);
+  initOled();
   #endif
 
     #ifdef _USETFT
@@ -843,7 +844,7 @@ int16_t findOldestDev() {
     if (!Sensors.isSensorInit(i)) return i;
 
     //find an expired noncritical slot
-    SnsType* sensor = Sensors.getSensorBySnsIndex(i);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
     if (sensor && sensor->expired == 1 && !bitRead(sensor->Flags,7)) {
       return i;
     }
@@ -895,7 +896,7 @@ void checkHeat() {
   int16_t snsindex = Sensors.findSnsOfType("HVAC", false, -1);
   if (snsindex == -1) return;
   while (snsindex != -1) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(snsindex);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsindex);
     if (!sensor || !sensor->IsSet) continue;
     if (sensor->snsValue > 0) {
       switch (sensor->snsType) {

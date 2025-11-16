@@ -11,7 +11,7 @@
 // Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_PrefsH;
 struct STRUCT_CORE;
-struct DevType;
+struct ArborysDevType;
 class Devices_Sensors;
 
 extern STRUCT_PrefsH Prefs;
@@ -69,8 +69,8 @@ bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen=80);
 bool broadcastServerPresence(bool broadcastPeripheral=false, uint8_t method=2);
 bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce= nullptr);
 void makeESPNowPingMsg(ESPNOW_type& msg, const uint8_t* targetMAC, bool useUDP);
-bool sendESPNowPingRequest(DevType* targetDevice, uint8_t tier, bool dataRequest);
-bool sendESPNowSensorDataRequest(DevType* targetDevice, uint8_t tier);
+bool sendESPNowPingRequest(ArborysDevType* targetDevice, uint8_t tier, bool dataRequest);
+bool sendESPNowSensorDataRequest(ArborysDevType* targetDevice, uint8_t tier);
 void OnESPNOWDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
 void processLANMessage(ESPNOW_type* msg);

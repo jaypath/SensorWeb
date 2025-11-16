@@ -172,7 +172,7 @@ void Animation_type::LED_set_color(byte r1, byte g1, byte b1, byte r2, byte g2, 
 
 }
 
-void Animation_type::LED_set_color_soil(struct SnsType *sns) {
+void Animation_type::LED_set_color_soil(struct ArborysSnsType *sns) {
   //while log(resistivity) is linearly correlated with moiusture, it is roughly linear in our range
   //let's scale from blue to green to yellow to red
 

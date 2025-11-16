@@ -10,8 +10,8 @@
 // Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_CORE;
 struct STRUCT_PrefsH;
-struct DevType;
-struct SnsType;
+struct ArborysDevType;
+struct ArborysSnsType;
 class Devices_Sensors;
 class WeatherInfoOptimized;
 

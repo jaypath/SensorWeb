@@ -199,7 +199,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
   char tempbuf[14];
 
   // Get sensor data - the sensor already contains its deviceIndex
-  SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
   
   if (!sensor || sensor->IsSet == 0) {
     return; // Invalid sensor
@@ -656,7 +656,7 @@ void fcnDrawSensorInfo() {
   byte boxnum = I.ScreenNum-10;
   if (boxnum >= 0 && boxnum < MAXALARMS && alarms[boxnum] != 255) {
 //figure out which sensor boxnum equates to    
-    SnsType* sensor = Sensors.getSensorBySnsIndex(alarms[boxnum]);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(alarms[boxnum]);
     if (sensor && sensor->IsSet ) {
 
 
@@ -945,7 +945,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
     while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
-      SnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
+      ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
       if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type
       bool isgood = true;
@@ -1056,7 +1056,7 @@ void fncDrawCurrentCondition() {
 
   //see if we have local weather
   if (I.localWeatherIndex<255) {
-    SnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
     if (sensor && sensor->IsSet ) { 
       st = "Local@" + (String) dateify(sensor->timeLogged,"h1:nn");
       if (I.localBatteryIndex<255)     st += " Bat" + (String) (I.localBatteryLevel) + "%";
@@ -1332,8 +1332,8 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
 
   if (snsIndex !=255) {
     // Find the sensor by its index and get its value
-    DevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    SnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
     
     if (device && sensor && device->IsSet && sensor->IsSet) {
       tempval = sensor->snsValue;
@@ -1379,8 +1379,8 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
   if (snsIndex!=255) {
     // Find the sensor by its index and get its value
     
-    DevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    SnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
     
     if (device && sensor && device->IsSet && sensor->IsSet) {
       tempval = (int) sensor->snsValue;

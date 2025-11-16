@@ -20,7 +20,7 @@ bool setupTFLuna() {
   }
 
   //get sensor number of TFLUNA   if it is not found, return
-  SnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
+  ArborysSnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
   if (P == NULL || !P->IsSet) {
     SerialPrint("CheckTFLuna: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
     return TFLunaFailed();
@@ -59,7 +59,7 @@ uint32_t checkTFLuna(int16_t snsindex) {
   }
 
     //get sensor number of TFLUNA   if it is not found, return
-  SnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
+  ArborysSnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
 
   int16_t tempval;
   if (tflI2C.getData(tempval, _USETFLUNA)) {
@@ -85,7 +85,7 @@ bool TFLunaUpdateMAX() {
   if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
     double distance_change=0;
     double actualdistance=0;
-    SnsType* P = NULL;
+    ArborysSnsType* P = NULL;
     m = checkTFLuna(-1);
     if (m == -9999) {
       LocalTF.FASTMODEEXPIRES = 0;

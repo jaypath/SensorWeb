@@ -584,7 +584,7 @@ bool broadcastServerList(const uint8_t serverMACs[][6], const uint32_t* serverIP
     uint8_t macs[6][6] = {};
     uint32_t ips[6] = {};
     for (int16_t i = 0; i < Sensors.getNumDevices() && found < 6; ++i) {
-        DevType* dev = Sensors.getDeviceByDevIndex(i);
+        ArborysDevType* dev = Sensors.getDeviceByDevIndex(i);
         if (dev && dev->IsSet && dev->devType >= 100) {
             // Convert uint64_t MAC to 6 bytes
             for (int j = 0; j < 6; ++j)
@@ -638,7 +638,7 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
     } else {
         bool found = false;
         for (int16_t i = 0; i < Sensors.getNumDevices(); ++i) {
-            DevType* dev = Sensors.getDeviceByDevIndex(i);
+            ArborysDevType* dev = Sensors.getDeviceByDevIndex(i);
             if (dev && dev->IsSet && dev->devType >= 100) {
                 for (int j = 0; j < 6; ++j)
                     destMAC[5-j] = (dev->MAC >> (8*j)) & 0xFF;
@@ -689,7 +689,7 @@ void makeESPNowPingMsg(ESPNOW_type& msg, uint64_t targetMAC, uint8_t tier) {
 }
 
 
-bool sendESPNowSensorDataRequest(DevType* targetDevice,uint8_t tier) {
+bool sendESPNowSensorDataRequest(ArborysDevType* targetDevice,uint8_t tier) {
     // Prepare sensor data request message (type 7) with current unix timestamp
     //tier is 1 = ESPNow directed ping, tier 2 = directed UDP, tier 3 = both ESP and UDP Directed ping (for HTTP or UDP use http specific code) 
     
@@ -698,7 +698,7 @@ bool sendESPNowSensorDataRequest(DevType* targetDevice,uint8_t tier) {
     
 }
 
-bool sendESPNowPingRequest(DevType* targetDevice, uint8_t tier, bool dataRequest) {
+bool sendESPNowPingRequest(ArborysDevType* targetDevice, uint8_t tier, bool dataRequest) {
     // Prepare ping request message (type 5) with current unix timestamp
     //tier is 1 = ESPNow directed ping, tier 2 = directed UDP, tier 3 = both ESP and UDP Directed ping (for HTTP or UDP use http specific code) 
     ESPNOW_type msg = {};
@@ -840,7 +840,7 @@ bool sendESPNowUDPMessage(ESPNOW_type& msg, IPAddress targetIP, bool encrypt) {
         targetIP = IPAddress(255,255,255,255);
     } else {
         if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0)) {
-            DevType* d = Sensors.getDeviceByMAC(MACToUint64(msg.targetMAC));        
+            ArborysDevType* d = Sensors.getDeviceByMAC(MACToUint64(msg.targetMAC));
             if (d) {
                 targetIP = d->IP;
             } else {

@@ -428,8 +428,7 @@ class LGFX;
 #endif
 
 #ifdef _USESSD1306
-#include <SSD1306_graphics.hpp>
-extern SSD1306AsciiWire oled;
+#include "SSD1306_graphics.hpp"
 #endif
 
 #include <ArduinoOTA.h>
