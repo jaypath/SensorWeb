@@ -165,12 +165,6 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
 
 #if defined(_USEHVAC)
 
-  #if defined(_USEAC) && !defined(_USEMUX)
-
-    for (byte i=0;i<_USEAC;i++) {
-      pinMode(ACPINS[i],INPUT);
-    }
-  #endif
   #if defined(_USEHEAT) && !defined(_USEMUX)
     for (byte i=0;i<_USEHEAT;i++) {
       pinMode(HEATPINS[i],INPUT);
@@ -190,7 +184,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     if (pintype !=0) {
       //set up pins
       if (pintype <= 4) pinMode(correctedPin, INPUT);
-      //if pintype is even, then it is a power pin, and we need to set the pin to output and low
+      //if pintype is even, then it has a power pin, and we need to set the pin to output and low
       if (pintype % 2 == 0 && pintype <= 6) {
         pinMode(powerPins[i], OUTPUT);
         digitalWrite(powerPins[i], LOW);
@@ -322,7 +316,11 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
   // Use I.currentTime instead of local time_t t variable
   byte nsamps; //only used for some sensors
   double val;
+  uint8_t lastflag = P->Flags;
+  //reset adjustable flags
   bitWrite(P->Flags,0,0);
+  bitWrite(P->Flags,5,0);
+  bitWrite(P->Flags,6,0);
 
   double LastsnsValue = P->snsValue;
   bool isInvalid = false;
@@ -351,41 +349,7 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
     case 3: //soil resistance 
     case 33: //soil capacitance
       {
-        val=0;
-        nsamps=10;
-
-        int8_t correctedPin=-1;
-        uint8_t pintype = getPinType(P->snsPin, &correctedPin);
-            
-        //has power pin?
-        if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
-          pinMode(P->powerPin, OUTPUT);
-          digitalWrite(P->powerPin, HIGH);
-          delay(200); //wait X ms for reading to settle
-        }
-
-        if (pintype == 1 || pintype == 2) {
-          pinMode(correctedPin, INPUT);
-          val = readAnalogVoltage(correctedPin, nsamps);
-          
-        }
-
-        if (pintype == 3 || pintype == 4) {
-          val = digitalRead(correctedPin); //digital pin, high is dry
-        }
-
-        if (pintype == 5 || pintype == 6) {
-          //use MUX to read the pin
-          #ifdef _USEMUX
-          val = readMUX(correctedPin, nsamps);
-          #endif
-        }
-
-        //has power pin?
-        if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
-          pinMode(P->powerPin, OUTPUT);
-          digitalWrite(P->powerPin, LOW);
-        }
+        val=readPinValue(P, 10);
 
         delay(10);
  
@@ -668,28 +632,20 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
       }
     #endif
 
-    #if defined(_USEHEAT) 
+    #if defined(_USEHVAC) 
 
-      case 53: //total HVAC time        
+      case 50: //total HVAC time        
         {
-          if (P.countFlagged(-3,0b00000001,0b00000001,0)>0) P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC multizone systems were on
-
-        #ifndef _USECALIBRATIONMODE
-          //note that for heat and ac, the total time (case 53) accounts for slot 0 and the heat or cool elements take the following slots
-          if (HVACHX[0].lastRead+HVACHX[0].interval <= P->LastReadTime) {
-            pushDoubleArray(HVACHX[0].values,_HVACHXPNTS,P->snsValue);
-            HVACHX[0].lastRead = P->LastReadTime;
-          }
-        #endif
-
+          if (Sensors.countFlagged(55,0b00000001,0b00000001,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0)>0) P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC  systems were on
 
         break;
         }
 
-      case 54: //heat - gas valve
+    #ifdef _USEHEAT
+      case 51: //heat - gas valve
         {
-          byte snspin = _USERELAY;
 
+          
           //can use the mux, as long as _USERELAY is set correctly.
           #ifndef _USEMUX
             pinMode(snspin, INPUT);
@@ -718,17 +674,10 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
 
           if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
 
-          #ifndef _USECALIBRATIONMODE
-            //note that for heat, the total time (case 50) accounts for slot 0 , gas  takes 1, zones take id + 1
-            if (HVACHX[1].lastRead+HVACHX[1].interval <= P->LastReadTime) {
-              pushDoubleArray(HVACHX[1].values,_HVACHXPNTS,P->snsValue);
-              HVACHX[1].lastRead = P->LastReadTime;
-            }
-          #endif  
         break;
         }
     
-      case 55: //heat
+      case 52: //heat
         {
         //take n measurements, and average
         val=0;
@@ -754,13 +703,6 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
         if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
 
             
-        #ifndef _USECALIBRATIONMODE
-          //note that for heat, the total time (case 50) accounts for slot 0 , gas  takes 1, so these take id + 1
-          if (HVACHX[P->snsID+1].lastRead+HVACHX[P->snsID+1].interval <= P->LastReadTime) {
-            pushDoubleArray(HVACHX[P->snsID+1].values,_HVACHXPNTS,P->snsValue);
-            HVACHX[P->snsID+1].lastRead = P->LastReadTime;
-          }
-        #endif
         break;
         }
     #endif
@@ -770,44 +712,31 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
       {
         //assumes you are using a fan relay to switch on
         //if the fan is off, the NC pins of relay will be connected and I can read a digital high
-        //if fan is on, pin will be low
-        //turn on the voltage DIO to the compressor
-        pinMode(ACPINS[2],OUTPUT);
-        pinMode(ACPINS[0],INPUT);
-        digitalWrite(ACPINS[2],HIGH);
-        delay(10);
-        if (digitalRead(ACPINS[0]) == LOW)           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
-        digitalWrite(ACPINS[2],LOW);
-
-
-        if (HVACHX[1].lastRead+HVACHX[1].interval <= P->LastReadTime) {
-          pushDoubleArray(HVACHX[1].values,_HVACHXPNTS,P->snsValue);
-          HVACHX[1].lastRead = P->LastReadTime;
+        //if fan is on, relay will be away (conneccting AC) andpin will be low
+    
+        val=readPinValue(P, 1);
+        if (val == 0)           {
+          bitWrite(P->Flags,0,1); //currently flagged
+          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
         }
 
         break;
       }
-      case 57: //aircon fan
+      case 55: //fan
       {
         //assumes you are using a fan relay to switch on
         //if the fan is off, the NC pins of relay will be connected and I can read a digital high
-        //turn on the voltage DIO to the fan
-        pinMode(ACPINS[3],OUTPUT);
-        pinMode(ACPINS[1],INPUT);
-        digitalWrite(ACPINS[3],HIGH);
-        delay(10);
-        if (digitalRead(ACPINS[1]) == LOW)           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
-        digitalWrite(ACPINS[3],LOW);
-
-
-
-        if (HVACHX[2].lastRead+HVACHX[2].interval <= P->LastReadTime) {
-          pushDoubleArray(HVACHX[2].values,_HVACHXPNTS,P->snsValue);
-          HVACHX[2].lastRead = P->LastReadTime;
+        //if fan is on, relay will be away (conneccting AC) andpin will be low
+        val=readPinValue(P, 1);
+        if (val == 0) {
+          bitWrite(P->Flags,0,1); //currently flagged
+          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
         }
+
 
         break;
       }
+    #endif
     #endif
 
     case 70: //Leak detection
@@ -902,91 +831,37 @@ int8_t ReadData(struct SnsType *P, bool forceRead) {
     return -10;
   }
 
-  checkSensorValFlag(P); //sets isFlagged
+  if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
+    if (bitRead(P->Flags,0) != bitRead(lastflag,0)) { //flags changed
+      bitWrite(P->Flags,6,1); //change in flag status
+      if (bitRead(P->Flags,0) == 1) bitWrite(P->Flags,5,1); //value is high
+    } else {
+      //no change in flag status. bit 6 is already 0.
+    }
+    
+      
+  }
+  else  {
+    double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
+    double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
+
+    if (P->snsValue>limitUpper || P->snsValue<limitLower) {
+      bitWrite(P->Flags,0,1); //currently flagged
+      if (bitRead(P->Flags,0) != bitRead(lastflag,0)) bitWrite(P->Flags,6,1); //change in flag status
+      if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1); //value is high
+      else bitWrite(P->Flags,5,0); //value is low
+    } else {
+      //no change in flag status. bit 6 is already 0. bit 5 is irrelevant.
+    }
+  }
   P->timeRead = I.currentTime; //localtime
 
   //add to sensor history
   SensorHistory.recordSentValue(P, prefs_index);
-
-  #ifdef _WEBCHART
-    for (byte k=0;k<_WEBCHART;k++) {
-      if (SensorCharts[k].snsType == P->snsType) {
-        if (SensorCharts[k].lastRead+SensorCharts[k].interval <= P->timeRead) {
-          SensorCharts[k].lastRead = P->timeRead;
-          //byte tmpval = (byte) ((double) (P->snsValue + SensorCharts[k].offset) / SensorCharts[k].multiplier );
-
-          pushDoubleArray(SensorCharts[k].values,_NUMWEBCHARTPNTS,P->snsValue);
-        }
-      }
-
-    }
-  #endif
-
+  
 return 1;
 }
 
-
-
-bool checkSensorValFlag(struct SnsType *P) {
-  //RMB5 is only relevant if bit 0 is 1 [flagged] and then this is 1 if the value is too high and 0 if too low, RMB6 = flag changed since last read, flag status changed and I have not sent data yet
-  
-  bool lastflag = bitRead(P->Flags,0);
-  bool thisflag = false;
-
-  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID);
-
-  double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
-  double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
-
-  if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
-    lastflag = bitRead(P->Flags,0); //this is the last flag status
-    // Note: LastsnsValue field removed in new SnsType structure
-    // HVAC logic simplified - just check current value against limits
-    
-
-    
-    if (P->snsValue > limitUpper || P->snsValue < limitLower) { //currently flagged
-      bitWrite(P->Flags,0,1); //currently flagged
-      bitWrite(P->Flags,5,1); //value is high
-      if (lastflag) {
-        bitWrite(P->Flags,6,0); //no change in flag        
-      } else {
-        bitWrite(P->Flags,6,1); //change in flag status
-      }
-      return true; //flagged
-    } else { //currently NOT flagged
-      bitWrite(P->Flags,0,0); //currently not flagged
-      bitWrite(P->Flags,5,0); //irrelevant
-      if (lastflag) {
-        bitWrite(P->Flags,6,1); // changed from flagged to NOT flagged
-      } else {
-        bitWrite(P->Flags,6,0); //no change (was not flagged, still is not flagged)
-      }
-        return false; //not flagged
-    }
-  }
-
-
-  if (P->snsValue>limitUpper || P->snsValue<limitLower) {
-    thisflag = true;
-    bitWrite(P->Flags,0,1);
-
-    //is it too high? write bit 5
-    if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1);
-    else bitWrite(P->Flags,5,0);
-  } 
-
-  //now check for changes...  
-  if (lastflag!=thisflag) {
-    bitWrite(P->Flags,6,1); //change detected
-    
-  } else {
-    bitWrite(P->Flags,6,0);
-  }
-  
-  return bitRead(P->Flags,0);
-
-}
 
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
@@ -1298,6 +1173,46 @@ float readAnalogVoltage(int16_t pin, byte nsamps) {
   }
   return val;
 }
+
+float readPinValue(SnsType* P, byte nsamps) {
+  float val=0;
+
+  int8_t correctedPin=-1;
+  uint8_t pintype = getPinType(P->snsPin, &correctedPin);
+      
+  //has power pin?
+  if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
+    pinMode(P->powerPin, OUTPUT);
+    digitalWrite(P->powerPin, HIGH);
+    delay(50); //wait X ms for reading to settle
+  }
+
+  if (pintype == 1 || pintype == 2) {
+    pinMode(correctedPin, INPUT);
+    val = readAnalogVoltage(correctedPin, nsamps);
+  }
+
+  if (pintype == 3 || pintype == 4) {
+    val = digitalRead(correctedPin); //digital pin, high is dry
+  }
+
+  if (pintype == 5 || pintype == 6) {
+    //use MUX to read the pin
+    #ifdef _USEMUX
+    val = readMUX(correctedPin, nsamps);
+    #endif
+  }
+
+  //has power pin?
+  if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
+    pinMode(P->powerPin, OUTPUT);
+    digitalWrite(P->powerPin, LOW);
+  }
+
+  return val;
+  
+}
+
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps) {

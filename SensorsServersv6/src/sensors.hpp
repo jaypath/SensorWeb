@@ -70,18 +70,8 @@ class Devices_Sensors;
     #endif
 
     #ifdef _USEHVAC //this is any number
-      #ifdef _USEAC //number of AC zones
-        //const uint8_t DIO_INPUTS=2; //two pins assigned
-        #ifdef _USEMUX
-        const uint8_t ACPINS[4] = _ACPINS; //if using MUX, then the pin count is always 4, regardless of the number of zones
-        #else
 
-        const uint8_t ACPINS[_USEAC] = _ACPINS; //note that this must match the number of zones. Declare a different sensor for compressor/fan or gas/zone valve. Note that the pin should be a mux address if _USEMUX is defined
-        #endif
-        const String ACZONE[_USEAC] = _ACZONES;
-
-        #endif
-        #ifdef _USEHEAT
+      #ifdef _USEHEAT
         //  const uint8_t DIO_INPUTS=6; //6 sensors
           #ifdef _USEMUX
             const uint8_t HEATPINS[4] = _HEATPINS; //if using MUX, then the pin count is always 4, regardless of the number of zones
@@ -90,26 +80,11 @@ class Devices_Sensors;
           #endif
           const String HEATZONE[_USEHEAT] = _HEATZONES;
 
-        #endif
+      #endif
 
-        #if defined(_USEHEAT) || defined(_USEAC)
-          #define _HVACHXPNTS 24
-        #endif
-
+      
 
     #endif
-
-    #if defined(_USECALIBRATIONMODE) && defined(_WEBCHART)
-      #error "CANNOT enable both webchart and usecalibration."
-    #endif
-
-
-    //for calibrating current sensor
-    #ifdef _USECALIBRATIONMODE
-      #define _NUMWEBCHARTPNTS 50
-      const uint8_t SENSORS_TO_CHART[_USECALIBRATIONMODE] = {32,33,25,26,36}; //which pins should be stored for charting?
-    #endif
-
 
 
     
@@ -260,13 +235,12 @@ int8_t ReadData(struct SnsType *P, bool forceRead=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN=1);
 void setupSensors();
-bool checkSensorValFlag(struct SnsType *P);
 double peak_to_peak(int pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
 float readAnalogVoltage(int16_t pin, byte nsamps);
-
+float readPinValue(SnsType* P, byte nsamps);
 
 #ifdef _USESSD1306
 void redrawOled(void);

@@ -438,7 +438,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
     //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
     //if snsType is -3, then count all soil sensors (meeting the flag criteria)
     //if snsType is -9, then count all pressure sensors (meeting the flag criteria)
-    //if snstype is -54 to -57, then count all HVAC sensors (meeting the flag criteria)
+    //if snstype is -50 to -59, then count all HVAC sensors (meeting the flag criteria)
     //if snsType is <=-100, then count all server sensors (meeting the flag criteria)
     //if snsType is <=-1000 then use flags to specify multiple types: 0 = all EXCEPT the specified types , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary...
 
@@ -460,7 +460,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
             if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
             if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
             if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
-            if (snsType <= -54 && snsType >= -57 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
+            if (snsType <= -50 && snsType >= -59 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
             if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
             if (snsType == -1000) {
                 //use I.showTheseFlags to determine which types to count
