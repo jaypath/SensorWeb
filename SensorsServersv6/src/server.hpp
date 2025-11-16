@@ -147,7 +147,8 @@ void registerHTTPMessage(const char* messageType);
 //sending data
 void wrapupSendData(SnsType* S);
 bool isDeviceSendTime(DevType* D, bool forceSend);
-bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex=-1);
+bool checkThisSensorTime(SnsType* S);
+bool isSensorSendTime(int16_t snsIndex);
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);

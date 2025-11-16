@@ -5326,6 +5326,9 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
 
   int16_t deviceIndex = processJSONMessage_addDevice(root, responseMsg);
   if (deviceIndex < 0) {
+    SerialPrint("Failed to register sender device",true);
+    responseMsg = "Failed to register sender device";
+    storeError("snsData failed: " + responseMsg, ERROR_JSON_PARSE, true);
     return;
   }
   
@@ -5476,15 +5479,29 @@ void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg) {
 
 
 //handlers for sending data
-bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex) {
-  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
-  if (!S) return false;
-  if (S->timeLogged !=0 && S->timeLogged < I.currentTime && I.currentTime - S->timeLogged < 60*60*24 && bitRead(S->Flags,6) == 0 /* isflagged changed since last read*/) {
-    if (sendToDeviceIndex < 0) {
-     if (S->timeLogged + S->SendingInt > I.currentTime) return false; //not time
-    }
+bool checkThisSensorTime(SnsType* Si) {
+  //return true if it is time to send this sensor
+  if (!Si || Si->deviceIndex != MY_DEVICE_INDEX) return false;
+  if (Si->timeLogged != 0 && Si->timeLogged < I.currentTime && I.currentTime - Si->timeLogged < 60*60*24 && bitRead(Si->Flags, 6) == 0 ) {
+    if (Si->timeLogged + Si->SendingInt > I.currentTime) return false; //not time
   }
-  return true;
+    return true;
+}
+
+bool isSensorSendTime(int16_t snsIndex) {
+  // When snsIndex == -1, check all sensors and return true if ANY sensor is due
+  if (snsIndex < 0) {
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+      SnsType* Si = Sensors.getSensorBySnsIndex(i);
+      if (checkThisSensorTime(Si)) return true;
+    }
+    return false;
+  }
+
+  // Single sensor path
+  SnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+  if (checkThisSensorTime(S)) return true;
+  return false;
 }
 
 bool isDeviceSendTime(DevType* D, bool forceSend) {
@@ -5571,7 +5588,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
   if (!forceSend) {
     //should we send unmonitored sensors? Uncomment this to skip sending unmonitored sensors. The advantage of sending is that the server will have all sensor data, but these take up space.
     //if (bitRead(S->Flags,1) == 0) return false; //not monitored
-    if (!isSensorSendTime(snsIndex,sendToDeviceIndex)) return false; //not time to send
+    if (!isSensorSendTime(snsIndex)) return false; //not time to send
   }
 
 

@@ -406,6 +406,10 @@ void loop() {
 
         OldTime[1] = minute();
 
+        #ifdef _USESSD1306
+        redrawOled();
+        #endif
+        
         I.MyRandomSecond = random(0, 59); //this is the random second at which I will send data. This prevents all devices from sending data at the same time, which could overload the network.
         if (minute() % 10 == 0 && _MYTYPE >= 100) I.makeBroadcast = true; //have servers broadcast every 10 minutes
         

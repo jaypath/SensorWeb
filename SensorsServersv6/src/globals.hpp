@@ -426,6 +426,12 @@ class LGFX;
 #ifdef _USETFT
 #include <LovyanGFX.hpp>
 #endif
+
+#ifdef _USESSD1306
+#include <SSD1306_graphics.hpp>
+extern SSD1306AsciiWire oled;
+#endif
+
 #include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <HTTPClient.h>

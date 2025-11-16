@@ -41,7 +41,10 @@ bool initSystem() {
   SPI.begin(39, 38, 40, -1); //sck, MISO, MOSI
   #endif
 
-  
+  #ifdef _USESSD1306
+  oled.begin();
+  oled.setFont(ArialMT_Plain_10);
+  #endif
 
     #ifdef _USETFT
     tft.init();
