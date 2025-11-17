@@ -318,8 +318,8 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     //using SensorHistory.HistoryIndex[n], which is the index of the last data point saved, rewind N points and pull them in order
     int16_t index_start = SensorHistory.HistoryIndex[n]-*N; //this might be a negative number, so we need to wrap around
     if (index_start < 0) index_start = _SENSORHISTORYSIZE + index_start;
-    uint16_t index = index_start;
-    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
+    int16_t index = index_start;
+    while (cycleIndex(index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -329,8 +329,8 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     }
   } else {
     //pull data in order of newest to oldest
-    uint16_t index = SensorHistory.HistoryIndex[n];
-    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
+    int16_t index = SensorHistory.HistoryIndex[n];
+    while (cycleIndex(index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -500,25 +500,28 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t senso
 void initGsheetHandler() {
   #ifdef _USEGSHEET
   if (!GSheetInfo.useGsheet) return;
-    SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
     
-    if (!readGsheetInfoSD() || GSheetInfo.clientEmail == NULL || GSheetInfo.projectID == NULL || GSheetInfo.privateKey == NULL) {
+    // Load credentials; if missing/empty, initialize defaults
+    if (!readGsheetInfoSD() ||
+        strlen(GSheetInfo.clientEmail) == 0 ||
+        strlen(GSheetInfo.projectID) == 0 ||
+        strlen(GSheetInfo.privateKey) == 0) {
         initGsheetInfo();
         storeGsheetInfoSD();        
     }
-    initGsheet(); 
-    if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
-        String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
-        strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
-        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
-        snprintf(GSheetInfo.GsheetID,64,"%s",file_findSpreadsheetIDByName(GSheetInfo.GsheetName).c_str());
-    } else {
-        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
-    }
 
-    SerialPrint("gsheet setup2: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup2: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+    // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
+    if (WifiStatus() && I.currentTime > 1000) {
+      initGsheet();
+    }
+    if (!(I.currentTime > 1000 && GSheet.ready())) { //wait for time to be set and gsheet to be ready
+        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
+        String reason = GSheet.errorReason();
+        if (reason.length() > 0) SerialPrint("GSheet not ready reason: " + reason, true);
+    }
+    // With per-sensor sheets, do not initialize a global monthly sheet.
+    // Ensure global name/ID remain empty to avoid accidental use.
+
   #endif
 }
 
@@ -1162,26 +1165,35 @@ uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
     return (procid >> (8 * (byteIndex))) & 0xFF;
 }
 
-bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards) {
+bool cycleByteIndex(byte& start, byte arraysize, byte origin, bool backwards) {
   //cycles through a byte vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete, and start is incremented appropriately.
 
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;
-  if (*start>=arraysize) return false; 
-
-
-
-  if (backwards) {   //cycle backwards
-    if (*start == 0) *start=arraysize-1;
-    else *start = *start - 1;
-  } else {          //cycle forwards
-    if (*start == arraysize-1) *start=0;
-    else *start = *start + 1;
+  if (start>=arraysize) return false; 
+  
+  //check for first run!
+  if (start==-1 && backwards==false) {
+    //first run
+    start=0;
+    return true;
+  } 
+  if (start==arraysize && backwards==true) {
+    start=arraysize-1;
+    return true;
   }
 
-  if (*start==origin)  {
+  if (backwards) {   //cycle backwards
+    if (start == 0) start=arraysize-1;
+    else start = start - 1;
+  } else {          //cycle forwards
+    if (start == arraysize-1) start=0;
+    else start = start + 1;
+  }
+
+  if (start==origin)  {
     //cycle index has already been updated, no changes
     return false;
   } else {
@@ -1189,31 +1201,38 @@ bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards) {
   }
 }
 
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards) {
+bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwards) {
   //cycles through a uint16_t vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;
-  if (*start>=arraysize) return false; 
-
-
-
-  if (backwards) {   //cycle backwards
-    if (*start == 0) *start=arraysize-1;
-    else *start = *start - 1;
-  } else {          //cycle forwards
-    if (*start == arraysize-1) *start=0;
-    else *start = *start + 1;
+  if (start>=arraysize) return false; 
+  //check for first run!
+  if (start==-1 && backwards==false) {
+    //first run
+    start=0;
+    return true;
+  } 
+  if (start==arraysize && backwards==true) {
+    start=arraysize-1;
+    return true;
   }
 
-  if (*start==origin)  {
+  if (backwards) {   //cycle backwards
+    if (start == 0) start=arraysize-1;
+    else start = start - 1;
+  } else {          //cycle forwards
+    if (start == arraysize-1) start=0;
+    else start = start + 1;
+  }
+
+  if (start==origin)  {
     //cycle index has already been updated, no changes
     return false;
   } else {
     return true;
   }
-
   
 }
 

@@ -283,23 +283,6 @@ void setup() {
     }
     
 
-    #ifdef _USEGSHEET
-    if (GSheetInfo.useGsheet) {
-        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-        initGsheetHandler();
-        if (GSheet.ready()) {
-            tftPrint("OK.", true, TFT_GREEN);
-        } else {
-            tftPrint("FAILED.", true, TFT_RED);
-            storeError("Gsheet initialization failed");
-        }
-    }
-    else {
-        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
-    }
-    #endif
-
-
     #ifdef _ISPERIPHERAL
     initHardwareSensors(); //initialize the hardware sensors
     #endif
@@ -327,6 +310,23 @@ void setup() {
         SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
         WeatherData.updateWeatherOptimized(3600);
     }
+
+    #ifdef _USEGSHEET
+    if (GSheetInfo.useGsheet) {
+        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+        initGsheetHandler();
+        if (GSheet.ready()) {
+            tftPrint("OK.", true, TFT_GREEN);
+        } else {
+            tftPrint("FAILED.", true, TFT_RED);
+            storeError("Gsheet initialization failed");
+        }
+    }
+    else {
+        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
+    }
+    #endif
+
     tftPrint("Setup OK.", true, TFT_GREEN);
 
     #ifdef _USETFT
@@ -337,6 +337,7 @@ void setup() {
     tft.setTextSize(1);
     #endif
     #endif
+    tftPrint("Please wait for SD card cleanup and Google Sheet updates.", true, TFT_GREEN);
 
 
 #endif //_USELOWPOWER
@@ -526,14 +527,7 @@ void loop() {
         
         handleStoreCoreData();
         
-        #ifdef _USEGSHEET
-
-        uint8_t gsheetResult = Gsheet_uploadData();
-
-        if (gsheetResult<0) {
-            SerialPrint(GsheetUploadErrorString(),true);
-        } 
-        #endif
+        
     }
 
     if (OldTime[2] != hour()) {

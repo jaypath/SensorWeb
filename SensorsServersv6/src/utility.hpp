@@ -71,8 +71,8 @@ int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
 uint16_t countSubstr(String orig, String token);
 String enumErrorToName(ERRORCODES E);
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards=false);
-bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards=false);
+bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwards=false);
+bool cycleByteIndex(byte& start, byte arraysize, byte origin, bool backwards=false);
 
 // Legacy sensor functions - these now delegate to the Devices_Sensors class
 bool isSensorInit(int i);

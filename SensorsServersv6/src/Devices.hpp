@@ -84,7 +84,7 @@ public:
     int16_t lastDeviceIndex();
     bool isDeviceInit(int16_t devindex);
     int16_t initDevice(int16_t devindex);
-    bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
+    bool cycleSensors(int16_t& currentPosition, uint8_t origin =0);
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 

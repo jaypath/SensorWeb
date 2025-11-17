@@ -28,11 +28,11 @@ Devices_Sensors::Devices_Sensors() {
     }
 }
 
-bool Devices_Sensors::cycleSensors(uint8_t* currentPosition, uint8_t origin) {
-    
-    bool cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
-    while (isSensorInit(*currentPosition)==false && cycling==true) {
-        cycling = cycleByteIndex(currentPosition,NUMSENSORS,origin);
+bool Devices_Sensors::cycleSensors(int16_t& currentPosition, uint8_t origin) {
+    //when first calling this function, currentPosition should be -1
+    bool cycling = cycleIndex(currentPosition,NUMSENSORS,origin);
+    while (isSensorInit(currentPosition)==false && cycling==true) {
+        cycling = cycleIndex(currentPosition,NUMSENSORS,origin);
     }
     return cycling;
 }

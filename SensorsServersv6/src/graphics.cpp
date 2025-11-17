@@ -944,7 +944,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   byte alarmArrayInd = 0;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
-    while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
+    while (cycleByteIndex(SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
       if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type

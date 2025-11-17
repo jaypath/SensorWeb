@@ -108,24 +108,74 @@ String formatBytes(uint64_t bytes) {
   }
 }
 
-bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert) { 
-  HTTPClient http;
-  WiFiClientSecure wfclient;
-  wfclient.setCACert(cacert.c_str());
+bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders) {
+if (WiFi.status() != WL_CONNECTED)
+return false;
 
-  if(WiFi.status()== WL_CONNECTED){
-    
-    http.begin(wfclient,URL.c_str());
-    //http.useHTTP10(true);
-    httpCode = http.GET();
-    
-    payload = http.getString();
-    
-    http.end();
-    return true;
-  } 
+HTTPClient http;
+WiFiClientSecure wfclient;
 
-  return false;
+if (cacert.length() == 0) {
+    //don't have the room to install the certificate bundle
+    return false;
+
+} else {
+  wfclient.setCACert(getCert(cacert).c_str());
+}
+
+http.useHTTP10(true);
+
+if (!http.begin(wfclient, URL.c_str()))
+return false;
+
+// --- Content-Type header ---
+if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
+
+// --- Extra headers: newline-separated list ---
+if (extraHeaders.length() > 0) {
+int start = 0;
+while (true) {
+int end = extraHeaders.indexOf('\n', start);
+String line;
+if (end == -1)
+line = extraHeaders.substring(start);
+else
+line = extraHeaders.substring(start, end);
+
+line.trim();
+if (line.length() > 0) {
+int colon = line.indexOf(':');
+if (colon > 0) {
+String key = line.substring(0, colon);
+String val = line.substring(colon + 1);
+key.trim();
+val.trim();
+if (key.length() > 0)
+http.addHeader(key, val);
+}
+}
+if (end == -1)
+break;
+start = end + 1;
+}
+}
+
+// --- Select HTTP method ---
+if (method == "GET") {
+httpCode = http.GET();
+} else if (method == "POST") {
+httpCode = http.POST(body);
+} else if (method == "DELETE") {
+httpCode = http.sendRequest("DELETE", (uint8_t*)nullptr, 0);
+} else if (method == "PATCH") {
+httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
+} else {
+httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
+}
+
+payload = http.getString();
+http.end();
+return true;
 }
 
 bool Server_Message(String& URL, String& payload, int &httpCode) { 
@@ -1546,8 +1596,8 @@ void handleSTATUS() {
   WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
   WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
   WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
-  WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.GsheetUploadIntervalMinutes + "<br>";
 
   // Button to trigger an immediate Google Sheets upload
   WEBHTML += R"===(
@@ -2532,8 +2582,6 @@ void handleGSHEET() {
   serverTextHeader();
   #if defined(_USEGSHEET)
 
-  SerialPrint("gsheet: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-  SerialPrint("gsheet: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
 
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Google Sheets Configuration</h2>";
@@ -2604,11 +2652,6 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetFunction</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.lastGsheetFunction) + "</div>";
 
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetID</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetID) + "</div>";
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetName</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetName) + "</div>";
 
   WEBHTML = WEBHTML + "</div>";
   
@@ -2619,6 +2662,16 @@ void handleGSHEET() {
   // Upload now button
   WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_UPLOAD_NOW\" method=\"post\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload to Gsheets Immediately\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Share all sheets button
+  WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_SHARE_ALL\" method=\"post\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Share Device Sheets\" style=\"padding: 10px 20px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Delete all sheets button
+  WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_DELETE_ALL\" method=\"post\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete All Sheets\" style=\"padding: 10px 20px; background-color: #F44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
   #else
@@ -2678,6 +2731,30 @@ void handleGSHEET_UPLOAD_NOW() {
   int8_t result = Gsheet_uploadData();
   String msg = "Triggered immediate upload. Result: " + String(result) + ", " + GsheetUploadErrorString();
   
+  #else
+  String msg = "GSHEET upload not enabled on this device";
+  #endif
+  server.send(200, "text/plain", msg);
+}
+
+void handleGSHEET_SHARE_ALL() {
+  registerHTTPMessage("GSHEETShare");
+  #ifdef _USEGSHEET
+  bool result = shareAllGsheets();
+  String msg = "Share all sheets triggered. Result: " + String(result ? "Success" : "Failed");
+  SerialPrint(msg, true);
+  #else
+  String msg = "GSHEET upload not enabled on this device";
+  #endif
+  server.send(200, "text/plain", msg);
+}
+
+void handleGSHEET_DELETE_ALL() {
+  registerHTTPMessage("GSHEETDelete");
+  #ifdef _USEGSHEET
+  file_deleteAllSheets();
+  String msg = "Delete all sheets triggered.";
+  SerialPrint(msg, true);
   #else
   String msg = "GSHEET upload not enabled on this device";
   #endif
@@ -4980,6 +5057,8 @@ void setupServerRoutes() {
     server.on("/GSHEET", HTTP_GET, handleGSHEET);
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
+    server.on("/GSHEET_SHARE_ALL", HTTP_POST, handleGSHEET_SHARE_ALL);
+    server.on("/GSHEET_DELETE_ALL", HTTP_POST, handleGSHEET_DELETE_ALL);
     
     // ESP-NOW Broadcast route
     server.on("/REQUEST_BROADCAST", HTTP_POST, handleREQUEST_BROADCAST);
@@ -5386,6 +5465,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
   );
 
   if (ret == 0) responseMsg = "Failed to add sensor";
+
 }
 
  uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags) {
@@ -5409,8 +5489,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
        ret =1; //sensor was not found in the database and is added
        SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
        addToSD = true;
-     }
- 
+     }   
 
      //is this a low power sensor?
      if (bitRead(flags,2) == 1) {
@@ -5445,7 +5524,19 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
      }
    }
    #endif
+  
+   #ifdef _USEGSHEET
+   //we got a sensor reading, so upload the data to the spreadsheet if time is appropriate
+   if (GSheetInfo.useGsheet && sensorIndex >= 0) {
+    ArborysSnsType* S = Sensors.getSensorBySnsIndex(sensorIndex);
  
+     if (!Gsheet_uploadSensorDataFunction(S)) {
+        SerialPrint("Failed to upload sensor " + String(S->snsName) + " to spreadsheet",true);
+        storeError("Gsheet: failed for sns:" + String(sensorIndex), ERROR_GSHEET_UPLOAD, true);
+     }
+    }
+   #endif
+
   
    return ret;
  }

@@ -135,6 +135,8 @@ bool WeatherInfoOptimized::fetchGridCoordinates() {
 
 // Optimized HTTP request method
 bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, const char* cert_path) {
+    //I am rehashing this from Server.cpp secure message because this one does http stream, not just GET
+
     if (WiFi.status() != WL_CONNECTED) {
         return false;
     }
@@ -149,7 +151,7 @@ bool WeatherInfoOptimized::makeSecureRequest(const String& url, JsonDocument& do
     
     uint32_t start_time = millis();
     httpCode = http.GET();
-    delay(1000);
+    delay(500);
     uint32_t response_time = millis() - start_time;
     
 
