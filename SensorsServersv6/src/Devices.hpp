@@ -12,7 +12,7 @@ struct STRUCT_CORE;
 
 
 // Device structure
-struct DevType {
+struct ArborysDevType {
     uint64_t MAC;           // Device MAC address
     IPAddress IP;            // Device IP address
     uint8_t devType;        // Device type (server, sensor, etc.)
@@ -26,7 +26,7 @@ struct DevType {
 };
 
 // Sensor structure
-struct SnsType {
+struct ArborysSnsType {
     int16_t deviceIndex;    // Index to parent device
     uint8_t snsType;        // Sensor type (temperature, humidity, etc.)
     uint8_t snsID;          // Sensor ID
@@ -50,8 +50,8 @@ struct SnsType {
 // Devices_Sensors class
 class Devices_Sensors {
 private:
-    DevType devices[NUMDEVICES];
-    SnsType sensors[NUMSENSORS];
+    ArborysDevType devices[NUMDEVICES];
+    ArborysSnsType sensors[NUMSENSORS];
 
 public:
     Devices_Sensors();
@@ -67,9 +67,9 @@ public:
     int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 86400, uint8_t flags = 0, uint8_t devType = 0);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);
-    DevType* getDeviceByDevIndex(int16_t devindex);
-    DevType* getDeviceBySnsIndex(int16_t snsindex);
-    DevType* getDeviceByMAC(uint64_t MAC);
+    ArborysDevType* getDeviceByDevIndex(int16_t devindex);
+    ArborysDevType* getDeviceBySnsIndex(int16_t snsindex);
+    ArborysDevType* getDeviceByMAC(uint64_t MAC);
     uint64_t getDeviceMACByDevIndex(int16_t devindex);
     uint64_t getDeviceMACBySnsIndex(int16_t snsindex);
     IPAddress getDeviceIPByDevIndex(int16_t devindex);
@@ -92,7 +92,7 @@ public:
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID);
-    SnsType* getSensorBySnsIndex(int16_t snsindex);
+    ArborysSnsType* getSensorBySnsIndex(int16_t snsindex);
     uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
     void initSensor(int16_t index);
@@ -104,7 +104,7 @@ public:
     uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false);
     uint8_t getSensorFlag(int16_t index);
     byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
-    DevType* getNextExpiredDevice(int16_t& startIndex);
+    ArborysDevType* getNextExpiredDevice(int16_t& startIndex);
     int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
     int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     
@@ -121,13 +121,13 @@ public:
     //peripheral specific functions
     #ifdef _ISPERIPHERAL
     uint32_t makeSensorID(uint8_t snsType, uint8_t snsID=-1, int16_t devID=-1); //make the sensor ID for this sensor. If snsID is -1, then it will be the next available sensor ID for the given sensor type
-    uint32_t makeSensorID(SnsType* sensor); //make the sensor ID for this sensor
+    uint32_t makeSensorID(ArborysSnsType* sensor); //make the sensor ID for this sensor
     uint32_t makeSensorID(int16_t index); //make the sensor ID for this sensor
     int16_t getPrefsIndex(int16_t index); //get the preferences index for this sensor
-    int16_t getPrefsIndex(SnsType* sensor); //get the preferences index for this sensor
+    int16_t getPrefsIndex(ArborysSnsType* sensor); //get the preferences index for this sensor
     int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
     int16_t getSensorHistoryIndex(int16_t index); //get the sensor history index for this sensor
-    int16_t getSensorHistoryIndex(SnsType* sensor); //get the sensor history index for this sensor
+    int16_t getSensorHistoryIndex(ArborysSnsType* sensor); //get the sensor history index for this sensor
     int16_t getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the sensor history index for this sensor
     #endif
     
@@ -137,10 +137,10 @@ public:
     int16_t isSensorIndexValid(int16_t index);
     uint16_t isSensorIndexInvalid(int16_t index, bool checkExpired=false);
     bool isSensorOfType(int16_t index, String type);
-    bool isSensorOfType(SnsType* sensor, String type);
+    bool isSensorOfType(ArborysSnsType* sensor, String type);
     bool isSensorOfType(uint8_t snsType, String type);
     String sensorIsOfType(int16_t index);
-    String sensorIsOfType(SnsType* sensor);
+    String sensorIsOfType(ArborysSnsType* sensor);
     String sensorIsOfType(uint8_t snsType);
 
 

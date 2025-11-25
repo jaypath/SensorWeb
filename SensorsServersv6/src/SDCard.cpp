@@ -681,7 +681,7 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     return false;
   }
 
-  SnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
   if (!sensor) {
       SerialPrint((String) "storeSensorDataSD: sensor not found: " + (String) sensorIndex + "\n");
       storeError("storeSensorDataSD: sensor not found", ERROR_SD_RETRIEVEDATAPARMS);

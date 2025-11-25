@@ -7,10 +7,11 @@
 #include <Arduino.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
-// Forward declarations - avoid circular includes since globals.hpp includes this file
 struct STRUCT_CORE;
 class WeatherInfoOptimized;
 class Devices_Sensors;
+struct ArborysDevType;
+struct ArborysSnsType;
 
 
 //Server requests time out after 2 seconds
@@ -145,9 +146,10 @@ void registerHTTPMessage(const char* messageType);
 
 
 //sending data
-void wrapupSendData(SnsType* S);
-bool isDeviceSendTime(DevType* D, bool forceSend);
-bool isSensorSendTime(int16_t snsIndex, int16_t sendToDeviceIndex=-1);
+void wrapupSendData(ArborysSnsType* S);
+bool isDeviceSendTime(ArborysDevType* D, bool forceSend);
+bool checkThisSensorTime(ArborysSnsType* S);
+bool isSensorSendTime(int16_t snsIndex);
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
@@ -156,14 +158,14 @@ bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=
 //send json messages
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
-int16_t sendMSG_DataRequest(DevType* d, int16_t snsIndex, bool viaHTTP);
+int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
 
 //add json handlers
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);
 void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
-void JSONbuilder_sensorMSG(SnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP);
+void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP);
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
-String JSONbuilder_sensorObject(SnsType* S);
+String JSONbuilder_sensorObject(ArborysSnsType* S);
 uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer);
 
 //json processors
@@ -172,7 +174,7 @@ void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck=fa
 void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
-static void handleSingleSensor(DevType* dev, JsonObject sensor, String& responseMsg);
+static void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg);
 
 
 bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);

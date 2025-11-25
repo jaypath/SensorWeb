@@ -28,7 +28,7 @@ public:
     void LED_update(void);
     void LED_set_color(uint32_t color1, uint32_t color2);
     void LED_set_color(uint8_t r1, uint8_t g1, uint8_t b1, uint8_t r2, uint8_t g2, uint8_t b2);
-    void LED_set_color_soil(struct SnsType *sns);
+    void LED_set_color_soil(struct ArborysSnsType *sns);
     byte LED_scale_color(byte c1, byte c2);
     void LED_choose_animation_style(String style);
 };

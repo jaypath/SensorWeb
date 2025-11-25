@@ -45,7 +45,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
     int16_t existingIndex = findDevice(MAC);
     if (existingIndex >= 0) {
         // Update existing device
-        DevType* device = &devices[existingIndex];
+        ArborysDevType* device = &devices[existingIndex];
         device->IP = IP;
         device->dataReceived = I.currentTime;
         //do not change time logged
@@ -110,21 +110,21 @@ int16_t Devices_Sensors::findDevice(IPAddress IP) {
     return -1;
 }
 
-DevType* Devices_Sensors::getDeviceBySnsIndex(int16_t snsindex) {
+ArborysDevType* Devices_Sensors::getDeviceBySnsIndex(int16_t snsindex) {
     if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceByDevIndex(sensors[snsindex].deviceIndex);
     }
     return nullptr;
 }
 
-DevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
+ArborysDevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
     if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
         return &devices[devindex];
     }
     return nullptr;
 }
 
-DevType* Devices_Sensors::getDeviceByMAC(uint64_t MAC) {
+ArborysDevType* Devices_Sensors::getDeviceByMAC(uint64_t MAC) {
     int16_t devindex = findDevice(MAC);
     if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
         return &devices[devindex];
@@ -276,7 +276,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
     int16_t existingIndex = findSensor(deviceMAC, snsType, snsID);
     if (existingIndex >= 0) {
         // Update existing sensor. note that timeWritten is not updated here.
-        SnsType* sensor = &sensors[existingIndex];
+        ArborysSnsType* sensor = &sensors[existingIndex];
         //update sensor name, if needed
         if (snsName) {
             strncpy(sensor->snsName, snsName, sizeof(sensor->snsName) - 1);
@@ -380,7 +380,7 @@ int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t
     return -1;
 }
 
-SnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
+ArborysSnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
     if (index >= 0 && index < NUMSENSORS  && sensors[index].IsSet) {
         return &sensors[index];
     }
@@ -772,13 +772,13 @@ uint16_t Devices_Sensors::isSensorIndexInvalid(int16_t index, bool checkExpired)
     return 0;
 }
 
-DevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
+ArborysDevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
     //takes a start index and finds the NEXT expired device. usage: Start at -1.
     //if it reaches the end of the list, no more expired devices
     startIndex++;
     if (startIndex < 0) startIndex = 0;
     for (int16_t i = startIndex; i < NUMDEVICES; i++) {
-        DevType* device = &devices[i];
+        ArborysDevType* device = &devices[i];
         if (!device->IsSet) continue;
         if (device->expired) {
             return device;
@@ -796,7 +796,7 @@ DevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
 //2a. call checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
 int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier) {
 
-    DevType* device = &devices[index];
+    ArborysDevType* device = &devices[index];
     if (!device->IsSet) return 0;
 
     if (currentTime == 0) currentTime = I.currentTime;
@@ -849,7 +849,7 @@ String Devices_Sensors::sensorIsOfType(int16_t index) {
     return sensorIsOfType(sensors[index].snsType);
 }
 
-String Devices_Sensors::sensorIsOfType(SnsType* sensor) {
+String Devices_Sensors::sensorIsOfType(ArborysSnsType* sensor) {
     if (sensor == NULL) return "Invalid sensor";
     return sensorIsOfType(sensor->snsType);
 }
@@ -875,7 +875,7 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
     return isSensorOfType(sensors[index].snsType, type);
 }
 
-bool Devices_Sensors::isSensorOfType(SnsType* sensor, String type) {
+bool Devices_Sensors::isSensorOfType(ArborysSnsType* sensor, String type) {
     if (sensor == NULL) return false;
     return isSensorOfType(sensor->snsType, type);
 }
@@ -951,7 +951,7 @@ uint32_t Devices_Sensors::makeSensorID(uint8_t snsType, uint8_t snsID, int16_t d
     return (devID<<16) + (snsType<<8) + snsID;
 }
 
-uint32_t Devices_Sensors::makeSensorID(SnsType* sensor) {
+uint32_t Devices_Sensors::makeSensorID(ArborysSnsType* sensor) {
     if (sensor == NULL) return 0;
     if (sensor->IsSet == false) return 0;
     return makeSensorID(sensor->snsType, sensor->snsID, sensor->deviceIndex);
@@ -971,7 +971,7 @@ int16_t Devices_Sensors::getPrefsIndex(int16_t index) {
 }
 
 
-int16_t Devices_Sensors::getPrefsIndex(SnsType* sensor) {
+int16_t Devices_Sensors::getPrefsIndex(ArborysSnsType* sensor) {
     if (sensor == NULL) return -1;
     if (sensor->IsSet == false) return -1;
     return getPrefsIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);
@@ -993,7 +993,7 @@ int16_t Devices_Sensors::getSensorHistoryIndex(int16_t index) {
     return getSensorHistoryIndex(&sensors[index]);
 }
 
-int16_t Devices_Sensors::getSensorHistoryIndex(SnsType* sensor) {
+int16_t Devices_Sensors::getSensorHistoryIndex(ArborysSnsType* sensor) {
     if (sensor == NULL) return -1;
     if (sensor->IsSet == false) return -1;
     return getSensorHistoryIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);

@@ -306,9 +306,9 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     
     uint8_t currentPosition = 0;
     while (Sensors.cycleSensors(&currentPosition,0) && rowInd < MAX_ROWS) {
-        SnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
+        ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
         if (sensor && sensor->IsSet) {
-            DevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
+            ArborysDevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
             if (device && device->IsSet && sensor->timeLogged > sensor->lastCloudUploadTime && sensor->lastCloudUploadTime < I.currentTime-(GSheetInfo.uploadGsheetIntervalMinutes*60)) { //only upload if the last upload was more than the interval minutes ago and the last read time is greater than the last upload time
                 valueRange.add("majorDimension", "ROWS");
                 valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC); //DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement
