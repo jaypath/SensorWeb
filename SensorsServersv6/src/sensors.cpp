@@ -851,34 +851,36 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     } else {
       //no change in flag status. bit 6 is already 0.
     }
-    
-      
-  }
-  else  {
+    P->timeRead = I.currentTime; //localtime
+
+    //add to sensor history
+    SensorHistory.recordSentValue(P, prefs_index);     
+  }  else  {
     double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
     double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
 
     if (P->snsValue>limitUpper || P->snsValue<limitLower) {
-      bitWrite(P->Flags,0,1); //currently flagged
-      if (bitRead(P->Flags,0) != bitRead(lastflag,0)) bitWrite(P->Flags,6,1); //change in flag status
+      bitWrite(P->Flags,0,1); //flagged
       if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1); //value is high
       else bitWrite(P->Flags,5,0); //value is low
     } else {
-      //no change in flag status. bit 6 is already 0. bit 5 is irrelevant.
+      bitWrite(P->Flags,0,0); //not flagged
     }
+    if (bitRead(lastflag,0)!=bitRead(P->Flags,0)) {     
+      bitWrite(P->Flags,6,1); //flag changed
+    }
+    P->timeRead = I.currentTime; //localtime
+    //add to sensor history
+    SensorHistory.recordSentValue(P, prefs_index);  
   }
-  P->timeRead = I.currentTime; //localtime
-
-  //add to sensor history
-  SensorHistory.recordSentValue(P, prefs_index);
-  
-return 1;
+  return 1;
 }
 
 
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
 }
+
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN) {
   /*
     R1 is first resistor
