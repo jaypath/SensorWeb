@@ -234,8 +234,8 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   SerialPrint("Sensors setup complete",true);
 }
 
-double peak_to_peak(int pin, int ms) {
-  
+double peak_to_peak(int16_t pin, int ms) {
+  pinMode(pin, INPUT);
   //check n (samples) over ms milliseconds, then return the max-min value (peak to peak value) 
 
   if (ms==0) ms = 50; //50 ms is roughly 3 cycles of a 60 Hz sin wave
@@ -250,7 +250,7 @@ double peak_to_peak(int pin, int ms) {
 
   while (millis()<=t0+ms) { 
 
-    buffer = readAnalogVoltage(pin, 1);
+    buffer = readPinValue(pin, 1);
     if (maxVal<buffer) maxVal = buffer;
     if (minVal>buffer) minVal = buffer;
 
@@ -641,8 +641,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 
       case 50: //total HVAC time        
         {
-          if (Sensors.countFlagged(55,0b00000001,0b00000001,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0)>0) P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC  systems were on
-
+          if (Sensors.countFlagged(55,0b00000001,0b00000001,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0)>0) {
+            P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC  systems were on
+            bitWrite(P->Flags,0,1); //currently flagged
+          }
         break;
         }
 
@@ -677,8 +679,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
             val = peak_to_peak(snspin,50);
           #endif
 
-          if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
-
+          if (val > Prefs.SNS_LIMIT_MAX[prefs_index]) {
+            P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
+            bitWrite(P->Flags,0,1); //currently flagged
+          }
         break;
         }
     
@@ -705,7 +709,11 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
           val = peak_to_peak(snspin,50);
         #endif
 
-        if (val > Prefs.SNS_LIMIT_MAX[prefs_index])           P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
+        if (val > Prefs.SNS_LIMIT_MAX[prefs_index]) {
+          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
+          bitWrite(P->Flags,0,1); //currently flagged
+
+        }
 
             
         break;
@@ -722,7 +730,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         val=readPinValue(P, 1);
         if (val == 0)           {
           bitWrite(P->Flags,0,1); //currently flagged
-          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
+          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on          
         }
 
         break;
@@ -762,11 +770,11 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         {
           #ifdef _USELIBATTERY
           //note that esp32 ranges 0 to ADCRATE, while 8266 is 1023. This is set in header.hpp
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USELIBATTERY, 20); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //if R1=R2 then the divider is 50%
           
         #endif
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USESLABATTERY, 20); 
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); 
           
         #endif
 
@@ -777,7 +785,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         {
           //_USEBATPCNT
         #ifdef _USELIBATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USELIBATTERY, 20); //if R1=R2 then the divider is 50%
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //if R1=R2 then the divider is 50%
 
           #define VOLTAGETABLE 21
           static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
@@ -794,7 +802,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         #endif
 
         #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  _USESLABATTERY, 20); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
+          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
 
           #define VOLTAGETABLE 11
           static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
@@ -871,18 +879,17 @@ return 1;
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
 }
-float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN) {
+float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN) {
   /*
     R1 is first resistor
     R2 is second resistor (which we are measuring voltage across)
-    snsPin is the pin to measure the voltage, Vo
+    P is the sensor pointer
     ADCRATE is the max ADCRATE
     Vm is the ADC max voltage 
     avgN is the number of times to avg
     */
  
-
-  return (float)  readAnalogVoltage(snsPin, avgN) / ((float)R2 / (R1 + R2));
+  return (float)  readPinValue(P, avgN) * ((float)(R1 + R2))/R2;
 
 }
 
@@ -1133,49 +1140,64 @@ uint8_t getPinType(int16_t pin, int8_t* correctedPin) {
 }
 
 
+float readAnalogVoltage(ArborysSnsType* P, byte nsamps) {
+  return readAnalogVoltage(P->snsPin, nsamps);
+}
+
 float readAnalogVoltage(int16_t pin, byte nsamps) {
+  if (pin < 0) pin = -1*pin;
+
   pinMode(pin, INPUT);
-  double val = 0;
+  float val = 0;
   for (byte ii=0;ii<nsamps;ii++) {
-    val += analogRead(pin); //analog pin. Note that not all ESP32 boards have the correct internal lookup for analogReadMilliVolts(), so we use analogRead() instead.
+    val += (float) analogRead(pin); //analog pin. Note that not all ESP32 boards have the correct internal lookup for analogReadMilliVolts(), so we use analogRead() instead.
     if (ii<nsamps-1) delay(10);
   }
+  val = (val/nsamps)/4095; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
   //output range depends on the attenuation settings. 
   if (_USEADCATTEN == ADC_6db) {
-    val= ((double) val/nsamps)/(4095)*1.75; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
-  } else if (_USEADCATTEN == ADC_11db) {
-    val= ((double) val/nsamps)/(4095)*2.450; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+    val= val*1.75; 
   } else if (_USEADCATTEN == ADC_2_5db) {
-    val= ((double) val/nsamps)/(4095)*1.25; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+    val= val*1.25; 
   } else if (_USEADCATTEN == ADC_0db) {
-    val= ((double) val/nsamps)/(4095)*0.95; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+    val= val*0.95; 
+  }
+  else { //assume 11db
+    val= val*2.450; 
   }
   return val;
 }
 
 float readPinValue(ArborysSnsType* P, byte nsamps) {
+//wrapper function to call readPinValue with the sensor pointer and the number of samples
+  return readPinValue(P->snsPin, nsamps, P->powerPin);
+}
+
+
+float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
+  //direct call function to read the pin value
   float val=0;
 
+
   int8_t correctedPin=-1;
-  uint8_t pintype = getPinType(P->snsPin, &correctedPin);
+  uint8_t pintype = getPinType(pin, &correctedPin);
       
   //has power pin?
-  if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
-    pinMode(P->powerPin, OUTPUT);
-    digitalWrite(P->powerPin, HIGH);
+  if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
+    pinMode(powerPin, OUTPUT);
+    digitalWrite(powerPin, HIGH);
     delay(50); //wait X ms for reading to settle
   }
 
   if (pintype == 1 || pintype == 2) {
-    pinMode(correctedPin, INPUT);
-    val = readAnalogVoltage(correctedPin, nsamps);
+    val = readAnalogVoltage(pin, nsamps);
   }
 
   if (pintype == 3 || pintype == 4) {
     val = digitalRead(correctedPin); //digital pin, high is dry
   }
 
-  if (pintype == 5 || pintype == 6) {
+  if ((pintype == 5 || pintype == 6)) {
     //use MUX to read the pin
     #ifdef _USEMUX
     val = readMUX(correctedPin, nsamps);
@@ -1183,9 +1205,9 @@ float readPinValue(ArborysSnsType* P, byte nsamps) {
   }
 
   //has power pin?
-  if (pintype % 2 == 0 && pintype <= 6) { //6 is the max pintype for a power pin
-    pinMode(P->powerPin, OUTPUT);
-    digitalWrite(P->powerPin, LOW);
+  if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
+    pinMode(powerPin, OUTPUT);
+    digitalWrite(powerPin, LOW);
   }
 
   return val;
@@ -1200,7 +1222,7 @@ double readMUX(int16_t pin, byte nsamps) {
   digitalWrite(MUXPINS[1],bitRead(pin,1));
   digitalWrite(MUXPINS[2],bitRead(pin,2));
   digitalWrite(MUXPINS[3],bitRead(pin,3));  
-  val = readAnalogVoltage(MUXPINS[4],nsamps);
+  val = readPinValue(MUXPINS[4],nsamps);
   digitalWrite(MUXPINS[0],HIGH);
   digitalWrite(MUXPINS[1],HIGH);
   digitalWrite(MUXPINS[2],HIGH);

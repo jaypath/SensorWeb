@@ -202,6 +202,7 @@ typedef enum {
       uint8_t cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
       uint8_t cycleWeatherMinutes = 10; //how many minutes to show weather values?
       uint8_t cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      uint8_t lastFutureConditionsAlt = 0; //was the last future conditions alternative display?
       uint8_t cycleFlagSeconds = 3; //how many seconds to show flag values?
       uint8_t IntervalHourlyWeather = 2; //hours between daily weather display
 

@@ -1301,8 +1301,12 @@ void fcnDrawFutureWeather() {
       Z=0;
       X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
       iconID = WeatherData.getDailyWeatherID(i,true);
-      snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //alway print day icons for future days
-
+      if (I.lastFutureConditionsAlt==0) { //this prevents screen burn from prolonged use of same icon on screen
+        snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //icon
+      } else {
+        snprintf(tempbuf,29,"/BMP60x60Alt/%d.bmp",iconID); //images
+      }
+      
       drawBmp(tempbuf,X,Y);
       Z+=60;
       
@@ -1320,6 +1324,8 @@ void fcnDrawFutureWeather() {
       Z+=deltaY+section_spacer;
 
     }
+    I.lastFutureConditionsAlt = !I.lastFutureConditionsAlt;
+
 }
 
 // Weather text functions

@@ -94,78 +94,116 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     return success;
   }
   
-  
-  String file_findSpreadsheetIDByName(const char* sheetname) {
+void file_deleteAllSheets() {
+    file_findSpreadsheetIDByName("*",2);
+}
+void file_grantPermissions() {
+    file_findSpreadsheetIDByName("*",1);
+} 
+
+String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) {
+
+    // Searches all files for the matching filename and returns the file ID if found
+    // Returns empty string if not found
+    SerialPrint("SearchForIDByFilename: " + String(sheetname) + " ");
+    FirebaseJson result;
     
-        // Searches all files for the matching filename and returns the file ID if found
-        // Returns empty string if not found
-        SerialPrint("SearchForIDByFilename: " + String(sheetname) + " ");
-        FirebaseJson result;
-        
-        String thisFileID = "";
-        
-        bool success = GSheet.listFiles(&result /* returned list of all files */);      
-    
-        if (!success) {
-            result.clear(); // Clean up FirebaseJson
-            SerialPrint("ERROR: Failed to list files with error: " + String(GSheet.errorReason()),true);
-            return "";
-        }
-    
-        //put file array into data object
-        FirebaseJsonData response;
-        result.get(response,"files");
-      
-        if (response.success) {
-            FirebaseJsonArray thisfile;
-            response.get<FirebaseJsonArray /* type e.g. FirebaseJson or FirebaseJsonArray */>(thisfile /* object that used to store value */);
-                  
-            int fileIndex = 0;
-            const int MAX_FILES_TO_CHECK = 50; // Limit to prevent memory issues
-        
-            do {
-                thisfile.get(response, fileIndex++); //iterate through each file
-                if (response.success && fileIndex <= MAX_FILES_TO_CHECK) {
-                    FirebaseJson fileinfo;
-      
-                    //Get FirebaseJson data
-                    response.get<FirebaseJson>(fileinfo);
-      
-                    size_t count = fileinfo.iteratorBegin();
-                    
-                    for (size_t i = 0; i < count; i++) {
-                        FirebaseJson::IteratorValue value = fileinfo.valueAt(i);
-                        String s1(value.key);
-                        String s2(value.value);
-                        s2 = s2.substring(1, s2.length()-1);
-      
-                        if (s1 == "id") thisFileID = s2;
-                        if (s1 == "name" && s2 == sheetname) {
-                            // Found matching filename
-                            fileinfo.iteratorEnd();
-                            fileinfo.clear(); // Clean up FirebaseJson
-                            thisfile.clear(); // Clean up FirebaseJsonArray
-                            result.clear(); // Clean up FirebaseJson
-                            SerialPrint(" OK - Found file ID: " + thisFileID,true);
-                            return thisFileID;
-                        }
-                    }
-                    fileinfo.iteratorEnd();
-                    fileinfo.clear(); // Clean up FirebaseJson
-                }
-            } while (response.success && fileIndex <= MAX_FILES_TO_CHECK);
-            
-            thisfile.clear(); // Clean up FirebaseJsonArray
-        }
-    
-        //if we get here, we did not find the file
+    String thisFileID = "";
+    //-------
+    bool success = GSheet.listFiles(&result /* returned list of all files */,20,"name");     //first page 
+    if (!success) {
         result.clear(); // Clean up FirebaseJson
-        snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: file not found");
-        snprintf(GSheetInfo.lastGsheetFunction,30,"file_findSpreadsheetIDByName");
-        GSheetInfo.lastErrorTime = I.currentTime;
-        storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_FIND,true);
-        SerialPrint(" ERROR: file_findSpreadsheetIDByName did not find " + String(sheetname),true);
+        SerialPrint("ERROR: Failed to list files with error: " + String(GSheet.errorReason()),true);
         return "";
+    }
+
+    bool morePages = true;
+    while (success && morePages) {
+        //put file array into data object
+        FirebaseJsonData filesData;
+        if (!result.get(filesData, "files")) {
+            // No files array in response
+            break;
+        }
+        if (!filesData.success) {
+            break;
+        }
+        
+        FirebaseJsonArray filesArr;
+        filesData.get<FirebaseJsonArray>(filesArr);
+
+        // Iterate through the array elements
+        size_t count = filesArr.size();
+        for (size_t i = 0; i < count; i++) {
+            FirebaseJsonData fileData;
+            filesArr.get(fileData, i); // Get the JSON object at index i
+            if (!fileData.success) continue;
+            
+            FirebaseJson details;
+            fileData.get<FirebaseJson>(details);
+        
+            String nameStr, idStr;
+            // Get the "name" and "id" from the file object
+            FirebaseJsonData nameData, idData;
+            bool isgood1 = details.get(nameData, "name") && nameData.success;
+            bool isgood2 = details.get(idData, "id") && idData.success;
+            if (isgood1) nameStr = nameData.to<const char*>();
+            if (isgood2) idStr = idData.to<const char*>();
+
+            if (isgood1 && isgood2) {
+                SerialPrint("file_findSpreadsheetIDByName: File: " + nameStr + ", ID: " + idStr + ", looking for: " + sheetname, true);
+
+                if (strcmp(sheetname, "*") == 0 ) {                            
+                    if (specialcase == 1) file_createUserPermission(idStr, false, NULL);                            
+                    if (specialcase == 2 || specialcase == 3) {
+                        //delete the file
+                        file_deleteSpreadsheetByID(idStr.c_str()); //in this case, the data is not removed from the SD card.
+                    }
+                } else {
+                    if (strcmp(nameStr.c_str(), sheetname) == 0) {
+                        
+                        if (specialcase == 2) {
+                            //delete the file
+                            file_deleteSpreadsheetByID(idStr.c_str()); //in this case, the data is removed from the SD card.                                
+                            SerialPrint(" OK - Deleted file ID: " + idStr,true);
+                        } else {
+                            if (specialcase == 1) {
+                                file_createUserPermission(idStr, false, NULL);                            
+                            }
+                            SerialPrint(" OK - Found file ID: " + idStr,true);
+                        }
+
+                        filesArr.clear();
+                        result.clear();
+                        return idStr;
+                    }
+                }
+            }
+        }
+        
+        // Check for next page AFTER processing all files on current page
+        filesArr.clear();
+        FirebaseJsonData nextPageData;
+        String nextPageTokenStr = "";
+        if (result.get(nextPageData, "nextPageToken") && nextPageData.success) {
+            nextPageTokenStr = nextPageData.to<const char*>();
+        }
+        
+        if (nextPageTokenStr.length() > 0) {
+            result.clear(); // Clear before getting next page
+            success = GSheet.listFiles(&result, 20, "name", nextPageTokenStr.c_str());     //next page 
+            morePages = success;
+        } else {
+            morePages = false;
+        }
+    }
+    
+    result.clear(); // Clean up FirebaseJson
+    
+    //if we get here, we did not find the file
+    
+    SerialPrint("file_findSpreadsheetIDByName: did not find " + String(sheetname),true);
+    return "";
 }
   
   uint8_t file_createSpreadsheet(String sheetname, bool checkFile, char* fileID) {
@@ -304,8 +342,8 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     byte rowInd = 0;
     const int MAX_ROWS = 50; // Limit to prevent memory issues
     
-    uint8_t currentPosition = 0;
-    while (Sensors.cycleSensors(&currentPosition,0) && rowInd < MAX_ROWS) {
+    int16_t currentPosition = 0;
+    while (Sensors.cycleSensors(currentPosition,0) && rowInd < MAX_ROWS) {
         ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
         if (sensor && sensor->IsSet) {
             ArborysDevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
@@ -343,6 +381,10 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_UPLOAD,true);
         GSheetInfo.lastErrorTime = I.currentTime;
         SerialPrint(" ERROR: failed to upload data",true);
+
+        //remove the spreadsheet info stored
+        GSheetInfo.GsheetID[0] = '\0';
+        GSheetInfo.GsheetName[0] = '\0';
         return false;
     }
 
@@ -426,4 +468,65 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     SerialPrint(" status: " + tmp,true);
     return tmp;
   }
+
+
+
+  
+//-----------------HTTPS functions to directly interact with Google sheets API, because some functions are not available in the ESP_Google_Sheet_Client library
+
+
+
+// GET file metadata (200 -> exists)
+bool file_sheetExists(String fileID) {
+    String url = "https://www.googleapis.com/drive/v3/files/" + fileID + "?fields=id,name,createdTime";
+    String token = GSheet.accessToken();
+    
+    String headers = "Authorization: Bearer " + token;  // newline if adding more
+    String method = "GET";
+    String contentType = "";   // none for GET
+    String body = "";
+    String resp;
+    int code;
+    String cacert = "/Certificates/Google.crt";
+    
+    bool ok = Server_SecureMessageEx(url, resp, code, cacert, method, contentType, body, headers);
+
+    return ok && (code == 200 || code == 201 || code == 409);
+    
+}
+
+
+// Create permission
+bool file_createUserPermission(String fileID, bool notify, const char* message) {
+  
+    String url = "https://www.googleapis.com/drive/v3/files/" + fileID + "/permissions?supportsAllDrives=true";
+    url += notify ? "&sendNotificationEmail=true" : "&sendNotificationEmail=false";
+    
+    if (notify && message && strlen(message) > 0) {
+        String msg = message;
+        msg.replace(" ", "%20");  // light URL encoding
+        url += "&emailMessage=" + msg;
+      }
+    
+    String token = GSheet.accessToken();
+    
+    FirebaseJson j;
+    j.add("type", "user");
+    j.add("role", "writer");
+    j.add("emailAddress", GSheetInfo.userEmail);
+    String body;
+    j.toString(body, false);
+    
+    String headers = "Authorization: Bearer " + token + "\nContent-Type: application/json";
+    String resp;
+    int code;
+    String cacert = "/Certificates/Google.crt";
+    String method = "POST";
+    String contentType = "application/json";
+    
+    bool ok = Server_SecureMessageEx(url, resp, code, cacert, method, contentType, body, headers);
+    
+    return ok && (code == 200 || code == 201 || code == 409); //409 permission already exists
+}
+
   #endif

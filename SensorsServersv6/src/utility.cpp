@@ -576,7 +576,8 @@ void initScreenFlags(bool completeInit) {
       I.cycleHeaderMinutes = 30; //how many seconds to show header?
       I.cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
       I.cycleWeatherMinutes = 10; //how many minutes to show weather values?
-      I.cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      I.cycleFutureConditionsMinutes = 5; //how many minutes to show future conditions?
+      I.lastFutureConditionsAlt = 0; //how many minutes to show future conditions?
       I.cycleFlagSeconds = 3; //how many seconds to show flag values?
       I.IntervalHourlyWeather = 2; //hours between daily weather display
       I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
@@ -886,7 +887,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 }
 
 #ifndef _ISPERIPHERAL
-void checkHeat() {
+void checkHVAC() {
   // Check if any HVAC sensors are active
   I.isHeat = 0;
   I.isAC = 0;
@@ -903,15 +904,23 @@ void checkHeat() {
     if (!sensor || !sensor->IsSet) continue;
     if (sensor->snsValue > 0) {
       switch (sensor->snsType) {
-        case 50: // Heat
-          I.isHeat = 1;
-          break;
-        case 51: // AC
-          I.isAC = 1;
-          break;
-        case 52: // Fan
-          I.isFan = 1;
-          break;
+        case 50: //total time          
+        break;
+        case 51: //heat - gas valve
+          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
+        break;
+        case 52: //heat
+          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
+        break;
+        case 55: // Fan
+          if (bitRead(sensor->Flags,0)==1) I.isFan = 1;
+        break;
+        case 56: //ac
+          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
+        break;
+        case 57: //ac
+          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
+        break;
       }
     }
     snsindex = Sensors.findSnsOfType("HVAC", false, snsindex+1);

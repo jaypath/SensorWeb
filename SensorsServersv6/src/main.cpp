@@ -509,7 +509,7 @@ void loop() {
 
         
         #ifndef _ISPERIPHERAL
-        checkHeat();
+        checkHVAC();
         #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;
@@ -527,7 +527,11 @@ void loop() {
         
         handleStoreCoreData();
         
-        
+        #ifdef _USEGSHEET
+        //we got a sensor reading, so upload the data to the spreadsheet if time is appropriate
+        if (GSheetInfo.useGsheet) Gsheet_uploadData();
+        #endif
+     
     }
 
     if (OldTime[2] != hour()) {

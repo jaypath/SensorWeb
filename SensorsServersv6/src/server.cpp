@@ -1597,8 +1597,7 @@ void handleSTATUS() {
   WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
   WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
   WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.GsheetUploadIntervalMinutes + "<br>";
-
+  
   // Button to trigger an immediate Google Sheets upload
   WEBHTML += R"===(
   <form action="/GSHEET_UPLOAD_NOW" method="post">
@@ -2652,6 +2651,12 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetFunction</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.lastGsheetFunction) + "</div>";
 
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetID</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetID) + "</div>";
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetName</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetName) + "</div>";
+
 
   WEBHTML = WEBHTML + "</div>";
   
@@ -2740,8 +2745,8 @@ void handleGSHEET_UPLOAD_NOW() {
 void handleGSHEET_SHARE_ALL() {
   registerHTTPMessage("GSHEETShare");
   #ifdef _USEGSHEET
-  bool result = shareAllGsheets();
-  String msg = "Share all sheets triggered. Result: " + String(result ? "Success" : "Failed");
+  file_grantPermissions();
+  String msg = "Share all sheets triggered. ";
   SerialPrint(msg, true);
   #else
   String msg = "GSHEET upload not enabled on this device";
@@ -5525,17 +5530,6 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
    }
    #endif
   
-   #ifdef _USEGSHEET
-   //we got a sensor reading, so upload the data to the spreadsheet if time is appropriate
-   if (GSheetInfo.useGsheet && sensorIndex >= 0) {
-    ArborysSnsType* S = Sensors.getSensorBySnsIndex(sensorIndex);
- 
-     if (!Gsheet_uploadSensorDataFunction(S)) {
-        SerialPrint("Failed to upload sensor " + String(S->snsName) + " to spreadsheet",true);
-        storeError("Gsheet: failed for sns:" + String(sensorIndex), ERROR_GSHEET_UPLOAD, true);
-     }
-    }
-   #endif
 
   
    return ret;

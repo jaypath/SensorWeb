@@ -218,14 +218,16 @@ extern  Adafruit_BME280 bme; // I2C
 
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
-float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN=1);
+float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
 void setupSensors();
-double peak_to_peak(int pin, int ms = 50);
+double peak_to_peak(int16_t pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
-float readAnalogVoltage(int16_t pin, byte nsamps);
+float readAnalogVoltage(ArborysSnsType* P, byte nsamps);
+float readAnalogVoltage(int16_t pin, byte nsamps=1);
 float readPinValue(ArborysSnsType* P, byte nsamps);
+float readPinValue(int16_t pin, byte nsamps, int16_t powerPin=-1);
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps);
