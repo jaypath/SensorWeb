@@ -3,8 +3,6 @@
 #include "sensors.hpp"
 
 /*sens types - see hpp file
- 
-
 */
 
 
@@ -43,6 +41,18 @@ uint8_t HVACSNSNUM = 0;
 #ifdef _USEBME680_BSEC
   Bsec iaqSensor;
   
+#endif
+
+#ifdef _USEADS1115
+  Adafruit_ADS1115 ads;  ///< Create an instance of the ADS1115 class
+  // Use the full-scale voltage range that best matches your expected input.
+  // GAIN_TWOTHIRDS allows a maximum input voltage of +/- 6.144V
+  //GAIN_ONE allows a maximum input voltage of +/- 4.096V
+  //GAIN_TWO allows a maximum input voltage of +/- 2.048V
+  
+  #define ADS_GAIN GAIN_TWO
+  #define ADS_MULTIPLIER 0.0625F //gain multiplier for GAIN_TWO is 0.0625
+
 #endif
 
 
@@ -290,9 +300,6 @@ int8_t readAllSensors(bool forceRead) {
           storeError((String) "Could not register" + (String) sensor->snsType + (String) "." + (String) sensor->snsID + " as a device.", ERROR_DEVICE_ADD, true);
       } else if (readResult >0) { //success
         numGood++;
-        #ifdef _USELED
-          if (sensor->snsType == 3 || sensor->snsType == 33)           LEDs.LED_set_color_soil(sensor);
-        #endif
       }
                       
       delay(20);
@@ -353,23 +360,44 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
       }
     case 3: //soil resistance 
     case 33: //soil capacitance
+    case 34: //soil resistance (ADS1115)
+    case 35: //soil capacitance (ADS1115)
       {
-        val=readPinValue(P, 10);
+        //check which type of sensor reading is being done. if pin is dio then read the pin from the esp32. If pin is 100-199 then read the sensor from the MUX or ADS1115
+        if (P->snsPin<100) {
+          val=readPinValue(P, 10);
 
-        delay(10);
- 
-        SerialPrint("val: " + String(val) + " sensor type: " + String(P->snsType),true);
+          delay(10);
+  
+          SerialPrint("val: " + String(val) + " sensor type: " + String(P->snsType),true);
 
 
-        if (P->snsType==3) {
-          P->snsValue = readResistanceDivider(10000, 3.3, val);
-          if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
-        
-        } 
-        if (P->snsType==33) {
-          P->snsValue = mapfloat(val, 0.15, 1.75, 0, 100); //this is the effective measurement range
-          if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
-        } 
+          if (P->snsType==3) {
+            P->snsValue = readResistanceDivider(10000, 3.3, val);
+            if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
+          
+          } 
+          if (P->snsType==33) {
+            P->snsValue = mapfloat(val, 0.15, 1.75, 0, 100); //this is the effective measurement range
+            if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+          } 
+        }
+        else {
+          #ifdef _USEADS1115
+            //read the sensor from the ADS1115. I have not currently implemented MUX reading and only allow 1 ADS1115 at present.
+            readADS1115(10, P);
+
+            //now convert the voltage to the sensor value
+            if (P->snsType==34) {
+              P->snsValue = readResistanceDivider(10000, 3.3, P->snsValue);
+              if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
+            } 
+            if (P->snsType==35) {
+              P->snsValue = mapfloat(P->snsValue, 0.15, 1.75, 0, 100); //this is the effective measurement range
+              if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+            } 
+          #endif
+        }
       break;
       }
 
@@ -422,6 +450,38 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
           #endif
       break;
       }
+    case 6: //NTC thermistor
+      {
+        //requires _THERMISTOR_B0, _THERMISTOR_R0 (nominal resistance at 25C), _THERMISTOR_RKNOWN (resistance of resisor in series with NTC), _THERMISTOR_TKNOWN (temperature at known resistance), _THERMISTOR_VDD (supply voltage)   
+        #if defined(_USEADS1115) && defined(_THERMISTOR_B0) && defined(_THERMISTOR_R0) && defined(_THERMISTOR_RKNOWN) && defined(_THERMISTOR_TKNOWN) && defined(_THERMISTOR_VDD)
+          // 1. read voltage 
+          readADS1115(20, P); 
+
+          // 2. Calculate R_thermistor using the Voltage Divider formula
+          // V_in and R_known should be measured/confirmed for highest accuracy!
+          float R_thermistor = _THERMISTOR_RKNOWN * (_THERMISTOR_VDD / P->snsValue - 1.0);
+
+          // 3. Calculate Temperature using the Steinhart-Hart (B-parameter) equation (Result is in Kelvin)
+          // T = 1 / [ (1/T0) + (1/B) * ln(R_thermistor / R0) ]
+          float T_kelvin = 1.0 / ( (1.0/_THERMISTOR_TKNOWN) + (1.0/_THERMISTOR_B0) * log(R_thermistor / _THERMISTOR_R0) );
+          
+          // 4. Convert Kelvin to Fahrenheit
+          // Step 4a: Convert Kelvin to Celsius
+          float T_celsius = T_kelvin - 273.15;
+          
+          // Step 4b: Convert Celsius to Fahrenheit
+          P->snsValue = (T_celsius * 9.0/5.0) + 32.0; 
+          if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+        #else
+          SerialPrint("NTC thermistor not configured",true);
+          P->snsValue = -1000;
+          isInvalid = true;
+        #endif
+
+
+        break;
+      }
+
     case 7: //dist
       {
         #ifdef _USEHCSR04
@@ -752,18 +812,6 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     #endif
     #endif
 
-    case 70: //Leak detection
-      {
-        #ifdef _USELEAK
-        digitalWrite(_USELEAK, HIGH);
-        if (digitalRead(_USELEAK)==HIGH) P->snsValue =1;
-        else P->snsValue =0;
-        digitalWrite(_USELEAK, LOW);
-
-      #endif
-
-      break;
-      }
     #if defined(_USELIBATTERY) || defined(_USESLABATTERY)
 
       case 60: // battery
@@ -818,7 +866,35 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 
         break;
         }
-    #endif
+
+      case 62: //battery voltage
+        {
+          //_USEBATPCNT
+        #if defined(_USEADS1115) && defined(_USELIBATTERY)
+          readADS1115(20, P); 
+          P->snsValue = P->snsValue * ((float)(_VDIVIDER_R1 + _VDIVIDER_R2))/_VDIVIDER_R2; //convert to total voltage
+        
+        #endif
+
+
+        break;
+        }
+
+      #endif
+
+      case 70: //Leak detection
+      {
+        #ifdef _USELEAK
+        digitalWrite(_USELEAK, HIGH);
+        if (digitalRead(_USELEAK)==HIGH) P->snsValue =1;
+        else P->snsValue =0;
+        digitalWrite(_USELEAK, LOW);
+
+      #endif
+
+      break;
+      }
+
     case 90:
       {
         //don't do anything here
@@ -873,12 +949,50 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     //add to sensor history
     SensorHistory.recordSentValue(P, prefs_index);  
   }
+
+  #ifdef _USELED
+    //check if this is a soil sensor
+    if (isSensorOfType(P, "soil")) LEDs.LED_set_color_soil(P);
+  #endif
+
   return 1;
 }
 
 
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
+}
+
+
+bool readADS1115(byte avgN, ArborysSnsType* P) {
+  //returns the voltage read from the ADS1115, and stores in P->snsValue
+  //note that P->snsPin is the ADS1115 channel, not the actual pin number or ADS address (for example, ADS1115 has channels 0-3).
+  #ifdef _USEADS1115
+    int16_t snsPin = P->snsPin;
+    int16_t powerPin = P->powerPin;
+    if (abs(P->snsPin) < 100 || abs(P->snsPin) > 199) return false; //invalid pin for ADS1115
+    if (P->snsPin < 0) {
+      digitalWrite(powerPin, HIGH);
+      snsPin = (-1*P->snsPin)-100; //convert to positive channel number
+    }
+    else snsPin = P->snsPin-100; //convert to positive channel number
+    
+    P->snsValue = 0; // Initialize to zero before accumulation
+    for (byte i=0;i<avgN;i++) { //read the ADC and average
+      P->snsValue += ads.readADC_SingleEnded(snsPin) ;
+      delay(10);
+    }
+
+    if (P->snsPin < 0) { //if negative pin, then power pin is the same as the sensor pin
+      digitalWrite(powerPin, LOW);
+    }
+
+    P->snsValue /= avgN; //average the readings
+    P->snsValue = P->snsValue * ADS_MULTIPLIER; //convert to voltage
+    return true;
+  #else
+    return false;
+  #endif
 }
 
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN) {
@@ -979,64 +1093,83 @@ void initHardwareSensors() {
     LAST_BAR_READ = 0;
   #endif
   
+  byte retry = 0;
+  #ifdef _USEADS1115
+    retry = 0;
+    while (!isI2CDeviceReady(0x48) && retry < 100)  {
+      SerialPrint("ADS1115 not ready or connected. Retry number " + String(retry),true);
+      delay(100);
+      retry++;
+    }
+    retry = 0;
+    while (!ads.begin() && retry < 10) {
+      SerialPrint("ADS1115 not connected. Retry number " + String(retry),true);
+      delay(250);
+      retry++;
+    }
+    if (retry >= 10) SerialPrint("ADS1115 failed to connect after 10 attempts",true);
+    else SerialPrint("ADS1115 connected after " + String(retry) + " attempts",true);
+  
+    ads.setGain(ADS_GAIN);
+  #endif
+
   // Initialize AHT sensor
   #if defined(_USEAHT) || defined(_USEAHTADA)
-    byte AHTretry = 0;
-    while (!isI2CDeviceReady(AHTXX_ADDRESS_X38) && AHTretry < 100) {
-      SerialPrint("AHT not ready or connected. Retry number " + String(AHTretry),true);
+    retry = 0;
+    while (!isI2CDeviceReady(AHTXX_ADDRESS_X38) && retry < 100) {
+      SerialPrint("AHT not ready or connected. Retry number " + String(retry),true);
       delay(100);
-      AHTretry++;
+      retry++;
     }
-    AHTretry = 0;
+    retry = 0;
 
-    while (aht.begin() != true && AHTretry < 10) {
+    while (aht.begin() != true && retry < 10) {
       
-      SerialPrint("AHT not connected. Retry number " + String(AHTretry),true);
+      SerialPrint("AHT not connected. Retry number " + String(retry),true);
 
       #ifdef _USESSD1306  
         oled.clear();
         oled.setCursor(0,0);  
-        oled.printf("No aht x%d!", AHTretry);          
+        oled.printf("No aht x%d!", retry);          
       #endif
       delay(250);
-      AHTretry++;
+      retry++;
     }
-    if (AHTretry >= 10) SerialPrint("AHT failed to connect after 10 attempts",true);
-    else SerialPrint("AHT connected after " + String(AHTretry) + " attempts",true);
+    if (retry >= 10) SerialPrint("AHT failed to connect after 10 attempts",true);
+    else SerialPrint("AHT connected after " + String(retry) + " attempts",true);
   #endif
 
   #ifdef _USEBMP
-    byte BMPretry = 0;
-    while (!isI2CDeviceReady(_USEBMP) && BMPretry < 50) {
-      SerialPrint("BMP not ready or connected. Retry number " + String(BMPretry),true);
+    retry = 0;
+    while (!isI2CDeviceReady(_USEBMP) && retry < 50) {
+      SerialPrint("BMP not ready or connected. Retry number " + String(retry),true);
       delay(100);
-      BMPretry++;
+      retry++;
     }
-    BMPretry = 0;
 
     byte trybmp = _USEBMP;
     if (trybmp == 0) trybmp = 0x76;
     else if (trybmp == 1) trybmp = 0x77;
     
-    while (bmp.begin(trybmp) != true && BMPretry < 20) {
-      SerialPrint("BMP fail at 0x" + String(trybmp) + ".\nRetry number " + String(BMPretry) + "\n",true);
+    while (bmp.begin(trybmp) != true && retry < 20) {
+      SerialPrint("BMP fail at 0x" + String(trybmp) + ".\nRetry number " + String(retry) + "\n",true);
 
       #ifdef _USESSD1306  
         oled.clear();
         oled.setCursor(0,0);  
-        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, BMPretry);          
+        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);          
       #endif
 
-      if (BMPretry == 10) { // Try swapping address
+      if (retry == 10) { // Try swapping address
         if (trybmp == 0x76) trybmp = 0x77;
         else trybmp = 0x76;
       }
 
       delay(100);
-      BMPretry++;
+      retry++;
     }
-    if (BMPretry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
-    else SerialPrint("BMP connected after " + String(BMPretry) + " attempts",true);
+    if (retry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
+    else SerialPrint("BMP connected after " + String(retry) + " attempts",true);
 
     /* Default settings from datasheet. */
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
@@ -1047,7 +1180,7 @@ void initHardwareSensors() {
   #endif
   
   #ifdef _USEBME
-    byte retry = 0;
+    retry = 0;
     while (!bme.begin() && retry < 20) {
       #ifdef _USESSD1306
         oled.println("BME failed.");
@@ -1095,7 +1228,7 @@ uint8_t getPinType(int16_t pin, int8_t* correctedPin) {
   //9 = I2C input, no power
   //10 = I2C input, power
 
-  //pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
+  //pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX or ADS address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
   *correctedPin = -1;
   if (pin == -9999) return 0;
   if (pin >= 0 && pin < 100) {

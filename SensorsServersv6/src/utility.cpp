@@ -95,20 +95,21 @@ bool initSystem() {
 
     if (Prefs.HAVECREDENTIALS) {
 
-      if (connectWiFi()<0) {
+      int16_t retries = connectWiFi();
+      if (retries<0) {
           //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
           SerialPrint("Failed to connect to Wifi",true);
-          if (connectWiFi()>-10000 && connectWiFi()<0) {
+          if (retries>-10000 && retries<0) {
 
               tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEnering into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
               SerialPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEntering local mode... login to my local wifi and go to http://192.168.4.1 to complete setup.", true);
               delay(10000);  
-              Prefs.HAVECREDENTIALS = false;
 
               APStation_Mode();
           }        
       } 
   } else {
+    tftPrint("No credentials, starting AP Station Mode", true);
     SerialPrint("No credentials, starting AP Station Mode",true);
     APStation_Mode();
   }

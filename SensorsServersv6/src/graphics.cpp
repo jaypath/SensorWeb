@@ -750,7 +750,7 @@ void fcnDrawSensorInfo() {
     tft.printf("Max: %.02f\n",maxv);
 
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.printf("Device IP: %s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
+    tft.printf("Device IP:%s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
     tft.printf("Sns type: %d\n",sensor->snsType);
     tft.printf("Sns ID: %d\n",sensor->snsID);
     tft.printf("Sns name: %s\n",sensor->snsName);
@@ -808,7 +808,10 @@ void fcnDrawStatus() {
     tft.setTextFont(1);
     tft.println("Status");
     tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
-    tft.printf("Device IP: %s\n",WiFi.localIP().toString().c_str());
+    tft.printf("Device IP:\n");
+    tft.setTextFont(2);
+    tft.printf("%s\n",WiFi.localIP().toString().c_str());
+    tft.setTextFont(1);
     tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");

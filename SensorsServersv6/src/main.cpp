@@ -524,7 +524,9 @@ void loop() {
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         
         I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true,3,true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
-        
+
+        if (I.currentTime % 300 == 0) Sensors.checkDeviceFlags(); //check the device flags every 5 minutes
+
         handleStoreCoreData();
         
         #ifdef _USEGSHEET
@@ -537,7 +539,31 @@ void loop() {
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         
+        //check if my IP address has changed
+        ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(MY_DEVICE_INDEX);
+        bool storeToSD = false;
 
+        if (WiFi.localIP() != myDevice->IP) {
+            myDevice->IP = WiFi.localIP();
+            storeToSD = true;
+        }
+
+        //check if the device name has changed
+        if (strcmp(Prefs.DEVICENAME, myDevice->devName) != 0) {
+            //copy the devicename in mydevice to prefs            
+            strncpy(Prefs.DEVICENAME, myDevice->devName, sizeof(Prefs.DEVICENAME) - 1);
+            Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+            Prefs.isUpToDate = false;
+            //store prefs
+            handleStoreCoreData();
+            storeToSD = true;
+        }
+
+        //store the device to SD card
+        #ifdef _USESDCARD
+        if (storeToSD) storeDevicesSensorsSD();
+        #endif
+        
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
         size_t minFreeHeap = ESP.getMinFreeHeap();

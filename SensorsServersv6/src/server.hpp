@@ -89,7 +89,7 @@ void handleFLUSHSD();
 void handleSETWIFI();
 void handleSTATUS();
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
-void serverTextHeader();
+void serverTextHeader(String pagename);
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 // Weather configuration handlers
 void handleWeather();

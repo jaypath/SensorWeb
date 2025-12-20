@@ -44,22 +44,39 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
     if (MAC == 0) return -1;
     int16_t existingIndex = findDevice(MAC);
     if (existingIndex >= 0) {
-        // Update existing device
+        //check if existing device has all the same parameters as the new device
         ArborysDevType* device = &devices[existingIndex];
-        device->IP = IP;
         device->dataReceived = I.currentTime;
-        //do not change time logged
 
-        if (devName[0] != '\0') {
-            strncpy(device->devName, devName, sizeof(device->devName));
-            device->devName[sizeof(device->devName) - 1] = '\0';
+        if (device->IP == IP && strcmp(device->devName, devName) == 0 && device->Flags == flags && device->SendingInt == sendingInt && device->devType == devType) {
+            //device already exists with all the same parameters (other than the time received), so return the existing index
+            //do nothing
+        }        else {
+            // Update existing device
+            device->IP = IP;
+            //do not change time logged
+
+            if (devName[0] != '\0') {
+                strncpy(device->devName, devName, sizeof(device->devName));
+                device->devName[sizeof(device->devName) - 1] = '\0';
+            }
+            if (bitRead(flags,7))  bitWrite(device->Flags, 7, 1); //there is a sensor that is critical, so the device is critical
+            if (bitRead(flags,2)) bitWrite(device->Flags, 2, 1); //there is a low power sensor, so the device is low power
+            if (bitRead(flags,1)) bitWrite(device->Flags, 1, 1); //there is a sensor that is monitored, so the device is monitored
+            //do not worry about alarm status here, because we will intermittently check for alarms
+
+            device->expired = false;
+            if (sendingInt != 0 && (sendingInt < device->SendingInt || device->SendingInt == 0)) device->SendingInt = sendingInt; //sending interval is the shortest of all attached sensors. Therefore, I should get a message at least this often!        
+            device->IsSet = 1;
+            if (devType != 0) device->devType = devType;
+
+            #ifdef _USESDCARD
+            //if this device is me and I updated, then I need to save to SD card 
+            if (existingIndex == findMyDeviceIndex()) {
+                storeDevicesSensorsSD();
+            }
+            #endif
         }
-        if (flags != 0) device->Flags = flags;
-        if (sendingInt != 0)         device->SendingInt = sendingInt;
-        device->expired = false;
-        if (sendingInt != 0 && (sendingInt < device->SendingInt || device->SendingInt == 0)) device->SendingInt = sendingInt; //sending interval is the shortest of all attached sensors. Therefore, I should get a message at least this often!        
-        device->IsSet = 1;
-        if (devType != 0) device->devType = devType;
         return existingIndex;
     }
     
@@ -265,8 +282,18 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                                   uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType, int16_t snsPin, int16_t powerPin) {
     //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
+    
+
+    uint8_t deviceFlags = 0;
+    if (bitRead(flags,2) == 1) bitWrite(deviceFlags, 2, 1); //if sensor is low power, then device is low power
+    if (bitRead(flags,0) == 1 && bitRead(flags,1) == 1) {
+        bitWrite(deviceFlags, 0, 1);//if sensor is flagged and monitored, then device is flagged
+        bitWrite(deviceFlags, 1, 1);
+    }
+    if (bitRead(flags,7) == 1) bitWrite(deviceFlags, 7, 1); //if sensor is critical and monitored, then device is critical
+
     // Find or create device
-    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, sendingInt, 0, devType);
+    int16_t deviceIndex = addDevice(deviceMAC, deviceIP, devName, sendingInt, deviceFlags, devType);
     if (deviceIndex < 0) {
         storeError("Addsensor: Could not create device", ERROR_DEVICE_ADD);
         return -2; // Could not create device
@@ -788,6 +815,24 @@ ArborysDevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
 }
 
 
+
+void Devices_Sensors::checkDeviceFlags() {
+    //check all devices and sensors and update the flags accordingly
+    for (int16_t i = 0; i < NUMDEVICES; i++) {
+        if (!devices[i].IsSet) continue;
+        devices[i].Flags = 0;
+        
+        for (int16_t j = 0; j < NUMSENSORS; j++) {
+            if (!sensors[j].IsSet) continue;
+            if (sensors[j].deviceIndex != i) continue;
+            if (bitRead(sensors[j].Flags,7)) bitWrite(devices[i].Flags, 7, 1); //there is a sensor that is critical, so the device is critical
+            if (bitRead(sensors[j].Flags,1)) bitWrite(devices[i].Flags, 1, 1); //there is a sensor that is monitored, so the device is monitored
+            if (bitRead(sensors[j].Flags,2)) bitWrite(devices[i].Flags, 2, 1); //there is a low power sensor, so the device is low power
+            if (bitRead(sensors[j].Flags,0) && (bitRead(sensors[j].Flags,1) || bitRead(sensors[j].Flags,7))) bitWrite(devices[i].Flags, 0, 1); //there is a sensor that is flagged and matters, so the device is flagged            
+        }
+    }
+}
+
 //there are two ways to check expiration of device:
 //1. check if any sensors are expired, and if the last read was multiplier x the sending interval ago then also label the device expired. This ensures that a device is expired even if only one sensor is missing (otherwise, other sensors could mask the expiration of one missing sensor)
 //1a. call checkExpirationAllSensors(currentTime, onlyCritical, multiplier, expireDevice)
@@ -883,7 +928,7 @@ bool Devices_Sensors::isSensorOfType(ArborysSnsType* sensor, String type) {
 bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
 
     if (type == "temperature") {//temperature
-        return (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17);
+        return (snsType == 1 || snsType == 4 || snsType == 6 || snsType == 10 || snsType == 14 || snsType == 17);
     }
     if (type == "humidity") {//humidity
         return (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18);
@@ -892,7 +937,7 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
         return (snsType == 9 || snsType == 13 || snsType == 19);
     }
     if (type == "battery") {//battery
-        return (snsType == 60 || snsType == 61);
+        return (snsType >= 60 && snsType <= 65);
     }
     if (type == "HVAC") {//HVAC
         return (snsType >= 50 && snsType < 60);
