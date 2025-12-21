@@ -94,8 +94,7 @@ String getESPNOWEncryptionStatus();
 bool encryptESPNOWMessage(ESPNOW_type& msg, byte msglen);
 bool decryptESPNOWMessage(ESPNOW_type& msg, byte msglen);
 
-// Generate AP SSID based on MAC address
-String generateAPSSID();
+// Note: generateAPSSID() is declared in server.hpp to avoid duplicate declarations
 
 
 #endif

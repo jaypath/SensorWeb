@@ -108,24 +108,74 @@ String formatBytes(uint64_t bytes) {
   }
 }
 
-bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert) { 
-  HTTPClient http;
-  WiFiClientSecure wfclient;
-  wfclient.setCACert(cacert.c_str());
+bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders) {
+if (WiFi.status() != WL_CONNECTED)
+return false;
 
-  if(WiFi.status()== WL_CONNECTED){
-    
-    http.begin(wfclient,URL.c_str());
-    //http.useHTTP10(true);
-    httpCode = http.GET();
-    
-    payload = http.getString();
-    
-    http.end();
-    return true;
-  } 
+HTTPClient http;
+WiFiClientSecure wfclient;
 
-  return false;
+if (cacert.length() == 0) {
+    //don't have the room to install the certificate bundle
+    return false;
+
+} else {
+  wfclient.setCACert(getCert(cacert).c_str());
+}
+
+http.useHTTP10(true);
+
+if (!http.begin(wfclient, URL.c_str()))
+return false;
+
+// --- Content-Type header ---
+if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
+
+// --- Extra headers: newline-separated list ---
+if (extraHeaders.length() > 0) {
+int start = 0;
+while (true) {
+int end = extraHeaders.indexOf('\n', start);
+String line;
+if (end == -1)
+line = extraHeaders.substring(start);
+else
+line = extraHeaders.substring(start, end);
+
+line.trim();
+if (line.length() > 0) {
+int colon = line.indexOf(':');
+if (colon > 0) {
+String key = line.substring(0, colon);
+String val = line.substring(colon + 1);
+key.trim();
+val.trim();
+if (key.length() > 0)
+http.addHeader(key, val);
+}
+}
+if (end == -1)
+break;
+start = end + 1;
+}
+}
+
+// --- Select HTTP method ---
+if (method == "GET") {
+httpCode = http.GET();
+} else if (method == "POST") {
+httpCode = http.POST(body);
+} else if (method == "DELETE") {
+httpCode = http.sendRequest("DELETE", (uint8_t*)nullptr, 0);
+} else if (method == "PATCH") {
+httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
+} else {
+httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
+}
+
+payload = http.getString();
+http.end();
+return true;
 }
 
 bool Server_Message(String& URL, String& payload, int &httpCode) { 
@@ -151,7 +201,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 }
 
 
-bool WifiStatus(void) {
+bool WifiStatus(void) {  
   if (WiFi.status() == WL_CONNECTED) {
     
     return true;
@@ -172,27 +222,94 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
       WiFi.mode(WIFI_MODE_STA);
 
     } else {
+      tftPrint("No credentials", true);
       return -1000;
     }
   }
     
   if (Prefs.WIFISSID[0] == 0) return -1000;
 
-  for (i = 0; i < retryLimit; i++) {
-    if (!WifiStatus()) {        
-      WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-      delay(delayms);
-    } else {
-      
-      Prefs.HAVECREDENTIALS=true;
-      Prefs.isUpToDate = false;
-      I.wifiFailCount = 0;
+  #ifdef _USE32
+  // Configure WiFi for WPA2/WPA3 compatibility
+  // This helps with mixed WPA2/WPA3 networks (transition mode)
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   
-      return i;
-    }
-  }
+  // Set WiFi security preferences for WPA2/WPA3 compatibility
+  // WIFI_AUTH_WPA2_PSK = WPA2 only
+  // WIFI_AUTH_WPA3_PSK = WPA3 only  
+  // WIFI_AUTH_WPA2_WPA3_PSK = WPA2/WPA3 mixed (transition mode) - preferred for compatibility
+  // Note: The WiFi.begin() call will automatically negotiate, but we can set preferences
+  #endif
 
-  if (!WifiStatus())       return -1*i;
+
+  for (i = 0; i < retryLimit; i++) {
+    SerialPrint(String(i) + ".", false);
+    tftPrint(".", false);
+    
+    // --- ATTEMPT 1: The Primary Connection ---
+    WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+    
+    // Wait for connection with timeout (e.g., 80% of total delayms)
+    uint32_t startTime = millis();
+    uint32_t firstTryTimeout = delayms * 0.8; 
+    
+    while (!WifiStatus() && (millis() - startTime) < firstTryTimeout) {
+        delay(100);
+    }
+
+    if (WifiStatus()) {
+        // SUCCESS on first attempt, skip double-hit logic and exit loop
+        // ... (Your success code block) ...
+        return i; 
+    }
+    
+    // --- ATTEMPT 2: The Double Hit / State Clear ---
+    #ifdef _USE32
+    SerialPrint("First attempt failed/stalled. Initiating double-hit.", true);
+
+    // 1. Disconnect to clear the potentially stuck state
+    WiFi.disconnect();
+    
+    // 2. Re-begin the connection
+    WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+    
+    // Wait for connection with remaining timeout (e.g., 20% of total delayms)
+    startTime = millis(); // Reset timer
+    while (!WifiStatus() && (millis() - startTime) < (delayms * 0.2)) {
+        delay(100);
+    }
+
+    if (WifiStatus()) {
+        // SUCCESS on second attempt, exit loop
+        Prefs.HAVECREDENTIALS=true;
+        Prefs.isUpToDate = false;
+        I.wifiFailCount = 0;
+    
+        #ifdef _USE32
+        // Log WiFi security info for debugging
+        SerialPrint("WiFi connected: " + WiFi.SSID() + " (RSSI: " + String(WiFi.RSSI()) + ")", true);
+        #endif
+    
+        return i;
+  
+
+    }
+    #endif
+
+    // If still not connected after both attempts, the loop will continue to the next iteration.
+    // You may want to add a final delay here if needed:
+    // delay(1000); 
+}
+
+// If the function reaches here, connection failed after all retryLimit attempts.
+ 
+
+  if (!WifiStatus())     {
+    tftPrint("Failed WiFi", true);
+    return -1*i;
+
+  } 
 
 
 
@@ -202,11 +319,29 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
 int16_t connectWiFi() {
   
   int16_t retries = 0;
-  retries = tryWifi(250,50,true);
+  retries = tryWifi(1000,50,true);
   if (WifiStatus()) {
     #ifdef _USEUDP
     LAN_UDP.begin(_USEUDP); //start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
     #endif
+
+    //register my possibly new IP address
+    int16_t devIndex = Sensors.findMyDeviceIndex();
+    if (devIndex != -1) {
+      ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
+      if (device != nullptr) {
+        IPAddress oldIP = device->IP;
+
+        device->IP = WiFi.localIP();
+        
+        if (oldIP != device->IP) {
+          #ifdef _USESDCARD
+          storeDevicesSensorsSD();
+          #endif
+        }
+      }
+    } else Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+
   
     return retries;
   }
@@ -264,9 +399,9 @@ void APStation_Mode() {
     tft.setTextColor(TFT_WHITE);
     tft.setTextFont(2);
     tft.setTextSize(1);
-    if (Prefs.HAVECREDENTIALS) tft.printf("Failed to connect to %s.\n", Prefs.WIFISSID);
-    else tft.printf("No stored credentials.\n");
-    tft.printf("Setup may be required \n(or wifi down). Please join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
+    if (Prefs.HAVECREDENTIALS) tft.printf("Failed to connect to %s.\nWiFi may be down. I will try again after reboot.\nOr ", Prefs.WIFISSID);
+    else tft.printf("No stored credentials.\nYou must ");
+    tft.printf("join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
                wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
     
     #endif
@@ -404,27 +539,38 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
     SerialPrint("connectToWiFi: Empty SSID provided", true);
     return false;
   }
-  
-  // Save credentials
-  snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
-  snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
-  
+  if (password.length() == 0) {
+    SerialPrint("connectToWiFi: Empty password provided", true);
+    return false;
+  }
+
+    
   // Save LMK key if provided
   if (lmk_key.length() > 0) {
     memset(Prefs.KEYS.ESPNOW_KEY, 0, sizeof(Prefs.KEYS.ESPNOW_KEY));
     strncpy((char*)Prefs.KEYS.ESPNOW_KEY, lmk_key.c_str(), 16);
   }
   
+
+  //save new wifi, pwd, and lmk_key to prefs
+  snprintf((char*)Prefs.WIFISSID, sizeof(Prefs.WIFISSID), "%s", ssid.c_str());
+  snprintf((char*)Prefs.WIFIPWD, sizeof(Prefs.WIFIPWD), "%s", password.c_str());
+  snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
   Prefs.HAVECREDENTIALS = true;
   Prefs.isUpToDate = false;
+  
+
   
   // Attempt WiFi connection
   SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
-  int retries = tryWifi(250,20,false); //do not check credentials, which will terminate AP mode
+  int retries = tryWifi(1000,50,false); //do not check credentials, which will terminate AP mode
   
   if (WiFi.status() == WL_CONNECTED) {
     SerialPrint("WiFi connected! IP: " + WiFi.localIP().toString(), true);
+
+    //store prefs and core now  
+    handleStoreCoreData(); //update prefs and core now  
     
     return true;
   }
@@ -561,8 +707,6 @@ void apiConnectToWiFi() {
       server.send(400, "application/json", "{\"success\":false,\"error\":\"SSID required\"}");
       return;
     }
-
-  
   }
   if (server.hasArg("password")) {
     password = server.arg("password");
@@ -573,7 +717,6 @@ void apiConnectToWiFi() {
   }
 
   if (connectToWiFi(ssid, password, lmk_key)) {
-    handleStoreCoreData(); //update prefs and core if needed  
     server.send(200, "application/json", "{\"success\":true,\"ip\":\"" + WiFi.localIP().toString() + "\"}");
   } else {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"Connection failed\"}");
@@ -799,7 +942,7 @@ void handleInitialSetup() {
 
   registerHTTPMessage("Init");
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Initial Setup");
   
   WEBHTML += R"===(
 <style>
@@ -833,7 +976,6 @@ void handleInitialSetup() {
 
 <body>
 <div class="setup-container">
-  <h1>Initial System Setup</h1>
   <p>Welcome! Let's configure your system.</p>
   )===";
 
@@ -842,9 +984,7 @@ void handleInitialSetup() {
 
   //is there no wifi?
   if (!Prefs.HAVECREDENTIALS || !WifiStatus()) {
-    WEBHTML += R"===(
-    <p>WiFi credentials not found and required to continue.</p>
-    )===";
+    WEBHTML += "<p>WiFi error detected.<br>Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>WiFi connected: " + String(WifiStatus() ? "true" : "false") + "</p>";
   } else {
     WEBHTML += "<p>Currently connected to WiFi network: " + WiFi.SSID() + "</p>";
     WEBHTML += "<p>Current IP address: " + WiFi.localIP().toString() + "</p>";
@@ -1414,11 +1554,9 @@ void handleSTATUS() {
   //registerHTTPMessage("STATUS");
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Status");
 
   WEBHTML = WEBHTML + "<body>";  
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Status Page</h2>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   // Navigation buttons
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -1448,7 +1586,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WifiStatus() ? "Connected" : "Disconnected") + "</p>";
   WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + getWiFiModeString() + "</p>";
 
   wifi_mode_t t = WiFi.getMode();
@@ -1546,9 +1684,8 @@ void handleSTATUS() {
   WEBHTML += "Last GSheets interval: " + (String) GSheetInfo.uploadGsheetIntervalMinutes + "<br>";
   WEBHTML += "Last GSheets function: " + (String) GSheetInfo.lastGsheetFunction + "<br>";
   WEBHTML += "Last GSheets response: " + (String) GSheetInfo.lastGsheetResponse + "<br>";
-  WEBHTML += "Last GSheets SD save time: " + (String) (GSheetInfo.lastGsheetSDSaveTime ? dateify(GSheetInfo.lastGsheetSDSaveTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML += "Last GSheets error time: " + (String) (GSheetInfo.lastErrorTime ? dateify(GSheetInfo.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-
+  
   // Button to trigger an immediate Google Sheets upload
   WEBHTML += R"===(
   <form action="/GSHEET_UPLOAD_NOW" method="post">
@@ -1591,15 +1728,17 @@ void handleALL(void) {
 }
 
 
-void serverTextHeader() {
+void serverTextHeader(String pagename) {
   WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>";
   WEBHTML = R"===(<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}
   body {  font-family: arial, sans-serif; }
   </style></head>
-)===";
-
+  )===";
+  WEBHTML += "<h1>" + (String) Prefs.DEVICENAME + " - " + pagename + "</h1>";
+  WEBHTML += "<h2>Current Time: " + (String) dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2>";
+  WEBHTML += "<h3>Current version: " + (String) _CURRENTVERSION + "</h3>";
+  WEBHTML += "<h3>Device IP: " + (String) WiFi.localIP().toString() + "</h3>";  
 }
-
 
 void serverTextClose(int htmlcode, bool asHTML) {
   
@@ -1773,17 +1912,15 @@ void handlerForRoot(bool allsensors) {
   }
   
   // Normal root page for fully configured systems
-  serverTextHeader();
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Main Page</h2>";
-
-  if (Prefs.HAVECREDENTIALS==true && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
+  serverTextHeader(allsensors ? "All Sensors" : "Main Page");
+  
+  if (Prefs.HAVECREDENTIALS==true && WifiStatus() && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
 
 
   #ifdef _USEROOTCHART
   WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
   #endif
-  WEBHTML = WEBHTML + "<body>";  
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
+  WEBHTML = WEBHTML + "<body>";
   
   WEBHTML = WEBHTML + "---------------------<br>";      
     
@@ -1936,8 +2073,8 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</script> \n";
 
 } else {
-  if (Prefs.HAVECREDENTIALS==false) {
-    SerialPrint("Prefs.HAVECREDENTIALS==false, redirecting to InitialSetup");
+  if (!Prefs.HAVECREDENTIALS || !WifiStatus()) {
+    SerialPrint("Prefs.HAVECREDENTIALS==false or WifiStatus()==false, redirecting to InitialSetup");
     //redirect to WiFi config page
     server.sendHeader("Location", "/InitialSetup");
     serverTextClose(302,false);
@@ -1971,7 +2108,7 @@ void handleRETRIEVEDATA() {
   
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Sensor History");
   byte  N=100;
   uint8_t snsType = 0, snsID = 0;
   uint64_t deviceMAC = 0;
@@ -2046,7 +2183,7 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
   registerHTTPMessage("AvgHx");
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Moving Average");
 
   if (server.args()==0) {
     WEBHTML="Inappropriate call... use RETRIEVEDATA_MOVINGAVERAGE?MAC=1234567890AB&type=1&id=1&starttime=1234567890&endtime=1731761847&windowSize=10&numPointsX=10 or RETRIEVEDATA_MOVINGAVERAGE?MAC=1234567890AB&type=1&id=1&endtime=1731761847&windowSize=10&numPointsX=10";
@@ -2195,12 +2332,10 @@ void handleCONFIG() {
   
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("System Configuration");
 //  SerialPrint("config: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " System Configuration</h2>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   // Navigation buttons
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -2329,10 +2464,9 @@ void handleREADONLYCOREFLAGS() {
 
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Read-Only Core Flags");
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Read-Only Core Flags</h2>";
   WEBHTML = WEBHTML + "<p>This page displays non-editable system parameters.</p>";
   
   // Start the grid container
@@ -2529,15 +2663,11 @@ void handleGSHEET() {
   
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Google Sheets");
   #if defined(_USEGSHEET)
 
-  SerialPrint("gsheet: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-  SerialPrint("gsheet: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Google Sheets Configuration</h2>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   // Navigation buttons
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -2610,6 +2740,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">GsheetName</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.GsheetName) + "</div>";
 
+
   WEBHTML = WEBHTML + "</div>";
   
   // Submit button
@@ -2621,9 +2752,18 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload to Gsheets Immediately\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
+  // Share all sheets button
+  WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_SHARE_ALL\" method=\"post\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Share Device Sheets\" style=\"padding: 10px 20px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
+  // Delete all sheets button
+  WEBHTML = WEBHTML + "<br><form action=\"/GSHEET_DELETE_ALL\" method=\"post\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete All Sheets\" style=\"padding: 10px 20px; background-color: #F44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  
   #else
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>Google Sheets Configuration</h2>";
   WEBHTML = WEBHTML + "<p>Google Sheets upload is not available on this device</p>";
   #endif
   
@@ -2684,6 +2824,30 @@ void handleGSHEET_UPLOAD_NOW() {
   server.send(200, "text/plain", msg);
 }
 
+void handleGSHEET_SHARE_ALL() {
+  registerHTTPMessage("GSHEETShare");
+  #ifdef _USEGSHEET
+  file_grantPermissions();
+  String msg = "Share all sheets triggered. ";
+  SerialPrint(msg, true);
+  #else
+  String msg = "GSHEET upload not enabled on this device";
+  #endif
+  server.send(200, "text/plain", msg);
+}
+
+void handleGSHEET_DELETE_ALL() {
+  registerHTTPMessage("GSHEETDelete");
+  #ifdef _USEGSHEET
+  file_deleteAllSheets();
+  String msg = "Delete all sheets triggered.";
+  SerialPrint(msg, true);
+  #else
+  String msg = "GSHEET upload not enabled on this device";
+  #endif
+  server.send(200, "text/plain", msg);
+}
+
 void handleREQUEST_BROADCAST() {
   registerHTTPMessage("Broadcast");
   
@@ -2699,11 +2863,12 @@ void handleREQUEST_BROADCAST() {
   
 }
 
-// Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex
+// Generate AP SSID based on MAC address: "SensorNet-" + last MAC in hex
 String generateAPSSID() {
-    char ssid[20];
-    // Format: "SensorNet-" + last 3 bytes of MAC in hex (6 characters)
-    snprintf(ssid, sizeof(ssid), "SensorNet-%02X%02X%02X", 
+    char ssid[25];
+    // Format: "SensorNet-" + all 6 bytes of MAC in hex (12 characters) in order 1,2,3,4,5,6
+    snprintf(ssid, sizeof(ssid), "SensorNet-%02X%02X%02X%02X%02X%02X", 
+             getPROCIDByte(Prefs.PROCID, 0), getPROCIDByte(Prefs.PROCID, 1), getPROCIDByte(Prefs.PROCID, 2),
              getPROCIDByte(Prefs.PROCID, 3), getPROCIDByte(Prefs.PROCID, 4), getPROCIDByte(Prefs.PROCID, 5));
     return String(ssid);
 }
@@ -2769,17 +2934,31 @@ void handleCONFIG_POST() {
   // Process device name
   if (server.hasArg("deviceName")) {
     String newDeviceName = server.arg("deviceName");
-    if (newDeviceName.length() > 0 && newDeviceName.length() <= 32) {
+    if (newDeviceName.length() > 0) {
+      if (newDeviceName.length() > 32) newDeviceName = newDeviceName.substring(0, 32);
+      
       snprintf((char*)Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "%s", newDeviceName.c_str());
       Prefs.isUpToDate = false; // Mark as needing to be saved
 
       //now update the DeviceStore with the new device name
-      int16_t deviceIndex = Sensors.findMyDeviceIndex();
-      if (!Sensors.updateDeviceName(deviceIndex, newDeviceName)) {
+      ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(MY_DEVICE_INDEX);
+      if (myDevice) {
+        strncpy(myDevice->devName, newDeviceName.c_str(), sizeof(myDevice->devName) - 1);
+        myDevice->devName[sizeof(myDevice->devName) - 1] = '\0';
+        //store the device to SD card
+        #ifdef _USESDCARD
+        storeDevicesSensorsSD();
+        #endif
+      } else {
         SerialPrint("Failed to update device name", true);
-        storeError("Failed to update device name");
-      } 
+        storeError("Failed to update device name", ERROR_DEVICE_NAME_INVALID, true);
+        storeError("My device not found", ERROR_DEVICE_MDEVICE_NOTFOUND, true);
+      }
+    } else {
+      SerialPrint("Device name is empty", true);
+      storeError("Device name is empty", ERROR_DEVICE_NAME_INVALID, true);
     }
+
   }
   
 #if defined(_USETFT) && !defined(_ISPERIPHERAL)
@@ -3066,11 +3245,9 @@ bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_
 void handleTimezoneSetup() {
   registerHTTPMessage("TZSetup");
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Timezone Configuration");
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>Timezone Configuration</h2>";
-  
 
   // Get timezone information from API
   int32_t utc_offset = Prefs.TimeZoneOffset;
@@ -3247,10 +3424,8 @@ void handleTimezoneSetup_POST() {
 void handleWeather() {
   registerHTTPMessage("Weather");
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Weather Data");
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Weather Data</h2>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   // Navigation buttons
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -3581,11 +3756,9 @@ void handleSDCARD() {
   registerHTTPMessage("SDCard");
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("SD Card Configuration");
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " SD Card Configuration</h2>";
-  WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
   // Navigation buttons
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -4431,10 +4604,9 @@ void handleREBOOT_DEBUG() {
   registerHTTPMessage("RebootDebug");
   WEBHTML.clear();
   WEBHTML = "";
-  serverTextHeader();
+  serverTextHeader("Reboot Debug");
 
   WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<h2>" + (String) Prefs.DEVICENAME + " Reboot Debug Information</h2>";
   
   // Display reboot debug information
   WEBHTML = WEBHTML + "<div style=\"margin: 20px 0; padding: 20px; background-color: #f5f5f5; border-radius: 8px;\">";
@@ -4495,10 +4667,9 @@ void handleUPDATETIMEZONE() {
   
   
   // Display timezone configuration page
-  serverTextHeader();
+  serverTextHeader("Timezone Configuration");
   String WEBHTML = "";
   
-  WEBHTML = WEBHTML + "<h2>Timezone Configuration</h2>";
   WEBHTML = WEBHTML + "<p>WiFi connection established! Please review and confirm the detected timezone settings:</p>";
   
   WEBHTML = WEBHTML + "<form id=\"timezoneForm\" method=\"POST\" action=\"/UPDATETIMEZONE\">";
@@ -4589,9 +4760,8 @@ void handleUPDATETIMEZONE_POST() {
   checkDST();
   
   // Display confirmation and reboot
-  serverTextHeader();
+  serverTextHeader("Timezone Settings Saved");
   String WEBHTML = "";
-  WEBHTML = WEBHTML + "<h2>Timezone Settings Saved</h2>";
   WEBHTML = WEBHTML + "<p>Timezone settings have been saved successfully!</p>";
   WEBHTML = WEBHTML + "<p><strong>UTC Offset:</strong> " + String(Prefs.TimeZoneOffset/3600) + "h " + String((Prefs.TimeZoneOffset%3600)/60) + "m</p>";
   WEBHTML = WEBHTML + "<p><strong>DST Enabled:</strong> " + (Prefs.DST ? "Yes" : "No") + "</p>";
@@ -4610,11 +4780,9 @@ void handleUPDATETIMEZONE_POST() {
 void handleDeviceViewer() {
     registerHTTPMessage("DeviceViewer");
     WEBHTML = "";
-    serverTextHeader();
+    serverTextHeader("Device Viewer");
     
     WEBHTML = WEBHTML + "<body>";
-    WEBHTML = WEBHTML + "<h2>Device Viewer</h2>";
-    WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "<br></h2>";
 
     // Navigation buttons to config pages
     WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
@@ -4872,7 +5040,7 @@ void handleDeviceViewerPing() {
     }
     
     // Ensure current device index is valid
-    if (CURRENT_DEVICEVIEWER_DEVINDEX >= Sensors.getNumDevices()) {
+    if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
         CURRENT_DEVICEVIEWER_DEVINDEX = 0;
     }
     
@@ -4980,6 +5148,8 @@ void setupServerRoutes() {
     server.on("/GSHEET", HTTP_GET, handleGSHEET);
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
+    server.on("/GSHEET_SHARE_ALL", HTTP_POST, handleGSHEET_SHARE_ALL);
+    server.on("/GSHEET_DELETE_ALL", HTTP_POST, handleGSHEET_DELETE_ALL);
     
     // ESP-NOW Broadcast route
     server.on("/REQUEST_BROADCAST", HTTP_POST, handleREQUEST_BROADCAST);
@@ -5248,17 +5418,36 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
   if (root["senderDevice"].is<JsonObject>()) {
     JsonObject senderDevice = root["senderDevice"];
     if (senderDevice["ip"].is<JsonVariantConst>())    devIP.fromString(senderDevice["ip"].as<String>());
-    if (senderDevice["mac"].is<JsonVariantConst>())    stringToUInt64(senderDevice["mac"].as<String>(), &devMAC, true);
+    bool macParsed = false;
+    if (senderDevice["mac"].is<JsonVariantConst>()) {
+      macParsed = stringToUInt64(senderDevice["mac"].as<String>(), &devMAC, true);
+      if (!macParsed) {
+        SerialPrint("Failed to parse MAC address: " + senderDevice["mac"].as<String>(), true);
+        responseMsg = "Failed to parse MAC address";
+        storeError("Failed to parse MAC address: " + senderDevice["mac"].as<String>(), ERROR_JSON_PARSE, true);
+        return -1;
+      }
+    } else {
+      SerialPrint("Missing MAC address in senderDevice", true);
+      responseMsg = "Missing MAC address in senderDevice";
+      storeError("Missing MAC address in senderDevice", ERROR_JSON_PARSE, true);
+      return -1;
+    }
     if (senderDevice["name"].is<JsonVariantConst>())    devName = senderDevice["name"].as<String>();
     if (senderDevice["devType"].is<JsonVariantConst>())    devType = senderDevice["devType"];
     //register the device sending me the request
     senderIndex = Sensors.addDevice(devMAC, devIP, devName.c_str(), 0, 0, devType);
+  } else {
+    SerialPrint("Missing senderDevice in JSON message", true);
+    responseMsg = "Missing senderDevice in JSON message";
+    storeError("Missing senderDevice in JSON message", ERROR_JSON_PARSE, true);
+    return -1;
   }
 
   if (senderIndex < 0) {
-    SerialPrint("Failed to register sender device",true);
+    SerialPrint("Failed to register sender device: MAC=" + String(devMAC, HEX) + " Name=" + devName, true);
     responseMsg = "Failed to register sender device";
-    storeError("Failed to register sender device: " + devName, ERROR_JSON_PARSE, true);
+    storeError("Failed to register sender device: " + devName + " MAC=" + String(devMAC, HEX), ERROR_JSON_PARSE, true);
   }
 
   return senderIndex;
@@ -5386,6 +5575,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
   );
 
   if (ret == 0) responseMsg = "Failed to add sensor";
+
 }
 
  uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags) {
@@ -5409,14 +5599,13 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
        ret =1; //sensor was not found in the database and is added
        SerialPrint("Sensor not found, adding to Devices_Sensors class",true);
        addToSD = true;
-     }
- 
+     }   
 
      //is this a low power sensor?
      if (bitRead(flags,2) == 1) {
-      //low power sensors do not know if they switched flag status... get the last reading, which has not yet been updated
       ArborysSnsType* OldS = Sensors.getSensorBySnsIndex(Sensors.findSensor(deviceMAC, snsType, snsID));
-      if (OldS) {
+      // low power sensors do not know if they switched flag status... get the last reading, which has not yet been updated
+      if (OldS) {        
         if (OldS->Flags != flags && (bitRead(flags,0) !=  bitRead(flags,0))) { //flag status changed
           bitWrite(flags,6,1); //flag changed since last read
         }          
@@ -5445,7 +5634,8 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
      }
    }
    #endif
- 
+  
+
   
    return ret;
  }

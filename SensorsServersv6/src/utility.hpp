@@ -71,8 +71,8 @@ int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
 uint16_t countSubstr(String orig, String token);
 String enumErrorToName(ERRORCODES E);
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards=false);
-bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards=false);
+bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwards=false);
+bool cycleByteIndex(byte& start, byte arraysize, byte origin, bool backwards=false);
 
 // Legacy sensor functions - these now delegate to the Devices_Sensors class
 bool isSensorInit(int i);
@@ -83,7 +83,7 @@ int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest)
 int16_t findSnsOfType(byte snstype, bool newest = false);
 uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
 uint8_t countDev();
-void checkHeat(void);
+void checkHVAC(void);
 uint8_t findSensorByName(String snsname, uint8_t snsType=0, uint8_t snsID = 0);
 uint8_t find_sensor_count(String snsname,uint8_t snsType);
 void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);

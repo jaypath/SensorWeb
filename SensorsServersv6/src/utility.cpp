@@ -95,20 +95,21 @@ bool initSystem() {
 
     if (Prefs.HAVECREDENTIALS) {
 
-      if (connectWiFi()<0) {
+      int16_t retries = connectWiFi();
+      if (retries<0) {
           //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
           SerialPrint("Failed to connect to Wifi",true);
-          if (connectWiFi()>-10000 && connectWiFi()<0) {
+          if (retries>-10000 && retries<0) {
 
               tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEnering into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
               SerialPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEntering local mode... login to my local wifi and go to http://192.168.4.1 to complete setup.", true);
               delay(10000);  
-              Prefs.HAVECREDENTIALS = false;
 
               APStation_Mode();
           }        
       } 
   } else {
+    tftPrint("No credentials, starting AP Station Mode", true);
     SerialPrint("No credentials, starting AP Station Mode",true);
     APStation_Mode();
   }
@@ -318,8 +319,8 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     //using SensorHistory.HistoryIndex[n], which is the index of the last data point saved, rewind N points and pull them in order
     int16_t index_start = SensorHistory.HistoryIndex[n]-*N; //this might be a negative number, so we need to wrap around
     if (index_start < 0) index_start = _SENSORHISTORYSIZE + index_start;
-    uint16_t index = index_start;
-    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
+    int16_t index = index_start;
+    while (cycleIndex(index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n])) {
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -329,8 +330,8 @@ bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t s
     }
   } else {
     //pull data in order of newest to oldest
-    uint16_t index = SensorHistory.HistoryIndex[n];
-    while (cycleIndex(&index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
+    int16_t index = SensorHistory.HistoryIndex[n];
+    while (cycleIndex(index, _SENSORHISTORYSIZE, SensorHistory.HistoryIndex[n],true) && i<*N) { //true means cycle backwards
       if (isTimeValid(SensorHistory.TimeStamps[n][index])) {
         t[i] = SensorHistory.TimeStamps[n][index];
         v[i] = SensorHistory.Values[n][index];
@@ -500,25 +501,28 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t senso
 void initGsheetHandler() {
   #ifdef _USEGSHEET
   if (!GSheetInfo.useGsheet) return;
-    SerialPrint("gsheet setup1: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup1: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
     
-    if (!readGsheetInfoSD() || GSheetInfo.clientEmail == NULL || GSheetInfo.projectID == NULL || GSheetInfo.privateKey == NULL) {
+    // Load credentials; if missing/empty, initialize defaults
+    if (!readGsheetInfoSD() ||
+        strlen(GSheetInfo.clientEmail) == 0 ||
+        strlen(GSheetInfo.projectID) == 0 ||
+        strlen(GSheetInfo.privateKey) == 0) {
         initGsheetInfo();
         storeGsheetInfoSD();        
     }
-    initGsheet(); 
-    if (I.currentTime > 1000 && GSheet.ready()) { //wait for time to be set and gsheet to be ready
-        String newGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
-        strncpy(GSheetInfo.GsheetName, newGsheetName.c_str(), 23);
-        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
-        snprintf(GSheetInfo.GsheetID,64,"%s",file_findSpreadsheetIDByName(GSheetInfo.GsheetName).c_str());
-    } else {
-        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
-    }
 
-    SerialPrint("gsheet setup2: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-    SerialPrint("gsheet setup2: file ID is " + (strlen(GSheetInfo.GsheetID) > 0 ? String(GSheetInfo.GsheetID) : "N/A"),true);
+    // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
+    if (WifiStatus() && I.currentTime > 1000) {
+      initGsheet();
+    }
+    if (!(I.currentTime > 1000 && GSheet.ready())) { //wait for time to be set and gsheet to be ready
+        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
+        String reason = GSheet.errorReason();
+        if (reason.length() > 0) SerialPrint("GSheet not ready reason: " + reason, true);
+    }
+    // With per-sensor sheets, do not initialize a global monthly sheet.
+    // Ensure global name/ID remain empty to avoid accidental use.
+
   #endif
 }
 
@@ -573,7 +577,8 @@ void initScreenFlags(bool completeInit) {
       I.cycleHeaderMinutes = 30; //how many seconds to show header?
       I.cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
       I.cycleWeatherMinutes = 10; //how many minutes to show weather values?
-      I.cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      I.cycleFutureConditionsMinutes = 5; //how many minutes to show future conditions?
+      I.lastFutureConditionsAlt = 0; //how many minutes to show future conditions?
       I.cycleFlagSeconds = 3; //how many seconds to show flag values?
       I.IntervalHourlyWeather = 2; //hours between daily weather display
       I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
@@ -883,7 +888,7 @@ uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings,
 }
 
 #ifndef _ISPERIPHERAL
-void checkHeat() {
+void checkHVAC() {
   // Check if any HVAC sensors are active
   I.isHeat = 0;
   I.isAC = 0;
@@ -900,15 +905,23 @@ void checkHeat() {
     if (!sensor || !sensor->IsSet) continue;
     if (sensor->snsValue > 0) {
       switch (sensor->snsType) {
-        case 50: // Heat
-          I.isHeat = 1;
-          break;
-        case 51: // AC
-          I.isAC = 1;
-          break;
-        case 52: // Fan
-          I.isFan = 1;
-          break;
+        case 50: //total time          
+        break;
+        case 51: //heat - gas valve
+          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
+        break;
+        case 52: //heat
+          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
+        break;
+        case 55: // Fan
+          if (bitRead(sensor->Flags,0)==1) I.isFan = 1;
+        break;
+        case 56: //ac
+          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
+        break;
+        case 57: //ac
+          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
+        break;
       }
     }
     snsindex = Sensors.findSnsOfType("HVAC", false, snsindex+1);
@@ -1162,26 +1175,35 @@ uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex) {
     return (procid >> (8 * (byteIndex))) & 0xFF;
 }
 
-bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards) {
+bool cycleByteIndex(byte& start, byte arraysize, byte origin, bool backwards) {
   //cycles through a byte vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete, and start is incremented appropriately.
 
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;
-  if (*start>=arraysize) return false; 
-
-
-
-  if (backwards) {   //cycle backwards
-    if (*start == 0) *start=arraysize-1;
-    else *start = *start - 1;
-  } else {          //cycle forwards
-    if (*start == arraysize-1) *start=0;
-    else *start = *start + 1;
+  if (start>=arraysize) return false; 
+  
+  //check for first run!
+  if (start==-1 && backwards==false) {
+    //first run
+    start=0;
+    return true;
+  } 
+  if (start==arraysize && backwards==true) {
+    start=arraysize-1;
+    return true;
   }
 
-  if (*start==origin)  {
+  if (backwards) {   //cycle backwards
+    if (start == 0) start=arraysize-1;
+    else start = start - 1;
+  } else {          //cycle forwards
+    if (start == arraysize-1) start=0;
+    else start = start + 1;
+  }
+
+  if (start==origin)  {
     //cycle index has already been updated, no changes
     return false;
   } else {
@@ -1189,31 +1211,38 @@ bool cycleByteIndex(byte* start, byte arraysize, byte origin, bool backwards) {
   }
 }
 
-bool cycleIndex(uint16_t* start, uint16_t arraysize, uint16_t origin, bool backwards) {
+bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwards) {
   //cycles through a uint16_t vector of arraysize, from start and looping around back to 0 until it wraps around back to origin
   //usage: cycle through a vector of size 10, starting from 6... repeatedly call y = cycleIndex(x,10,6) where x is the last y returned
   //returns true if cycling, false if complete
   if (arraysize==0) return false;
   if (origin>=arraysize) return false;
-  if (*start>=arraysize) return false; 
-
-
-
-  if (backwards) {   //cycle backwards
-    if (*start == 0) *start=arraysize-1;
-    else *start = *start - 1;
-  } else {          //cycle forwards
-    if (*start == arraysize-1) *start=0;
-    else *start = *start + 1;
+  if (start>=arraysize) return false; 
+  //check for first run!
+  if (start==-1 && backwards==false) {
+    //first run
+    start=0;
+    return true;
+  } 
+  if (start==arraysize && backwards==true) {
+    start=arraysize-1;
+    return true;
   }
 
-  if (*start==origin)  {
+  if (backwards) {   //cycle backwards
+    if (start == 0) start=arraysize-1;
+    else start = start - 1;
+  } else {          //cycle forwards
+    if (start == arraysize-1) start=0;
+    else start = start + 1;
+  }
+
+  if (start==origin)  {
     //cycle index has already been updated, no changes
     return false;
   } else {
     return true;
   }
-
   
 }
 

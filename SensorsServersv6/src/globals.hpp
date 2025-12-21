@@ -120,7 +120,23 @@ typedef enum {
     ERROR_HARDWARE_MEMORY, //hardware memory error
     ERROR_TIME, 
     ERROR_SENSOR_READ, //could not read a sensor
-    ERROR_SENSOR_SEND //could not write a sensor
+    ERROR_SENSOR_SEND, //could not write a sensor
+    ERROR_SENSOR_NOT_FOUND, //sensor not found
+    ERROR_SENSOR_INVALID, //sensor invalid
+    ERROR_SENSOR_1, //placeholder
+    ERROR_SENSOR_2, //placeholder
+    ERROR_SENSOR_3, //placeholder
+    ERROR_SENSOR_4, //placeholder
+    ERROR_SENSOR_5, //placeholder
+    ERROR_DEVICE_NOTFOUND, //device not found
+    ERROR_DEVICE_MDEVICE_NOTFOUND, //my device not found
+    ERROR_DEVICE_WIFIINVALID, //device wifi invalid
+    ERROR_DEVICE_NAME_INVALID, //device name invalid
+    ERROR_DEVICE_NAME_1, //placeholder
+    ERROR_DEVICE_NAME_2, //placeholder
+    ERROR_DEVICE_NAME_3, //placeholder
+    ERROR_DEVICE_NAME_4, //placeholder
+    ERROR_DEVICE_NAME_5 //placeholder
   } ERRORCODES;
 
 
@@ -202,6 +218,7 @@ typedef enum {
       uint8_t cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
       uint8_t cycleWeatherMinutes = 10; //how many minutes to show weather values?
       uint8_t cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
+      uint8_t lastFutureConditionsAlt = 0; //was the last future conditions alternative display?
       uint8_t cycleFlagSeconds = 3; //how many seconds to show flag values?
       uint8_t IntervalHourlyWeather = 2; //hours between daily weather display
 

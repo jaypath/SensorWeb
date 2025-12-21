@@ -283,23 +283,6 @@ void setup() {
     }
     
 
-    #ifdef _USEGSHEET
-    if (GSheetInfo.useGsheet) {
-        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-        initGsheetHandler();
-        if (GSheet.ready()) {
-            tftPrint("OK.", true, TFT_GREEN);
-        } else {
-            tftPrint("FAILED.", true, TFT_RED);
-            storeError("Gsheet initialization failed");
-        }
-    }
-    else {
-        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
-    }
-    #endif
-
-
     #ifdef _ISPERIPHERAL
     initHardwareSensors(); //initialize the hardware sensors
     #endif
@@ -327,6 +310,23 @@ void setup() {
         SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
         WeatherData.updateWeatherOptimized(3600);
     }
+
+    #ifdef _USEGSHEET
+    if (GSheetInfo.useGsheet) {
+        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+        initGsheetHandler();
+        if (GSheet.ready()) {
+            tftPrint("OK.", true, TFT_GREEN);
+        } else {
+            tftPrint("FAILED.", true, TFT_RED);
+            storeError("Gsheet initialization failed");
+        }
+    }
+    else {
+        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
+    }
+    #endif
+
     tftPrint("Setup OK.", true, TFT_GREEN);
 
     #ifdef _USETFT
@@ -337,6 +337,7 @@ void setup() {
     tft.setTextSize(1);
     #endif
     #endif
+    tftPrint("Please wait for SD card cleanup and Google Sheet updates.", true, TFT_GREEN);
 
 
 #endif //_USELOWPOWER
@@ -508,7 +509,7 @@ void loop() {
 
         
         #ifndef _ISPERIPHERAL
-        checkHeat();
+        checkHVAC();
         #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;
@@ -523,23 +524,46 @@ void loop() {
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         
         I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true,3,true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
-        
+
+        if (I.currentTime % 300 == 0) Sensors.checkDeviceFlags(); //check the device flags every 5 minutes
+
         handleStoreCoreData();
         
         #ifdef _USEGSHEET
-
-        uint8_t gsheetResult = Gsheet_uploadData();
-
-        if (gsheetResult<0) {
-            SerialPrint(GsheetUploadErrorString(),true);
-        } 
+        //we got a sensor reading, so upload the data to the spreadsheet if time is appropriate
+        if (GSheetInfo.useGsheet) Gsheet_uploadData();
         #endif
+     
     }
 
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
         
+        //check if my IP address has changed
+        ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(MY_DEVICE_INDEX);
+        bool storeToSD = false;
 
+        if (WiFi.localIP() != myDevice->IP) {
+            myDevice->IP = WiFi.localIP();
+            storeToSD = true;
+        }
+
+        //check if the device name has changed
+        if (strcmp(Prefs.DEVICENAME, myDevice->devName) != 0) {
+            //copy the devicename in mydevice to prefs            
+            strncpy(Prefs.DEVICENAME, myDevice->devName, sizeof(Prefs.DEVICENAME) - 1);
+            Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+            Prefs.isUpToDate = false;
+            //store prefs
+            handleStoreCoreData();
+            storeToSD = true;
+        }
+
+        //store the device to SD card
+        #ifdef _USESDCARD
+        if (storeToSD) storeDevicesSensorsSD();
+        #endif
+        
         #ifdef _USE32
         size_t freeHeap = ESP.getFreeHeap();
         size_t minFreeHeap = ESP.getMinFreeHeap();

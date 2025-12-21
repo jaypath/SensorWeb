@@ -13,7 +13,7 @@ struct ArborysDevType;
 struct ArborysSnsType;
 class Devices_Sensors;
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
 
   /*sens types
 //0 - not defined
@@ -22,7 +22,7 @@ class Devices_Sensors;
 //3 - soil moisture, capacitative or Resistive
 //4 -  temp, AHT21
 //5 - RH, AHT21
-//6 - 
+//6 - - ADS1115 reading NTC thermistor , requires _THERMISTOR_B0, _THERMISTOR_R0 (nominal resistance at 25C), _THERMISTOR_RKNOWN (resistance of resisor in series with NTC), _THERMISTOR_TKNOWN (temperature at known resistance), _THERMISTOR_VDD (supply voltage)   
 //7 - distance, HC-SR04 or tfluna 
 //8 - human presence (mm wave)
 //9 - BMP pressure
@@ -39,6 +39,7 @@ class Devices_Sensors;
 20  - BME680 gas sensor
 21 - 
 
+
 50 - HVAC, total heating time (use for a multizone system) (ie heat on)
 51 - HVAC, Heat zone 
 52 - HVAC, Heat fan  
@@ -51,6 +52,7 @@ class Devices_Sensors;
 
 60 -  battery power
 61 - battery %
+62 - battery voltage, ads1115
 70 - leak yes/no
 71 - any binary, 1=yes/true/on
 98 - clock
@@ -218,14 +220,16 @@ extern  Adafruit_BME280 bme; // I2C
 
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
-float readVoltageDivider(float R1, float R2, uint8_t snsPin, byte avgN=1);
+float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
 void setupSensors();
-double peak_to_peak(int pin, int ms = 50);
+double peak_to_peak(int16_t pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
-float readAnalogVoltage(int16_t pin, byte nsamps);
+float readAnalogVoltage(ArborysSnsType* P, byte nsamps);
+float readAnalogVoltage(int16_t pin, byte nsamps=1);
 float readPinValue(ArborysSnsType* P, byte nsamps);
+float readPinValue(int16_t pin, byte nsamps, int16_t powerPin=-1);
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps);

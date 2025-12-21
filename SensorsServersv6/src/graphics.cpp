@@ -750,7 +750,7 @@ void fcnDrawSensorInfo() {
     tft.printf("Max: %.02f\n",maxv);
 
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.printf("Device IP: %s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
+    tft.printf("Device IP:%s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
     tft.printf("Sns type: %d\n",sensor->snsType);
     tft.printf("Sns ID: %d\n",sensor->snsID);
     tft.printf("Sns name: %s\n",sensor->snsName);
@@ -808,7 +808,10 @@ void fcnDrawStatus() {
     tft.setTextFont(1);
     tft.println("Status");
     tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
-    tft.printf("Device IP: %s\n",WiFi.localIP().toString().c_str());
+    tft.printf("Device IP:\n");
+    tft.setTextFont(2);
+    tft.printf("%s\n",WiFi.localIP().toString().c_str());
+    tft.setTextFont(1);
     tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
     tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
@@ -944,7 +947,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   byte alarmArrayInd = 0;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
-    while (cycleByteIndex(&SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
+    while (cycleByteIndex(SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
       if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type
@@ -1301,8 +1304,12 @@ void fcnDrawFutureWeather() {
       Z=0;
       X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
       iconID = WeatherData.getDailyWeatherID(i,true);
-      snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //alway print day icons for future days
-
+      if (I.lastFutureConditionsAlt==0) { //this prevents screen burn from prolonged use of same icon on screen
+        snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //icon
+      } else {
+        snprintf(tempbuf,29,"/BMP60x60Alt/%d.bmp",iconID); //images
+      }
+      
       drawBmp(tempbuf,X,Y);
       Z+=60;
       
@@ -1320,6 +1327,8 @@ void fcnDrawFutureWeather() {
       Z+=deltaY+section_spacer;
 
     }
+    I.lastFutureConditionsAlt = !I.lastFutureConditionsAlt;
+
 }
 
 // Weather text functions

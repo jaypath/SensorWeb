@@ -40,10 +40,13 @@ struct ArborysSnsType {
     uint8_t IsSet;          // Whether this sensor is initialized
     bool expired;           // Whether sensor has expired
     uint32_t lastCloudUploadTime; // Time sensor data was last uploaded to cloud
+    #ifdef _USESDCARD
     uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
+    #endif
     #ifdef _ISPERIPHERAL
-    int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
+    int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address or other special pin number where actual pin is snsPin-100, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
     int16_t powerPin;          // pin number for the power pin, if applicable. -9999 means no power pin If -9999 then there is no power pin, if -200 then it is a special case
+
     #endif
 };
 
@@ -84,7 +87,7 @@ public:
     int16_t lastDeviceIndex();
     bool isDeviceInit(int16_t devindex);
     int16_t initDevice(int16_t devindex);
-    bool cycleSensors(uint8_t* currentPosition, uint8_t origin =0);
+    bool cycleSensors(int16_t& currentPosition, uint8_t origin =0);
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
@@ -107,7 +110,7 @@ public:
     ArborysDevType* getNextExpiredDevice(int16_t& startIndex);
     int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
     int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
-    
+    void checkDeviceFlags();
 
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);

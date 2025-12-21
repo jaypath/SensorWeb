@@ -70,7 +70,9 @@ String urlEncode(const String& str);
 
 String getCert(String filename);
 bool Server_Message(String &URL, String &payload, int &httpCode);
-bool Server_SecureMessage(String& URL, String& payload, int& httpCode,  String& cacert);
+bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode,
+  String& cacert, String& method, String& contentType,
+  String& body, String& extraHeaders);
 void handleReboot();
 void handleNotFound();
 
@@ -87,7 +89,7 @@ void handleFLUSHSD();
 void handleSETWIFI();
 void handleSTATUS();
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
-void serverTextHeader();
+void serverTextHeader(String pagename);
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 // Weather configuration handlers
 void handleWeather();
@@ -106,6 +108,8 @@ void handleSENSOR_READ_SEND_NOW();
 void handleGSHEET();
 void handleGSHEET_POST();
 void handleGSHEET_UPLOAD_NOW();
+void handleGSHEET_SHARE_ALL();
+void handleGSHEET_DELETE_ALL();
 void handleREQUEST_BROADCAST();
 void handleTimezoneSetup();
 void handleTimezoneSetup_POST();

@@ -29,7 +29,7 @@ struct STRUCT_GOOGLESHEET {
 // Initialize with default values
 void initGsheetInfo();
 bool initGsheet();
-String file_findSpreadsheetIDByName(const char* sheetname);
+String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase=0);
 bool file_deleteSpreadsheetByID(const char* fileID);
 uint8_t file_createSpreadsheet(const char* sheetname, bool checkfile, char* fileID);
 bool file_createHeaders(char* fileID, String Headers);
@@ -39,6 +39,11 @@ String SearchForIDByFilename(const char* filename);
 int8_t Gsheet_uploadData(); //uploads data to gsheets
 bool Gsheet_uploadSensorDataFunction(void);
 String GsheetUploadErrorString();
+void file_grantPermissions();
+void file_deleteAllSheets();
+bool file_sheetExists(String fileID);
+bool file_createUserPermission(String fileID, bool notify, const char* message);
+
 
 #endif
 #endif
