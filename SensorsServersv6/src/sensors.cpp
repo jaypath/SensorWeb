@@ -49,9 +49,13 @@ uint8_t HVACSNSNUM = 0;
   // GAIN_TWOTHIRDS allows a maximum input voltage of +/- 6.144V
   //GAIN_ONE allows a maximum input voltage of +/- 4.096V
   //GAIN_TWO allows a maximum input voltage of +/- 2.048V
-  
-  #define ADS_GAIN GAIN_TWO
-  #define ADS_MULTIPLIER 0.0625F //gain multiplier for GAIN_TWO is 0.0625
+
+  #ifndef _USE_ADS_GAIN
+    #define _USE_ADS_GAIN GAIN_TWO
+  #endif
+  #ifndef _USE_ADS_MULTIPLIER
+    #define _USE_ADS_MULTIPLIER 0.0625F //gain multiplier for _USE_ADS_GAIN is 0.0625
+  #endif
 
 #endif
 
@@ -187,9 +191,6 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   #endif
 #endif
 
-
-
-
   for (byte i=0;i<_SENSORNUM;i++) {
     byte snsID = Sensors.countSensors(sensortypes[i],MY_DEVICE_INDEX)+1;
 
@@ -201,8 +202,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
       if (pintype <= 4) pinMode(correctedPin, INPUT);
       //if pintype is even, then it has a power pin, and we need to set the pin to output and low
       if (pintype % 2 == 0 && pintype <= 6) {
-        pinMode(powerPins[i], OUTPUT);
-        digitalWrite(powerPins[i], LOW);
+        togglePowerPin(powerPins[i], 0);
       } 
     }
 
@@ -814,66 +814,25 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 
     #if defined(_USELIBATTERY) || defined(_USESLABATTERY)
 
-      case 60: // battery
+      case 60: // Li battery
+      case 61: //pb battery
         {
-          #ifdef _USELIBATTERY
           //note that esp32 ranges 0 to ADCRATE, while 8266 is 1023. This is set in header.hpp
           P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //if R1=R2 then the divider is 50%
-          
-        #endif
-        #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); 
-          
-        #endif
 
 
         break;
         }
-      case 61:
+
+      case 62: //li battery voltage from an ADS1115
+      case 63: //pb battery voltage from an ADS1115
         {
           //_USEBATPCNT
-        #ifdef _USELIBATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //if R1=R2 then the divider is 50%
-
-          #define VOLTAGETABLE 21
-          static float BAT_VOLT[VOLTAGETABLE] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
-          static byte BAT_PCNT[VOLTAGETABLE] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
-
-          for (byte jj=0;jj<VOLTAGETABLE;jj++) {
-            if (P->snsValue> BAT_VOLT[jj]) {
-              P->snsValue = BAT_PCNT[jj];
-              break;
-            } 
-          }
- 
-
-        #endif
-
-        #ifdef _USESLABATTERY
-          P->snsValue = readVoltageDivider( _VDIVIDER_R1, _VDIVIDER_R2,  P, 20); //esp12e ADC maxes at 1 volt, and can sub the lowest common denominator of R1 and R2 rather than full values
-
-          #define VOLTAGETABLE 11
-          static float BAT_VOLT[VOLTAGETABLE] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
-          static byte BAT_PCNT[VOLTAGETABLE] = {100,90,80,70,60,50,40,30,20,10,0};
-          for (byte jj=0;jj<VOLTAGETABLE;jj++) {
-            if (P->snsValue>= BAT_VOLT[jj]) {
-              P->snsValue = BAT_PCNT[jj];
-              break;
-            } 
-          }
-
-        #endif
-
-        break;
-        }
-
-      case 62: //battery voltage
-        {
-          //_USEBATPCNT
-        #if defined(_USEADS1115) && defined(_USELIBATTERY)
+        #if defined(_USEADS1115) 
           readADS1115(20, P); 
           P->snsValue = P->snsValue * ((float)(_VDIVIDER_R1 + _VDIVIDER_R2))/_VDIVIDER_R2; //convert to total voltage
-        
+        #else
+          P->snsValue = -99999; //invalid value
         #endif
 
 
@@ -959,6 +918,16 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 }
 
 
+void togglePowerPin(int16_t powerPin, bool on) {
+  #ifdef _USELOWPOWER
+  //low power mode does not turn on power pins, this is done at startup
+  return;
+  #endif
+  powerPin = abs(powerPin);
+  pinMode(powerPin, OUTPUT);
+  digitalWrite(powerPin, on ? HIGH : LOW);
+}
+
 float readResistanceDivider(float R1, float Vsupply, float Vread) {
   return R1 * Vread/(Vsupply - Vread) ;
 }
@@ -972,7 +941,7 @@ bool readADS1115(byte avgN, ArborysSnsType* P) {
     int16_t powerPin = P->powerPin;
     if (abs(P->snsPin) < 100 || abs(P->snsPin) > 199) return false; //invalid pin for ADS1115
     if (P->snsPin < 0) {
-      digitalWrite(powerPin, HIGH);
+      togglePowerPin(powerPin,1);
       snsPin = (-1*P->snsPin)-100; //convert to positive channel number
     }
     else snsPin = P->snsPin-100; //convert to positive channel number
@@ -984,11 +953,11 @@ bool readADS1115(byte avgN, ArborysSnsType* P) {
     }
 
     if (P->snsPin < 0) { //if negative pin, then power pin is the same as the sensor pin
-      digitalWrite(powerPin, LOW);
+      togglePowerPin(powerPin,0);
     }
 
     P->snsValue /= avgN; //average the readings
-    P->snsValue = P->snsValue * ADS_MULTIPLIER; //convert to voltage
+    P->snsValue = P->snsValue * _USE_ADS_MULTIPLIER; //convert to voltage
     return true;
   #else
     return false;
@@ -1096,7 +1065,7 @@ void initHardwareSensors() {
   byte retry = 0;
   #ifdef _USEADS1115
     retry = 0;
-    while (!isI2CDeviceReady(0x48) && retry < 100)  {
+    while (!isI2CDeviceReady(_USEADS1115) && retry < 100)  {
       SerialPrint("ADS1115 not ready or connected. Retry number " + String(retry),true);
       delay(100);
       retry++;
@@ -1110,7 +1079,7 @@ void initHardwareSensors() {
     if (retry >= 10) SerialPrint("ADS1115 failed to connect after 10 attempts",true);
     else SerialPrint("ADS1115 connected after " + String(retry) + " attempts",true);
   
-    ads.setGain(ADS_GAIN);
+    ads.setGain(_USE_ADS_GAIN);
   #endif
 
   // Initialize AHT sensor
@@ -1319,8 +1288,7 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
       
   //has power pin?
   if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
-    pinMode(powerPin, OUTPUT);
-    digitalWrite(powerPin, HIGH);
+    togglePowerPin(powerPin, 1);
     delay(50); //wait X ms for reading to settle
   }
 
@@ -1341,12 +1309,35 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
 
   //has power pin?
   if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
-    pinMode(powerPin, OUTPUT);
-    digitalWrite(powerPin, LOW);
+    togglePowerPin(powerPin, 0);
   }
 
-  return val;
+  return val; 
+}
+
+uint8_t returnBatteryPercentage(ArborysSnsType* P) {
+
+  if (P->snsType == 60 || P->snsType == 62) {
+    float Li_BAT_VOLT[21] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
+    byte Li_BAT_PCNT[21] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
   
+    for (byte jj=0;jj<21;jj++) {
+      if (P->snsValue> Li_BAT_VOLT[jj]) {
+        return Li_BAT_PCNT[jj];
+      } 
+    }
+  } else {
+    float Pb_BAT_VOLT[11] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+    byte Pb_BAT_PCNT[11] = {100,90,80,70,60,50,40,30,20,10,0};
+  
+    for (byte jj=0;jj<11;jj++) {
+      if (P->snsValue>= Pb_BAT_VOLT[jj]) {
+        return Pb_BAT_PCNT[jj];
+      } 
+    }
+  }
+
+  return 0;
 }
 
 

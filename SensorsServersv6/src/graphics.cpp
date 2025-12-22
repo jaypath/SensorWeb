@@ -839,7 +839,6 @@ void fcnDrawStatus() {
     tft.printf("-----------------------\n");
     tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
     tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
-    tft.printf("Local Battery Level: %d\n",I.localBatteryLevel);
     tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
 
     tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
@@ -1056,13 +1055,12 @@ void fncDrawCurrentCondition() {
   String st = "";
   byte section_spacer = 3;
 
-
   //see if we have local weather
   if (I.localWeatherIndex<255) {
     ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
     if (sensor && sensor->IsSet ) { 
       st = "Local@" + (String) dateify(sensor->timeLogged,"h1:nn");
-      if (I.localBatteryIndex<255)     st += " Bat" + (String) (I.localBatteryLevel) + "%";
+      if (I.localBatteryIndex<255)     st += " Bat" + (String) (returnBatteryPercentage(sensor)) + "%";
     
       FH = setFont(1);
       Z = 2;

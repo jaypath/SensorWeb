@@ -241,7 +241,6 @@ typedef enum {
   
       #ifdef _USEBATTERY
       uint8_t localBatteryIndex; //index of battery
-      int8_t localBatteryLevel;
       #endif
   
       //espnow info

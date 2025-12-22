@@ -611,10 +611,6 @@ void initScreenFlags(bool completeInit) {
   I.lastStoreCoreDataTime = 0;
   #endif
 
-  #ifdef _USEBATTERY
-  I.localBatteryLevel=0;
-  #endif
-
   I.makeBroadcast = true;
   I.ESPNOW_SENDS = 0;
   I.ESPNOW_RECEIVES = 0;

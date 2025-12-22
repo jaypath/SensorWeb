@@ -480,18 +480,13 @@ void loop() {
             }
         }
         //see if we have local battery power
-        if (I.localBatteryIndex == 255) I.localBatteryIndex = findSensorByName("Outside",61);
-    
-        if (I.localBatteryIndex<255 && I.localBatteryIndex >= 0 && I.localBatteryIndex < NUMDEVICES * NUMSENSORS) {
-            // Find the battery sensor
-            ArborysDevType* batDevice = Sensors.getDeviceBySnsIndex(I.localBatteryIndex);
-            ArborysSnsType* batSensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
-            if (batDevice && batSensor && batDevice->IsSet && batSensor->IsSet && batSensor->timeLogged + 3600 > I.currentTime) {
-                I.localBatteryLevel = batSensor->snsValue;
-                //SerialPrint((String) "Local battery device found, snsindex" + I.localBatteryIndex, true + ", snsValue=" + I.localBatteryLevel);
-            }             else {
-                I.localBatteryIndex = 255;
-                I.localBatteryLevel = -1;
+        if (I.localBatteryIndex == 255) {
+            int16_t batteryIndex = findSnsOfType(60,true);
+            if (batteryIndex != -1) I.localBatteryIndex = batteryIndex;
+            else {
+                batteryIndex = findSnsOfType(61,true);
+                if (batteryIndex != -1) I.localBatteryIndex = batteryIndex;
+                else I.localBatteryIndex = 255;
             }
         }
 

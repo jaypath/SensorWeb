@@ -2602,8 +2602,6 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localBatteryIndex</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localBatteryIndex + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localBatteryLevel</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localBatteryLevel + "</div>";
   #endif
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isExpired</div>";

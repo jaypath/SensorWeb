@@ -123,6 +123,11 @@ class Devices_Sensors;
   #include <Wire.h>
   #include <AHTxx.h>
 #endif
+
+#ifdef _USEADS1115
+  #include <Adafruit_ADS1X15.h>
+#endif
+
 #ifdef _USEAHTADA
 #include <Wire.h>
 #include <Adafruit_AHTX0.h>
@@ -230,6 +235,9 @@ float readAnalogVoltage(ArborysSnsType* P, byte nsamps);
 float readAnalogVoltage(int16_t pin, byte nsamps=1);
 float readPinValue(ArborysSnsType* P, byte nsamps);
 float readPinValue(int16_t pin, byte nsamps, int16_t powerPin=-1);
+void togglePowerPin(int16_t powerPin, bool on);
+uint8_t returnBatteryPercentage(ArborysSnsType* P);
+bool readADS1115(byte avgN, ArborysSnsType* P);
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps);

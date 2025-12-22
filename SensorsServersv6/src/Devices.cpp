@@ -939,6 +939,12 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "battery") {//battery
         return (snsType >= 60 && snsType <= 65);
     }
+    if (type == "battery_li") {//battery
+        return (snsType == 60 || snsType == 62);
+    }
+    if (type == "battery_pb") {//battery
+        return (snsType == 61 || snsType == 63);
+    }
     if (type == "HVAC") {//HVAC
         return (snsType >= 50 && snsType < 60);
     }
