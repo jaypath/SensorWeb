@@ -407,6 +407,89 @@ int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t
     return -1;
 }
 
+
+bool Devices_Sensors::isOutsideSensor(int16_t index) {
+    if (index >= 0 && index < NUMSENSORS && sensors[index].IsSet) {
+        return bitRead(sensors[index].Flags,4);
+    }
+    return false;
+}
+
+bool Devices_Sensors::hasOutsideSensors(String parameter) {
+    //return true if there are any outside sensors of the given type, note that type can be "all"
+    
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (isOutsideSensor(i) == false) continue;
+        else {
+            if (parameter == "all") return true;
+            if (isSensorOfType(i,parameter) == true) return true;
+        }
+    }
+    return false;
+}
+
+
+uint8_t Devices_Sensors::returnBatteryPercentage(ArborysSnsType* P) {
+
+    if (P->snsType == 60 || P->snsType == 62) {
+      float Li_BAT_VOLT[21] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
+      byte Li_BAT_PCNT[21] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
+    
+      for (byte jj=0;jj<21;jj++) {
+        if (P->snsValue> Li_BAT_VOLT[jj]) {
+          return Li_BAT_PCNT[jj];
+        } 
+      }
+    } else {
+        if (P->snsType == 61 || P->snsType == 63) {
+            float Pb_BAT_VOLT[11] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+            byte Pb_BAT_PCNT[11] = {100,90,80,70,60,50,40,30,20,10,0};
+            
+            for (byte jj=0;jj<11;jj++) {
+                if (P->snsValue>= Pb_BAT_VOLT[jj]) {
+                return Pb_BAT_PCNT[jj];
+                } 
+            }
+        }
+    }
+  
+    return 255;
+  }
+  
+
+double Devices_Sensors::getAverageOutsideParameterValue(String parameter, uint32_t MoreRecentThan) {
+    //outside sensors are those with bit 4 set in the flags
+    //return -127 if no monitored outside sensors of that type, or return the average value if there are any. This its in an int8_t range.
+    //parameter can be "temperature", "humidity", or "pressure", etc
+    //optionally specify the recency of the last update, in unixtime seconds.
+
+//RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
+
+
+    //average the parameter value for sensors that are outside, if the sensor is both outside and monitored.
+    double totalvalue = 0;
+    int16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (!sensors[i].IsSet) continue;
+
+        if (bitRead(sensors[i].Flags,4) == 0) continue; //not an outside sensor
+        if (bitRead(sensors[i].Flags,1) == 0) continue; //not monitored
+        if (isSensorOfType(i,parameter) == false) continue; //not the type I want
+        
+        // Check time filter
+        if (MoreRecentThan > 0 && sensors[i].timeLogged < MoreRecentThan) continue;        
+
+        //add the value to the total
+        totalvalue += sensors[i].snsValue;
+        count++;
+    }
+
+    if (count == 0) return -127;
+    return totalvalue / count;
+
+}
+
+
 ArborysSnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
     if (index >= 0 && index < NUMSENSORS  && sensors[index].IsSet) {
         return &sensors[index];
@@ -456,10 +539,8 @@ int16_t Devices_Sensors::findOldestSensor() {
     return oldestIndex;
 }
 
-
-
 uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
-    ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored and expired- alert if no updates received within time limit specified)
+     //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
     //if snsType is 0, then count all sensors (meeting the flag criteria)
     //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
     //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
@@ -488,6 +569,7 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
             if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
             if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
             if (snsType <= -50 && snsType >= -59 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
+            if (snsType <= -60 && snsType >= -63 && (isSensorOfType(i,"battery") == false)) continue; // Battery sensors only
             if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
             if (snsType == -1000) {
                 //use I.showTheseFlags to determine which types to count
@@ -499,6 +581,8 @@ uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, 
                 if (bitRead(I.showTheseFlags, 5) == 1 && isSensorOfType(i,"humidity") == true)   isgood = true;
                 if (bitRead(I.showTheseFlags, 6) == 1 && isSensorOfType(i,"pressure") == true)   isgood = true;
                 if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery_li") == true)   isgood = true;
+                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery_pb") == true)   isgood = true;
                 if (bitRead(I.showTheseFlags, 8) == 1 && isSensorOfType(i,"HVAC") == true)   isgood = true;
                 if (bitRead(I.showTheseFlags, 9) == 1 && isSensorOfType(i,"human") == true)   isgood = true;
                 if (bitRead(I.showTheseFlags, 10) == 1 && isSensorOfType(i,"distance") == true)   isgood = true;
@@ -594,6 +678,9 @@ int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t
     //if snstype is "server", then find a server sensor
     //if snstype is "dist", then find a distance sensor
     //if snstype is "binary", then find a binary sensor
+    //if snstype is "battery", then find a battery sensor
+    //if snstype is "battery_li", then find a weather sensor
+
     if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
@@ -733,8 +820,19 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
         
         int16_t ismine = findMyDeviceIndex();
         if (ismine == -1) {
-            //I am not registered as a device, so register me
-            ismine = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+            //I am not registered as a device, so try to register me
+            // But only if WiFi is connected and we have a valid IP
+            // This prevents registering with IP 0.0.0.0 which can cause devices to be lost
+
+            if (CheckWifiStatus(false)!=1) {
+                // WiFi not connected or no IP - can't register safely
+                // Return -2 to indicate fatal error (I am not registered and could not be registered)
+                SerialPrint("isDeviceIndexValid: Cannot register device - WiFi not connected or no IP address", true);
+                return -2;
+            }
+
+            IPAddress myIP = WiFi.localIP();
+            ismine = addDevice(ESP.getEfuseMac(), myIP, Prefs.DEVICENAME, 0, 0, _MYTYPE);
             if (ismine == -1) {
                 //failed to register me, so return invalid
                 return -2;
@@ -903,7 +1001,9 @@ String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
     if (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17) return "temperature";
     if (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18) return "humidity";
     if (snsType == 9 || snsType == 13 || snsType == 19) return "pressure";
-    if (snsType == 60 || snsType == 61) return "battery";
+    if (snsType == 60 || snsType == 61 || snsType == 62 || snsType == 63) return "battery";
+    if (snsType == 60 || snsType == 62) return "battery_li";
+    if (snsType == 61 || snsType == 63) return "battery_pb";
     if (snsType >= 50 && snsType < 60) return "HVAC";
     if (snsType == 3 || snsType == 33) return "soil";
     if (snsType == 70) return "leak";
@@ -939,10 +1039,10 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "battery") {//battery
         return (snsType >= 60 && snsType <= 65);
     }
-    if (type == "battery_li") {//battery
+    if (type == "battery_li") {//battery_li
         return (snsType == 60 || snsType == 62);
     }
-    if (type == "battery_pb") {//battery
+    if (type == "battery_pb") {//battery_pb
         return (snsType == 61 || snsType == 63);
     }
     if (type == "HVAC") {//HVAC
@@ -984,7 +1084,19 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
         if (Prefs.DEVICENAME[0] == 0) {
             snprintf(Prefs.DEVICENAME, sizeof(Prefs.DEVICENAME), "Temporary Name");
         }
-        index = addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+        
+        // Only register if WiFi is connected and we have a valid IP
+        // This prevents registering with IP 0.0.0.0 which can cause devices to be lost
+        if (CheckWifiStatus(false)!=1) {
+            SerialPrint("Cannot register device: WiFi not connected or no IP address", true);
+            return -1; // Don't register with invalid IP
+        }
+        
+        IPAddress myIP = WiFi.localIP();
+        index = addDevice(ESP.getEfuseMac(), myIP, Prefs.DEVICENAME, 0, 0, _MYTYPE);
+        if (index >= 0) {
+            SerialPrint("Device registered successfully with IP: " + myIP.toString(), true);
+        }
     }
      
     return index;

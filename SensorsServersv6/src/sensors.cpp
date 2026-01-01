@@ -108,7 +108,7 @@ bool STRUCT_SNSHISTORY::recordSentValue(ArborysSnsType *S, int16_t hIndex) {
 
 void setupSensors() {
 
-
+SerialPrint("Sensors setup started",true);
 #ifdef _USE32
 #ifdef _USEADCATTEN
 analogSetAttenuation(_USEADCATTEN);
@@ -134,6 +134,7 @@ if (myname == "") {
 
 
 MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my index
+SerialPrint("MY_DEVICE_INDEX: " + String(MY_DEVICE_INDEX),true);
 
 uint16_t flagstates[] = _FLAGSTATES;
 uint16_t interval_poll[] = _INTERVAL_POLL;
@@ -814,6 +815,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 
     #if defined(_USELIBATTERY) || defined(_USESLABATTERY)
 
+      //use ESP ADC
       case 60: // Li battery
       case 61: //pb battery
         {
@@ -824,13 +826,14 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         break;
         }
 
+      //use ads1115 
       case 62: //li battery voltage from an ADS1115
       case 63: //pb battery voltage from an ADS1115
         {
           //_USEBATPCNT
         #if defined(_USEADS1115) 
           readADS1115(20, P); 
-          P->snsValue = P->snsValue * ((float)(_VDIVIDER_R1 + _VDIVIDER_R2))/_VDIVIDER_R2; //convert to total voltage
+          P->snsValue = P->snsValue * (((float)(_VDIVIDER_R1 + _VDIVIDER_R2))/_VDIVIDER_R2)/1000.0; //convert to total voltage, in volts
         #else
           P->snsValue = -99999; //invalid value
         #endif
@@ -879,6 +882,13 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     return -10;
   }
 
+
+  #ifdef _USELOWPOWER
+    bitWrite(P->Flags,2,1); //low power device
+  #else
+    bitWrite(P->Flags,2,0); //not low power device
+  #endif
+
   if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
     if (bitRead(P->Flags,0) != bitRead(lastflag,0)) { //flags changed
       bitWrite(P->Flags,6,1); //change in flag status
@@ -891,6 +901,8 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     //add to sensor history
     SensorHistory.recordSentValue(P, prefs_index);     
   }  else  {
+    //set flag status
+
     double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
     double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
 
@@ -936,19 +948,21 @@ float readResistanceDivider(float R1, float Vsupply, float Vread) {
 bool readADS1115(byte avgN, ArborysSnsType* P) {
   //returns the voltage read from the ADS1115, and stores in P->snsValue
   //note that P->snsPin is the ADS1115 channel, not the actual pin number or ADS address (for example, ADS1115 has channels 0-3).
+  SerialPrint("Entering readADS1115 with: P->snsPin: " + String(P->snsPin) + " powerPin: " + String(P->powerPin), true);
   #ifdef _USEADS1115
     int16_t snsPin = P->snsPin;
     int16_t powerPin = P->powerPin;
     if (abs(P->snsPin) < 100 || abs(P->snsPin) > 199) return false; //invalid pin for ADS1115
+    SerialPrint("readADS1115: snsPin: " + String(snsPin) + " powerPin: " + String(powerPin), true);
     if (P->snsPin < 0) {
-      togglePowerPin(powerPin,1);
-      snsPin = (-1*P->snsPin)-100; //convert to positive channel number
+      togglePowerPin(powerPin,1);      
     }
-    else snsPin = P->snsPin-100; //convert to positive channel number
+    snsPin = abs(P->snsPin)-100; //convert to positive channel number
     
     P->snsValue = 0; // Initialize to zero before accumulation
     for (byte i=0;i<avgN;i++) { //read the ADC and average
       P->snsValue += ads.readADC_SingleEnded(snsPin) ;
+      SerialPrint("readADS1115: readADC_SingleEnded(" + String(snsPin) + "): " + String(ads.readADC_SingleEnded(snsPin)), true);
       delay(10);
     }
 
@@ -958,6 +972,7 @@ bool readADS1115(byte avgN, ArborysSnsType* P) {
 
     P->snsValue /= avgN; //average the readings
     P->snsValue = P->snsValue * _USE_ADS_MULTIPLIER; //convert to voltage
+    SerialPrint("readADS1115: final P->snsValue: " + String(P->snsValue), true);
     return true;
   #else
     return false;
@@ -1110,42 +1125,67 @@ void initHardwareSensors() {
 
   #ifdef _USEBMP
     retry = 0;
-    while (!isI2CDeviceReady(_USEBMP) && retry < 50) {
-      SerialPrint("BMP not ready or connected. Retry number " + String(retry),true);
+    //note that _USEBMP is the address of the BMP sensor, but may be wrong.
+    byte BMPaddress = 0;
+    bool isBMPgood = true;
+
+    //quick check to see if an address is obviously valid
+    if (isI2CDeviceReady(0x76)) BMPaddress = 0x76;
+    else if (isI2CDeviceReady(0x77)) BMPaddress = 0x77;
+    else BMPaddress = _USEBMP;
+
+    while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
+      SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
       delay(100);
       retry++;
     }
 
-    byte trybmp = _USEBMP;
-    if (trybmp == 0) trybmp = 0x76;
-    else if (trybmp == 1) trybmp = 0x77;
-    
-    while (bmp.begin(trybmp) != true && retry < 20) {
-      SerialPrint("BMP fail at 0x" + String(trybmp) + ".\nRetry number " + String(retry) + "\n",true);
-
-      #ifdef _USESSD1306  
-        oled.clear();
-        oled.setCursor(0,0);  
-        oled.printf("BMP fail at 0x%d.\nRetry number %d\n", trybmp, retry);          
-      #endif
-
-      if (retry == 10) { // Try swapping address
-        if (trybmp == 0x76) trybmp = 0x77;
-        else trybmp = 0x76;
+    if (!isI2CDeviceReady(BMPaddress)) {
+      SerialPrint("BMP was not detected at address " + String(BMPaddress) + ". Will check address ", false);
+      if (BMPaddress == 0x76) BMPaddress = 0x77;
+      else BMPaddress = 0x76;
+      SerialPrint(" " + String(BMPaddress), true);
+      while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
+        SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
+        delay(100);
+        retry++;
       }
-
-      delay(100);
-      retry++;
+      if (!isI2CDeviceReady(BMPaddress)) {
+        isBMPgood = false;
+        SerialPrint("BMP not ready/detected at all known addresses.",true);
+      } else {
+        SerialPrint("BMP ready at address " + String(BMPaddress),true);
+      }
+    } else {
+      SerialPrint("BMP ready at address " + String(BMPaddress),true);
     }
-    if (retry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
-    else SerialPrint("BMP connected after " + String(retry) + " attempts",true);
 
-    /* Default settings from datasheet. */
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
-                    Adafruit_BMP280::SAMPLING_X2,
-                    Adafruit_BMP280::SAMPLING_X16,
-                    Adafruit_BMP280::FILTER_X16,
-                    Adafruit_BMP280::STANDBY_MS_500);
+    retry = 0;
+
+    if (isBMPgood) {
+      while (bmp.begin(BMPaddress) != true && retry < 20) {
+        SerialPrint("BMP failed to connect at " + String(BMPaddress) + ".\nRetry number " + String(retry) + "\n",true);
+
+        #ifdef _USESSD1306  
+          oled.clear();
+          oled.setCursor(0,0);  
+          oled.printf("BMP fail at %d.\nRetry number %d\n", BMPaddress, retry);          
+        #endif
+
+        delay(100);
+        retry++;
+      }
+      if (retry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
+      else {
+        SerialPrint("BMP connected after " + String(retry) + " attempts",true);
+        /* Default settings from datasheet. */
+        bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
+                        Adafruit_BMP280::SAMPLING_X2,
+                        Adafruit_BMP280::SAMPLING_X16,
+                      Adafruit_BMP280::FILTER_X16,
+                      Adafruit_BMP280::STANDBY_MS_500);
+        }
+    }
   #endif
   
   #ifdef _USEBME
@@ -1315,30 +1355,6 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
   return val; 
 }
 
-uint8_t returnBatteryPercentage(ArborysSnsType* P) {
-
-  if (P->snsType == 60 || P->snsType == 62) {
-    float Li_BAT_VOLT[21] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
-    byte Li_BAT_PCNT[21] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
-  
-    for (byte jj=0;jj<21;jj++) {
-      if (P->snsValue> Li_BAT_VOLT[jj]) {
-        return Li_BAT_PCNT[jj];
-      } 
-    }
-  } else {
-    float Pb_BAT_VOLT[11] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
-    byte Pb_BAT_PCNT[11] = {100,90,80,70,60,50,40,30,20,10,0};
-  
-    for (byte jj=0;jj<11;jj++) {
-      if (P->snsValue>= Pb_BAT_VOLT[jj]) {
-        return Pb_BAT_PCNT[jj];
-      } 
-    }
-  }
-
-  return 0;
-}
 
 
 #ifdef _USEMUX

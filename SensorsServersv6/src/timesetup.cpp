@@ -169,7 +169,7 @@ void checkTimezoneUpdate() {
   // Check once per day (86400 seconds = 24 hours)
   
   // Only check if we have WiFi connection and enough time has passed
-  if (Prefs.isUpToDate==false || WifiStatus()==false ) {
+  if (Prefs.isUpToDate==false || CheckWifiStatus(false)!=1 ) {
       return;
   }
   

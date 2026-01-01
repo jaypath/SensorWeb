@@ -136,7 +136,13 @@ typedef enum {
     ERROR_DEVICE_NAME_2, //placeholder
     ERROR_DEVICE_NAME_3, //placeholder
     ERROR_DEVICE_NAME_4, //placeholder
-    ERROR_DEVICE_NAME_5 //placeholder
+    ERROR_DEVICE_NAME_5, //placeholder
+    ERROR_UDP_MULTICAST_JOIN, //failed to join multicast group
+    ERROR_UDP_1, //UDP message error placeholder
+    ERROR_UDP_2, //UDP message error
+    ERROR_UDP_3, //UDP message error
+    ERROR_UDP_4, //UDP message error
+    ERROR_UDP_5, //UDP message error
   } ERRORCODES;
 
 
@@ -202,6 +208,7 @@ typedef enum {
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
       time_t currentTime;
+      uint8_t WiFiMode; //0 = not connected, 1 = connected in Station mode, 2 = currently in AP/sta mode, 3 = station mode started, obtaining IP address
 
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
 
@@ -232,11 +239,13 @@ typedef enum {
       #endif
   
       #ifdef _USEWEATHER
-      int8_t currentTemp;
+      bool haveOutsideTemperatureSensor;
+      int8_t currentOutsideTemp;
+      int8_t currentOutsideHumidity;
+      int8_t currentOutsidePressure;
       int8_t Tmax;
       int8_t Tmin;
-      uint8_t localWeatherIndex; //index of outside sensor
-      int8_t lastCurrentTemp; //last current temperature
+      int8_t lastCurrentOutsideTemp; //last current outside temperature
       #endif
   
       #ifdef _USEBATTERY

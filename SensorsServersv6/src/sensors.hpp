@@ -13,7 +13,7 @@ struct ArborysDevType;
 struct ArborysSnsType;
 class Devices_Sensors;
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
 
   /*sens types
 //0 - not defined
@@ -236,7 +236,6 @@ float readAnalogVoltage(int16_t pin, byte nsamps=1);
 float readPinValue(ArborysSnsType* P, byte nsamps);
 float readPinValue(int16_t pin, byte nsamps, int16_t powerPin=-1);
 void togglePowerPin(int16_t powerPin, bool on);
-uint8_t returnBatteryPercentage(ArborysSnsType* P);
 bool readADS1115(byte avgN, ArborysSnsType* P);
 
 #ifdef _USEMUX

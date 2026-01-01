@@ -449,48 +449,7 @@ void loop() {
             SerialPrint("Weather update: error code " + (String) weatherResult,true);
         }
 
-        //see if we have local weather
-        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 4);  //if no local weather sensor, use outside
-        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 1);  //if no local weather sensor, use outside dht
-        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 10);  //if no local weather sensor, use outside bmp
-        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 14);  //if no local weather sensor, use outside bme
-        if (I.localWeatherIndex==255)     I.localWeatherIndex=findSensorByName("Outside", 17);  //if no local weather sensor, use outside bme680
-
-
-        if (I.localWeatherIndex!=255) {
-            ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
-            if (!sensor || !sensor->IsSet) {
-                I.localWeatherIndex = 255;
-            } else {
-                if (sensor->timeLogged + 30*60<I.currentTime)     I.localWeatherIndex = 255;
-                else {
-                    if (I.currentTemp != sensor->snsValue) {
-                        I.currentTemp = sensor->snsValue;
-                        I.lastCurrentConditionTime = 0; //force redraw of current condition
-                    }
-                    //SerialPrint((String) "Local weather device found, snsindex" + I.localWeatherIndex, true + ", snsValue=" + I.currentTemp);
-                }
-            }
-        }
-        int8_t currenttemp = WeatherData.getTemperature(I.currentTime);
-        if (I.localWeatherIndex==255 || abs(I.currentTemp-currenttemp)>15) {
-            if (I.currentTemp != currenttemp) {   
-                I.currentTemp = currenttemp;
-                I.lastCurrentConditionTime = 0; //force redraw of current condition
-            }
-        }
-        //see if we have local battery power
-        if (I.localBatteryIndex == 255) {
-            int16_t batteryIndex = findSnsOfType(60,true);
-            if (batteryIndex != -1) I.localBatteryIndex = batteryIndex;
-            else {
-                batteryIndex = findSnsOfType(61,true);
-                if (batteryIndex != -1) I.localBatteryIndex = batteryIndex;
-                else I.localBatteryIndex = 255;
-            }
-        }
-
-        if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 300 && I.currentTime - I.ALIVESINCE > 10800) {
+        if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 3600 && I.currentTime - I.ALIVESINCE > 10800) {
             tftPrint("Weather failed for 60 minutes.", true, TFT_RED, 2, 1, true, 0, 0);
             tftPrint("Rebooting in 3 seconds...", false, TFT_WHITE, 2, 1, false, -1, -1);
             SerialPrint("Weather failed for 60 minutes. Rebooting in 3 seconds...",true);
@@ -500,6 +459,55 @@ void loop() {
             storeError("Weather failed too many times");
             controlledReboot("Weather failed too many times", RESET_WEATHER);
         }
+
+
+        //see if we have local weather
+        if (Sensors.hasOutsideSensors("temperature")) {
+            I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", I.currentTime - 900);
+            if (isTempValid(I.currentOutsideTemp)==true) I.haveOutsideTemperatureSensor = true;
+            else I.haveOutsideTemperatureSensor = false;
+        }
+        if (Sensors.hasOutsideSensors("humidity")) {
+            I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", I.currentTime - 300);
+        }
+        if (Sensors.hasOutsideSensors("pressure")) {
+            I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 300);
+        }
+        
+        int8_t currentInternetTemp = WeatherData.getTemperature(I.currentTime);
+        if (isTempValid(I.currentOutsideTemp)==false || I.haveOutsideTemperatureSensor==false) {
+            I.currentOutsideTemp = currentInternetTemp;
+            I.haveOutsideTemperatureSensor = false;
+        } else {
+            if (isTempValid(currentInternetTemp)==true) {
+                if ((double) abs(I.currentOutsideTemp-currentInternetTemp)>150) { //hard to believe a greater than 15 degree difference is possible, ignore local temp
+                    I.currentOutsideTemp = currentInternetTemp;
+                    I.haveOutsideTemperatureSensor = false;
+                }        
+            }
+        }
+
+        //see if we have local battery        
+        int16_t batteryIndex = Sensors.findSnsOfType((const char*) "battery",false,-1);
+        bool haveLocalBattery = false;
+        ArborysSnsType* sensor = NULL;
+        while (batteryIndex != -1 && haveLocalBattery == false) {
+          sensor = Sensors.getSensorBySnsIndex(batteryIndex);
+          if (!sensor || sensor->IsSet == false) continue;
+          if (sensor && sensor->IsSet == true) {        
+            if (sensor->timeLogged + 7200>I.currentTime) {
+              haveLocalBattery = true;
+            }
+          }
+    
+          if (haveLocalBattery == false) batteryIndex = Sensors.findSnsOfType((const char*) "battery",false,batteryIndex+1);
+        }
+        if (haveLocalBattery == true) {
+          I.localBatteryIndex = batteryIndex;
+        } else {
+          I.localBatteryIndex = 255;
+        }
+    
         #endif
 
         

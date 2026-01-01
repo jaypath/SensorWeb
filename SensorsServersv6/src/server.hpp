@@ -60,9 +60,9 @@ extern uint32_t WTHRFAIL;
 #endif
 
 void SerialWrite(String);
-bool WifiStatus(void);
-int16_t connectWiFi();
-int16_t tryWifi(uint16_t delayms = 250, uint16_t retryLimit = 50, bool checkCredentials = true);
+int8_t CheckWifiStatus(bool trytoconnect=false);
+int16_t connectWiFi(uint8_t retryLimit=20);
+int16_t tryWifi(uint16_t delayms = 250, bool checkCredentials = true);
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
 void APStation_Mode();
 
@@ -180,6 +180,7 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
 static void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg);
 
+void WiFiEvent(WiFiEvent_t event);
 
 bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);
 void apiConnectToWiFi();

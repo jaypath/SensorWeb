@@ -47,7 +47,7 @@ bool initSystem() {
   initOled();
   #endif
 
-    #ifdef _USETFT
+  #ifdef _USETFT
     tft.init();
     tft.setRotation(2);
     tft.setCursor(0,0);
@@ -55,59 +55,54 @@ bool initSystem() {
     tft.setTextFont(1);
     tft.setTextDatum(TL_DATUM);
     tft.printf("Running setup\n");
-    #endif
+  #endif
 
 
-    BootSecure bootSecure;
-    int8_t boot_status = bootSecure.setup();
-    if (boot_status <= 0) {
-        #ifdef SETSECURE
-            // Security check failed for any reason, halt device
-            while (1) { delay(1000); }
-        #endif
-        #ifdef _USETFT
-        tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
-        #endif
-        SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
-        SerialPrint("Will redefine Prefs struct later...", true);
-    } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
-
-
-
-    //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
-    if (Prefs.DEVICENAME[0] == 0) {
-      //name the device sensor-MAC where MAC is in hex without spacers
-      #ifdef MYNAME
-      strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
-      Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
-      #else
-      //name the device server-MAC where MAC is in hex without spacers
-      strncpy(Prefs.DEVICENAME, ("Dev" + String(ESP.getEfuseMac(), HEX)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
-      Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+  BootSecure bootSecure;
+  int8_t boot_status = bootSecure.setup();
+  if (boot_status <= 0) {
+      #ifdef SETSECURE
+          // Security check failed for any reason, halt device
+          while (1) { delay(1000); }
       #endif
-      Prefs.isUpToDate = false;
-    }
+      #ifdef _USETFT
+      tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
+      #endif
+      SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
+      SerialPrint("Will redefine Prefs struct later...", true);
+  } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
 
 
-    tftPrint("Init Wifi... \n", true);
-    SerialPrint("Init Wifi... ",false);
-    setupServerRoutes();
 
-    if (Prefs.HAVECREDENTIALS) {
+  //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
+  if (Prefs.DEVICENAME[0] == 0) {
+    //name the device sensor-MAC where MAC is in hex without spacers
+    #ifdef MYNAME
+    strncpy(Prefs.DEVICENAME, MYNAME, sizeof(Prefs.DEVICENAME) - 1);
+    Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+    #else
+    //name the device server-MAC where MAC is in hex without spacers
+    strncpy(Prefs.DEVICENAME, ("Dev" + String(ESP.getEfuseMac(), HEX)).c_str(), sizeof(Prefs.DEVICENAME) - 1);
+    Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+    #endif
+    Prefs.isUpToDate = false;
+  }
 
-      int16_t retries = connectWiFi();
+
+  tftPrint("Init Wifi... \n", true);
+  SerialPrint("Init Wifi... ",false);
+  setupServerRoutes();
+  WiFi.onEvent(WiFiEvent); //register the WiFi event handler
+
+  if (Prefs.HAVECREDENTIALS) {
+
+    if (CheckWifiStatus(true)!=1) {
+      int16_t retries = connectWiFi(20);
       if (retries<0) {
-          //if connectWiFi returned -10000, then we are in AP mode and handled elsewhere
-          SerialPrint("Failed to connect to Wifi",true);
-          if (retries>-10000 && retries<0) {
-
-              tftPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEnering into local mode... ", true, TFT_RED, 2, 1, true, 0, 0);  
-              SerialPrint("Wifi failed too many times,\npossibly due to incorrect credentials.\nEntering local mode... login to my local wifi and go to http://192.168.4.1 to complete setup.", true);
-              delay(10000);  
-
-              APStation_Mode();
-          }        
-      } 
+        SerialPrint("Failed to connect to Wifi",true);
+        APStation_Mode();
+      }
+    }
   } else {
     tftPrint("No credentials, starting AP Station Mode", true);
     SerialPrint("No credentials, starting AP Station Mode",true);
@@ -115,11 +110,19 @@ bool initSystem() {
   }
 
 
+
   #ifdef _USETFT
   displaySetupProgress( true);
   #endif
   SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true);
 
+  // Only register device if WiFi is connected and we have a valid IP
+  int8_t wifiStatus = CheckWifiStatus(false);
+  if (wifiStatus!=1 ) {
+    SerialPrint("Cannot register device: WiFi not connected or no IP address. Wifi status is: " + String(wifiStatus), true);
+    failedToRegister();
+    return false;
+  }
 
   byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
   if (devIndex == -1) {
@@ -128,10 +131,6 @@ bool initSystem() {
   }
 
 
-  while(WifiStatus()==false) {
-    SerialPrint("Waiting for WiFi to be ready...", true);
-    delay(500);
-  }
 
   tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   server.begin();
@@ -512,7 +511,7 @@ void initGsheetHandler() {
     }
 
     // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
-    if (WifiStatus() && I.currentTime > 1000) {
+    if (CheckWifiStatus(false)==1 && I.currentTime > 1000) {
       initGsheet();
     }
     if (!(I.currentTime > 1000 && GSheet.ready())) { //wait for time to be set and gsheet to be ready
@@ -583,11 +582,14 @@ void initScreenFlags(bool completeInit) {
       I.IntervalHourlyWeather = 2; //hours between daily weather display
       I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
 
-      I.localWeatherIndex=255; //index of outside sensor
+      I.localBatteryIndex=255; //index of outside sensor
 
-      I.currentTemp-127;
+      I.currentOutsideTemp=-127;
+      I.currentOutsideHumidity=-127;
+      I.currentOutsidePressure=-127;
       I.Tmax=-127;
       I.Tmin=127;
+      I.lastCurrentOutsideTemp=-127;
 
       #endif
 
@@ -875,9 +877,10 @@ int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest)
   return Sensors.findDevice(mac);
 }
 
-int16_t findSnsOfType(byte snstype, bool newest) {
+//remove the following, and require explicit type name
+/*int16_t findSnsOfType(byte snstype, bool newest) {
   return Sensors.findSnsOfType(snstype, newest);
-}
+}*/
 
 uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
   return Sensors.countFlagged(snsType, flagsthatmatter, flagsettings, MoreRecentThan);
@@ -1249,6 +1252,13 @@ uint32_t IPToUint32(IPAddress ip) {
 
 int16_t updateMyDevice() {
     //update mySensorsIndices array and update my IP if needed
+    // Only update if WiFi is connected and we have a valid IP
+    // This prevents registering/updating with IP 0.0.0.0 which can cause devices to be lost
+    int8_t wifiStatus = CheckWifiStatus(false);
+    if (wifiStatus!=1) {
+      return Sensors.findMyDeviceIndex();
+    }
+
     MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
 
   return MY_DEVICE_INDEX;

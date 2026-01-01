@@ -18,6 +18,30 @@ extern int16_t MY_DEVICE_INDEX;
 extern WiFiUDP LAN_UDP;
 #endif
 
+
+//wifi event registration 
+void WiFiEvent(WiFiEvent_t event) {
+  switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_START:
+          SerialPrint("WiFiEvent: Station Mode Started", true);
+          I.WiFiMode = 3;
+          break;
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+          SerialPrint("WiFiEvent: Connected! IP address: " + WiFi.localIP().toString(), true);
+          I.WiFiMode = 1;
+          break;
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+          SerialPrint("WiFiEvent: Disconnected from WiFi. Retrying...", true);
+          // This ensures the ESP32 tries to re-establish the handshake 
+          // if the Deco mesh drops it.
+          I.WiFiMode = 0;
+          WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+          break;
+      default:
+          break;
+  }
+}
+
 // Base64 decoding functions
 int base64_dec_len(const char* input, int length) {
   int i = 0;
@@ -109,7 +133,7 @@ String formatBytes(uint64_t bytes) {
 }
 
 bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders) {
-if (WiFi.status() != WL_CONNECTED)
+if (CheckWifiStatus(false)!=1)
 return false;
 
 HTTPClient http;
@@ -185,7 +209,7 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
   WiFiClient wfclient;
   
 
-  if(WiFi.status()== WL_CONNECTED){
+  if(CheckWifiStatus(false)==1){
     
     http.begin(wfclient,URL.c_str());
     //http.useHTTP10(true);
@@ -201,27 +225,51 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 }
 
 
-bool WifiStatus(void) {  
-  if (WiFi.status() == WL_CONNECTED) {
-    
-    return true;
+int8_t CheckWifiStatus(bool trytoconnect) {  
+  // First check if we have a valid IP address (most reliable indicator)
+
+  int8_t status = 1;
+
+  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+    SerialPrint("WifiStatus: Does not have valid IP address", true);
+    status = -1;
   }
 
-    return false;
+  // 1. Check RSSI - should be in valid range if connected (typically -30 to -100 dBm)
+  int32_t rssi = WiFi.RSSI();
+  
+  if (!(rssi < 0 && rssi > -120)) {
+    SerialPrint("WifiStatus: RSSI " + String(rssi) + " is not in valid range", true);
+    status = -2;  // no valid RSSI range
+  }
+
+  if (WiFi.SSID().length() <= 0) {
+    SerialPrint("WifiStatus: SSID is not set", true); 
+    status = -3;  // no valid SSID
+  }
+  
+  if (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
+    SerialPrint("WifiStatus: Gateway is not set", true);
+    status = -4;  // no valid gateway
+  }
+
+  if (status == 1) {
+    I.WiFiMode = 1;
+  }
+
+  if (trytoconnect && status != 1) {
+    tryWifi(5000, true);
+    status = CheckWifiStatus(false);
+  }
+  
+  return status;  
   
 }
 
-int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
-  //return -1000 if no credentials, or connection attempts if success, or -1*number of attempts if failure
-  int16_t retries = 0;
-  int16_t i = 0;
-
+int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
+  
   if (checkCredentials) {
-    if (Prefs.HAVECREDENTIALS) {
-      // force station-only mode for normal operation
-      WiFi.mode(WIFI_MODE_STA);
-
-    } else {
+    if (!Prefs.HAVECREDENTIALS) {
       tftPrint("No credentials", true);
       return -1000;
     }
@@ -242,90 +290,59 @@ int16_t tryWifi(uint16_t delayms, uint16_t retryLimit, bool checkCredentials) {
   // Note: The WiFi.begin() call will automatically negotiate, but we can set preferences
   #endif
 
+  //attempt to connect to WiFi. this terminates my connection and restarts it. This should reset I.WiFiMode to 3.
+  WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+  SerialPrint("I.WiFiMode: " + String(I.WiFiMode), true);
+    
+  delay(100);
 
-  for (i = 0; i < retryLimit; i++) {
-    SerialPrint(String(i) + ".", false);
-    tftPrint(".", false);
+  // Wait for connection AND IP assignment with timeout (e.g., 80% of total delayms)
+  uint32_t startTime = millis();
+  uint32_t firstTryTimeout = delayms; 
     
-    // --- ATTEMPT 1: The Primary Connection ---
-    WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-    
-    // Wait for connection with timeout (e.g., 80% of total delayms)
-    uint32_t startTime = millis();
-    uint32_t firstTryTimeout = delayms * 0.8; 
-    
-    while (!WifiStatus() && (millis() - startTime) < firstTryTimeout) {
-        delay(100);
-    }
-
-    if (WifiStatus()) {
-        // SUCCESS on first attempt, skip double-hit logic and exit loop
-        // ... (Your success code block) ...
-        return i; 
+    // First check for connection
+    while (I.WiFiMode != 1 && (millis() - startTime) < firstTryTimeout) {
+      SerialPrint("Waiting for connection... " + String(millis() - startTime) + " of " + String(firstTryTimeout) + " milliseconds", true);
+      delay(100);
     }
     
-    // --- ATTEMPT 2: The Double Hit / State Clear ---
-    #ifdef _USE32
-    SerialPrint("First attempt failed/stalled. Initiating double-hit.", true);
+    if (I.WiFiMode == 1) {
+      if (!Prefs.HAVECREDENTIALS) {
+        Prefs.isUpToDate = true;
+      }
+      I.wifiFailCount = 0;
+      return 1; 
 
-    // 1. Disconnect to clear the potentially stuck state
-    WiFi.disconnect();
-    
-    // 2. Re-begin the connection
-    WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-    
-    // Wait for connection with remaining timeout (e.g., 20% of total delayms)
-    startTime = millis(); // Reset timer
-    while (!WifiStatus() && (millis() - startTime) < (delayms * 0.2)) {
-        delay(100);
+    } else {
+      I.wifiFailCount++;
+      tftPrint("Failed WiFi", true);
+
+      return -1; 
     }
 
-    if (WifiStatus()) {
-        // SUCCESS on second attempt, exit loop
-        Prefs.HAVECREDENTIALS=true;
-        Prefs.isUpToDate = false;
-        I.wifiFailCount = 0;
-    
-        #ifdef _USE32
-        // Log WiFi security info for debugging
-        SerialPrint("WiFi connected: " + WiFi.SSID() + " (RSSI: " + String(WiFi.RSSI()) + ")", true);
-        #endif
-    
-        return i;
-  
-
-    }
-    #endif
-
-    // If still not connected after both attempts, the loop will continue to the next iteration.
-    // You may want to add a final delay here if needed:
-    // delay(1000); 
 }
 
-// If the function reaches here, connection failed after all retryLimit attempts.
- 
+int16_t connectWiFi(uint8_t retryLimit) {
 
-  if (!WifiStatus())     {
-    tftPrint("Failed WiFi", true);
-    return -1*i;
+  uint8_t retries = 0;
+  while (CheckWifiStatus(true)!=1 && retries<retryLimit) {
+    retries++;
+    SerialPrint("Failed WiFi, retry #" + String(retries), true);
+  }
 
-  } 
-
-
-
-  return i;
-}
-
-int16_t connectWiFi() {
-  
-  int16_t retries = 0;
-  retries = tryWifi(1000,50,true);
-  if (WifiStatus()) {
+  if (CheckWifiStatus(false)==1) {
+    SerialPrint("connectWiFi: WiFi connected", true);
     #ifdef _USEUDP
-    LAN_UDP.begin(_USEUDP); //start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
+//    LAN_UDP.begin(_USEUDP); //start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
+if(LAN_UDP.beginMulticast(IPAddress(239, 255, 255, 250), _USEUDP)) {
+  SerialPrint("Multicast group joined.", true);
+} else {
+  storeError("Failed to join multicast group", ERROR_UDP_MULTICAST_JOIN);
+  SerialPrint("Failed to join multicast group", true);
+}
     #endif
 
-    //register my possibly new IP address
+    
     int16_t devIndex = Sensors.findMyDeviceIndex();
     if (devIndex != -1) {
       ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
@@ -333,25 +350,29 @@ int16_t connectWiFi() {
         IPAddress oldIP = device->IP;
 
         device->IP = WiFi.localIP();
-        
+
         if (oldIP != device->IP) {
+          SerialPrint("connectWiFi: Updated device IP from " + oldIP.toString() + " to " + device->IP, true);
           #ifdef _USESDCARD
           storeDevicesSensorsSD();
           #endif
         }
       }
-    } else Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+    } else {
+      // Device not found, register it
+      int16_t newIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+      if (newIndex >= 0) {
+        SerialPrint("connectWiFi: Registered device with IP: " + WiFi.localIP().toString(), true);
+      } else {
+        SerialPrint("connectWiFi: Failed to register device", true);
+      }
+    }
 
   
     return retries;
   }
-  if (retries == -1000 || Prefs.HAVECREDENTIALS == false) {
-    SerialPrint("No credentials, starting AP Station Mode",true);
-    APStation_Mode();
-    return -1000;
-  }
 
-  return retries;
+  return -1000; //failed to connect
 }
 
 void APStation_Mode() {
@@ -564,9 +585,9 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   // Attempt WiFi connection
   SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
-  int retries = tryWifi(1000,50,false); //do not check credentials, which will terminate AP mode
+  connectWiFi(); //try to connect to WiFi, and if it fails, will start AP mode
   
-  if (WiFi.status() == WL_CONNECTED) {
+  if (CheckWifiStatus(false)==1) {
     SerialPrint("WiFi connected! IP: " + WiFi.localIP().toString(), true);
 
     //store prefs and core now  
@@ -599,7 +620,7 @@ bool lookupLocationFromAddress(const String& street, const String& city, const S
   }
   
   // Check WiFi status
-  if (!WifiStatus()) {
+  if (CheckWifiStatus(false)!=1) {
     SerialPrint("lookupLocationFromAddress: WiFi not connected", true);
     return false;
   }
@@ -630,7 +651,7 @@ bool lookupLocationFromAddress(const String& street, const String& city, const S
  * Returns: true if detection successful, false otherwise
  */
 bool autoDetectTimezone(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
-  if (!WifiStatus()) {
+  if (CheckWifiStatus(false)!=1) {
     SerialPrint("autoDetectTimezone: WiFi not connected", true);
     return false;
   }
@@ -803,7 +824,8 @@ void apiSaveTimezone() {
 void apiGetSetupStatus() {
   registerHTTPMessage("API_Setup");
 
-  bool wifi_configured = Prefs.HAVECREDENTIALS && WifiStatus();
+  bool wifistatus = (CheckWifiStatus(false)==1);
+  bool wifi_configured = Prefs.HAVECREDENTIALS && (wifistatus);
   bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
   bool timezone_configured = (Prefs.TimeZoneOffset != 0);
   #ifdef _USEWEATHER
@@ -813,7 +835,7 @@ void apiGetSetupStatus() {
   #endif
   
   String json = "{\"wifi_configured\":" + String(wifi_configured ? "true" : "false") +
-                ",\"wifi_connected\":" + String(WifiStatus() ? "true" : "false") +
+                ",\"wifi_connected\":" + String(wifistatus ? "true" : "false") +
                 ",\"location_configured\":" + String(location_configured ? "true" : "false") +
                 ",\"timezone_configured\":" + String(timezone_configured ? "true" : "false") +
                 ",\"setup_complete\":" + String(setup_complete ? "true" : "false");
@@ -836,7 +858,7 @@ void apiGetSetupStatus() {
 void handleApiCompleteSetup() {
   registerHTTPMessage("API_OK");
 
-  if (!WifiStatus()) {
+  if (CheckWifiStatus(false)!=1) {
     #ifdef _USETFT
     tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
     tft.setCursor(0, tft.height()-200);
@@ -983,8 +1005,10 @@ void handleInitialSetup() {
   //possible choices include no wifi, no timezone, no location (if using weather), or user reset
 
   //is there no wifi?
-  if (!Prefs.HAVECREDENTIALS || !WifiStatus()) {
-    WEBHTML += "<p>WiFi error detected.<br>Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>WiFi connected: " + String(WifiStatus() ? "true" : "false") + "</p>";
+  bool wifistatus = (CheckWifiStatus(false)==1);
+  if (!Prefs.HAVECREDENTIALS || !wifistatus) {
+    WEBHTML += "<p>WiFi error detected.<br>Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>WiFi connected: " + String(wifistatus ? "true" : "false") + "</p>";
+    WEBHTML += "<p>WiFi status: " + String(CheckWifiStatus(false)) + "</p>";
   } else {
     WEBHTML += "<p>Currently connected to WiFi network: " + WiFi.SSID() + "</p>";
     WEBHTML += "<p>Current IP address: " + WiFi.localIP().toString() + "</p>";
@@ -1586,7 +1610,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (WifiStatus() ? "Connected" : "Disconnected") + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + ((CheckWifiStatus(false)==1) ? "Connected" : "Disconnected") + "</p>";
   WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + getWiFiModeString() + "</p>";
 
   wifi_mode_t t = WiFi.getMode();
@@ -1893,7 +1917,8 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = "";
   
   // Check if initial setup is complete
-  bool wifi_configured = Prefs.HAVECREDENTIALS && WifiStatus();
+  bool wifistatus = (CheckWifiStatus(false)==1);
+  bool wifi_configured = Prefs.HAVECREDENTIALS && wifistatus;
   bool timezone_configured = (Prefs.TimeZoneOffset != 0);
   
   #ifdef _USEWEATHER
@@ -1905,7 +1930,7 @@ void handlerForRoot(bool allsensors) {
   
   // Redirect to Initial Setup Wizard if not configured
   if (!setup_complete) {
-    SerialPrint("Setup incomplete, redirecting to Initial Setup Wizard", true);
+    SerialPrint("Setup incomplete [WiFiStatus is " + String(CheckWifiStatus(false)) + ",  timezone is " + String(timezone_configured?"true":"false")  + "], redirecting to Initial Setup Wizard", true);
     server.sendHeader("Location", "/InitialSetup");
     server.send(302, "text/plain", "Setup incomplete. Redirecting to setup wizard...");
     return;
@@ -1914,7 +1939,7 @@ void handlerForRoot(bool allsensors) {
   // Normal root page for fully configured systems
   serverTextHeader(allsensors ? "All Sensors" : "Main Page");
   
-  if (Prefs.HAVECREDENTIALS==true && WifiStatus() && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
+  if (Prefs.HAVECREDENTIALS==true && wifistatus && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
 
 
   #ifdef _USEROOTCHART
@@ -2073,8 +2098,9 @@ void handlerForRoot(bool allsensors) {
   WEBHTML += "</script> \n";
 
 } else {
-  if (!Prefs.HAVECREDENTIALS || !WifiStatus()) {
-    SerialPrint("Prefs.HAVECREDENTIALS==false or WifiStatus()==false, redirecting to InitialSetup");
+  bool wifistatus = (CheckWifiStatus(false)==1);
+  if (!Prefs.HAVECREDENTIALS || !wifistatus) {
+    SerialPrint("Prefs.HAVECREDENTIALS not set or Wifi not connected, redirecting to InitialSetup");
     //redirect to WiFi config page
     server.sendHeader("Location", "/InitialSetup");
     serverTextClose(302,false);
@@ -2582,8 +2608,8 @@ void handleREADONLYCOREFLAGS() {
   #endif
 
   #ifdef _USEWEATHER
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentTemp</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.currentTemp + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentOutsideTemp</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.currentOutsideTemp + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmax</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmax + "</div>";
@@ -2591,11 +2617,9 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmin</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmin + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localWeatherIndex</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localWeatherIndex + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentTemp</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastCurrentTemp + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentOutsideTemp</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastCurrentOutsideTemp + "</div>";
   #endif
 
   #ifdef _USEBATTERY
@@ -3275,7 +3299,7 @@ void handleTimezoneSetup() {
   }
   
   
-  if (Prefs.TimeZoneOffset == 0 && WifiStatus()) {
+  if (Prefs.TimeZoneOffset == 0 && (CheckWifiStatus(false)==1)) {
     WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
     if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
       WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information detected successfully!</p>";
@@ -3696,7 +3720,7 @@ void handleWeatherAddress() {
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
   
   //assume data is valid   
-  if (WifiStatus()) {
+  if (CheckWifiStatus(false)==1) {
     // Lookup coordinates from complete address
     #ifdef _USETFT
     tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
@@ -4635,7 +4659,7 @@ void handleUPDATETIMEZONE() {
   registerHTTPMessage("TZUpdate");
   
   // Check if WiFi is connected
-  if (WiFi.status() != WL_CONNECTED) {
+  if (CheckWifiStatus(false)!=1) {
     server.sendHeader("Location", "/InitialSetup");
     server.send(302, "text/plain", "WiFi not connected. Please configure WiFi first.");
     return;
@@ -5730,7 +5754,7 @@ int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* ms
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
   //http method
 
-  if (WifiStatus() ==false) {
+  if (CheckWifiStatus(false)!=1) {
     I.HTTP_OUTGOING_ERRORS++;
     return -1001; //not connected to wifi
   }
@@ -5782,7 +5806,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
 
   bool isGood = false;
 
-  if(WiFi.status() == WL_CONNECTED){
+  if(CheckWifiStatus(false)==1){
     // Use static buffers to reduce memory fragmentation
     static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
 
@@ -5815,6 +5839,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     if (sendToDeviceIndex >= 0) {
       //send data to a specific device
       ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+      if (!d) return false; //device not found
       if (isDeviceSendTime(d, forceSend)) {
         if (useUDP) {
           isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer),"snsMsg");
@@ -5890,6 +5915,12 @@ int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP) {
     SerialPrint("sendMSG_DataRequest: Device not found: " + String(d->devName), true);
     return -1002; //device not found
   }
+
+  if (bitRead(d->Flags,2) == 1) {
+    SerialPrint("sendMSG_DataRequest: Device is low power and will not send data", true);
+    return -1003; //device is low power and will not see this data request
+  }
+
   char jsonBuffer[512];
   JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), viaHTTP, snsIndex);
   SerialPrint("sendMSG_DataRequest: " + String(jsonBuffer), true);
@@ -6260,7 +6291,7 @@ bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, c
   SerialPrint("Buffer contains: " + String((char*)buffer),true);
   if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(50); //wait if the last message was sent within the last second
   if (bufferSize==0) bufferSize = strlen((const char*)buffer);
-  if (ip == IPAddress(0,0,0,0)) ip = IPAddress(255,255,255,255); //broadcast if no ip is provided
+  if (ip == IPAddress(0,0,0,0) || ip == IPAddress(255,255,255,255)) ip = IPAddress(239,255,255,250); //broadcast to multicast group if no ip is provided or 255 is provided. This is the multicast group address for all devices on the network. Could use 255.255.255.255, but that is the broadcast address for all devices on the network (and may be blocked by some routers)
   LAN_UDP.beginPacket(ip, _USEUDP);
   LAN_UDP.write(buffer, bufferSize);
   LAN_UDP.endPacket();

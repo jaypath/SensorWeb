@@ -81,6 +81,9 @@ public:
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countServers(); // count the servers
     int16_t nextServerIndex(int16_t startIndex=0); // get the index of the next server
+    bool isOutsideSensor(int16_t index);
+    bool hasOutsideSensors(String parameter="all");
+    double getAverageOutsideParameterValue(String parameter, uint32_t MoreRecentThan=0);
 
     uint8_t countSensors(int16_t snsType=-1,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device. If snsType is -1, then count all sensors.
     int16_t firstDeviceIndex();
@@ -111,6 +114,7 @@ public:
     int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
     int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     void checkDeviceFlags();
+    uint8_t returnBatteryPercentage(ArborysSnsType* P);
 
     // Search functions
     void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);

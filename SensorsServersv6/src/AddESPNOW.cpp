@@ -837,9 +837,9 @@ bool sendESPNowUDPMessage(ESPNOW_type& msg, IPAddress targetIP, bool encrypt) {
 
     
     if (isBroadcast) {
-        targetIP = IPAddress(255,255,255,255);
+        targetIP = IPAddress(239,255,255,250); //multicast group address for all devices on the network. Could use 255.255.255.255, but that is the broadcast address for all devices on the network (and may be blocked by some routers)
     } else {
-        if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0)) {
+        if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0) || targetIP == IPAddress(239,255,255,250)) {
             ArborysDevType* d = Sensors.getDeviceByMAC(MACToUint64(msg.targetMAC));
             if (d) {
                 targetIP = d->IP;

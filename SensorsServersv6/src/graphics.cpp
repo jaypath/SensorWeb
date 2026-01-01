@@ -7,7 +7,6 @@
 
 
 
-
 //for drawing sensors. The maximum number of sensors on a screen is 48.
 #define MAXALARMS 48
 byte alarms[MAXALARMS] = {255};
@@ -755,7 +754,7 @@ void fcnDrawSensorInfo() {
     tft.printf("Sns ID: %d\n",sensor->snsID);
     tft.printf("Sns name: %s\n",sensor->snsName);
     tft.printf("Sns last logged: %s\n",dateify(sensor->timeLogged,"mm/dd/yyyy hh:nn:ss"));
-
+    tft.printf("Sns flags: %s\n",String(sensor->Flags,BIN).c_str());
 
     } else tft.printf("Sensor not set");
     } else {
@@ -837,9 +836,11 @@ void fcnDrawStatus() {
       tft.printf("DST End: %d/%d\n", Prefs.DSTEndMonth, Prefs.DSTEndDay);
     }
     tft.printf("-----------------------\n");
-    tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
     tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
-    tft.printf("Local Weather Index: %d\n",I.localWeatherIndex);
+    tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
+    tft.printf("Current Outside Temp: %d\n",I.currentOutsideTemp);
+    tft.printf("Current Outside Humidity: %d\n",I.currentOutsideHumidity);
+    tft.printf("Current Outside Pressure: %d\n",I.currentOutsidePressure);
 
     tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
     tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
@@ -1055,28 +1056,35 @@ void fncDrawCurrentCondition() {
   String st = "";
   byte section_spacer = 3;
 
-  //see if we have local weather
-  if (I.localWeatherIndex<255) {
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localWeatherIndex);
-    if (sensor && sensor->IsSet ) { 
-      st = "Local@" + (String) dateify(sensor->timeLogged,"h1:nn");
-      if (I.localBatteryIndex<255)     st += " Bat" + (String) (returnBatteryPercentage(sensor)) + "%";
-    
-      FH = setFont(1);
-      Z = 2;
-      tft.setCursor(X,Y+Z);
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      fcnPrintTxtCenter(st,1,X,Y+Z+FH/2);
-      //Y+=FH+Z;
+  //see if we have local weather and battery
+  if (I.haveOutsideTemperatureSensor==true) {
+
+    st = "Local:" ;
+    //check for outside battery
+
+    if (I.localBatteryIndex<255) {
+      ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
+      if (sensor && sensor->IsSet && sensor->timeLogged + 7200>I.currentTime) {        
+        st += " Bat" + (String) (Sensors.returnBatteryPercentage(sensor)) + "%";
+      }
     }
+
+    FH = setFont(1);
+    Z = 2;
+    tft.setCursor(X,Y+Z);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    fcnPrintTxtCenter(st,1,X,Y+Z+FH/2);    
+    
+      //Y+=FH+Z;
   }
+  
   
   // draw current temp
   FH = setFont(FNTSZ);
   X = 180+(tft.width()-180)/2; //middle of area on side of icon
   Z = 10;
-  tft.setTextColor(temp2color(I.currentTemp),BG_COLOR);
-  fcnPrintTxtCenter(I.currentTemp,FNTSZ,X,Y+Z+FH/2);
+  tft.setTextColor(temp2color(I.currentOutsideTemp),BG_COLOR);
+  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+Z+FH/2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   Z+=FH+section_spacer;
 
@@ -1085,10 +1093,10 @@ void fncDrawCurrentCondition() {
     FH = setFont(FNTSZ);
     int8_t tempMaxmin[2];
     WeatherData.getDailyTemp(0,tempMaxmin);
-    if (tempMaxmin[0] == -125) tempMaxmin[0] = WeatherData.getTemperature(I.currentTime);
+    if (isTempValid(tempMaxmin[0])==false) tempMaxmin[0] = WeatherData.getTemperature(I.currentTime);
     //does local max/min trump reported?
-    if (tempMaxmin[0]<I.currentTemp) tempMaxmin[0]=I.currentTemp;
-    if (tempMaxmin[1]>I.currentTemp) tempMaxmin[1]=I.currentTemp;
+    if (tempMaxmin[0]<I.currentOutsideTemp) tempMaxmin[0]=I.currentOutsideTemp;
+    if (tempMaxmin[1]>I.currentOutsideTemp) tempMaxmin[1]=I.currentOutsideTemp;
     I.Tmax = tempMaxmin[0];
     I.Tmin = tempMaxmin[1];
 
@@ -1131,7 +1139,7 @@ void fncDrawCurrentCondition() {
     Z=Z+FH+section_spacer;
 
   //end current wthr
-  I.lastCurrentTemp = I.currentTemp;
+  I.lastCurrentOutsideTemp = I.currentOutsideTemp;
   
   return;
 }
