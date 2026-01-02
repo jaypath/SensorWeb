@@ -14,9 +14,10 @@ extern  Screen myScreen;
 
 
 byte fcnDrawClock();
-void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent=-1);
+void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent=-1, uint8_t luminosity=100);
 void fcnDrawPic() ;
 String weatherID2string(uint16_t weatherID);
+void scaleColor(uint8_t &r, uint8_t &g, uint8_t &b, uint8_t luminosity);
 
 
 void setup() {
@@ -253,8 +254,12 @@ void fcnDrawPic() {
     String fn;
     fn= "/PICS/" + getNthFileName("/PICS",myScreen.lastPic);
 
-    drawBmp(fn.c_str(),0,0,-1);
-
+    //if the hour is between 9p and 7a, use a luminosity of 50
+    if (hour()>=22 || hour()<=7) {
+      drawBmp(fn.c_str(),0,0,-1,50);
+    } else {
+      drawBmp(fn.c_str(),0,0,-1,100);
+    }
   
 }
 
@@ -266,15 +271,21 @@ byte fcnDrawClock() {
 
     uint16_t Xpos,Ypos;
 String st;
-
     Xpos = 475;
     Ypos=475;
     tft.setTextFont(8);
+
+/*
+    //first draw a 50% transparent black rectangle under the clock
+    //the rectangle needs to be the width of the text + 10px
+    uint16_t clockHeight = tft.font.getMaxHeight();
+    uint16_t clockWidth = tft.font.measureText(dateify(myScreen.t,"hh:nn")) + 10;
+*/
     tft.setCursor(Xpos,Ypos);
     tft.setTextDatum(BR_DATUM);
     tft.setTextColor(myScreen.FG_COLOR);
     tft.drawString(dateify(myScreen.t,"hh:nn"),Xpos,Ypos);
-
+  
     
     byte fntsz = 4;
     Xpos=5;
@@ -419,8 +430,9 @@ String weatherID2string(uint16_t weatherID) {
   return (String) weatherID;
 }
 
-void drawBmp(const char *filename, int16_t x, int16_t y,  int32_t alpha) {
-
+void drawBmp(const char *filename, int16_t x, int16_t y,  int32_t alpha, uint8_t luminosity) {
+//alpha is the color that will "transparent" the image
+//luminosity is the percentage of the original luminosity to use, 100 is original, 0 is black, 255 is max
   if ((x >= tft.width()) || (y >= tft.height())) return;
 
   File bmpFS;
@@ -466,14 +478,18 @@ void drawBmp(const char *filename, int16_t x, int16_t y,  int32_t alpha) {
         // Convert 24 to 16 bit colours
         for (uint16_t col = 0; col < w; col++)
         {
+          if (alpha>=0 && *tptr==alpha) {
+            *tptr = myScreen.BG_COLOR; //convert background pixels to background
+            *tptr++;
+            continue;
+          }
           b = *bptr++;
           g = *bptr++;
           r = *bptr++;
-        
+
+          scaleColor(r,g,b,luminosity);
           *tptr = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-          if (alpha>=0)  {
-            if (*tptr==alpha) *tptr = myScreen.BG_COLOR; //convert background pixels to background
-          }
+          
           *tptr++;
         }
 
@@ -490,3 +506,9 @@ void drawBmp(const char *filename, int16_t x, int16_t y,  int32_t alpha) {
   bmpFS.close();
 }
 
+void scaleColor(uint8_t &r, uint8_t &g, uint8_t &b, uint8_t luminosity) {
+    //if the scaling factor increases the color value above 255, clamp it at 255
+    r = min((uint16_t)r*luminosity/100, 255);
+    g = min((uint16_t)g*luminosity/100, 255);
+    b = min((uint16_t)b*luminosity/100, 255);
+}
