@@ -5825,7 +5825,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     if (useUDP && sendToDeviceIndex <0) { //special value for sending to broadcast UDP to everyone
       SerialPrint("Sending to all devices", true);
   
-      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(255,255,255,255), strlen(jsonBuffer),"snsBrdcst");
+      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(192,168,68,255), strlen(jsonBuffer),"snsBrdcst");
       #ifndef _USELOWPOWER
       for (int16_t i=0; i<NUMDEVICES ; i++) {
         ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
