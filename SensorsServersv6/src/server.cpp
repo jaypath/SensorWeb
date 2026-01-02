@@ -6255,7 +6255,8 @@ bool receiveUDPMessage() {
 }
 
 bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, const char* msgType) {
-  //send the provided jsonbuffer via UDP
+  //send the provided jsonbuffer via UDP, including directed broadcast
+  //broadcasts are 192.168.68.255 or 239.255.255.250, but I will accept 0.0.0.0 or 255.255.255.255 as well
   //return true if successful, false if failed
   #ifdef _USEUDP
   SerialPrint("Sending UDP message to " + ip.toString(),true);
