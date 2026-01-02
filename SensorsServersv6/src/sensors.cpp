@@ -923,7 +923,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
 
   #ifdef _USELED
     //check if this is a soil sensor
-    if (isSensorOfType(P, "soil")) LEDs.LED_set_color_soil(P);
+    if (Sensors.isSensorOfType(P, "soil")) LEDs.LED_set_color_soil(P);
   #endif
 
   return 1;

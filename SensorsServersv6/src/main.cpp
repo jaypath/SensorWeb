@@ -480,7 +480,7 @@ void loop() {
             I.haveOutsideTemperatureSensor = false;
         } else {
             if (isTempValid(currentInternetTemp)==true) {
-                if ((double) abs(I.currentOutsideTemp-currentInternetTemp)>150) { //hard to believe a greater than 15 degree difference is possible, ignore local temp
+                if ((double) abs(I.currentOutsideTemp-currentInternetTemp)>15) { //hard to believe a greater than 15 degree difference is possible, ignore local temp
                     I.currentOutsideTemp = currentInternetTemp;
                     I.haveOutsideTemperatureSensor = false;
                 }        

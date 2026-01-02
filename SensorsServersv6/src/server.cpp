@@ -6257,17 +6257,31 @@ bool receiveUDPMessage() {
       if (_MYTYPE < 100) {
           return false;
       }
-      if (packetSize+1 > SNSDATA_JSON_BUFFER_SIZE) {
-        SerialPrint("UDP message is too large", true);
+      // For multi-sensor messages, the packet size can exceed SNSDATA_JSON_BUFFER_SIZE
+      // Use dynamic allocation based on actual packet size, but with a reasonable maximum
+      // to prevent memory exhaustion from malicious or corrupted packets
+      const uint16_t MAX_UDP_PACKET_SIZE = 8192; // 8KB max - reasonable for multi-sensor messages
+      if (packetSize > MAX_UDP_PACKET_SIZE) {
+        SerialPrint("UDP message is too large: " + String(packetSize) + " bytes (max: " + String(MAX_UDP_PACKET_SIZE) + ")", true);
         snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "TooLarge");
         return false;
       }
-      char buffer[packetSize+1];
-      LAN_UDP.read(buffer, packetSize);
+      
+      // Allocate buffer dynamically based on actual packet size
+      // This allows multi-sensor messages that exceed SNSDATA_JSON_BUFFER_SIZE
+      char* buffer = (char*)malloc(packetSize + 1);
+      if (!buffer) {
+        SerialPrint("UDP message: Failed to allocate buffer for " + String(packetSize) + " bytes", true);
+        snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "AllocFail");
+        return false;
+      }
+      
+      LAN_UDP.read((uint8_t*)buffer, packetSize);
       buffer[packetSize] = '\0'; //ensure the buffer is null terminated
       String responseMsg = "OK";
       String postData = (String)buffer;
       processJSONMessage(postData, responseMsg);
+      free(buffer); // Free the dynamically allocated buffer
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "JSON");
 
       if (responseMsg == "OK") {
@@ -6287,14 +6301,32 @@ bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, c
   //send the provided jsonbuffer via UDP
   //return true if successful, false if failed
   #ifdef _USEUDP
-  SerialPrint("Sending UDP message to " + ip.toString(),true);
   SerialPrint("Buffer contains: " + String((char*)buffer),true);
-  if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(50); //wait if the last message was sent within the last second
+  if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(500); //wait if the last message was sent within the last second
   if (bufferSize==0) bufferSize = strlen((const char*)buffer);
-  if (ip == IPAddress(0,0,0,0) || ip == IPAddress(255,255,255,255)) ip = IPAddress(239,255,255,250); //broadcast to multicast group if no ip is provided or 255 is provided. This is the multicast group address for all devices on the network. Could use 255.255.255.255, but that is the broadcast address for all devices on the network (and may be blocked by some routers)
-  LAN_UDP.beginPacket(ip, _USEUDP);
-  LAN_UDP.write(buffer, bufferSize);
-  LAN_UDP.endPacket();
+
+  if (ip == IPAddress(0,0,0,0) || ip == IPAddress(255,255,255,255) || ip == IPAddress(239,255,255,250)) {
+    ip = IPAddress(192,168,68,255); //directed broadcast
+    SerialPrint("Sending UDP message to " + ip.toString(),true);
+    LAN_UDP.beginPacket(ip, _USEUDP);
+    LAN_UDP.write(buffer, bufferSize);
+    LAN_UDP.endPacket();
+    
+    delay(500); //wait before trying to broadcast the next ip
+    
+    ip = IPAddress(239,255,255,250); //broadcast to multicast group 
+    SerialPrint("Sending UDP message to " + ip.toString(),true);
+    LAN_UDP.beginPacket(ip, _USEUDP);
+    LAN_UDP.write(buffer, bufferSize);
+    LAN_UDP.endPacket();
+    
+  } else {
+    SerialPrint("Sending UDP message to " + ip.toString(),true);
+    LAN_UDP.beginPacket(ip, _USEUDP);
+    LAN_UDP.write(buffer, bufferSize);
+    LAN_UDP.endPacket();
+  }
+   
   registerUDPSend(ip, msgType);
 
   return true;
