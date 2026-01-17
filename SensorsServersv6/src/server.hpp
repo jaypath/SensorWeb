@@ -65,7 +65,7 @@ int16_t connectWiFi(uint8_t retryLimit=20);
 int16_t tryWifi(uint16_t delayms = 250, bool checkCredentials = true);
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
 void APStation_Mode();
-
+String WiFiEventtoString(WiFiEvent_t event);
 String urlEncode(const String& str);
 
 String getCert(String filename);
@@ -185,6 +185,7 @@ void WiFiEvent(WiFiEvent_t event);
 bool connectToWiFi(const String& ssid, const String& password, const String& lmk_key);
 void apiConnectToWiFi();
 void apiScanWiFi();
+void apiClearWiFi();
 void apiLookupLocation();
 void apiDetectTimezone();
 void apiSaveTimezone();

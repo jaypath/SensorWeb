@@ -12,6 +12,9 @@
 
 #include "BootSecure.hpp"
 
+#include <lwip/sockets.h> // Essential for low-level IGMP control
+#include <string.h> // For memset
+
 extern int16_t MY_DEVICE_INDEX;
 
 #ifdef _USEUDP
@@ -21,26 +24,61 @@ extern WiFiUDP LAN_UDP;
 
 //wifi event registration 
 void WiFiEvent(WiFiEvent_t event) {
-  switch (event) {
-      case ARDUINO_EVENT_WIFI_STA_START:
-          SerialPrint("WiFiEvent: Station Mode Started", true);
-          I.WiFiMode = 3;
+  I.WiFiLastEvent = event;
+  String s = WiFiEventtoString(event);
+  SerialPrint("WiFiEvent: " + s, true);
+
+}
+
+String WiFiEventtoString(WiFiEvent_t event) {
+  String s = "Unknown WiFi event";
+  switch (event) {    
+      case ARDUINO_EVENT_WIFI_READY:
+          s = "Wifi ready";
           break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-          SerialPrint("WiFiEvent: Connected! IP address: " + WiFi.localIP().toString(), true);
-          I.WiFiMode = 1;
+          s = "IP address: " + WiFi.localIP().toString();
+          break;
+      case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+          s = "Lost IP address";
           break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-          SerialPrint("WiFiEvent: Disconnected from WiFi. Retrying...", true);
-          // This ensures the ESP32 tries to re-establish the handshake 
-          // if the Deco mesh drops it.
-          I.WiFiMode = 0;
-          WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+          s = "Disconnected from AP";
           break;
+      case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+          s = "Connected to AP";
+          break;
+      case ARDUINO_EVENT_WIFI_STA_START:
+          s = "STA Started";
+          break;
+      case ARDUINO_EVENT_WIFI_STA_STOP:
+          s = "STA Stopped";
+          break;
+      case ARDUINO_EVENT_WIFI_AP_START:
+          s = "AP Started";
+          break;
+      case ARDUINO_EVENT_WIFI_AP_STOP:
+          s = "AP Stopped";
+          break;
+      case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+          s = "APSTA IP assigned";
+          break;
+      case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+          s = "APSTA STA connected";
+          break;
+      case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+          s = "APSTA STA disconnected";
+          break;
+      case ARDUINO_EVENT_WIFI_SCAN_DONE:
+        s = "Wifi scan done";
+        break;
+      
       default:
           break;
   }
+  return s;
 }
+
 
 // Base64 decoding functions
 int base64_dec_len(const char* input, int length) {
@@ -227,42 +265,56 @@ bool Server_Message(String& URL, String& payload, int &httpCode) {
 
 int8_t CheckWifiStatus(bool trytoconnect) {  
   // First check if we have a valid IP address (most reliable indicator)
+  //2 - connected by all measures, but wifi.status() != WL_CONNECTED
+  //1 - valid status
+  //0 - unknown status (no SSID, no gateway, no IP address, no RSSI range)
+  //-1 - no valid IP address
+  //-2 - no valid RSSI range (will accept anything between 0 and -150 dBm)
+  //-3 - no valid SSID
+  //-4 - no valid gateway
+  //-5 - WiFi station is starting
 
-  int8_t status = 1;
 
-  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
-    SerialPrint("WifiStatus: Does not have valid IP address", true);
-    status = -1;
-  }
-
-  // 1. Check RSSI - should be in valid range if connected (typically -30 to -100 dBm)
   int32_t rssi = WiFi.RSSI();
-  
-  if (!(rssi < 0 && rssi > -120)) {
-    SerialPrint("WifiStatus: RSSI " + String(rssi) + " is not in valid range", true);
-    status = -2;  // no valid RSSI range
+
+  //first just check if the status lists as accurate...
+  if (WiFi.status() == WL_CONNECTED) {
+    I.WiFiStatus = 1;
+  } else {
+    I.WiFiStatus = 0;
   }
 
   if (WiFi.SSID().length() <= 0) {
     SerialPrint("WifiStatus: SSID is not set", true); 
-    status = -3;  // no valid SSID
+    I.WiFiStatus = -3;  // no valid SSID
+  }
+
+  else if  (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
+      SerialPrint("WifiStatus: Gateway is not set", true);
+      I.WiFiStatus = -4;  // no valid gateway
+  }  
+  
+  else if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+    SerialPrint("WifiStatus: Does not have valid IP address", true);
+    I.WiFiStatus = -1;
+  }
+
+  else if (!(rssi < 0 && rssi > -150)) {
+      SerialPrint("WifiStatus: RSSI " + String(rssi) + " is not in valid range", true);
+      I.WiFiStatus = -2;  // no valid RSSI range
   }
   
-  if (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
-    SerialPrint("WifiStatus: Gateway is not set", true);
-    status = -4;  // no valid gateway
-  }
+  else { //all good
+    if (I.WiFiStatus != 1) I.WiFiStatus = 2; //wifi.status() != WL_CONNECTED from above
+    else I.WiFiStatus = 1;
+  } 
 
-  if (status == 1) {
-    I.WiFiMode = 1;
-  }
-
-  if (trytoconnect && status != 1) {
+  if (trytoconnect && I.WiFiStatus < 1) {
     tryWifi(5000, true);
-    status = CheckWifiStatus(false);
+    CheckWifiStatus(false);
   }
   
-  return status;  
+  return I.WiFiStatus;  
   
 }
 
@@ -290,9 +342,9 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
   // Note: The WiFi.begin() call will automatically negotiate, but we can set preferences
   #endif
 
-  //attempt to connect to WiFi. this terminates my connection and restarts it. This should reset I.WiFiMode to 3.
+  //attempt to connect to WiFi. this terminates my connection and restarts it. This should reset I.WiFiLastEvent to disconnect.
   WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
-  SerialPrint("I.WiFiMode: " + String(I.WiFiMode), true);
+  SerialPrint("I.WiFiLastEvent: " + WiFiEventtoString(I.WiFiLastEvent), true);
     
   delay(100);
 
@@ -301,12 +353,12 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
   uint32_t firstTryTimeout = delayms; 
     
     // First check for connection
-    while (I.WiFiMode != 1 && (millis() - startTime) < firstTryTimeout) {
+    while (CheckWifiStatus(false) <1 && (millis() - startTime) < firstTryTimeout) {
       SerialPrint("Waiting for connection... " + String(millis() - startTime) + " of " + String(firstTryTimeout) + " milliseconds", true);
       delay(100);
     }
     
-    if (I.WiFiMode == 1) {
+    if (I.WiFiStatus >= 1) {
       if (!Prefs.HAVECREDENTIALS) {
         Prefs.isUpToDate = true;
       }
@@ -327,21 +379,35 @@ int16_t connectWiFi(uint8_t retryLimit) {
   uint8_t retries = 0;
   while (CheckWifiStatus(true)!=1 && retries<retryLimit) {
     retries++;
-    SerialPrint("Failed WiFi, retry #" + String(retries), true);
+    SerialPrint("Failed WiFi, retry #" + String(retries), true);    
   }
 
   if (CheckWifiStatus(false)==1) {
     SerialPrint("connectWiFi: WiFi connected", true);
     #ifdef _USEUDP
-//    LAN_UDP.begin(_USEUDP); //start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
-if(LAN_UDP.beginMulticast(IPAddress(239, 255, 255, 250), _USEUDP)) {
-  SerialPrint("Multicast group joined.", true);
-} else {
-  storeError("Failed to join multicast group", ERROR_UDP_MULTICAST_JOIN);
-  SerialPrint("Failed to join multicast group", true);
-}
-    #endif
+      IPAddress multicastIP(_USEUDP_MULTICAST);
+      //1. wifi connected
+      //2. Start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
+      
+      // Use beginMulticast() which properly handles multicast group joining
+      // This is the recommended approach for receiving multicast packets
+      LAN_UDP.beginMulticast(multicastIP, _USEUDP);
+      SerialPrint("UDP multicast initialized on " + multicastIP.toString() + ":" + String(_USEUDP), true);
+      
+      #ifdef _USE32
+        // For ESP32, also set multicast TTL for sending (if needed)
+        // Note: beginMulticast() handles receiving, but we may need to set TTL for sending
+        // We'll set this on the actual LAN_UDP socket if possible
+        // Unfortunately, WiFiUDP doesn't expose the socket directly, so we rely on beginMulticast()
+        // which should handle both receiving and basic sending configuration
+      #endif
+      
+      #ifndef _USELOWPOWER
+      // Disable WiFi Sleep to ensure we don't miss packets
+      WiFi.setSleep(false);
+      #endif
 
+    #endif
     
     int16_t devIndex = Sensors.findMyDeviceIndex();
     if (devIndex != -1) {
@@ -909,8 +975,55 @@ void apiScanWiFi() {
     tft.println("Scanning networks...");
     tft.setTextColor(TFT_WHITE);
     #endif
+  
+  // ESP32 cannot scan while connected to a network in STA mode
+  // We need to temporarily disconnect or switch to AP+STA mode
+  // IMPORTANT: Don't disconnect if client might be connected via WiFi - send response first!
+  #ifdef _USE32
+    bool wasConnected = (WiFi.status() == WL_CONNECTED);
+    String savedSSID = "";
+    String savedPassword = "";
+    wifi_mode_t originalMode = WiFi.getMode();
+    bool needToDisconnect = false;
+    
+    if (wasConnected) {
+      // Save current connection info
+      savedSSID = WiFi.SSID();
+      savedPassword = WiFi.psk();
+      
+      // Switch to AP+STA mode to allow scanning while maintaining AP
+      if (originalMode != WIFI_MODE_APSTA) {
+        WiFi.mode(WIFI_MODE_APSTA);
+        delay(100);
+        // In AP+STA mode, we can scan without disconnecting
+        // The scan will work even if STA is connected
+        needToDisconnect = false;
+      } else {
+        // Already in AP+STA mode - can scan without disconnecting
+        needToDisconnect = false;
+      }
+    } else {
+      // Not connected, but ensure we're in a mode that allows scanning
+      if (originalMode == WIFI_MODE_AP) {
+        WiFi.mode(WIFI_MODE_APSTA);
+        delay(100);
+      }
+      needToDisconnect = false;
+    }
+    
+    // Note: We don't disconnect here to avoid breaking HTTP connections
+    // Scanning works in AP+STA mode even when STA is connected
+  #endif
+  
   // Perform WiFi scan
-  int numNetworks = WiFi.scanNetworks();
+  int numNetworks = WiFi.scanNetworks(false, true); // async=false, show_hidden=true
+  
+  // Wait for scan to complete (if async was false, this should be immediate)
+  if (numNetworks < 0) {
+    // Scan might be in progress, wait a bit
+    delay(2000);
+    numNetworks = WiFi.scanComplete();
+  }
 
   // Build JSON array of networks
   String json = "{\"success\":true,\"networks\":[";
@@ -930,28 +1043,91 @@ void apiScanWiFi() {
   }
   json += "]}";
   
-  if (numNetworks == 0) {
+  // Clean up scan results
+  WiFi.scanDelete();
+  
+  // Send response BEFORE reconnecting/disconnecting to avoid breaking HTTP connection
+  if (numNetworks == 0 || count == 0) {
     #ifdef _USETFT
     tft.setTextColor(TFT_RED);
     tft.println("No networks found. Enter Manually.");
     tft.setTextColor(TFT_WHITE);
     #endif
     server.send(200, "application/json", "{\"success\":true,\"networks\":[]}");
-    return;
+  } else {
+    SerialPrint("Found " + String(count) + " WiFi networks", true);
+    #ifdef _USETFT
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("%d networks found.\n",count);
+    tft.setTextColor(TFT_WHITE);
+    #endif
+    server.send(200, "application/json", json);
   }
   
-  
-  // Clean up scan results
-  WiFi.scanDelete();
-  
-  SerialPrint("Found " + String(count) + " WiFi networks", true);
-  #ifdef _USETFT
-  tft.setTextColor(TFT_GREEN);
-  tft.printf("%d networks found.\n",count);
-  tft.setTextColor(TFT_WHITE);
+  // Now reconnect/disconnect AFTER sending the response
+  #ifdef IGNOREME //don't reconnect to original network
+    // Reconnect to original network if we were connected
+    if (wasConnected && savedSSID.length() > 0) {
+      SerialPrint("Reconnecting to " + savedSSID, true);
+      WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+      // Restore original mode if it wasn't APSTA
+      if (originalMode != WIFI_MODE_APSTA) {
+        delay(1000); // Give time for connection attempt
+        WiFi.mode(originalMode);
+      }
+    } else if (!wasConnected && originalMode != WIFI_MODE_APSTA) {
+      // Restore original mode if we changed it
+      WiFi.mode(originalMode);
+    }
   #endif
+}
 
-  server.send(200, "application/json", json);
+/**
+ * API: Clear WiFi credentials and disconnect station
+ * POST /api/clear-wifi
+ * Returns: JSON response indicating success or failure
+ */
+void apiClearWiFi() {
+  registerHTTPMessage("API_ClearWiFi");
+  
+  SerialPrint("Clearing WiFi credentials and disconnecting station...", true);
+  
+  #ifdef _USE32
+    // Ensure we're in AP+STA mode so AP remains active
+    wifi_mode_t currentMode = WiFi.getMode();
+    if (currentMode != WIFI_MODE_APSTA) {
+      WiFi.mode(WIFI_MODE_APSTA);
+      delay(100);
+      SerialPrint("Switched to AP+STA mode", true);
+    }
+    
+    // Disconnect from station WiFi (but keep AP running)
+    WiFi.disconnect(false); // false = don't erase credentials from flash
+    delay(500);
+    SerialPrint("Disconnected from station WiFi", true);
+  #else
+    // For ESP8266, disconnect station
+    WiFi.disconnect();
+    delay(500);
+  #endif
+  
+  // Clear WiFi credentials from Prefs
+  memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
+  memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
+  Prefs.HAVECREDENTIALS = false;
+  Prefs.isUpToDate = false;
+  
+  // Save preferences
+  BootSecure bootSecure;
+  int8_t ret = bootSecure.setPrefs();
+  
+  if (ret == 0) {
+    SerialPrint("WiFi credentials cleared and saved successfully", true);
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"WiFi credentials cleared. Device disconnected from network but remains accessible via AP.\"}");
+  } else {
+    SerialPrint("Failed to save cleared credentials: " + String(ret), true);
+    server.send(200, "application/json", "{\"success\":false,\"error\":\"Failed to save preferences: " + String(ret) + "\"}");
+  }
 }
 
 // ==================== SETUP WIZARD PAGE ====================
@@ -1005,14 +1181,38 @@ void handleInitialSetup() {
   //possible choices include no wifi, no timezone, no location (if using weather), or user reset
 
   //is there no wifi?
-  bool wifistatus = (CheckWifiStatus(false)==1);
-  if (!Prefs.HAVECREDENTIALS || !wifistatus) {
-    WEBHTML += "<p>WiFi error detected.<br>Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>WiFi connected: " + String(wifistatus ? "true" : "false") + "</p>";
-    WEBHTML += "<p>WiFi status: " + String(CheckWifiStatus(false)) + "</p>";
+  CheckWifiStatus(false);
+  WEBHTML += "<p>";
+  WEBHTML += "Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>";    
+  WEBHTML += "WiFi connection status: "; 
+  if (I.WiFiStatus == 2) {
+    WEBHTML += "Connected by all measures, but wifi.status() != WL_CONNECTED";
+  } else if (I.WiFiStatus == 1) {
+    WEBHTML += "Connected";
+  } else if (I.WiFiStatus == 0) {
+    WEBHTML += "Unknown";
+  } else if (I.WiFiStatus == -1) {
+    WEBHTML += "No valid IP address";
+  } else if (I.WiFiStatus == -2) {
+    WEBHTML += "No valid RSSI range";
+  } else if (I.WiFiStatus == -3) {
+    WEBHTML += "No valid SSID";
+  } else if (I.WiFiStatus == -4) {
+    WEBHTML += "No valid gateway";
   } else {
-    WEBHTML += "<p>Currently connected to WiFi network: " + WiFi.SSID() + "</p>";
-    WEBHTML += "<p>Current IP address: " + WiFi.localIP().toString() + "</p>";
+    WEBHTML += "Unknown";
   }
+  WEBHTML += "<br>";
+  if (I.WiFiStatus >= 1) {
+    WEBHTML += "Currently connected to WiFi network: " + WiFi.SSID() + "<br>";
+    WEBHTML += "Current IP address: " + WiFi.localIP().toString() + "<br>";
+    WEBHTML += "Current RSSI: " + String(WiFi.RSSI()) + "<br>";
+  } else {
+    WEBHTML += "Not connected to WiFi<br>";
+  }
+  WEBHTML += "Last WiFi event: " + WiFiEventtoString(I.WiFiLastEvent) + "<br>";
+  WEBHTML += "</p>";
+  WEBHTML += R"===(<button class="btn btn-secondary" onclick="clearWiFiCredentials()" style="margin-top: 10px; padding: 8px 16px; font-size: 14px; background-color: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear WiFi Credentials</button>)===";
 
   //is there no timezone?
   if (Prefs.TimeZoneOffset == 0) {
@@ -1206,6 +1406,54 @@ function checkSetupComplete() {
   }
 }
 
+// Clear WiFi credentials
+async function clearWiFiCredentials() {
+  if (!confirm('Are you sure you want to clear WiFi credentials? The device will disconnect from the current network but remain accessible via AP mode.')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/clear-wifi', { method: 'POST' });
+    const data = await response.json();
+    
+    if (data.success) {
+      alert('WiFi credentials cleared successfully. The device has disconnected from the network.');
+      // Reload the page to show updated status
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } else {
+      alert('Failed to clear WiFi credentials: ' + (data.error || 'Unknown error'));
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+
+// Clear WiFi credentials
+async function clearWiFiCredentials() {
+  if (!confirm('Are you sure you want to clear WiFi credentials? The device will disconnect from the current network but remain accessible via AP mode.')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/clear-wifi', { method: 'POST' });
+    const data = await response.json();
+    
+    if (data.success) {
+      alert('WiFi credentials cleared successfully. The device has disconnected from the network.');
+      // Reload the page to show updated status
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } else {
+      alert('Failed to clear WiFi credentials: ' + (data.error || 'Unknown error'));
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+
 // Scan for WiFi networks
 async function scanWiFiNetworks() {
   showStatus('wifi-status', 'Scanning for networks...', 'info');
@@ -1215,32 +1463,53 @@ async function scanWiFiNetworks() {
   
   try {
     const response = await fetch('/api/wifi-scan');
+    
+    // Check if response is OK before parsing
+    if (!response.ok) {
+      throw new Error('HTTP error: ' + response.status);
+    }
+    
     const data = await response.json();
     
-    if (data.success && data.networks) {
-      const datalist = document.getElementById('ssid-list');
-      datalist.innerHTML = ''; // Clear existing options
-      
-      // Sort networks by signal strength (RSSI)
-      data.networks.sort((a, b) => b.rssi - a.rssi);
-      
-      // Add each network to the datalist
-      data.networks.forEach(network => {
-        const option = document.createElement('option');
-        option.value = network.ssid;
-        // Show signal strength indicator
-        const bars = network.rssi > -50 ? '++++' : network.rssi > -60 ? '+++' : network.rssi > -70 ? '++' : '+';
-        const lock = network.encryption > 0 ? '[enc] ' : '[open]';
-        option.textContent = lock + network.ssid + ' ' + bars;
-        datalist.appendChild(option);
-      });
-      
-      showStatus('wifi-status', 'Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
+    // Check if data has the expected structure
+    if (data && data.success !== undefined) {
+      if (data.success && Array.isArray(data.networks)) {
+        const datalist = document.getElementById('ssid-list');
+        datalist.innerHTML = ''; // Clear existing options
+        
+        if (data.networks.length > 0) {
+          // Sort networks by signal strength (RSSI)
+          data.networks.sort((a, b) => b.rssi - a.rssi);
+          
+          // Add each network to the datalist
+          data.networks.forEach(network => {
+            const option = document.createElement('option');
+            option.value = network.ssid;
+            // Show signal strength indicator
+            const bars = network.rssi > -50 ? '++++' : network.rssi > -60 ? '+++' : network.rssi > -70 ? '++' : '+';
+            const lock = network.encryption > 0 ? '[enc] ' : '[open]';
+            option.textContent = lock + network.ssid + ' ' + bars;
+            datalist.appendChild(option);
+          });
+          
+          showStatus('wifi-status', 'Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
+        } else {
+          showStatus('wifi-status', 'No networks found. You can still enter SSID manually.', 'info');
+        }
+      } else {
+        showStatus('wifi-status', 'No networks found. You can still enter SSID manually.', 'info');
+      }
     } else {
-      showStatus('wifi-status', 'No networks found. You can still enter SSID manually.', 'info');
+      throw new Error('Invalid response format');
     }
   } catch (error) {
-    showStatus('wifi-status', 'Scan failed: ' + error.message + '. You can still enter SSID manually.', 'error');
+    // If connection was lost (e.g., WiFi disconnected during scan), the scan may have still succeeded
+    // Show a more helpful message
+    if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      showStatus('wifi-status', 'Scan completed but connection was interrupted. The scan may have succeeded - try refreshing the page or check if networks appear in the dropdown.', 'info');
+    } else {
+      showStatus('wifi-status', 'Scan failed: ' + error.message + '. You can still enter SSID manually.', 'error');
+    }
   } finally {
     scanBtn.disabled = false;
     scanBtn.textContent = 'Scan for Networks';
@@ -1610,30 +1879,32 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + ((CheckWifiStatus(false)==1) ? "Connected" : "Disconnected") + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>WiFi Mode:</strong> " + getWiFiModeString() + "</p>";
+  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + ((CheckWifiStatus(false)==1) ? "Connected" : "Disconnected") + "<br>";
+  WEBHTML += "<strong>WiFi Self Report Status:</strong> " + String(((WiFi.status() != WL_CONNECTED) ? "Not Connected" : "Connected")) + "<br>";
+  WEBHTML = WEBHTML + "<strong>WiFi Mode:</strong> " + getWiFiModeString() + "<br>";
 
   wifi_mode_t t = WiFi.getMode();
 
   if (t == WIFI_MODE_APSTA) {
-    WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
-    WEBHTML = WEBHTML + "<p>APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "</p>";
-    WEBHTML = WEBHTML + "<p>Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>Router Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
+    WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
+    WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "<br>";
+    WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
+    WEBHTML = WEBHTML + "<strong>Router Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm<br>";
     
   } else if (t == WIFI_MODE_STA) {
-    WEBHTML = WEBHTML + "<p>Station IP: " + WiFi.localIP().toString() + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>Connected to:</strong> " + WiFi.SSID() + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm</p>";
+    WEBHTML = WEBHTML + "<strong>Station IP:</strong> " + WiFi.localIP().toString() + "<br>";
+    WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
+    WEBHTML = WEBHTML + "<strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm<br>";
   
   } else if (t == WIFI_MODE_AP) {
-    WEBHTML = WEBHTML + "<p>APIP: " + WiFi.softAPIP().toString() + "</p>";
-    WEBHTML = WEBHTML + "<p>Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "</p>";
+    WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + "<br>";
+    WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
   } 
   
 
-  WEBHTML = WEBHTML + "<p><strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
+  WEBHTML = WEBHTML + "<strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "<br>";
+  WEBHTML = WEBHTML + "<strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
+  WEBHTML = WEBHTML + "Last WiFi event: " + WiFiEventtoString(I.WiFiLastEvent) + "<br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
   #ifdef _USEUDP  
   //in this section we will show incoming and then outgoing UDP message traffic info  
@@ -5179,6 +5450,7 @@ void setupServerRoutes() {
     // New API routes for streamlined setup
     server.on("/api/wifi", HTTP_POST, apiConnectToWiFi);
     server.on("/api/wifi-scan", HTTP_GET, apiScanWiFi);
+    server.on("/api/clear-wifi", HTTP_POST, apiClearWiFi);
     server.on("/api/location", HTTP_POST, apiLookupLocation);
     server.on("/api/timezone", HTTP_GET, apiDetectTimezone);
     server.on("/api/timezone", HTTP_POST, apiSaveTimezone);
@@ -5825,7 +6097,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     if (useUDP && sendToDeviceIndex <0) { //special value for sending to broadcast UDP to everyone
       SerialPrint("Sending to all devices", true);
   
-      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(192,168,68,255), strlen(jsonBuffer),"snsBrdcst");
+      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0,0,0,0), strlen(jsonBuffer),"snsBrdcst");
       #ifndef _USELOWPOWER
       for (int16_t i=0; i<NUMDEVICES ; i++) {
         ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
@@ -6236,6 +6508,9 @@ bool receiveUDPMessage() {
 
   int packetSize = LAN_UDP.parsePacket(); //>0 if message received!
   if (packetSize > 0) {
+    //even if this message was not for me, count it.
+    I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+    I.UDP_RECEIVES++;
     IPAddress remoteIP = LAN_UDP.remoteIP();
     if (remoteIP == WiFi.localIP()) {
       return false;
@@ -6246,7 +6521,13 @@ bool receiveUDPMessage() {
 
     if (packetSize == sizeof(ESPNOW_type)) {
       ESPNOW_type msg = {};
-      LAN_UDP.read((uint8_t*)&msg, packetSize);        
+      size_t bytesRead = LAN_UDP.read((uint8_t*)&msg, packetSize);
+      if (bytesRead != packetSize) {
+        SerialPrint("UDP ESPNOW message: Read " + String(bytesRead) + " bytes, expected " + String(packetSize), true);
+        I.UDP_INCOMING_ERRORS++;
+        snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ReadFail");
+        return false;
+      }
       processLANMessage(&msg);        
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP:%d", msg.msgType);
         
@@ -6255,7 +6536,8 @@ bool receiveUDPMessage() {
       //assume this is a sensor data json buffer
       //am I a server type? Should I interpret this?
       if (_MYTYPE < 100) {
-          return false;
+        //do not update error counts, just return true because I received a message (it just wasn't for me)
+          return true;
       }
       // For multi-sensor messages, the packet size can exceed SNSDATA_JSON_BUFFER_SIZE
       // Use dynamic allocation based on actual packet size, but with a reasonable maximum
@@ -6272,11 +6554,21 @@ bool receiveUDPMessage() {
       char* buffer = (char*)malloc(packetSize + 1);
       if (!buffer) {
         SerialPrint("UDP message: Failed to allocate buffer for " + String(packetSize) + " bytes", true);
+        I.UDP_INCOMING_ERRORS++;
         snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "AllocFail");
         return false;
       }
       
-      LAN_UDP.read((uint8_t*)buffer, packetSize);
+      // Read packet data and verify all bytes were read
+      size_t bytesRead = LAN_UDP.read((uint8_t*)buffer, packetSize);
+      if (bytesRead != packetSize) {
+        SerialPrint("UDP JSON message: Read " + String(bytesRead) + " bytes, expected " + String(packetSize), true);
+        free(buffer);
+        I.UDP_INCOMING_ERRORS++;
+        snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ReadFail");
+        return false;
+      }
+      
       buffer[packetSize] = '\0'; //ensure the buffer is null terminated
       String responseMsg = "OK";
       String postData = (String)buffer;
@@ -6292,44 +6584,58 @@ bool receiveUDPMessage() {
       }
     }
   } 
-  return false;
   #endif
   return false;
 }
 
 bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, const char* msgType) {
   //send the provided jsonbuffer via UDP, including directed broadcast
-  //broadcasts are 192.168.68.255 or 239.255.255.250, but I will accept 0.0.0.0 or 255.255.255.255 as well
+  //broadcasts are 192.168.68.255 or multicast ip, but I will accept 0.0.0.0 or 255.255.255.255 as well
   //return true if successful, false if failed
   #ifdef _USEUDP
   SerialPrint("Buffer contains: " + String((char*)buffer),true);
   if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(500); //wait if the last message was sent within the last second
-  if (bufferSize==0) bufferSize = strlen((const char*)buffer);
-
-  if (ip == IPAddress(0,0,0,0) || ip == IPAddress(255,255,255,255) || ip == IPAddress(239,255,255,250)) {
-    ip = IPAddress(192,168,68,255); //directed broadcast
-    SerialPrint("Sending UDP message to " + ip.toString(),true);
-    LAN_UDP.beginPacket(ip, _USEUDP);
-    LAN_UDP.write(buffer, bufferSize);
-    LAN_UDP.endPacket();
-    
-    delay(500); //wait before trying to broadcast the next ip
-    
-    ip = IPAddress(239,255,255,250); //broadcast to multicast group 
-    SerialPrint("Sending UDP message to " + ip.toString(),true);
-    LAN_UDP.beginPacket(ip, _USEUDP);
-    LAN_UDP.write(buffer, bufferSize);
-    LAN_UDP.endPacket();
-    
-  } else {
-    SerialPrint("Sending UDP message to " + ip.toString(),true);
-    LAN_UDP.beginPacket(ip, _USEUDP);
-    LAN_UDP.write(buffer, bufferSize);
-    LAN_UDP.endPacket();
+  
+  // Calculate buffer size if not provided
+  if (bufferSize == 0) {
+    // Only use strlen if buffer is guaranteed to be null-terminated string
+    // For binary data, bufferSize must be provided explicitly
+    bufferSize = strlen((const char*)buffer);
+    if (bufferSize == 0) {
+      SerialPrint("sendUDPMessage: Invalid buffer size (0)", true);
+      I.UDP_OUTGOING_ERRORS++;
+      return false;
+    }
   }
-   
-  registerUDPSend(ip, msgType);
 
+  // Normalize broadcast addresses to multicast group
+  if (ip == IPAddress(0,0,0,0) || ip == IPAddress(255,255,255,255)) {
+    ip = IPAddress(_USEUDP_MULTICAST); //broadcast to multicast group 
+  }
+
+  SerialPrint("Sending UDP message to " + ip.toString() + ", size: " + String(bufferSize) + " bytes", true);
+  
+  // beginPacket returns void, so we can't check for errors here
+  LAN_UDP.beginPacket(ip, _USEUDP);
+  
+  // Write data and check if all bytes were written
+  size_t bytesWritten = LAN_UDP.write(buffer, bufferSize);
+  if (bytesWritten != bufferSize) {
+    SerialPrint("sendUDPMessage: write failed - wrote " + String(bytesWritten) + " of " + String(bufferSize) + " bytes", true);
+    I.UDP_OUTGOING_ERRORS++;
+    return false;
+  }
+  
+  // endPacket returns size_t (bytes sent), 0 indicates failure
+  size_t bytesSent = LAN_UDP.endPacket();
+  if (bytesSent == 0) {
+    SerialPrint("sendUDPMessage: endPacket failed (returned 0)", true);
+    I.UDP_OUTGOING_ERRORS++;
+    return false;
+  }
+  
+  // Success - register the send
+  registerUDPSend(ip, msgType);
   return true;
   #else
   I.UDP_OUTGOING_ERRORS++;
@@ -6340,8 +6646,8 @@ bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, c
 void registerUDPMessage(IPAddress ip, const char* messageType) {
   I.UDP_LAST_INCOMINGMSG_FROM_IP = ip;
   if (messageType != 0)   snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), messageType);
-  I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
-  I.UDP_RECEIVES++;
+  //I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+  //I.UDP_RECEIVES++;
 }
 
 void registerUDPSend(IPAddress ip, const char* messageType) {
