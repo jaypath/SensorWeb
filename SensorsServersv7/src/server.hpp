@@ -62,6 +62,7 @@ extern uint32_t WTHRFAIL;
 void SerialWrite(String);
 int8_t CheckWifiStatus(bool trytoconnect=false);
 int16_t connectWiFi(uint8_t retryLimit=20);
+bool closeUDP(bool returnStatus);
 bool connectUDP();
 int16_t tryWifi(uint16_t delayms = 250, bool checkCredentials = true);
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);

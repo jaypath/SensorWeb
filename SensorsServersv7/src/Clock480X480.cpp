@@ -46,10 +46,24 @@ void initClock480X480Graphics() {
     tft.printf("CLOCK SETUP...\n");
     tft.setFont(&fonts::Font2);
 
-    SPI.begin(48,41,47); //SPI pins per https://homeding.github.io/boards/esp32s3/panel-4848S040.htm
-    tft.printf("SD Card mounting...");
 
-    if(!SD.begin(42)){  //CS=42 per https://homeding.github.io/boards/esp32s3/panel-4848S040.htm
+
+// 2. NUCLEAR FIX: Detach GPIO 39 from LGFX/SPI Hardware entirely
+    // This removes any "Alternate Function" status set by tft.init()
+    gpio_reset_pin(GPIO_NUM_39); 
+    
+    // 3. Manually Lock it HIGH
+    pinMode(39, OUTPUT);
+    digitalWrite(39, HIGH);
+
+    // 4. Initialize SD Card with LOWER Speed
+    // High-speed (16MHz+) SPI on these shared pins often induces crosstalk.
+    // 4MHz is plenty for loading BMPs and much safer.
+    SPI.begin(48, 41, 47);  //SPI pins per https://homeding.github.io/boards/esp32s3/panel-4848S040.htm
+    tft.printf("SD Card mounting...");
+    
+    if(!SD.begin(42, SPI)){ 
+
       tft.setTextColor(TFT_RED);
       tft.println("SD Mount Failed. Halted!");
       while(true);
@@ -87,16 +101,17 @@ void initClock480X480Graphics() {
 
 
 void clockLoop() {
+
     getWeather();
 
     fcnCheckScreen();
+
+
 }
 
 void fcnDrawPic(byte luminosity) {
 
-//    if ((myScreen.lastPic>0 && myScreen.time_lastPic>0) && (myScreen.time_lastPic == myScreen.t || myScreen.t - myScreen.time_lastPic < myScreen.int_Pic_MIN*60)) return;
-    
-    
+
     //choose a new random picture
     myScreen.lastPic = random(0,myScreen.num_images-1);
     myScreen.time_lastPic=I.currentTime;
@@ -104,7 +119,7 @@ void fcnDrawPic(byte luminosity) {
     String fn;
     fn= "/PICS/" + getNthFileName("/PICS",myScreen.lastPic);
 
-    //if the hour is between 9p and 7a, use a luminosity of 50
+    //if the hour is between 9p and 7a, use a reduced luminosity 
     if (hour()>=22 || hour()<=7) {
       if (luminosity==0) luminosity = 50;
     } else if (luminosity==0) {
@@ -159,7 +174,7 @@ void fcnCheckScreen() {
 
   // Re-assert 16-bit RGB565 so all drawing (fillScreen, text, BMP) is correct.
   // Something after init (e.g. shared tftPrint/clear/setTextFont) can alter panel state.
-  tft.setColorDepth(16);
+  //tft.setColorDepth(16);
 
   if (myScreen.screenChangeTimer<I.currentTime && myScreen.screenNum!=0) myScreen.screenNum=0;
 
@@ -206,6 +221,15 @@ byte fcnDrawStatusScreen() {
   y += tft.fontHeight(&fonts::Font0)+2;
   tft.drawString("Last Reset Time: " + (String) dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"),0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
+  
+  tft.drawString("-----------------------\n",0,y);
+  y += tft.fontHeight(&fonts::Font0)+2;
+  tft.drawString("Heap (available/total): " + (String) ESP.getFreeHeap() + " / " + (String) ESP.getHeapSize() + " bytes\n",0,y);
+  y += tft.fontHeight(&fonts::Font0)+2;
+  tft.drawString("PSRAM (available/total): " + (String) ESP.getFreePsram() + " / " + (String) ESP.getPsramSize() + " bytes\n",0,y);
+  y += tft.fontHeight(&fonts::Font0)+2;
+
+
   tft.drawString("-----------------------\n",0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
   tft.drawString("UDP Messages Received today: " + (String) I.UDP_RECEIVES,0,y);
@@ -413,7 +437,7 @@ String weatherID2string(uint16_t weatherID) {
 
 
     void drawBmp(const char *filename, int16_t x, int16_t y,  int32_t alpha, uint8_t luminosity) {
-    //alpha is the color that will "transparent" the image
+    //alpha is the color that will "transparent" the image. must be in RGB565 format. can be negative for no alpha.
     //luminosity is the percentage of the original luminosity to use, 100 is original, 0 is black, 255 is max
       if ((x >= tft.width()) || (y >= tft.height())) return;
     
@@ -430,6 +454,17 @@ String weatherID2string(uint16_t weatherID) {
       uint32_t seekOffset;
       uint16_t w, h, row;
       uint8_t  r, g, b;
+      uint8_t r_alpha, g_alpha, b_alpha;
+      uint16_t color;
+
+      if (alpha >= 0) {
+        //convert alpha to RGB565 format
+        r_alpha = (alpha >> 11) & 0x1F;
+        g_alpha = (alpha >> 5) & 0x3F;
+        b_alpha = alpha & 0x1F;
+      }
+
+
     
       if (read16(bmpFS) == 0x4D42)
       {
@@ -462,13 +497,21 @@ String weatherID2string(uint16_t weatherID) {
               b = *bptr++;
               g = *bptr++;
               r = *bptr++;
-              uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-              if (alpha >= 0 && rgb565 == (uint16_t)alpha) {
+
+              //uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+              if (alpha >= 0 && r == r_alpha && g == g_alpha && b == b_alpha) {
                 *tptr++ = myScreen.BG_COLOR;
                 continue;
               }
-              scaleColor(r, g, b, luminosity);
-              *tptr++ = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+              if (luminosity!=100) scaleColor(r, g, b, luminosity);
+                
+                // LGFX helper handles the bit-packing and endianness automatically
+                // It respects the internal configuration, reducing red/blue swap errors.
+              color = tft.color565(r, g, b);
+
+              *tptr++ = color;
+              
+              //*tptr++ = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
             }
 
             tft.pushImage(x, y--, w, 1, outBuffer);
@@ -661,4 +704,19 @@ String fcnMMM(time_t t, bool abb) {
     return "???";
 }
 
+
+void tftGraphicsTest(String testType, byte secondstoshow) {
+    //test graphics
+    tft.fillScreen(TFT_BLACK);
+    tft.setCursor(0,0);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    if (testType == "") testType = "Testing graphics...";
+    tftPrint(testType, true, TFT_WHITE);
+    tftPrint("R", true, TFT_RED);
+    tftPrint("G", true, TFT_GREEN);
+    tftPrint("B", true, TFT_BLUE);
+    delay(secondstoshow*1000);
+}
 #endif //ifdef _ISCLOCK480X480

@@ -198,5 +198,7 @@ void clockLoop();
 uint16_t read16(File &f);
 uint32_t read32(File &f);
 String fcnMMM(time_t t, bool abb);
+void tftGraphicsTest(String testType="", byte secondstoshow=5);
+
 #endif //ifndef CLOCK480X480_HPP
 #endif //ifdef _ISCLOCK480X480

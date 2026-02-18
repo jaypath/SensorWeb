@@ -203,7 +203,12 @@ void setup() {
 
 
 
+    #ifdef _ISPERIPHERAL
+    // Peripherals have no TFT and minimal HTTP; avoid reserving 20KB to reduce heap pressure and fragmentation
+    WEBHTML.reserve(2048);
+    #else
     WEBHTML.reserve(20000);
+    #endif
 
     initSystem(); //among other things, loads the Prefs struct
 
@@ -216,6 +221,8 @@ void setup() {
     tftPrint("Serial disabled.", true);
     #endif
 
+
+    #ifdef _USESDCARD
     int8_t sdResult = initSDCard();
     if (sdResult==0) return;
     if (sdResult==-1) {
@@ -224,7 +231,7 @@ void setup() {
         loadScreenFlags(); //load the screen flags from the SD card
         loadSensorData(); //load the sensor data from the SD card
     }
-
+    #endif //_USESDCARD
 
 
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
@@ -240,7 +247,7 @@ void setup() {
     SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
     
     
-    
+
 
     initOTA();
 
@@ -283,11 +290,13 @@ void setup() {
         #endif
     }
     
+    
+
 
     #ifdef _ISPERIPHERAL
     initHardwareSensors(); //initialize the hardware sensors
     #endif
-
+    
     #ifdef _USELED
     initLEDs();
     #endif
@@ -337,6 +346,7 @@ void setup() {
 
 
 
+
     #ifdef _USETFT
     #ifdef _ISCLOCK480X480
     // Clock480X480: avoid tft.clear() and setTextFont/setTextSize (can alter panel/write state).
@@ -359,7 +369,7 @@ void setup() {
     #endif
 
 
-#endif //_USELOWPOWER
+#endif //_USELOWPOWER/else
     
 }
 

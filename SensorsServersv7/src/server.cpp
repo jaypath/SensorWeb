@@ -6615,6 +6615,20 @@ bool getCoordinatesFromZipCodeFallback(const String& zipCode) {
 //In addition to ESPnow, I will also use UDP for all of the above message types
 //In addition to ESPnow, I will also use UDP for all of the above message types
 
+bool closeUDP(bool returnStatus) {
+  #ifdef _USEUDP
+  LAN_UDP.clear(); //clear the buffer to avoid reading the same message twice
+  if (returnStatus) {
+    I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+    I.UDP_RECEIVES++;
+  }
+
+  return returnStatus;
+  #else
+  return false;
+  #endif
+}
+
 bool receiveUDPMessage() {
   //receive a message via UDP
   //return true if message is received, false if no message is received
@@ -6623,27 +6637,34 @@ bool receiveUDPMessage() {
   int packetSize = LAN_UDP.parsePacket(); //>0 if message received!
 
   if (packetSize > 0) {
-    //even if this message was not for me, count it.
-    I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
-    I.UDP_RECEIVES++;
-
-    IPAddress remoteIP = LAN_UDP.remoteIP();
-    if (remoteIP == WiFi.localIP()) {
-      return false;
-    }
-
-    // For multi-sensor messages, the packet size can exceed SNSDATA_JSON_BUFFER_SIZE
-    // Use dynamic allocation based on actual packet size, but with a reasonable maximum
-    // to prevent memory exhaustion from malicious or corrupted packets
     if (packetSize > 8192) {
       SerialPrint("UDP message is too large: " + String(packetSize) + " bytes (max: 8192)", true);
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "TooLarge");
-      return false;
+      return closeUDP(false);
     }
 
-    SerialPrint("UDP message from: " + remoteIP.toString(),true);
-    registerUDPMessage(remoteIP,0);
+    IPAddress remoteIP = LAN_UDP.remoteIP();
+    if (remoteIP == WiFi.localIP()) {
+      return closeUDP(false);  // ignore self-sent packets
+    }
 
+    SerialPrint("UDP message from: " + remoteIP.toString(), true);
+    registerUDPMessage(remoteIP, 0);
+
+    bool isESPNOW = false;
+
+    if (packetSize != sizeof(ESPNOW_type)) {
+      //assume this is a sensor data json buffer
+      //am I a server type? Should I interpret this?
+      if (_MYTYPE < 100) {
+        //do not process JSON; still count as received (it just wasn't for me)
+        return closeUDP(true);
+      } 
+
+    } else {
+      isESPNOW = true;
+    } 
+    
     // Allocate buffer dynamically based on actual packet size
     // This allows multi-sensor messages that exceed SNSDATA_JSON_BUFFER_SIZE
     char* buffer = (char*)malloc(packetSize + 1);
@@ -6651,53 +6672,40 @@ bool receiveUDPMessage() {
       SerialPrint("UDP message: Failed to allocate buffer for " + String(packetSize) + " bytes", true);
       I.UDP_INCOMING_ERRORS++;
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "AllocFail");
-      return false;
+      return closeUDP(false);
     }
-  
     // Read packet data and verify all bytes were read
     size_t bytesRead = LAN_UDP.read((uint8_t*)buffer, packetSize);
 
-    //LAN_UDP.flush(); //old method
-    LAN_UDP.clear(); //clear the buffer to avoid reading the same message twice
+    if (bytesRead != packetSize) {
+      SerialPrint("UDP message: Read " + String(bytesRead) + " bytes, expected " + String(packetSize), true);
+      free(buffer);
+      I.UDP_INCOMING_ERRORS++;
+      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ReadFail");
+      return closeUDP(false);
+    }
 
-    if (bytesRead == sizeof(ESPNOW_type)) {
+    if (isESPNOW) {
       ESPNOW_type msg;
       memcpy(&msg, buffer, sizeof(ESPNOW_type));
-      free(buffer);
       processLANMessage(&msg);
-      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP:%d", msg.msgType);
-      return true;
+      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP type:%d", msg.msgType);
+      
     } else {
-      //assume this is a sensor data json buffer
-      //am I a server type? Should I interpret this?
-      if (_MYTYPE < 100) {
-        //do not update error counts, just return true because I received a message (it just wasn't for me)
-          return true;
-      }
-      
-      if (bytesRead != packetSize) {
-        SerialPrint("UDP JSON message: Read " + String(bytesRead) + " bytes, expected " + String(packetSize), true);
-        free(buffer);
-        I.UDP_INCOMING_ERRORS++;
-        snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ReadFail");
-        return false;
-      }
-      
-      buffer[packetSize] = '\0'; //ensure the buffer is null terminated
+      //process the json buffer
+      buffer[packetSize] = '\0';  // ensure null termination for String
       String responseMsg = "OK";
       String postData = (String)buffer;
-      processJSONMessage(postData, responseMsg);
-      free(buffer); // Free the dynamically allocated buffer
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "JSON");
-
-      if (responseMsg == "OK") {
-        return true;
-      }
-      else {
-        return false;  
-      }
+      processJSONMessage(postData, responseMsg);
     }
-  } 
+
+  
+    free(buffer);  // must free to avoid memory leak
+
+    return closeUDP(true);
+
+  }
   #endif
   return false;
 }

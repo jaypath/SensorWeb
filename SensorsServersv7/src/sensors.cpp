@@ -190,7 +190,6 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     }
   #endif
 #endif
-
   for (byte i=0;i<_SENSORNUM;i++) {
     byte snsID = Sensors.countSensors(sensortypes[i],I.MY_DEVICE_INDEX)+1;
 
@@ -233,6 +232,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
         }
     }
   }
+
 
   #ifdef _USETFLUNA
   Matrix_Init();

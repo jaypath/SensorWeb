@@ -40,8 +40,6 @@ void systemHousekeeping(bool fullHousekeeping) {
     } else {
         I.wifiDownSince = 0;
         I.wifiFailCount = 0;
-        ArduinoOTA.handle();
-        server.handleClient();
     }
 
     if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
@@ -66,6 +64,12 @@ void systemHousekeeping(bool fullHousekeeping) {
       ESP.restart();
     }
 
+  }
+
+  // Service web server and OTA every loop when WiFi connected (avoids up-to-1-minute delay when handleClient was only in fullHousekeeping)
+  if (WiFi.status() == WL_CONNECTED) {
+    ArduinoOTA.handle();
+    server.handleClient();
   }
 
   esp_task_wdt_reset();
