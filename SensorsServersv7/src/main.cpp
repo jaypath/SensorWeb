@@ -201,8 +201,6 @@ void setup() {
     esp_task_wdt_add(NULL);
 
 
-
-
     #ifdef _ISPERIPHERAL
     // Peripherals have no TFT and minimal HTTP; avoid reserving 20KB to reduce heap pressure and fragmentation
     WEBHTML.reserve(2048);
