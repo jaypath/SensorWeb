@@ -32,9 +32,6 @@ Messages will use the ESPNOW_type struct for their transmission
 #include "AddESPNOW.hpp"
 #include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
 #include "utility.hpp"
-#ifdef _USETFT
-#include "graphics.hpp"
-#endif
 
 
 #ifdef _USEUDP
@@ -408,7 +405,7 @@ void processLANMessage(ESPNOW_type* msg) {
         
         if (strcmp((char*)decrypted, (char*)Prefs.WIFIPWD) == 0) {
             //wifi password matches, so maybe WiFi is down. Proceed along typical routine
-            #ifdef _USETFT
+            #if defined(_USETFT) 
             screenWiFiDown();
             #endif
 
@@ -870,7 +867,7 @@ bool sendESPNowUDPMessage(ESPNOW_type msg, IPAddress targetIP, bool forceencrypt
     if (isBroadcast) {
         targetIP = IPAddress(0,0,0,0); //generic broadcast address for arborys UDP messages
     } else {
-        if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0) || targetIP == IPAddress(239, 1, 2, 3) || targetIP == IPAddress(192,168,68,255) || targetIP == IPAddress(239, 255, 255, 250) ) { //broadcast addresses specified, but this is not a broadcast,  check if we need to find the IP address of the device
+        if (targetIP == IPAddress(255,255,255,255) || targetIP == IPAddress(0,0,0,0) || targetIP == IPAddress(_USEUDP_MULTICAST) || targetIP == IPAddress(239, 1, 2, 3) || targetIP == IPAddress(192,168,68,255) || targetIP == IPAddress(239, 255, 255, 250) ) { //broadcast addresses specified, but this is not a broadcast,  check if we need to find the IP address of the device
             ArborysDevType* d = Sensors.getDeviceByMAC(MACToUint64(msg.targetMAC));
             if (d) {
                 targetIP = d->IP;

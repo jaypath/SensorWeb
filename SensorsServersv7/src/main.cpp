@@ -59,11 +59,6 @@
 #include "LowPower.hpp"
 #endif
 
-// --- WiFi Down Timer ---
-static uint32_t wifiDownSince = 0;
-static uint32_t lastPwdRequestMinute = 0;
-
-int16_t MY_DEVICE_INDEX = 0; //local stored index of my device
 
 
 #ifdef _USETFT
@@ -302,40 +297,55 @@ void setup() {
     setupTFLuna();
     #endif
 
+
     #ifdef _USEWEATHER
-    tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
-//load weather data from SD card
-    if (readWeatherDataSD()) {
+        tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
+    //load weather data from SD card
+        if (readWeatherDataSD()) {
+        
+            if (WeatherData.updateWeatherOptimized(3600)>0) {
+                SerialPrint("Weather data loaded from SD card",true);
+            } else {
+                SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);
+            }
+        } else {
+            SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
+            WeatherData.updateWeatherOptimized(3600);
+        }
+
+        #ifdef _USEGSHEET
+        if (GSheetInfo.useGsheet) {
+            tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+            initGsheetHandler();
+            if (GSheet.ready()) {
+                tftPrint("OK.", true, TFT_GREEN);
+            } else {
+                tftPrint("FAILED.", true, TFT_RED);
+                storeError("Gsheet initialization failed");
+            }
+        }
+        else {
+            tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
+        }
+        #endif
+
+
     
-        if (WeatherData.updateWeatherOptimized(3600)>0) {
-            SerialPrint("Weather data loaded from SD card",true);
-        } else {
-            SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);
-        }
-    } else {
-        SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
-        WeatherData.updateWeatherOptimized(3600);
-    }
+        tftPrint("Setup OK.", true, TFT_GREEN);
 
-    #ifdef _USEGSHEET
-    if (GSheetInfo.useGsheet) {
-        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-        initGsheetHandler();
-        if (GSheet.ready()) {
-            tftPrint("OK.", true, TFT_GREEN);
-        } else {
-            tftPrint("FAILED.", true, TFT_RED);
-            storeError("Gsheet initialization failed");
-        }
-    }
-    else {
-        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
-    }
-    #endif
+    #endif //_USEWEATHER
 
-    tftPrint("Setup OK.", true, TFT_GREEN);
+
 
     #ifdef _USETFT
+    #ifdef _ISCLOCK480X480
+    // Clock480X480: avoid tft.clear() and setTextFont/setTextSize (can alter panel/write state).
+    // Use explicit fill and LGFX setFont so all subsequent screens stay correct.
+    tft.fillScreen(0x0000);  // RGB565 black
+    tft.setCursor(0,0);
+    tft.setTextColor(TFT_WHITE);
+    tft.setFont(&fonts::Font2);
+    #else
     tft.clear();
     tft.setCursor(0,0);
     tft.setTextColor(TFT_WHITE);
@@ -343,7 +353,10 @@ void setup() {
     tft.setTextSize(1);
     #endif
     #endif
+
+    #ifndef _ISPERIPHERAL
     tftPrint("Please wait for SD card cleanup and Google Sheet updates.", true, TFT_GREEN);
+    #endif
 
 
 #endif //_USELOWPOWER
@@ -356,7 +369,7 @@ void setup() {
 // --- Main Loop ---
 void loop() {
 
-    esp_task_wdt_reset();
+    systemHousekeeping();
 
     #ifdef _USETFLUNA    
 //    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
@@ -368,34 +381,12 @@ void loop() {
     }
     #endif
 
-    if (WiFi.status() != WL_CONNECTED) {
-        if (wifiDownSince == 0) wifiDownSince = I.currentTime;
-        int16_t retries = connectWiFi();
-        if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
-        // If WiFi has been down for 10 minutes, enter AP mode
-        if (wifiDownSince && (I.currentTime - wifiDownSince >= 600)) {
-            #ifdef _USETFT
-            tftPrint("Wifi failed for 10 minutes, entering AP mode...", true, TFT_RED, 2, 1, true, 0, 0);
-            #endif
-            SerialPrint("Wifi failed for 10 minutes, entering AP mode...",true);
-            delay(3000);
-            APStation_Mode();
-//            controlledReboot("Wifi failed for 15 min, rebooting", RESET_WIFI, true);
-        }
-    } else {
-        wifiDownSince = 0;
-        I.wifiFailCount = 0;
-        ArduinoOTA.handle();
-        server.handleClient();
-    }
-    
-
-    #ifdef _USEUDP
-    receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
+    #ifdef _ISCLOCK480X480
+    clockLoop();
     #endif
-    updateTime(); //sets I.currenttime
 
-    #ifdef _USETFT
+
+    #if defined(_USETFT) && !defined(_ISPERIPHERAL)
     checkTouchScreen();
     #endif
 
@@ -409,6 +400,8 @@ void loop() {
 
     // --- Periodic Tasks ---
     if (OldTime[1] != minute()) {
+        systemHousekeeping(true);
+        SerialPrint("Minute: " + String(minute()),true);
 
         OldTime[1] = minute();
 
@@ -421,12 +414,6 @@ void loop() {
         
         if (Sensors.getNumDevices() ==1) I.makeBroadcast = true; //if there is only one device (including  me), broadcast my presence
         
-        if (isTimeValid(I.ALIVESINCE)==false) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not valid, set it to the current time
-
-        if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
-
-        MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
-
         #ifdef _ISPERIPHERAL
         //check if there are any new servers (that I have not sent data to yet), and if so reset the timelogged for all my sensors
         for (int16_t i=0; i<NUMDEVICES ; i++) {
@@ -518,7 +505,10 @@ void loop() {
 
         
         #ifndef _ISPERIPHERAL
-        checkHVAC();
+            #ifdef _ISHVACSERVER
+                checkHVAC();
+            #endif
+
         #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;
@@ -549,7 +539,7 @@ void loop() {
         OldTime[2] = hour();
         
         //check if my IP address has changed
-        ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(MY_DEVICE_INDEX);
+        ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(I.MY_DEVICE_INDEX);
         bool storeToSD = false;
 
         if (WiFi.localIP() != myDevice->IP) {
@@ -573,26 +563,7 @@ void loop() {
         if (storeToSD) storeDevicesSensorsSD();
         #endif
         
-        #ifdef _USE32
-        size_t freeHeap = ESP.getFreeHeap();
-        size_t minFreeHeap = ESP.getMinFreeHeap();
-          
-        // If memory is critically low, restart
-        if (freeHeap < 10000) { // Less than 10KB free
-          SerialPrint("CRITICAL: Low memory detected, restarting system", true);
-          storeError("CRITICAL: Low memory detected, restarting system", ERROR_HARDWARE_MEMORY,true);
-          delay(1000);
-          ESP.restart();
-        }
-        
-        // If minimum free heap is very low, log warning
-        if (minFreeHeap < 5000) { // Less than 5KB minimum
-          SerialPrint("WARNING: Memory fragmentation detected", true);
-          storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
-          ESP.restart();
-        }
-        #endif
-
+ 
 
         if (OldTime[2] == 4) {
             //check if DST has changed every day at 4 am
@@ -634,7 +605,6 @@ void loop() {
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
-        SerialPrint("Second changed",true);
         //if time is invalid, completely reset the time
         if (isTimeValid(I.currentTime)==false) {
             SerialPrint("Time is invalid, completely resetting time",true);
@@ -644,7 +614,7 @@ void loop() {
             SerialPrint((String) "New time is: " + dateify(I.currentTime),true);
         }
 
-        #ifdef _USETFT
+        #if defined(_USETFT) && !defined(_ISPERIPHERAL)
         fcnDrawScreen();
         if (I.screenChangeTimer > 0) I.screenChangeTimer--;
         else I.ScreenNum=0;

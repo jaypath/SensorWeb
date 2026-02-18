@@ -1,0 +1,5 @@
+# Enable ESP-IDF certificate bundle so we can use it via setCACertBundle()
+# instead of loading a single CA cert from SD card.
+# Use the "common" bundle (~38 certs, ~99% coverage) to save flash.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y

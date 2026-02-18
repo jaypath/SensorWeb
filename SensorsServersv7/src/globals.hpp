@@ -4,6 +4,7 @@
 //edit these!
 
 
+// RGB565 color definitions. LovyanGFX may #undef these when its headers are included after globals; values below match LGFX.
 #define TFT_RED 0xF800
 #define TFT_GREEN 0x07E0
 #define TFT_BLUE 0x001F
@@ -199,6 +200,7 @@ typedef enum {
   
   
   struct STRUCT_CORE {
+    int16_t MY_DEVICE_INDEX; // local stored index of this device in Sensors
       bool makeBroadcast=false;
       time_t lastStoreCoreDataTime;
       bool isUpToDate;  // Core has been saved to memory
@@ -207,12 +209,14 @@ typedef enum {
       byte rebootsSinceLast=0;
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
+      time_t wifiDownSince;
+      
       time_t currentTime;
       int8_t WiFiStatus; //2= connected but wifi.status() doesn't list this correctly, 1 = connected, 0=unknown, -1 - no valid IP address, -2 - no valid RSSI range, -3 - no valid SSID, -4 - no valid gateway, -5 - no connection
       WiFiEvent_t WiFiLastEvent; //last WiFi event
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
 
-      #ifdef _USETFT
+      #if defined(_USETFT) && !defined(_ISPERIPHERAL)
       byte CLOCK_Y = 105;
       byte HEADER_Y = 30;
       uint32_t lastHeaderTime=0; //last time header was drawn
@@ -417,8 +421,13 @@ class LGFX;
 #endif
 
 #ifdef _USETFT
-#include "graphics.hpp"
+  #ifdef _ISCLOCK480X480
+    #include "Clock480X480.hpp"
+  #else
+    #include "graphics.hpp"
+  #endif
 #endif
+
 
 #include "AddESPNOW.hpp"
 #include "BootSecure.hpp"
@@ -448,7 +457,7 @@ class LGFX;
 #include <SPI.h>
 #include <SD.h>
 #include <string>
-#ifdef _USETFT
+#if defined(_USETFT) && !defined(_ISPERIPHERAL)
 #include <LovyanGFX.hpp>
 #endif
 

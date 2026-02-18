@@ -12,12 +12,71 @@ extern const uint16_t BG_COLOR;
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
-extern int16_t MY_DEVICE_INDEX;
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
 
 
 //setup functions
+void systemHousekeeping(bool fullHousekeeping) {
+
+  if (fullHousekeeping) {
+    if (isTimeValid(I.ALIVESINCE)==false) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not valid, set it to the current time
+
+    if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = I.currentTime; //if lastResetTime is not valid, set it to the current time
+
+    if (WiFi.status() != WL_CONNECTED) {
+      if (I.wifiDownSince == 0) I.wifiDownSince = I.currentTime;
+      int16_t retries = connectWiFi();
+      if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
+      // If WiFi has been down for 10 minutes, enter AP mode
+      if (I.wifiDownSince && (I.currentTime - I.wifiDownSince >= 600)) {
+          #ifdef _USETFT
+          tftPrint("Wifi failed for 10 minutes, entering AP mode...", true, TFT_RED, 2, 1, true, 0, 0);
+          #endif
+          SerialPrint("Wifi failed for 10 minutes, entering AP mode...",true);
+          delay(3000);
+          APStation_Mode();
+      }
+    } else {
+        I.wifiDownSince = 0;
+        I.wifiFailCount = 0;
+        ArduinoOTA.handle();
+        server.handleClient();
+    }
+
+    if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
+
+    I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
+
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t minFreeHeap = ESP.getMinFreeHeap();
+      
+    // If memory is critically low, restart
+    if (freeHeap < 1000) { // Less than 1KB free
+      SerialPrint("CRITICAL: Low memory detected, restarting system", true);
+      storeError("CRITICAL: Low memory detected, restarting system", ERROR_HARDWARE_MEMORY,true);
+      delay(1000);
+      ESP.restart();
+    }
+    
+    // If minimum free heap is very low, log warning
+    if (minFreeHeap < 5000) { // Less than 5KB minimum
+      SerialPrint("WARNING: Memory fragmentation detected", true);
+      storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
+      ESP.restart();
+    }
+
+  }
+
+  esp_task_wdt_reset();
+
+  #ifdef _USEUDP
+  receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
+  #endif
+  updateTime(); //sets I.currenttime
+
+
+}
 void initI2C() {
   #ifdef _USEI2C
   Wire.begin();
@@ -48,6 +107,9 @@ bool initSystem() {
   #endif
 
   #ifdef _USETFT
+  #ifdef _ISCLOCK480X480
+    initClock480X480Graphics();
+  #else
     tft.init();
     tft.setRotation(2);
     tft.setCursor(0,0);
@@ -55,6 +117,7 @@ bool initSystem() {
     tft.setTextFont(1);
     tft.setTextDatum(TL_DATUM);
     tft.printf("Running setup\n");
+  #endif
   #endif
 
 
@@ -109,6 +172,12 @@ bool initSystem() {
     APStation_Mode();
   }
 
+  #ifdef _USEUDP
+  if (!connectUDP()) {
+    SerialPrint("Failed to connect to UDP",true);
+    storeError("Failed to connect to UDP");
+  }
+  #endif
 
 
   #ifdef _USETFT
@@ -553,7 +622,7 @@ void initScreenFlags(bool completeInit) {
       I.wifiFailCount=0;
       I.currentTime=0;
 
-      #ifdef _USETFT
+      #if defined(_USETFT) && !defined(_ISPERIPHERAL)
       I.CLOCK_Y = 105;
       I.HEADER_Y = 30;
       
@@ -596,7 +665,7 @@ void initScreenFlags(bool completeInit) {
       I.lastErrorTime=0;
   }
 
-  #ifdef _USETFT
+  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   I.lastHeaderTime=0; //last time header was drawn
   I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
   I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
@@ -1260,9 +1329,9 @@ int16_t updateMyDevice() {
       return Sensors.findMyDeviceIndex();
     }
 
-    MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
+    I.MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
 
-  return MY_DEVICE_INDEX;
+  return I.MY_DEVICE_INDEX;
 }
 
 void failedToRegister() {
@@ -1354,4 +1423,44 @@ void displaySetupProgress(bool success) {
     tft.setTextColor(FG_COLOR,BG_COLOR);
   }
 }
+
+void screenWiFiDown() {
+  tft.clear();
+  tft.setCursor(0, 0);
+  tft.setTextColor(TFT_RED);
+  tft.printf("WiFi may be down.\nAP mode enabled.\nConnect to: %s\nIP: 192.168.4.1\nif wifi credentials need to be updated.\nRebooting in 5 min...", WiFi.softAPSSID().c_str());
+}
+
+void displayOTAProgress(unsigned int progress, unsigned int total) {
+  if (progress==0) {
+    tft.fillScreen(BG_COLOR);            // Clear screen
+    tft.setTextFont(2);
+    tft.setCursor(0,0);
+    tft.println("OTA started, receiving data.");
+    tft.drawRect(0,100,tft.width(),25,FG_COLOR);
+  } else {
+    tft.fillRect(0,100,tft.width()*progress/total,25,FG_COLOR);    
+  }
+}
+
+void displayOTAError(int error) {
+  tft.setCursor(0,0);
+  tft.print("OTA error: ");
+  tft.println(error);
+} 
+
+void displayWiFiStatus(byte retries, bool success) {
+  if (success) {
+    tft.setTextColor(TFT_GREEN);
+    tft.printf("Wifi ok, %u attempts.\nWifi IP is %s\nMAC is %s\n",retries,WiFi.localIP().toString().c_str(),MACToString(Prefs.PROCID).c_str());
+    tft.setTextColor(FG_COLOR);
+  } else {
+    tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);
+  }
+}
+
+
+
+
+
 #endif

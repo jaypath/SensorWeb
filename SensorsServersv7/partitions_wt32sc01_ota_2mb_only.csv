@@ -1,0 +1,8 @@
+# WT32-SC01-Plus: 2MB + 2MB OTA only (8MB flash; rest of flash unused)
+# Heap is RAM/PSRAM — set via build (e.g. CONFIG_SPIRAM_SIZE), not this table
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+app0,     app,  factory, 0x10000,  0x200000,
+app1,     app,  ota_0,   0x210000, 0x200000,

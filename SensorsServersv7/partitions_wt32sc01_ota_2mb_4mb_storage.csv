@@ -1,0 +1,10 @@
+# WT32-SC01-Plus: 2MB per app (OTA), ~4MB storage (8MB flash)
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+# App: 2MB each
+app0,     app,  factory, 0x10000,  0x200000,
+app1,     app,  ota_0,   0x210000, 0x200000,
+# Storage: ~3.94MB (rest of flash) — use as SPIFFS/LittleFS or raw
+storage,  data, spiffs,  0x410000, 0x3F0000,

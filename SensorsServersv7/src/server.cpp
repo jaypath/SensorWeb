@@ -2,24 +2,35 @@
 #include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
+
 #ifdef _USETFT
-  #include "graphics.hpp"
+  #ifdef _ISCLOCK480X480
+    #include "Clock480X480.hpp"
+  #else
+    #include "graphics.hpp"
+  #endif
   extern LGFX tft;
 #endif
+
 #ifdef _USELEDMATRIX
 #include "LEDMatrix.hpp"
 #endif
 
 #include "BootSecure.hpp"
 
-#include <lwip/sockets.h> // Essential for low-level IGMP control
+#include <ssl_client.h> // Ensure this is at the top of server.cpp
+
+
 #include <string.h> // For memset
 
-extern int16_t MY_DEVICE_INDEX;
 
 #ifdef _USEUDP
+#include <lwip/sockets.h> // Essential for low-level IGMP control
+
+
 extern WiFiUDP LAN_UDP;
 #endif
+
 
 
 //wifi event registration 
@@ -170,60 +181,87 @@ String formatBytes(uint64_t bytes) {
   }
 }
 
-bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders) {
-if (CheckWifiStatus(false)!=1)
-return false;
-
-HTTPClient http;
-WiFiClientSecure wfclient;
-
-if (cacert.length() == 0) {
-    //don't have the room to install the certificate bundle
-    return false;
-
-} else {
-  wfclient.setCACert(getCert(cacert).c_str());
+// Use ESP-IDF certificate bundle when cacert is "" or "*" or "bundle" (requires USE_CERT_BUNDLE in platformio.ini + sdkconfig cert bundle).
+#if defined(_USE_CERT_BUNDLE)
+extern "C" {
+    extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
+    extern const uint8_t x509_crt_imported_bundle_bin_end[]   asm("_binary_x509_crt_bundle_end");
 }
+#endif
 
-http.useHTTP10(true);
+bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders, JsonDocument* responseDoc, const JsonDocument* filter) {
+  #ifndef _ISPERIPHERAL
+  if (CheckWifiStatus(false)!=1)
+  return false;
 
-if (!http.begin(wfclient, URL.c_str()))
-return false;
+  WiFiClientSecure wfclient;
+  HTTPClient http; // In the ESP32 library, HTTPClient is the wrapper
 
+
+  //0. reserve a block to start off any json parsing
+  if (responseDoc) {
+    responseDoc->clear(); 
+    (*responseDoc)[0] = 0; // Forces an initial allocation block
+    responseDoc->clear(); // Content is gone, but the allocated block remains
+  }
+  
+
+  // 1. Setup Security
+  bool use_bundle = (cacert.length() == 0 || cacert == "*" || cacert == "bundle");
+
+  if (use_bundle) {
+    #if defined(_USE_CERT_BUNDLE)
+    size_t bundle_len = (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start);
+    wfclient.setCACertBundle(x509_crt_imported_bundle_bin_start, bundle_len);
+    #else
+    SerialPrint("securemessageex: No cert bundle and no certificate. No HTTPS connection possible.", true);
+    storeError("securemessageex: No certifcates");
+    wfclient.setInsecure(); // Fallback if bundle isn't compiled
+    #endif
+  } else {
+    wfclient.setCACert(getCert(cacert).c_str());
+  } 
+
+
+  // 2. Initialize Connection
+  if (!http.begin(wfclient, URL.c_str())) {
+      SerialPrint("[HTTPS] Unable to connect to: " + URL, true);
+      storeError("Unable to connect to: " + URL);
+      return false;
+  }
+
+  // 3. Add Required Headers (Crucial for NOAA)
 // --- Content-Type header ---
 if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
 
 // --- Extra headers: newline-separated list ---
 if (extraHeaders.length() > 0) {
-int start = 0;
-while (true) {
-int end = extraHeaders.indexOf('\n', start);
-String line;
-if (end == -1)
-line = extraHeaders.substring(start);
-else
-line = extraHeaders.substring(start, end);
+  int start = 0;
+  while (true) {
+    int end = extraHeaders.indexOf('\n', start);
+    String line;
+    if (end == -1) line = extraHeaders.substring(start);
+    else    line = extraHeaders.substring(start, end);
 
-line.trim();
-if (line.length() > 0) {
-int colon = line.indexOf(':');
-if (colon > 0) {
-String key = line.substring(0, colon);
-String val = line.substring(colon + 1);
-key.trim();
-val.trim();
-if (key.length() > 0)
-http.addHeader(key, val);
-}
-}
-if (end == -1)
-break;
-start = end + 1;
-}
+    line.trim();
+    if (line.length() > 0) {
+      int colon = line.indexOf(':');
+      if (colon > 0) {
+        String key = line.substring(0, colon);
+        String val = line.substring(colon + 1);
+        key.trim();
+        val.trim();
+        if (key.length() > 0) http.addHeader(key, val);
+      }
+    }
+    if (end == -1) break;
+    start = end + 1;
+  }
 }
 
-// --- Select HTTP method ---
-if (method == "GET") {
+  // 4. Execute the  HTTP method ---
+  http.useHTTP10(true); //before http.GET(). This forces the server to send the whole payload as a steady stream without chunking, which is much easier for the esp32 to handle
+  if (method == "GET") {
 httpCode = http.GET();
 } else if (method == "POST") {
 httpCode = http.POST(body);
@@ -234,11 +272,103 @@ httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
 } else {
 httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
 }
+  // 5. Integrated Error Checking
+  if (httpCode <= 0) {
+      // --- CHECK 1 & 3: Connection/TLS Failure ---
+      SerialPrint("[HTTPS] Connection failed! Error: " + http.errorToString(httpCode), true);
+      storeError("HTTPS Connection Error: " + http.errorToString(httpCode));
+      
+      // Log heap to check for memory-related TLS failure
+      uint32_t freeHeap = ESP.getFreeHeap();
+      SerialPrint("[System] Free Heap: " + String(freeHeap, DEC) + " bytes", true);
+      if (freeHeap < 10000) {
+        storeError("securemessageex: Free Heap <10kb");
+      }
 
-payload = http.getString();
-http.end();
-return true;
+      // --- CHECK 2: SSL Specific Error ---
+      char lastError[100];
+      // Note: Using the underlying WiFiClientSecure for deep SSL errors
+      wfclient.lastError(lastError, 100);
+      if (strlen(lastError) > 0) {
+          SerialPrint("SSL Deep Error: " + String(lastError), true);
+          storeError("securemessageex: SSL Deep Error");
+      }
+  } else {
+      // --- CHECK 1 & 3: Server Response Error ---
+      if (httpCode != HTTP_CODE_OK) {
+          if (httpCode == 403) {
+              SerialPrint("securemessageex: 403. NOAA requires a User-Agent or coordinates are invalid.", true);
+              storeError("securemessageex: 403");
+          } else if (httpCode == 404) {
+              SerialPrint("Hint: 404 Not Found. Check URL formatting or grid coordinates.", true);
+              storeError("securemessageex: 404");
+          } else {
+            SerialPrint("Hint: " + String(httpCode) + " " + http.errorToString(httpCode), true);
+            storeError("securemessageex: " + String(httpCode) + " error");
+          }
+      }
+  }
+
+  // 6. Handle Payload
+  if (httpCode == HTTP_CODE_OK) {
+
+    if (!responseDoc) {
+      //read the data into payload
+      payload = http.getString();
+      http.end();
+      return true;
+    }
+
+    wfclient.setTimeout(5000); //the data stream may be too slow, so allow a greater timeout
+    DeserializationError error;
+
+    if (filter) {
+
+      //download the data to the SD Card
+      File dumpFile = SD.open("/Data/temp_stream.json", FILE_WRITE);
+      if (!dumpFile) {
+        SerialPrint("securemessageex: Failed to open SD for writing", true);
+        storeError("securemessageex: Failed to open SD for writing");
+        return false;
+      }
+      http.writeToStream(&dumpFile);
+      dumpFile.close();
+
+      dumpFile = SD.open("/Data/temp_stream.json", FILE_READ);
+      if (!dumpFile) {
+        SerialPrint("securemessageex: Failed to open SD for reading", true);
+        storeError("securemessageex: Failed to open SD for reading");
+        return false;
+      } else {
+        // Standard full deserialization
+        error = deserializeJson(*responseDoc, dumpFile);
+        dumpFile.close();
+      }
+    } else {
+      // Standard full deserialization
+      error = deserializeJson(*responseDoc, http.getStream());
+    }
+
+    http.end();
+
+    if (error) {
+        SerialPrint("securemessageex: JSON Deserialization failed: " + String(error.c_str()), true);
+        SerialPrint("The original URL: " + URL, true);
+        SerialPrint("securemessageex: HEAP MEMORY: " + String(ESP.getFreeHeap(), DEC) + " bytes", true);
+        storeError("securemessageex: JSON Deserialization failed");
+        return false;
+    }
+    return true;
+  }
+
+  http.end();
+  SerialPrint("securemessageex: HTTP_CODE_OK not returned", true);
+  storeError("securemessageex: HTTP_CODE_OK not returned");
+  #endif
+  return false;
 }
+
+
 
 bool Server_Message(String& URL, String& payload, int &httpCode) { 
   
@@ -278,8 +408,11 @@ int8_t CheckWifiStatus(bool trytoconnect) {
   int32_t rssi = WiFi.RSSI();
 
   //first just check if the status lists as accurate...
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {    
+    SerialPrint("WifiStatus: Connected with wifi.status() == WL_CONNECTED", true);
+
     I.WiFiStatus = 1;
+    return 1; //done!
   } else {
     I.WiFiStatus = 0;
   }
@@ -344,6 +477,8 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
 
   //attempt to connect to WiFi. this terminates my connection and restarts it. This should reset I.WiFiLastEvent to disconnect.
   WiFi.begin((char *) Prefs.WIFISSID, (char *) Prefs.WIFIPWD);
+  WiFi.setSleep(WIFI_PS_NONE);
+        
   SerialPrint("I.WiFiLastEvent: " + WiFiEventtoString(I.WiFiLastEvent), true);
     
   delay(100);
@@ -384,34 +519,6 @@ int16_t connectWiFi(uint8_t retryLimit) {
 
   if (CheckWifiStatus(false)==1) {
     SerialPrint("connectWiFi: WiFi connected", true);
-    #ifdef _USEUDP
-      IPAddress multicastIP(_USEUDP_MULTICAST);
-      //1. wifi connected
-      //2. Start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
-      
-      // Use beginMulticast() which properly handles multicast group joining
-      // This is the recommended approach for receiving multicast packets
-      //LAN_UDP.beginMulticast(multicastIP, _USEUDP);
-
-      //or just bind to the multicast IP and port
-      LAN_UDP.begin(multicastIP, _USEUDP);
-
-      SerialPrint("UDP multicast initialized on " + multicastIP.toString() + ":" + String(_USEUDP), true);
-      
-      #ifdef _USE32
-        // For ESP32, also set multicast TTL for sending (if needed)
-        // Note: beginMulticast() handles receiving, but we may need to set TTL for sending
-        // We'll set this on the actual LAN_UDP socket if possible
-        // Unfortunately, WiFiUDP doesn't expose the socket directly, so we rely on beginMulticast()
-        // which should handle both receiving and basic sending configuration
-      #endif
-      
-      #ifndef _USELOWPOWER
-      // Disable WiFi Sleep to ensure we don't miss packets
-      WiFi.setSleep(false);
-      #endif
-
-    #endif
     
     int16_t devIndex = Sensors.findMyDeviceIndex();
     if (devIndex != -1) {
@@ -443,6 +550,37 @@ int16_t connectWiFi(uint8_t retryLimit) {
   }
 
   return -1000; //failed to connect
+}
+
+bool connectUDP() {
+  #ifdef _USEUDP
+
+  #ifndef _USELOWPOWER
+    // Disable WiFi Sleep to ensure we don't miss packets
+    WiFi.setSleep(false);
+  #endif
+
+  IPAddress multicastIP(_USEUDP_MULTICAST);
+  //1. wifi connected
+  //2. Start the UDP server on the port defined (WiFiUDP automatically binds to device IP)
+  
+  if (LAN_UDP.begin(IPAddress(0,0,0,0), _USEUDP)) { //listen for any incoming packets
+    SerialPrint("UDP bound to port " + String(_USEUDP), true);
+  
+    
+    // Then join the multicast group specifically
+    // This allows the hardware to pass through packets sent to the multicast group
+    if (LAN_UDP.beginMulticast(multicastIP, _USEUDP)) {
+        SerialPrint("Joined Multicast Group: " + multicastIP.toString(), true);
+    }
+
+    
+    return true;
+
+  } 
+  
+#endif
+return false;
 }
 
 void APStation_Mode() {
@@ -2287,32 +2425,32 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "</table>";
   
   
-  WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "---------------------<br>";
 
     byte used[NUMSENSORS];
     for (byte j=0;j<NUMSENSORS;j++)  {
       used[j] = 255;
     }
 
-    byte usedINDEX = 0;  
+    byte usedINDEX = 0;
 
 
-  WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:100%\">";      
+  WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:100%\">";
   #ifdef _ISPERIPHERAL
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:100px\">Last Send</th><th style=\"width:50px\">Critical</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:300px\">Config</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:100px\">Last Send</th><th style=\"width:50px\">Critical</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:300px\">Config</th></tr>";
   #else
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>"; 
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>";
   #endif
   for (byte j=0;j<NUMSENSORS;j++)  {
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);    
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);
     if (sensor && sensor->IsSet) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
       if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
         used[usedINDEX++] = j;
         rootTableFill(j);
-        
+
         for (byte jj=j+1;jj<NUMSENSORS;jj++) {
-          ArborysSnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);    
+          ArborysSnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);
           if (sensor2 && sensor2->IsSet) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
             if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
@@ -2325,8 +2463,7 @@ void handlerForRoot(bool allsensors) {
     }
   }
 
-    
-  WEBHTML += "</table>";   
+  WEBHTML += "</table>";
 
 #ifdef _USEROOTCHART
   //add chart
@@ -2663,7 +2800,11 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Timezone Configuration</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><a href=\"/TimezoneSetup\" style=\"padding: 8px 16px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">Configure Timezone Settings</a></div>";
   
-  #ifdef _USETFT
+  // Device Name Configuration
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   // CYCLE fields
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleHeaderMinutes</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleHeaderMinutes\" value=\"" + (String) I.cycleHeaderMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
@@ -2682,13 +2823,7 @@ void handleCONFIG() {
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  #endif
 
-  // Device Name Configuration
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  #ifdef _USETFT
   // showTheseFlags - 8 individual checkboxes for each bit
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">showTheseFlags (Display Settings)</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
@@ -2844,7 +2979,7 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsSinceLast</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
 
-  #ifdef _USETFT
+  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.CLOCK_Y + "</div>";
   
@@ -3238,7 +3373,7 @@ void handleCONFIG_POST() {
       Prefs.isUpToDate = false; // Mark as needing to be saved
 
       //now update the DeviceStore with the new device name
-      ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(MY_DEVICE_INDEX);
+      ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(I.MY_DEVICE_INDEX);
       if (myDevice) {
         strncpy(myDevice->devName, newDeviceName.c_str(), sizeof(myDevice->devName) - 1);
         myDevice->devName[sizeof(myDevice->devName) - 1] = '\0';
@@ -5078,7 +5213,7 @@ void handleDeviceViewer() {
     registerHTTPMessage("DeviceViewer");
     WEBHTML = "";
     serverTextHeader("Device Viewer");
-    
+
     WEBHTML = WEBHTML + "<body>";
 
     // Navigation buttons to config pages
@@ -5098,8 +5233,8 @@ void handleDeviceViewer() {
     WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Ping</a> ";
     WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete</a>";
     WEBHTML = WEBHTML + "</div>";
-    
-    
+
+
     // Check for status messages from ping operations
     if (server.hasArg("ping")) {
         String pingStatus = server.arg("ping");
@@ -5113,7 +5248,7 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "</div>";
         }
     }
-    
+
     // Check for status messages from delete operations
     if (server.hasArg("delete")) {
         String deleteStatus = server.arg("delete");
@@ -5124,17 +5259,17 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "<strong>Success:</strong> Device '" + deviceName + "' and " + sensorCount + " associated sensors have been deleted.";
             WEBHTML = WEBHTML + "</div>";
             CURRENT_DEVICEVIEWER_DEVINDEX = 0;
-            CURRENT_DEVICEVIEWER_DEVNUMBER = 0;  //reset the device number
+            CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
         }
     }
-    
+
     if (server.hasArg("error")) {
         String errorType = server.arg("error");
         if (errorType == "no_devices") {
             WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; color: #856404; padding: 15px; margin: 10px 0; border: 1px solid #ffeaa7; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Warning:</strong> No devices available to ping.";
             WEBHTML = WEBHTML + "</div>";
-        } 
+        }
         else if (errorType == "device_not_found") {
             WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
             WEBHTML = WEBHTML + "<strong>Error:</strong> Device not found.";
@@ -5146,7 +5281,7 @@ void handleDeviceViewer() {
             WEBHTML = WEBHTML + "</div>";
         }
     }
-    
+
     // Reset to first device if no devices exist
     if (Sensors.getNumDevices() == 0) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #fff3cd; color: #856404; padding: 15px; margin: 10px 0; border: 1px solid #ffeaa7; border-radius: 4px;\">";
@@ -5157,10 +5292,9 @@ void handleDeviceViewer() {
         serverTextClose(200, true);
         return;
     }
-    
-    // Ensure there is at least 1 device in the queue, and I am in it!
+
     uint16_t myDeviceIndex = Sensors.findMyDeviceIndex();
-    if (myDeviceIndex == -1) {
+    if (myDeviceIndex == (uint16_t)-1) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
         WEBHTML = WEBHTML + "<strong>Error:</strong> Could not retrieve device information.";
         WEBHTML = WEBHTML + "</div>";
@@ -5178,8 +5312,7 @@ void handleDeviceViewer() {
           CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
         }
     }
-    
-    // Get current device
+
     ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
@@ -5190,15 +5323,13 @@ void handleDeviceViewer() {
         serverTextClose(200, true);
         return;
     }
-    
-    // Device information header
+
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
     bool isThisDevice = (CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex);
     WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((isThisDevice) ? " (this device)" : "") +"</h3>";
     WEBHTML = WEBHTML + "Local Device Index: " + String(CURRENT_DEVICEVIEWER_DEVINDEX);
     WEBHTML = WEBHTML + "</div>";
-    
-    // Device details
+
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
     WEBHTML = WEBHTML + "<h4>Device Information</h4>";
     WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
@@ -5207,7 +5338,6 @@ void handleDeviceViewer() {
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
     if (isThisDevice) {
-      //show alive since
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(I.ALIVESINCE ? dateify(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
     } else {
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Sent:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataSent ? dateify(device->dataSent, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
@@ -5217,8 +5347,7 @@ void handleDeviceViewer() {
     }
     WEBHTML = WEBHTML + "</table>";
     WEBHTML = WEBHTML + "</div>";
-    
-    // Count sensors for this device
+
     uint8_t sensorCount = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
         ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
@@ -5226,14 +5355,13 @@ void handleDeviceViewer() {
             sensorCount++;
         }
     }
-    
+
     WEBHTML = WEBHTML + "<div style=\"background-color: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #2196f3;\">";
     WEBHTML = WEBHTML + "<h4>Sensors (" + String(sensorCount) + " total)</h4>";
-    
+
     if (sensorCount == 0) {
         WEBHTML = WEBHTML + "<p>No sensors found for this device.</p>";
     } else {
-        // Sensor table
         WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse; margin-top: 10px;\">";
         WEBHTML = WEBHTML + "<tr style=\"background-color: #2196f3; color: white;\">";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor Name</th>";
@@ -5243,11 +5371,10 @@ void handleDeviceViewer() {
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Value</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Logged</th>";
         WEBHTML = WEBHTML + "</tr>";
-        
-        // Add sensor rows
+
         for (int16_t i = 0; i < NUMSENSORS; i++) {
             ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
-            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {                
+            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
                 WEBHTML = WEBHTML + "<tr>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsType) + "</td>";
@@ -5261,43 +5388,41 @@ void handleDeviceViewer() {
         WEBHTML = WEBHTML + "</table>";
     }
     WEBHTML = WEBHTML + "</div>";
-    
-    
+
+
     WEBHTML = WEBHTML + "</body></html>";
     serverTextClose(200, true);
 }
 
 void handleDeviceViewerNext() {
     registerHTTPMessage("DVNext");
-    
+
     if (Sensors.getNumDevices() > 0) {
-        
+
         CURRENT_DEVICEVIEWER_DEVINDEX++;
         CURRENT_DEVICEVIEWER_DEVNUMBER++;
         if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
           CURRENT_DEVICEVIEWER_DEVINDEX = 0;
           CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
         }
-        //move forward until we find a valid  device 
         while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
-          CURRENT_DEVICEVIEWER_DEVINDEX++; 
-          //note that we do not increment device number here, because we have not found another valid device yet!
+          CURRENT_DEVICEVIEWER_DEVINDEX++;
           if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES-1) {
             CURRENT_DEVICEVIEWER_DEVINDEX = 0;
             CURRENT_DEVICEVIEWER_DEVNUMBER = 0;
           }
         }
     }
-    
+
     server.sendHeader("Location", "/DEVICEVIEWER");
     server.send(302, "text/plain", "Redirecting to next device...");
 }
 
 void handleDeviceViewerPrev() {
     registerHTTPMessage("DVPrev");
-    
+
     if (Sensors.getNumDevices() == 0) {
-      
+
       server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
       server.send(302, "text/plain", "No devices available to view.");
     }
@@ -5310,48 +5435,41 @@ void handleDeviceViewerPrev() {
       CURRENT_DEVICEVIEWER_DEVNUMBER--;
     }
 
-    //now move back until we find a valid  device 
     while (Sensors.isDeviceInit(CURRENT_DEVICEVIEWER_DEVINDEX)==false) {
       if (CURRENT_DEVICEVIEWER_DEVINDEX <= 0) {
         CURRENT_DEVICEVIEWER_DEVINDEX = NUMDEVICES - 1;
         CURRENT_DEVICEVIEWER_DEVNUMBER = Sensors.getNumDevices()-1;
       } else {
-        //note that we only decrement viewer, not number
-        CURRENT_DEVICEVIEWER_DEVINDEX--;      
+        CURRENT_DEVICEVIEWER_DEVINDEX--;
       }
     }
 
-    
     server.sendHeader("Location", "/DEVICEVIEWER");
     server.send(302, "text/plain", "Redirecting to previous device...");
 }
 
 void handleDeviceViewerPing() {
     registerHTTPMessage("DVPing");
-    
-    // Check if we have any devices
+
     if (Sensors.getNumDevices() == 0) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
         server.send(302, "text/plain", "No devices available to ping.");
         return;
     }
-    
-    // Ensure current device index is valid
+
     if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
         CURRENT_DEVICEVIEWER_DEVINDEX = 0;
     }
-    
-    // Get current device
+
     ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
         return;
     }
-    
-    // Send ping request
+
     bool success = sendESPNowPingRequest(device, 3, true);
-    
+
     if (success) {
         server.sendHeader("Location", "/DEVICEVIEWER?ping=success");
         server.send(302, "text/plain", "Ping sent successfully.");
@@ -5362,26 +5480,21 @@ void handleDeviceViewerPing() {
 }
 
 void handleDeviceViewerDelete() {
-    registerHTTPMessage("DVDelete");  
-    
-    // Check if we have any devices
+    registerHTTPMessage("DVDelete");
+
     if (Sensors.getNumDevices() == 0) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
         server.send(302, "text/plain", "No devices available to delete.");
         return;
     }
 
-    
-    // Ensure current device index is valid
     if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
         CURRENT_DEVICEVIEWER_DEVINDEX = 0;
         server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
         server.send(302, "text/plain", "Invalid device index.");
         return;
     }
-    
-    
-    // Get current device
+
     ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
         server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
@@ -5395,20 +5508,17 @@ void handleDeviceViewerDelete() {
       return;
     }
 
-    // Store device name for confirmation message
     String deviceName = String(device->devName);
     uint8_t deletedSensors = Sensors.initDevice(CURRENT_DEVICEVIEWER_DEVINDEX);
-    
-    // Adjust current device index if needed
+
     if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
         CURRENT_DEVICEVIEWER_DEVINDEX = 0;
     }
-    
-    // Redirect back to device viewer with success message
+
     if (!device->IsSet) {
         server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
         server.send(302, "text/plain", "Device and sensors deleted successfully.");
-      } else {
+    } else {
         server.sendHeader("Location", "/DEVICEVIEWER?error=delete_failed");
         server.send(302, "text/plain", "Failed to delete device.");
     }
@@ -5969,7 +6079,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
 //handlers for sending data
 bool checkThisSensorTime(ArborysSnsType* Si) {
   //return true if it is time to send this sensor
-  if (!Si || Si->deviceIndex != MY_DEVICE_INDEX) return false;
+  if (!Si || Si->deviceIndex != I.MY_DEVICE_INDEX) return false;
   if (Si->timeLogged != 0 && Si->timeLogged < I.currentTime && I.currentTime - Si->timeLogged < 60*60*24 && bitRead(Si->Flags, 6) == 0 ) {
     if (Si->timeLogged + Si->SendingInt > I.currentTime) return false; //not time
   }
@@ -6011,7 +6121,7 @@ void wrapupSendData(ArborysSnsType* S) {
     for (int16_t i = 0; i < NUMSENSORS; i++) {
       ArborysSnsType* S = Sensors.getSensorBySnsIndex(i);
       if (!S) continue;
-      if (S->deviceIndex != MY_DEVICE_INDEX) continue; //don't send others sensors
+      if (S->deviceIndex != I.MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
       S->timeLogged = I.currentTime;
     }
@@ -6547,14 +6657,15 @@ bool receiveUDPMessage() {
     // Read packet data and verify all bytes were read
     size_t bytesRead = LAN_UDP.read((uint8_t*)buffer, packetSize);
 
-    LAN_UDP.flush(); //old method
+    //LAN_UDP.flush(); //old method
     LAN_UDP.clear(); //clear the buffer to avoid reading the same message twice
 
     if (bytesRead == sizeof(ESPNOW_type)) {
-      ESPNOW_type msg = {};
-      processLANMessage(&msg);        
+      ESPNOW_type msg;
+      memcpy(&msg, buffer, sizeof(ESPNOW_type));
+      free(buffer);
+      processLANMessage(&msg);
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP:%d", msg.msgType);
-        
       return true;
     } else {
       //assume this is a sensor data json buffer
