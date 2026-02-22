@@ -490,99 +490,49 @@ bool readDevicesSensorsSD() {
     return true;
 }
 
-bool writeErrorToSD() {
-    String filename = "/Data/DeviceErrors.txt";
-    File f = SD.open(filename, FILE_APPEND); // Open in append mode to the end of the file
-
-    if (f==false) {
-        storeError("writeErrorSD: Could not open error log",ERROR_SD_LOGOPEN,false); //do not store this error, to avoid infinite loop
-        f.close();
-        return false;
-    }
-
-    String logEntry = dateify(I.lastErrorTime) + (String) "," + I.lastErrorCode + "," + I.lastError;
-    if (f.println(logEntry) == false)   {
-      storeError("writeErrorSD: Could not write to error log",ERROR_SD_LOGWRITE,false); //do not store this error, to avoid infinite loop
-      f.close();
-      return false;
-    }
-    f.close();
-    
-    // Update the timestamp index file
-    updateTimestampIndex(filename.c_str());
-    
-    return true;
+bool writeErrorToSD(ERROR_STRUCT LASTERROR) {
+  return writeAnythingToSD("/Data/DeviceErrors.txt", &LASTERROR, sizeof(ERROR_STRUCT), true);    
 }
 
-int8_t readErrorFromSD(String* error, uint8_t MaxNumberofLines) {
-  //return the number of lines read, or -1 if failed to open file, -2 if file is empty, -3 if error is nullptr
-  if (error == nullptr) {
-    return -3; //error is nullptr
-  }
-  String filename = "/Data/DeviceErrors.txt";
-  File file = SD.open(filename, FILE_READ);
+int8_t readErrorFromSD(ERROR_STRUCT& LASTERROR, uint8_t NthFromLast) {
+
+
+  //open the file
+  File file = SD.open("/Data/DeviceErrors.txt", FILE_READ);
   if (file==false) {
-    return -1; //failed to open file
+    storeError("readErrorFromSD: Could not open file",ERROR_SD_ERRORREAD);
+    return false;
   }
-  if (file.size() <3) { //need at least 3 characters to read
+  if (file.size() < sizeof(ERROR_STRUCT)) {
     file.close();
-    return -2; //file is empty
+    storeError("readErrorFromSD: File is less than the size of an ERROR_STRUCT",ERROR_SD_ERRORFILESIZE);
+    return false;
   }
 
-  if (MaxNumberofLines == 0) MaxNumberofLines = 1;
-  if (MaxNumberofLines > 100) MaxNumberofLines = 100;
-  
-    // --- Step 1: Count the total number of lines ---
-    int totalLines = 0;
-    String line;
-    
-    // Note: Using 'file.readStringUntil('\n')' can be memory intensive for very large files.
-    // For this approach, it simplifies line-by-line reading.
-    // An alternative is manual character-by-character reading, which is more complex.
-    while (file.available()) {
-      line = file.readStringUntil('\n');
-      totalLines++;
-    }
-  
-    SerialPrint("readErrorFromSD: Total lines in file: ",false);
-    SerialPrint((String) totalLines,true);
-  
-    // Determine the starting line to read from
-    int startLine = totalLines - MaxNumberofLines;
-  
-    // Ensure startLine is not negative (if file has fewer lines than LINES_TO_READ)
-    if (startLine < 0) {
-      startLine = 0;
-    }
-    
-    SerialPrint("readErrorFromSD: Starting read from line: ",false);
-    SerialPrint((String) (startLine + 1),true); // +1 for 1-based indexing in human-readable output
-  
-    // --- Step 2: Reset pointer and read from the calculated start line ---
-    file.seek(0); // Move the file pointer back to the beginning
-  
-    // Read and discard lines until the startLine is reached
-    for (int i = 0; i < startLine; i++) {
-      if (file.available()) {
-        file.readStringUntil('\n'); // Discard line
-      } else {
-        break; // Reached end of file unexpectedly
-      }
-    }
-  
-    // --- Step 3: Read and save the last 'numLines' ---
-    int linesRead = 0;
-    while (file.available() && linesRead < MaxNumberofLines) {
-      line = file.readStringUntil('\n');
-      *error += line + "\n";
-      linesRead++;
-    }
+  uint16_t nEntries = file.size()/sizeof(ERROR_STRUCT);
+
+  if (file.size() != nEntries*sizeof(ERROR_STRUCT)) {
+    //file is not a multiple of the size of an ERROR_STRUCT
     file.close();
-    return linesRead;
+    storeError("readErrorFromSD: File does not contain ERROR_STRUCTs",ERROR_SD_ERRORFILESIZE);
+    deleteFiles("DeviceErrors.txt","/Data");
+    return false;
   }
 
+  //go to the end of the file
+  file.seek(file.size());
 
+  //rewind nthfromlast times
+  for (int i = 0; i < NthFromLast; i++) {
+    file.seek(file.position()-sizeof(ERROR_STRUCT));
+  }
 
+  //read the entry
+  file.read((uint8_t*)&LASTERROR, sizeof(ERROR_STRUCT));
+  file.close();
+
+  return true;
+}
 
   
 
@@ -868,10 +818,17 @@ double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t
 }
 
 uint16_t deleteFiles(const char* pattern,const char* directory) {
+  //deletes files in the specified directory that match the pattern
   //returns number of files deleted
   File dir = SD.open(directory); // Open the target directory
 
     String filename ;
+    String tempdir = (String) directory;
+
+  //remove trailing slash from directory if it exists
+  if (tempdir.endsWith("/")) {
+    tempdir.remove(tempdir.length() - 1);
+  }
 
   if (!dir) {
     storeError("deleteFiles: Could not open dir", ERROR_SD_OPENDIR);
@@ -893,7 +850,7 @@ uint16_t deleteFiles(const char* pattern,const char* directory) {
     
     if (matchPattern(filename.c_str(),  pattern)) {
         SerialPrint("Deleting: " + filename + "\n");
-        filename = String(directory) + "/" + filename;
+        filename = tempdir + "/" + filename;
       if (!SD.remove(filename)) {
         SerialPrint("Error deleting: " + filename + "\n");
         storeError(((String) "Error deleting: " + filename).c_str(), ERROR_SD_FILEDEL);
@@ -990,6 +947,29 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
     }
     file = root.openNextFile();
   }
+}
+
+
+bool writeAnythingToSD(const char* filename, const void* data, uint16_t size, bool append) {
+  File file = SD.open(filename, append ? FILE_APPEND : FILE_WRITE);
+  if (!file) {
+    storeError("writeAnythingToSD: Could not open file",ERROR_SD_FILEWRITE);
+    return false;
+  }
+  file.write((uint8_t*)data, size);
+  file.close();
+  return true;
+}
+
+bool readAnythingFromSD(const char* filename, const void* data, uint16_t size) {
+  File file = SD.open(filename, FILE_READ);
+  if (!file) {
+    storeError("readAnythingFromSD: Could not open file",ERROR_SD_FILEREAD);
+    return false;
+  }
+  file.read((uint8_t*)data, size);
+  file.close();
+  return true;
 }
 
 uint16_t read16(fs::File &f) {

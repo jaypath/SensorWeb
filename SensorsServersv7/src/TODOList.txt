@@ -1,0 +1,5 @@
+1. implement new time zone features. I stores DST info and UTC offset. Prefs only stores the time zone. remove time info from Prefs, which should only have immutable objects.
+2. calibration ability needs to be completed (need the function in sensors)
+3. implement plant database
+4. Create a new NVS key pair for sensor parameters, which will not be encrypted. This will include all current data, plus calibration min/max.
+

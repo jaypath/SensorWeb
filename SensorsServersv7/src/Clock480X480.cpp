@@ -48,11 +48,8 @@ void initClock480X480Graphics() {
 
 
 
-// 2. NUCLEAR FIX: Detach GPIO 39 from LGFX/SPI Hardware entirely
-    // This removes any "Alternate Function" status set by tft.init()
-    gpio_reset_pin(GPIO_NUM_39); 
-    
-    // 3. Manually Lock it HIGH
+
+    //temporarily write this high while we begin SD card initialization
     pinMode(39, OUTPUT);
     digitalWrite(39, HIGH);
 
@@ -62,7 +59,7 @@ void initClock480X480Graphics() {
     SPI.begin(48, 41, 47);  //SPI pins per https://homeding.github.io/boards/esp32s3/panel-4848S040.htm
     tft.printf("SD Card mounting...");
     
-    if(!SD.begin(42, SPI)){ 
+    if(!SD.begin(42, SPI, 4000000)){ 
 
       tft.setTextColor(TFT_RED);
       tft.println("SD Mount Failed. Halted!");
@@ -91,6 +88,8 @@ void initClock480X480Graphics() {
   
   tft.setTextColor(myScreen.FG_COLOR);
 
+    initRelays();
+
   tft.printf("Total heap: %d\n", ESP.getHeapSize());
   tft.printf("Free heap: %d\n", ESP.getFreeHeap());
   tft.printf("Total PSRAM: %d\n", ESP.getPsramSize());
@@ -99,6 +98,17 @@ void initClock480X480Graphics() {
 
 }
 
+
+void initRelays() {
+  pinMode(40, OUTPUT);
+  pinMode(2, OUTPUT); // Note: Watch for display crosstalk on this pin
+  pinMode(1, OUTPUT);
+  
+  // Start with all relays OFF
+  digitalWrite(40, LOW);
+  digitalWrite(2, LOW); 
+  digitalWrite(1, LOW);
+}
 
 void clockLoop() {
 
@@ -147,9 +157,35 @@ void checkTouchScreen() {
           myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
         }
         else if (myScreen.screenNum==1) {
-          //touched the status screen
-          myScreen.screenNum=2;
-          myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
+
+          //print the x,y touch coordinates at the top right of the screen
+          tft.setCursor(425,0);
+          tft.setTextDatum(TR_DATUM);
+          tft.setTextColor(myScreen.FG_COLOR);
+          tft.drawString("X: " + String(myScreen.touchX) + " Y: " + String(myScreen.touchY),475,0);
+          delay(3000);
+
+          // Determine if a relay button was pressed
+          int startY = 380;
+          int btnW = 140;
+          int gap = 15;
+
+          if (myScreen.touchY >= startY && myScreen.touchY <= startY + 60) {
+              for (int i = 0; i < 3; i++) {
+                int btnX = 15 + (i * (btnW + gap));
+                if (myScreen.touchX >= btnX && myScreen.touchX <= btnX + btnW) {
+                  myScreen.relayStates[i] = !myScreen.relayStates[i];
+                  int pins[] = {40, 2, 1};
+                  digitalWrite(pins[i], myScreen.relayStates[i] ? HIGH : LOW);
+                  fcnDrawStatusScreen(); // Now works with the fix above
+                }
+              } 
+              
+          } else {
+            //touched the status screen but not the button
+            myScreen.screenNum=2;
+            myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
+          }
         }
         else if (myScreen.screenNum==2) {
           //touched the weather screen
@@ -172,9 +208,9 @@ void checkTouchScreen() {
 void fcnCheckScreen() {
   checkTouchScreen();
 
-  // Re-assert 16-bit RGB565 so all drawing (fillScreen, text, BMP) is correct.
+  // Re-assert 16-bit RGB565 so all drawing (fillScreen, text, shapes, BMP) is correct.
   // Something after init (e.g. shared tftPrint/clear/setTextFont) can alter panel state.
-  //tft.setColorDepth(16);
+  tft.setColorDepth(16);
 
   if (myScreen.screenChangeTimer<I.currentTime && myScreen.screenNum!=0) myScreen.screenNum=0;
 
@@ -196,10 +232,13 @@ void fcnCheckScreen() {
 }
 
 byte fcnDrawStatusScreen() {
+// Allow drawing if we are switching to the screen OR if we are already on it
+if (myScreen.screenNum != 1) {
+  
+  return 0;
+}
+myScreen.oldScreenNum = 1;
 
-  if ((myScreen.screenNum==1 && myScreen.oldScreenNum!=1 && myScreen.screenChangeTimer>I.currentTime) ) {
-    myScreen.oldScreenNum=myScreen.screenNum;
-  }   else return 0;
 
   //clear tft
   tft.fillScreen(myScreen.BG_COLOR);
@@ -235,6 +274,34 @@ byte fcnDrawStatusScreen() {
   tft.drawString("UDP Messages Received today: " + (String) I.UDP_RECEIVES,0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
   tft.drawString("UDP Messages Sent today: " + (String) I.UDP_SENDS,0,y);
+
+
+  // --- Relay Buttons Row ---
+  tft.setColorDepth(16);  // ensure shapes use 16-bit (text path can change driver state)
+  int btnW = 140;
+  int btnH = 60;
+  int gap = 15;
+  int startY = 380; // Positioned towards the bottom
+
+  for (int i = 0; i < 3; i++) {
+      int btnX = 15 + (i * (btnW + gap));
+      uint16_t btnColor = myScreen.relayStates[i] ? TFT_GREEN : (uint16_t)0x7BEF;  // 0x7BEF = dark grey RGB565 (TFT_DARKGREY not in globals)
+      uint16_t textColor = myScreen.relayStates[i] ? TFT_BLACK : TFT_WHITE;
+
+      if (myScreen.relayStates[i]) {
+          tft.fillRoundRect(btnX + 4, startY + 4, btnW, btnH, 8, btnColor);
+      } else {
+          tft.fillRoundRect(btnX, startY, btnW, btnH, 8, btnColor);
+          tft.drawRoundRect(btnX, startY, btnW, btnH, 8, TFT_WHITE);
+      }
+
+      tft.setFont(&fonts::Font2);
+      tft.setTextColor(textColor);
+      tft.setTextDatum(MC_DATUM);
+      String label = "R" + String(i + 1) + (myScreen.relayStates[i] ? ".ON" : ".OFF");
+      tft.drawString(label, btnX + (btnW / 2), startY + (btnH / 2));
+  }
+  tft.setTextDatum(TL_DATUM);
 
   return 1;
 }

@@ -5,27 +5,98 @@
 #include "Devices.hpp"
 #include "utility.hpp"
 
+
+
+//global google cert valid to 2036
+#include <Arduino.h>
+
+/*
+// Use 'static const char' with 'PROGMEM' to keep this in Flash memory
+static const char root_ca_google[] PROGMEM = "-----BEGIN CERTIFICATE-----
+MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw\n
+CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\n
+MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw\n
+MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp\n
+Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA\n
+A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo\n
+27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w\n
+Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw\n
+TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl\n
+qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH\n
+szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8\n
+Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk\n
+MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92\n
+wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p\n
+aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN\n
+VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID\n
+AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E\n
+FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb\n
+C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe\n
+QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy\n
+h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4\n
+7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J\n
+ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef\n
+MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/\n
+Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT\n
+6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ\n
+0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm\n
+2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb\n
+bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n
+-----END CERTIFICATE-----";
+*/
+
 STRUCT_GOOGLESHEET GSheetInfo;
 extern STRUCT_CORE I;
 extern Devices_Sensors Sensors;
 
+
+  
 bool initGsheet() {
     // Set the callback for Google API access token generation status (for debug only)
     GSheet.setTokenCallback(tokenStatusCallback);
     // Set the seconds to refresh the auth token before expire (60 to 3540, default is 300 seconds)
     GSheet.setPrerefreshSeconds(300);
-
+    //Gsheet.setCert(root_ca_google);
     
     //Begin the access token generation for Google API authentication
     GSheet.begin(GSheetInfo.clientEmail, GSheetInfo.projectID, GSheetInfo.privateKey);
     if (!GSheet.ready()) {
-        SerialPrint("ERROR: GSheet not ready, client email: " + String(GSheetInfo.clientEmail) + " project ID: " + String(GSheetInfo.projectID),true);
+        tftPrint("GSHEET INIT FAILED.", true, TFT_RED);
+        storeError("Gsheet initialization failed");
+        String reason = GSheet.errorReason();
+        if (reason.length() > 0) SerialPrint("GSheet not ready reason: " + reason, true);
         return false;
     }
     return true;
 }
 
 
+void startGsheet() {   
+    if (GSheetInfo.useGsheet) {
+        tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+        
+        // Load credentials; if missing/empty, initialize defaults
+      if (!readGsheetInfoSD() ||
+      strlen(GSheetInfo.clientEmail) == 0 ||
+      strlen(GSheetInfo.projectID) == 0 ||
+      strlen(GSheetInfo.privateKey) == 0) {
+        initGsheetInfo();
+        storeGsheetInfoSD();        
+        }
+
+      // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
+        if (CheckWifiStatus(false)==1 && I.currentTime > 1000) {
+            initGsheet();
+        } else {
+            tftPrint("GSHEET NOT READY - WiFi not connected or time not set", true, TFT_RED);
+            storeError("Gsheet not ready - WiFi not connected or time not set");
+            return;
+        }
+
+    }    else {
+        tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
+    }
+}
 
 void initGsheetInfo() {
     GSheetInfo.useGsheet = true;
@@ -65,6 +136,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_deleteSpreadsheetByID");
         GSheetInfo.lastErrorTime = I.currentTime;
         SerialPrint("ERROR: failed to delete spreadsheet",true);
+        storeError("Gsheet: failed to delete spreadsheet",ERROR_GSHEET_DELETE,true);
         return false;
     }
   }
@@ -88,6 +160,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_deleteSpreadsheetByName");
         GSheetInfo.lastErrorTime = I.currentTime;
         SerialPrint("ERROR: Too many delete attempts",true);
+        storeError("Gsheet: too many delete attempts",ERROR_GSHEET_DELETE,true);
         return false;
     }
     SerialPrint(" OK");
@@ -261,6 +334,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
         response.clear(); // Clean up FirebaseJson
         spreadsheet.clear(); // Clean up FirebaseJson
         SerialPrint(" ERROR: failed to create spreadsheet",true);
+        storeError("Gsheet: failed to create spreadsheet",ERROR_GSHEET_CREATE,true);
         return 0;
     }
 }
@@ -270,6 +344,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     if (strncmp(fileID, "ERROR", 5) == 0 || strlen(fileID) == 0) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: no valid file ID");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
+        storeError("Gsheet: no valid file ID for headers",ERROR_GSHEET_CREATE,true);
         GSheetInfo.lastErrorTime = I.currentTime;
         SerialPrint(" ERROR: no valid file ID",true);
         return false;
@@ -301,7 +376,15 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     valueRange.clear();
     response.clear();
     SerialPrint(" OK",true);
-    return success;
+    if (!success) {
+        snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
+        snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
+        storeError("Gsheet: failed to create headers",ERROR_GSHEET_CREATE,true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        SerialPrint(" ERROR: failed to create headers",true);
+        return false;
+    }
+    return true;
 }
     
   
@@ -323,7 +406,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
         if (success==0 || strlen(GSheetInfo.GsheetID)==0 || strncmp(GSheetInfo.GsheetID,"ERROR",5)==0) {
             snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR:%s",GSheetInfo.GsheetID);
             snprintf(GSheetInfo.lastGsheetFunction,30,"file_createSpreadsheet");
-            storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_CREATE,true);
+            storeError("Gsheet: failed to create spreadsheet",ERROR_GSHEET_CREATE,true);
             GSheetInfo.lastErrorTime = I.currentTime;
             SerialPrint("ERROR: failed to create spreadsheet",true);
             return false;
@@ -486,7 +569,7 @@ bool file_sheetExists(String fileID) {
     String contentType = "";   // none for GET
     String body = "";
     String resp;
-    int code;
+    int16_t code;
     // Use "" or "*" for embedded CA bundle (see sdkconfig.defaults); or SD path e.g. "/Certificates/Google.crt"
     //String cacert = "/Certificates/Google.crt"; //use the SD card certificate
     String cacert = ""; //use the ESP-IDF certificate bundle
@@ -521,7 +604,7 @@ bool file_createUserPermission(String fileID, bool notify, const char* message) 
     
     String headers = "Authorization: Bearer " + token + "\nContent-Type: application/json";
     String resp;
-    int code;
+    int16_t code;
     // Use "" or "*" for embedded CA bundle; or SD path "/Certificates/Google.crt"
     //String cacert = "/Certificates/Google.crt"; //use the SD card certificate
     String cacert = ""; //use the ESP-IDF certificate bundle

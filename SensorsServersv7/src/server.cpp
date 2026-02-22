@@ -2,7 +2,6 @@
 #include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
-
 #ifdef _USETFT
   #ifdef _ISCLOCK480X480
     #include "Clock480X480.hpp"
@@ -31,6 +30,9 @@
 extern WiFiUDP LAN_UDP;
 #endif
 
+#ifdef _ISPERIPHERAL
+extern STRUCT_SNSHISTORY SensorHistory;
+#endif
 
 
 //wifi event registration 
@@ -189,8 +191,8 @@ extern "C" {
 }
 #endif
 
-bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders, JsonDocument* responseDoc, const JsonDocument* filter) {
-  #ifndef _ISPERIPHERAL
+bool Server_SecureMessageEx(String& URL, String& payload, int16_t& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders, JsonDocument* responseDoc, const JsonDocument* filter, bool allowInsecure) {
+  
   if (CheckWifiStatus(false)!=1)
   return false;
 
@@ -199,29 +201,37 @@ bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String&
 
 
   //0. reserve a block to start off any json parsing
+  /*
   if (responseDoc) {
     responseDoc->clear(); 
     (*responseDoc)[0] = 0; // Forces an initial allocation block
     responseDoc->clear(); // Content is gone, but the allocated block remains
   }
-  
+    */
+   if (responseDoc) {
+    responseDoc->clear(); 
+   }
+    
 
   // 1. Setup Security
-  bool use_bundle = (cacert.length() == 0 || cacert == "*" || cacert == "bundle");
+  if (!allowInsecure) {
+    bool use_bundle = (cacert.length() == 0 || cacert == "*" || cacert == "bundle");
 
-  if (use_bundle) {
-    #if defined(_USE_CERT_BUNDLE)
-    size_t bundle_len = (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start);
-    wfclient.setCACertBundle(x509_crt_imported_bundle_bin_start, bundle_len);
-    #else
-    SerialPrint("securemessageex: No cert bundle and no certificate. No HTTPS connection possible.", true);
-    storeError("securemessageex: No certifcates");
-    wfclient.setInsecure(); // Fallback if bundle isn't compiled
-    #endif
+    if (use_bundle) {
+      #if defined(_USE_CERT_BUNDLE)
+      size_t bundle_len = (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start);
+      wfclient.setCACertBundle(x509_crt_imported_bundle_bin_start, bundle_len);
+      #else
+      SerialPrint("securemessageex: No cert bundle and no certificate. No HTTPS connection possible.", true);
+      storeError("securemessageex: No certifcates");
+      wfclient.setInsecure(); // Fallback if bundle isn't compiled
+      #endif
+    } else {
+      wfclient.setCACert(getCert(cacert).c_str());
+    } 
   } else {
-    wfclient.setCACert(getCert(cacert).c_str());
-  } 
-
+    wfclient.setInsecure();
+  }
 
   // 2. Initialize Connection
   if (!http.begin(wfclient, URL.c_str())) {
@@ -232,46 +242,46 @@ bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode, String&
 
   // 3. Add Required Headers (Crucial for NOAA)
 // --- Content-Type header ---
-if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
+  if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
 
 // --- Extra headers: newline-separated list ---
-if (extraHeaders.length() > 0) {
-  int start = 0;
-  while (true) {
-    int end = extraHeaders.indexOf('\n', start);
-    String line;
-    if (end == -1) line = extraHeaders.substring(start);
-    else    line = extraHeaders.substring(start, end);
+  if (extraHeaders.length() > 0) {
+   int start = 0;
+    while (true) {
+      int end = extraHeaders.indexOf('\n', start);
+      String line;
+      if (end == -1) line = extraHeaders.substring(start);
+      else    line = extraHeaders.substring(start, end);
 
-    line.trim();
-    if (line.length() > 0) {
-      int colon = line.indexOf(':');
-      if (colon > 0) {
-        String key = line.substring(0, colon);
-        String val = line.substring(colon + 1);
-        key.trim();
-        val.trim();
-        if (key.length() > 0) http.addHeader(key, val);
+      line.trim();
+      if (line.length() > 0) {
+        int colon = line.indexOf(':');
+        if (colon > 0) {
+          String key = line.substring(0, colon);
+          String val = line.substring(colon + 1);
+          key.trim();
+          val.trim();
+          if (key.length() > 0) http.addHeader(key, val);
+        }
       }
+      if (end == -1) break;
+      start = end + 1;
     }
-    if (end == -1) break;
-    start = end + 1;
   }
-}
 
   // 4. Execute the  HTTP method ---
   http.useHTTP10(true); //before http.GET(). This forces the server to send the whole payload as a steady stream without chunking, which is much easier for the esp32 to handle
   if (method == "GET") {
-httpCode = http.GET();
-} else if (method == "POST") {
-httpCode = http.POST(body);
-} else if (method == "DELETE") {
-httpCode = http.sendRequest("DELETE", (uint8_t*)nullptr, 0);
-} else if (method == "PATCH") {
-httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
-} else {
-httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
-}
+  httpCode = http.GET();
+  } else if (method == "POST") {
+  httpCode = http.POST(body);
+  } else if (method == "DELETE") {
+  httpCode = http.sendRequest("DELETE", (uint8_t*)nullptr, 0);
+  } else if (method == "PATCH") {
+  httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
+  } else {
+  httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
+  }
   // 5. Integrated Error Checking
   if (httpCode <= 0) {
       // --- CHECK 1 & 3: Connection/TLS Failure ---
@@ -293,81 +303,136 @@ httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length(
           SerialPrint("SSL Deep Error: " + String(lastError), true);
           storeError("securemessageex: SSL Deep Error");
       }
+
+      storeError("HTTPS Error: " + URL);
+      
   } else {
       // --- CHECK 1 & 3: Server Response Error ---
       if (httpCode != HTTP_CODE_OK) {
-          if (httpCode == 403) {
-              SerialPrint("securemessageex: 403. NOAA requires a User-Agent or coordinates are invalid.", true);
-              storeError("securemessageex: 403");
-          } else if (httpCode == 404) {
-              SerialPrint("Hint: 404 Not Found. Check URL formatting or grid coordinates.", true);
-              storeError("securemessageex: 404");
-          } else {
-            SerialPrint("Hint: " + String(httpCode) + " " + http.errorToString(httpCode), true);
-            storeError("securemessageex: " + String(httpCode) + " error");
-          }
-      }
-  }
-
-  // 6. Handle Payload
-  if (httpCode == HTTP_CODE_OK) {
-
-    if (!responseDoc) {
-      //read the data into payload
-      payload = http.getString();
-      http.end();
-      return true;
-    }
-
-    wfclient.setTimeout(5000); //the data stream may be too slow, so allow a greater timeout
-    DeserializationError error;
-
-    if (filter) {
-
-      //download the data to the SD Card
-      File dumpFile = SD.open("/Data/temp_stream.json", FILE_WRITE);
-      if (!dumpFile) {
-        SerialPrint("securemessageex: Failed to open SD for writing", true);
-        storeError("securemessageex: Failed to open SD for writing");
+        if (httpCode == 304) {
+          SerialPrint("securemessageex: 304. Not Modified and no new data.", true);
+          //not an error, just no new data          
+        }
+        else if (httpCode == 403) {
+            SerialPrint("securemessageex: 403. User-Agent or coordinates requried?", true);
+            storeError("securemessageex: 403");
+        } else if (httpCode == 404) {
+            SerialPrint("404 Not Found. Check URL formatting.", true);
+            storeError("securemessageex: 404");
+        } else {
+          SerialPrint("Code: " + String(httpCode) + " " + http.errorToString(httpCode), true);
+          storeError("securemessageex: " + String(httpCode) + " error");
+        }      
+        http.end();
         return false;
-      }
-      http.writeToStream(&dumpFile);
-      dumpFile.close();
-
-      dumpFile = SD.open("/Data/temp_stream.json", FILE_READ);
-      if (!dumpFile) {
-        SerialPrint("securemessageex: Failed to open SD for reading", true);
-        storeError("securemessageex: Failed to open SD for reading");
-        return false;
+      
       } else {
-        // Standard full deserialization
-        error = deserializeJson(*responseDoc, dumpFile);
-        dumpFile.close();
+        // 6. Handle Payload
+        // Create a buffer in PSRAM. 
+        // We use a pointer to ensure we control the allocation.
+
+        // Check how much data the server is sending
+        int contentLength = http.getSize();
+
+        // Create a buffer in PSRAM. 
+        // We use a pointer to ensure we control the allocation.
+        char* psramBuffer = nullptr;
+
+        if (contentLength > 0) {
+          // Allocate exact size + 1 for null terminator
+          psramBuffer = (char*)ps_malloc(contentLength + 1024);
+        } else {
+          // If Content-Length is unknown (chunked), allocate a safe large block
+          // NOAA responses are rarely over 100KB, but PSRAM is huge.
+          psramBuffer = (char*)ps_malloc(512 * 1024); 
+        }
+
+        if (!psramBuffer) {
+          SerialPrint("securemessageex: PSRAM allocation failed!", true);
+          http.end();
+          return false;
+        }
+
+        // Use a stream to fill our PSRAM buffer
+        WiFiClient* stream = http.getStreamPtr();
+        size_t bytesRead = 0;
+        uint32_t startMs = millis();
+        // Fill the buffer manually to ensure we don't hit timing gaps
+        while (http.connected() && (contentLength < 0 || bytesRead < contentLength)) {
+          while (stream->available()) {
+              psramBuffer[bytesRead++] = stream->read();
+              startMs = millis(); // Reset timeout on every byte
+          }
+          if (millis() - startMs > 5000) break; // 5s gap timeout
+        }
+        psramBuffer[bytesRead] = '\0'; // Null terminate
+
+        http.end();
+
+        DeserializationError error;
+
+        // Now deserialize from the stable PSRAM buffer
+        if (filter) {
+          error = deserializeJson(*responseDoc, (const char*)psramBuffer, DeserializationOption::Filter(*filter));
+        } else {
+          error = deserializeJson(*responseDoc, (const char*)psramBuffer);
+        }
+
+        // CRITICAL: Free the PSRAM memory
+        free(psramBuffer);
+
+/*
+//old method used SD card for buffering
+          //download the data to the SD Card
+          File dumpFile = SD.open("/Data/temp_stream.json", FILE_WRITE);
+          if (!dumpFile) {
+            SerialPrint("securemessageex: Failed to open SD for writing", true);
+            storeError("securemessageex: Failed to open SD for writing");
+            return false;
+          }
+          http.writeToStream(&dumpFile);
+          dumpFile.close();
+
+          dumpFile = SD.open("/Data/temp_stream.json", FILE_READ);
+          if (!dumpFile) {
+            SerialPrint("securemessageex: Failed to open SD for reading", true);
+            storeError("securemessageex: Failed to open SD for reading");
+            return false;
+          } else {
+            // Standard full deserialization
+            error = deserializeJson(*responseDoc, dumpFile, DeserializationOption::Filter(filter));
+            dumpFile.close();
+          }
+*/
+
+        
+        if (error) {
+          
+            SerialPrint("securemessageex: JSON Deserialization failed: " + String(error.c_str()), true);
+            SerialPrint("The original URL: " + URL, true);
+            SerialPrint("securemessageex: HEAP MEMORY: " + String(ESP.getFreeHeap(), DEC) + " bytes", true);
+            SerialPrint("securemessageex: Error Code: " + String(error.c_str()), true);
+            storeError("securemessageex: JSON deserialization error: "  + String(error.c_str()));
+    
+            if (error == DeserializationError::IncompleteInput) {
+                SerialPrint("securemessageex: IncompleteInput", true);
+                storeError("securemessageex: IncompleteInput");
+            } else if (error == DeserializationError::NoMemory) {
+                SerialPrint("securemessageex: NoMemory", true);
+                storeError("securemessageex: NoMemory");
+            } else if (error == DeserializationError::InvalidInput) {
+                SerialPrint("securemessageex: InvalidInput", true);
+                storeError("securemessageex: InvalidInput");
+            }
+
+            
+            return false;
+        }
+        return true;
       }
-    } else {
-      // Standard full deserialization
-      error = deserializeJson(*responseDoc, http.getStream());
-    }
-
-    http.end();
-
-    if (error) {
-        SerialPrint("securemessageex: JSON Deserialization failed: " + String(error.c_str()), true);
-        SerialPrint("The original URL: " + URL, true);
-        SerialPrint("securemessageex: HEAP MEMORY: " + String(ESP.getFreeHeap(), DEC) + " bytes", true);
-        storeError("securemessageex: JSON Deserialization failed");
-        return false;
-    }
-    return true;
   }
-
-  http.end();
-  SerialPrint("securemessageex: HTTP_CODE_OK not returned", true);
-  storeError("securemessageex: HTTP_CODE_OK not returned");
-  #endif
   return false;
 }
-
 
 
 bool Server_Message(String& URL, String& payload, int &httpCode) { 
@@ -662,7 +727,7 @@ void APStation_Mode() {
         tft.printf("WiFi: %s, Location: %s, Time: %s",
           (Prefs.HAVECREDENTIALS)?"Y":"N",
           (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0)?"Y":"N",
-          (Prefs.TimeZoneOffset!=0)?"Y":"N");
+          (Prefs.TimeZoneOffset <= 50400)?"Y":"N");
         #endif
 
       }
@@ -728,13 +793,10 @@ String urlEncode(const String& str) {
 // 1. HELPER FUNCTIONS - Reusable logic for WiFi, location, and timezone
 //    - connectToWiFi()              : Connect to WiFi network
 //    - lookupLocationFromAddress()  : Get coordinates from address
-//    - autoDetectTimezone()         : Auto-detect timezone settings
-//    - saveTimezoneSettings()       : Save timezone to preferences
 //
 // 2. API HANDLERS - RESTful JSON endpoints for AJAX calls
 //    - POST /api/wifi               : Connect to WiFi (returns JSON)
 //    - POST /api/location           : Lookup location (returns JSON)
-//    - GET  /api/timezone           : Auto-detect timezone (returns JSON)
 //    - POST /api/timezone           : Save timezone (returns JSON)
 //    - POST /api/complete-setup     : Complete setup (returns JSON)
 //    - GET  /api/setup-status       : Get setup completion status (returns JSON)
@@ -744,11 +806,6 @@ String urlEncode(const String& str) {
 //      Step 1: WiFi Configuration
 //      Step 2: Location Setup (optional)
 //      Step 3: Timezone Configuration
-//
-// 4. LEGACY HANDLERS - Backward compatible (still functional)
-//    - handleTimezoneSetup()        : Old timezone page
-//    - handleTimezoneSetup_POST()   : Now uses helper functions
-//    - handleWeatherAddress()       : Now uses helper functions
 //
 // Benefits:
 //   - Cleaner code separation
@@ -854,49 +911,6 @@ bool lookupLocationFromAddress(const String& street, const String& city, const S
   return result;
 }
 
-/**
- * Helper: Auto-detect timezone from IP location
- * Returns: true if detection successful, false otherwise
- */
-bool autoDetectTimezone(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
-  if (CheckWifiStatus(false)!=1) {
-    SerialPrint("autoDetectTimezone: WiFi not connected", true);
-    return false;
-  }
-  
-  // Call existing timezone detection function
-  bool result = getTimezoneInfo(utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
-  
-  if (result) {
-    SerialPrint("Timezone detected: UTC offset = " + String(*utc_offset), true);
-  } else {
-    SerialPrint("Timezone detection failed, using defaults", true);
-    // Set reasonable defaults (EST)
-    *utc_offset = -18000;
-    *dst_enabled = true;
-    *dst_start_month = 3;
-    *dst_start_day = 10;
-    *dst_end_month = 11;
-    *dst_end_day = 3;
-  }
-  
-  return result;
-}
-
-/**
- * Helper: Save timezone settings to preferences
- */
-void saveTimezoneSettings(int32_t utc_offset, bool dst_enabled, uint8_t dst_start_month, uint8_t dst_start_day, uint8_t dst_end_month, uint8_t dst_end_day) {
-  Prefs.TimeZoneOffset = utc_offset;
-  Prefs.DST = dst_enabled;
-  Prefs.DSTStartMonth = dst_start_month;
-  Prefs.DSTStartDay = dst_start_day;
-  Prefs.DSTEndMonth = dst_end_month;
-  Prefs.DSTEndDay = dst_end_day;
-  Prefs.isUpToDate = false;
-  
-  SerialPrint("Timezone settings saved: UTC offset = " + String(utc_offset), true);
-}
 
 // ==================== API HANDLERS (JSON RESPONSES) ====================
 
@@ -986,42 +1000,65 @@ void apiLookupLocation() {
  */
 void apiDetectTimezone() {
   registerHTTPMessage("API_TZ");
-  int32_t utc_offset;
-  bool dst_enabled;
-  uint8_t dst_start_month, dst_start_day, dst_end_month, dst_end_day;
   
-  bool success = autoDetectTimezone(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day);
+  bool success = getTimezoneInfo();
+  if (success==false) {
+    Prefs.TimeZoneOffset = 90000; //some arbitrarily large and impossible value
+  }
+
   
   String json = "{\"success\":" + String(success ? "true" : "false") + 
-                ",\"utc_offset\":" + String(utc_offset) +
-                ",\"dst_enabled\":" + String(dst_enabled ? "true" : "false") +
-                ",\"dst_start_month\":" + String(dst_start_month) +
-                ",\"dst_start_day\":" + String(dst_start_day) +
-                ",\"dst_end_month\":" + String(dst_end_month) +
-                ",\"dst_end_day\":" + String(dst_end_day) + "}";
+                ",\"utc_offset\":" + String(Prefs.TimeZoneOffset) +
+                ",\"dst_enabled\":" + String(I.DST != 0 ? "true" : "false") +
+                ",\"dst_offset\":" + String(I.DSTOffset) +
+                ",\"dst_start_date\":" + String(I.DSTStartUnixTime) +
+                ",\"dst_end_date\":" + String(I.DSTEndUnixTime) + "}";
   
   server.send(200, "application/json", json);
 }
 
-/**
- * API: Save timezone settings
- * POST /api/timezone
- * Parameters: utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day
- * Returns: JSON with status
- */
 void apiSaveTimezone() {
   registerHTTPMessage("API_TZ");
   
   int32_t utc_offset = server.hasArg("utc_offset") ? server.arg("utc_offset").toInt() : 0;
   bool dst_enabled = server.hasArg("dst_enabled") ? (server.arg("dst_enabled") == "true" || server.arg("dst_enabled") == "1") : false;
-  uint8_t dst_start_month = server.hasArg("dst_start_month") ? server.arg("dst_start_month").toInt() : 3;
-  uint8_t dst_start_day = server.hasArg("dst_start_day") ? server.arg("dst_start_day").toInt() : 10;
-  uint8_t dst_end_month = server.hasArg("dst_end_month") ? server.arg("dst_end_month").toInt() : 11;
-  uint8_t dst_end_day = server.hasArg("dst_end_day") ? server.arg("dst_end_day").toInt() : 3;
+  uint32_t dst_start_date = server.hasArg("dst_start_date") ? server.arg("dst_start_date").toInt() : 0;
+  uint32_t dst_end_date = server.hasArg("dst_end_date") ? server.arg("dst_end_date").toInt() : 0;
+  int32_t dst_offset = server.hasArg("dst_offset") ? server.arg("dst_offset").toInt() : 0;
+
+  Prefs.TimeZoneOffset = utc_offset;
+  I.DST = dst_enabled?0:-1,0; //note that 0 still means DST is used, but -1 means no DST info found
+  I.DSTStartUnixTime = dst_start_date;
+  I.DSTEndUnixTime = dst_end_date;
+  I.DSTOffset = dst_offset;
+  Prefs.isUpToDate = false;
+
+  String json = "{\"success\":true,\"message\":\"Timezone settings saved\"}";
+  server.send(200, "application/json", json);
   
-  saveTimezoneSettings(utc_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
-  
-  server.send(200, "application/json", "{\"success\":true}");
+  SerialPrint("Timezone settings saved: UTC offset = " + String(utc_offset), true);
+}
+
+void handleSNS_READ_NOW() {
+  #ifdef _ISPERIPHERAL
+  registerHTTPMessage("API_SNS_READ_NOW");
+  int16_t snsType = server.hasArg("snsType") ? server.arg("snsType").toInt() : 0;
+  int16_t snsID = server.hasArg("snsID") ? server.arg("snsID").toInt() : 0;
+  int16_t snsIndex = Sensors.findMySensorBySnsTypeAndID(snsType, snsID);
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsIndex);
+  double value = 0;
+  if (sensor == nullptr) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Sensor not found\"}");
+    return;
+  }
+  int8_t success = ReadData(sensor, true, true);
+  if (success>0) {
+    value = sensor->snsValue;
+    server.send(200, "application/json", "{\"success\":true,\"value\":" + String(value) + "}");
+  } else {
+    server.send(200, "application/json", "{\"success\":false,\"value\":" + String(value) + "}");
+  }
+#endif
 }
 
 /**
@@ -1035,7 +1072,7 @@ void apiGetSetupStatus() {
   bool wifistatus = (CheckWifiStatus(false)==1);
   bool wifi_configured = Prefs.HAVECREDENTIALS && (wifistatus);
   bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
-  bool timezone_configured = (Prefs.TimeZoneOffset != 0);
+  bool timezone_configured = (Prefs.TimeZoneOffset <= 50400);
   #ifdef _USEWEATHER
   bool setup_complete = wifi_configured && timezone_configured && location_configured;
   #else
@@ -1357,7 +1394,7 @@ void handleInitialSetup() {
   WEBHTML += R"===(<button class="btn btn-secondary" onclick="clearWiFiCredentials()" style="margin-top: 10px; padding: 8px 16px; font-size: 14px; background-color: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear WiFi Credentials</button>)===";
 
   //is there no timezone?
-  if (Prefs.TimeZoneOffset == 0) {
+  if (Prefs.TimeZoneOffset > 50400) { //UTC cannot be greater than this
     WEBHTML += R"===(
     <p>Timezone not found and required to continue.</p>
     )===";
@@ -1471,23 +1508,21 @@ void handleInitialSetup() {
         </div>
         
         <div class="form-group">
-          <label for="dst_enabled">Daylight Saving Time</label>
-          <select id="dst_enabled">
-            <option value="true">Enabled</option>
-            <option value="false">Disabled</option>
-          </select>
+          <label for="dst_enabled">DST (-1 - none, 0 - inactive, 1 - active)</label>
+          <input type="number" id="dst_enabled" value="0" step="1">          
         </div>
         
         <div class="form-group">
-          <label for="dst_start">DST Start (Month/Day)</label>
-          <input type="number" id="dst_start_month" value="3" min="1" max="12" style="width: 80px;" placeholder="Month">
-          <input type="number" id="dst_start_day" value="10" min="1" max="31" style="width: 80px;" placeholder="Day">
+          <label for="dst_start_date">DST Start UnixTime (Month/Day)</label>
+          <input type="number" id="dst_start_date" style="width: 80px;">          
         </div>
-        
         <div class="form-group">
-          <label for="dst_end">DST End (Month/Day)</label>
-          <input type="number" id="dst_end_month" value="11" min="1" max="12" style="width: 80px;" placeholder="Month">
-          <input type="number" id="dst_end_day" value="3" min="1" max="31" style="width: 80px;" placeholder="Day">
+          <label for="dst_end_date">DST End UnixTime (Month/Day)</label>
+          <input type="number" id="dst_end_date" style="width: 80px;">          
+        </div>
+        <div class="form-group">
+          <label for="dst_offset">DST Offset (seconds)</label>
+          <input type="number" id="dst_offset" value="3600" step="900">
         </div>
         
         <button class="btn btn-primary" onclick="saveTimezone()">Save Timezone</button>
@@ -1761,10 +1796,9 @@ async function autoDetectTimezone() {
       // Populate form
       document.getElementById('utc_offset').value = data.utc_offset;
       document.getElementById('dst_enabled').value = data.dst_enabled ? 'true' : 'false';
-      document.getElementById('dst_start_month').value = data.dst_start_month;
-      document.getElementById('dst_start_day').value = data.dst_start_day;
-      document.getElementById('dst_end_month').value = data.dst_end_month;
-      document.getElementById('dst_end_day').value = data.dst_end_day;
+      document.getElementById('dst_start_date').value = data.dst_start_date;
+      document.getElementById('dst_end_date').value = data.dst_end_date;
+      document.getElementById('dst_offset').value = data.dst_offset;
       
       showStatus('timezone-status', 'Timezone detected. Please review and save.', 'success');
       document.getElementById('timezone-form').style.display = 'block';
@@ -1782,18 +1816,16 @@ async function autoDetectTimezone() {
 async function saveTimezone() {
   const utc_offset = document.getElementById('utc_offset').value;
   const dst_enabled = document.getElementById('dst_enabled').value;
-  const dst_start_month = document.getElementById('dst_start_month').value;
-  const dst_start_day = document.getElementById('dst_start_day').value;
-  const dst_end_month = document.getElementById('dst_end_month').value;
-  const dst_end_day = document.getElementById('dst_end_day').value;
+  const dst_start_date = document.getElementById('dst_start_date').value;
+  const dst_end_date = document.getElementById('dst_end_date').value;
+  const dst_offset = document.getElementById('dst_offset').value;
   
   const formData = new FormData();
   formData.append('utc_offset', utc_offset);
   formData.append('dst_enabled', dst_enabled);
-  formData.append('dst_start_month', dst_start_month);
-  formData.append('dst_start_day', dst_start_day);
-  formData.append('dst_end_month', dst_end_month);
-  formData.append('dst_end_day', dst_end_day);
+  formData.append('dst_offset', dst_offset);
+  formData.append('dst_start_date', dst_start_date);
+  formData.append('dst_end_date', dst_end_date);
   
   try {
     const response = await fetch('/api/timezone', { method: 'POST', body: formData });
@@ -1974,6 +2006,7 @@ void handleTIMEUPDATE() {
   registerHTTPMessage("TIMEUPD");
 
   timeClient.forceUpdate();
+  updateTime(); 
 
   server.sendHeader("Location", "/");
 
@@ -2143,7 +2176,6 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
   WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/TimezoneSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Timezone Setup</a> ";
   WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
   WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
@@ -2173,7 +2205,7 @@ void serverTextHeader(String pagename) {
   )===";
   WEBHTML += "<h1>" + (String) Prefs.DEVICENAME + " - " + pagename + "</h1>";
   WEBHTML += "<h2>Current Time: " + (String) dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2>";
-  WEBHTML += "<h3>Current version: " + (String) _CURRENTVERSION + "</h3>";
+  WEBHTML += "<h3>Current version: " + (String) PROJECT_VER + "</h3>";
   WEBHTML += "<h3>Device IP: " + (String) WiFi.localIP().toString() + "</h3>";  
 }
 
@@ -2220,7 +2252,7 @@ void rootTableFill(byte j) {
     // Add editable sensor configuration if this is my sensor
     if (Sensors.isMySensor(j)) {
     
-      int16_t prefsIndex = Sensors.getPrefsIndex(j);
+      int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(j);
       
       if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
         // Add a configuration cell with expandable form
@@ -2304,10 +2336,12 @@ void rootTableFill(byte j) {
         WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
         WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">Read & Send</button>";
         WEBHTML = WEBHTML + "</form>";
+        // Calibrate button (links to calibration page)
+        WEBHTML = WEBHTML + "<a href=\"/SENSOR_SETUP?snsType=" + String(sensor->snsType) + "&snsID=" + String(sensor->snsID) + "\" style=\"display: inline-block; padding: 6px 12px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none;\">Setup</a>";
         WEBHTML = WEBHTML + "</div>";
         
         WEBHTML = WEBHTML + "</details>";
-        WEBHTML = WEBHTML + "</td>";
+        WEBHTML = WEBHTML + "</td>";       
     
       } else {
         WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
@@ -2332,7 +2366,7 @@ void handlerForRoot(bool allsensors) {
   // Check if initial setup is complete
   bool wifistatus = (CheckWifiStatus(false)==1);
   bool wifi_configured = Prefs.HAVECREDENTIALS && wifistatus;
-  bool timezone_configured = (Prefs.TimeZoneOffset != 0);
+  bool timezone_configured = (Prefs.TimeZoneOffset <= 50400);
   
   #ifdef _USEWEATHER
   bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
@@ -2442,7 +2476,7 @@ void handlerForRoot(bool allsensors) {
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>";
   #endif
   for (byte j=0;j<NUMSENSORS;j++)  {
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(j);
     if (sensor && sensor->IsSet) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
       if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
@@ -2450,7 +2484,7 @@ void handlerForRoot(bool allsensors) {
         rootTableFill(j);
 
         for (byte jj=j+1;jj<NUMSENSORS;jj++) {
-          ArborysSnsType* sensor2 = Sensors.getSensorBySnsIndex(jj);
+          ArborysSnsType* sensor2 = Sensors.snsIndexToPointer(jj);
           if (sensor2 && sensor2->IsSet) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
             if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
@@ -2691,7 +2725,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
 
   // Find sensor in Devices_Sensors class
   int16_t sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
-  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(sensorIndex);
 
   WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>\n";
   WEBHTML =WEBHTML  + (String) "<style> table {  font-family: arial, sans-serif;  border-collapse: collapse;width: 100%;} td, th {  border: 1px solid #dddddd;  text-align: left;  padding: 8px;}tr:nth-child(even) {  background-color: #dddddd;}";
@@ -2796,10 +2830,22 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
 
   // Editable fields from STRUCT_CORE I in specified order
-  // Timezone configuration is now handled through the timezone setup page
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Timezone Configuration</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><a href=\"/TimezoneSetup\" style=\"padding: 8px 16px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">Configure Timezone Settings</a></div>";
-  
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">UTC Offset</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"utc_offset\" value=\"" + (String) Prefs.TimeZoneOffset + "\" maxlength=\"7\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  //add DST value box where values are -1 (no DST) or 0 (DST is used) or 1 (DST is active)
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">DST</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_enabled\" value=\"" + (String) I.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  //add DST start unixtime and end unixtime and DST offset
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Start UnixTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_start_date\" value=\"" + (String) I.DSTStartUnixTime + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End UnixTime</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_end_date\" value=\"" + (String) I.DSTEndUnixTime + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_offset\" value=\"" + (String) I.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+//add a button to autodetect DST
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"button\" value=\"Autodetect DST\" onclick=\"autodetectTimezone()\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+    
   // Device Name Configuration
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
@@ -2874,7 +2920,6 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "Bit 8 (HVAC)</label>";
 
   WEBHTML = WEBHTML + "</div>";
-
   WEBHTML = WEBHTML + "</div>";
   #endif
   
@@ -2885,12 +2930,49 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
+  //make another form that changes the ota slot
+  WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_OTA_SWITCH\" style=\"display: inline;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Switch OTA Slot\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+
   // Reset button
-  WEBHTML = WEBHTML + "<br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
+  WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset All Settings\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  WEBHTML = WEBHTML + "</body></html>";
+  WEBHTML = WEBHTML + "</body>";
+  WEBHTML = WEBHTML + "<script>";
+  WEBHTML = WEBHTML + R"===(
+// Auto-detect timezone
+async function autoDetectTimezone() {
+  showStatus('timezone-status', 'Detecting timezone...', 'info');
+  document.getElementById('detect-tz-btn').disabled = true;
+  
+  try {
+    const response = await fetch('/api/timezone');
+    const data = await response.json();
+    
+    if (data.success || data.utc_offset !== 0) {
+      // Populate form
+      document.getElementById('utc_offset').value = data.utc_offset;
+      document.getElementById('dst_enabled').value = data.dst_enabled ? 'true' : 'false';
+      document.getElementById('dst_start_date').value = data.dst_start_date;
+      document.getElementById('dst_end_date').value = data.dst_end_date;
+      document.getElementById('dst_offset').value = data.dst_offset;
+      
+      showStatus('timezone-status', 'Timezone detected and saved.', 'success');
+    } else {
+      showStatus('timezone-status', 'Auto-detection failed. Please set manually.', 'info');
+    }
+  } catch (error) {
+    showStatus('timezone-status', 'Detection error. Manually set timezone.', 'info');
+  }
+}
+  </script>
+)===";
+
+
+  WEBHTML = WEBHTML + "</html>";
 
   serverTextClose(200, true);
 }
@@ -3392,6 +3474,27 @@ void handleCONFIG_POST() {
     }
 
   }
+  if (server.hasArg("dst_enabled")) {
+    I.DST = server.arg("dst_enabled").toInt();
+    I.isUpToDate = false;
+  }
+  if (server.hasArg("dst_start_date")) {
+    I.DSTStartUnixTime = server.arg("dst_start_date").toInt();
+    I.isUpToDate = false;
+  }
+  if (server.hasArg("dst_end_date")) {
+    I.DSTEndUnixTime = server.arg("dst_end_date").toInt();
+    I.isUpToDate = false;
+  }
+  if (server.hasArg("dst_offset")) {
+    I.DSTOffset = server.arg("dst_offset").toInt();
+    I.isUpToDate = false;
+  }
+  if (server.hasArg("utc_offset")) {
+    Prefs.TimeZoneOffset = server.arg("utc_offset").toInt();
+    Prefs.isUpToDate = false;
+  }
+
   
 #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   // Process showTheseFlags checkboxes - reconstruct byte from individual bits
@@ -3483,6 +3586,20 @@ void handleCONFIG_DELETE() {
   controlledReboot("User Request",RESET_USER,true);
 }
 
+void handleCONFIG_OTA_SWITCH() {
+  registerHTTPMessage("ConfigOtaSwitch");
+  int16_t result = force_switch_ota_slot();
+  if (result == 1) {
+    server.send(302, "text/plain", "OTA slot switched. Restarting in 3 seconds...");
+    delay(3000);
+    esp_restart();
+  } else if (result == 0) {
+    server.send(200, "text/plain", "OTA slot already active. No restart needed. Redirecting to status page...");
+  } else {
+    server.send(200, "text/plain", "OTA slot could not be switched.");
+  }
+}
+
 #ifdef _ISPERIPHERAL
 void handleSENSOR_UPDATE_POST() {
   registerHTTPMessage("SnsUpd");
@@ -3495,9 +3612,14 @@ void handleSENSOR_UPDATE_POST() {
   
   uint8_t snsType = server.arg("snsType").toInt();
   uint8_t snsID = server.arg("snsID").toInt();
-  
+
+    // First, get the sensor object so we can update it
+    int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+
+
   // Get the prefs index for this sensor
-  int16_t prefsIndex = Sensors.getPrefsIndex(snsType, snsID,-1);
+  int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
   SerialPrint("Updating sensor: " + String(snsType) + "." + String(snsID) + " with Prefs index: " + String(prefsIndex),true);
   
   if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) {
@@ -3505,12 +3627,6 @@ void handleSENSOR_UPDATE_POST() {
     return;
   }
   
-  // First, get the sensor object so we can update it
-  int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
-  ArborysSnsType* sensor = nullptr;
-  if (snsIndex >= 0) {
-    sensor = Sensors.getSensorBySnsIndex(snsIndex);
-  }
   
   // Update sensor name
   if (server.hasArg("sensorName") && sensor) {
@@ -3613,244 +3729,121 @@ void handleSENSOR_READ_SEND_NOW() {
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", resultMsg);
 }
+
+void handleSensorSetup() {
+  if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
+    server.send(400, "text/plain", "Missing snsType or snsID");
+    return;
+  }
+  uint8_t snsType = (uint8_t)server.arg("snsType").toInt();
+  uint8_t snsID = (uint8_t)server.arg("snsID").toInt();
+  int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+  if (snsIndex < 0) {
+    server.send(400, "text/plain", "Sensor not found");
+    return;
+  }
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!sensor) {
+    server.send(400, "text/plain", "Invalid sensor");
+    return;
+  }
+
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader("Sensor Setup: " + String(sensor->snsName));
+  WEBHTML = WEBHTML + "<body>";
+  WEBHTML = WEBHTML + "<p><a href=\"/\">Back to Main</a></p>";
+
+  if (snsType == 33 || snsType == 3) {
+    // Soil capacitance / soil moisture (type 3 = soil moisture, type 33 = capacitive soil e.g. Den config)
+    WEBHTML = WEBHTML + "<p>Use the the live measurement below to take measurements in bone dry soil and fully saturated soil. Enter both of those values below. Alternatively (though less accurate), use air (dry) and water (wet) for measurements. If you enter the same value for both, the calibration will be ignored.</p>";
+    //need to take measurements from this sensor and display here every X seconds, until page exits or submit is clicked
+    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">LIVE VALUE:</label>";
+    WEBHTML = WEBHTML + "<div id=\"sensor_value\" style=\"font-size: 24px; font-weight: bold;\">Taking measurements...</div>";
+    WEBHTML = WEBHTML + "<script>";
+    WEBHTML = WEBHTML + "setInterval(function() {";
+    WEBHTML = WEBHTML + "  fetch('/api/SNS_READ_NOW?snsType=" + String(snsType) + "&snsID=" + String(snsID) + "')";
+    WEBHTML = WEBHTML + "    .then(response => response.json())";
+    WEBHTML = WEBHTML + "    .then(data => {";
+    WEBHTML = WEBHTML + "      if (data.success) {";
+    WEBHTML = WEBHTML + "        var v = Number(data.value); document.getElementById('sensor_value').innerHTML = 'Value: ' + (isNaN(v) ? data.value : v.toPrecision(3));";
+    WEBHTML = WEBHTML + "      } else {";
+    WEBHTML = WEBHTML + "        document.getElementById('sensor_value').innerHTML = 'Error: ' + data.error;";
+    WEBHTML = WEBHTML + "      }";
+    WEBHTML = WEBHTML + "    });";
+    WEBHTML = WEBHTML + "}, 1000);";
+    WEBHTML = WEBHTML + "</script>";
+
+
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SNS_COILCAP_CALIBRATION\" style=\"max-width: 400px;\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(snsType) + "\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(snsID) + "\">";
+    //input the water value
+    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">Fully wet soil/mud:</label>";
+    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"minval\" required style=\"width: 120px; padding: 4px;\" value=\"" + String(sensor->snsCalibMin,3) + "\"></div>";
+    //input the air value
+    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">Fully dry soil/sand:</label>";
+    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"maxval\" required style=\"width: 120px; padding: 4px;\" value=\"" + String(sensor->snsCalibMax,3) + "\"></div>";
+
+    WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Apply Calibration</button>";
+    WEBHTML = WEBHTML + "</form>";
+  } else {
+    WEBHTML = WEBHTML + "<p>Calibration is not available for this sensor type (type " + String(snsType) + ").</p>";
+  }
+
+  WEBHTML = WEBHTML + "</body></html>";
+  server.send(200, "text/html", WEBHTML.c_str());
+}
+
+void handleSNS_CALIBRATION_SOIL_CAPACITANCE() {
+  if (!server.hasArg("snsType") || !server.hasArg("snsID") || !server.hasArg("minval") || !server.hasArg("maxval")) {
+    server.send(400, "text/plain", "Missing snsType, snsID, minval, or maxval");
+    return;
+  }
+  uint8_t snsType = (uint8_t)server.arg("snsType").toInt();
+  uint8_t snsID = (uint8_t)server.arg("snsID").toInt();
+  double minval = server.arg("minval").toDouble();
+  double maxval = server.arg("maxval").toDouble();
+  int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+
+  if (!sensor) {
+    server.send(400, "text/plain", "Sensor not found");
+    return;
+  }
+  int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+
+  if (sensor->snsCalibMin != minval) {
+    sensor->snsCalibMin = minval;
+    Prefs.SNS_CALIB_MIN[prefsIndex] = minval;
+    Prefs.isUpToDate = false;
+  }
+  if (sensor->snsCalibMax != maxval) {
+    sensor->snsCalibMax = maxval;
+    Prefs.SNS_CALIB_MAX[prefsIndex] = maxval;
+    Prefs.isUpToDate = false;
+  }
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Calibration applied. Redirecting...");
+}
 #endif
 
 
-// Timezone detection function
-bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day) {
+
+// Helper to get external IP
+String getPublicIP() {
   HTTPClient http;
-  WiFiClient client;
-  
-  String url = "http://worldtimeapi.org/api/ip";
-  http.begin(client, url);
-  
+  WiFiClient client; // ipify uses HTTP (port 80) by default
+  http.begin(client, "http://api.ipify.org");
   int httpCode = http.GET();
+  String ip = "";
   if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    http.end();
-    
-    // Parse JSON response
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-      SerialPrint("JSON parsing failed: " + String(error.c_str()), true);
-      return false;
-    }
-    
-    // Extract timezone information
-    String utc_offset_str = doc["raw_offset"]; //note that raw offset does not include the dst offset, and is already in seconds
-    bool dst = doc["dst"];
-    String dst_from = doc["dst_from"];
-    String dst_until = doc["dst_until"];
-    
-    /*
-    // Parse UTC offset (format: "+05:00" or "-04:00")
-    if (utc_offset_str.length() >= 6) {
-      int hours = utc_offset_str.substring(1, 3).toInt();
-      int minutes = utc_offset_str.substring(4, 6).toInt();
-      *utc_offset = (utc_offset_str[0] == '-' ? -1 : 1) * (hours * 3600 + minutes * 60);
-    }
-    */
-    *utc_offset = utc_offset_str.toInt();
-    *dst_enabled = dst;
-    
-    // Parse DST start and end dates (format: "2025-03-09T07:00:00+00:00")
-    if (dst_from.length() >= 10) {
-      *dst_start_month = dst_from.substring(5, 7).toInt();
-      *dst_start_day = dst_from.substring(8, 10).toInt();
-    }
-    
-    if (dst_until.length() >= 10) {
-      *dst_end_month = dst_until.substring(5, 7).toInt();
-      *dst_end_day = dst_until.substring(8, 10).toInt();
-    }
-
-    return true;
+    ip = http.getString();
   }
-  
   http.end();
-  return false;
+  return ip;
 }
 
-
-void handleTimezoneSetup() {
-  registerHTTPMessage("TZSetup");
-  WEBHTML = "";
-  serverTextHeader("Timezone Configuration");
-
-  WEBHTML = WEBHTML + "<body>";
-
-  // Get timezone information from API
-  int32_t utc_offset = Prefs.TimeZoneOffset;
-  bool dst_enabled = Prefs.DST;
-  uint8_t dst_start_month = Prefs.DSTStartMonth;
-  uint8_t dst_start_day = Prefs.DSTStartDay;
-  uint8_t dst_end_month = Prefs.DSTEndMonth;
-  uint8_t dst_end_day = Prefs.DSTEndDay;
-
-  if (server.hasArg("utc_offset_seconds")) {
-    utc_offset = server.arg("utc_offset_seconds").toInt();
-  }
-  if (server.hasArg("dst_enabled")) {
-    dst_enabled = server.arg("dst_enabled").toInt();
-  }
-  if (server.hasArg("dst_start_month")) {
-    dst_start_month = server.arg("dst_start_month").toInt();
-  }
-  if (server.hasArg("dst_start_day")) {
-    dst_start_day = server.arg("dst_start_day").toInt();
-  }
-  if (server.hasArg("dst_end_month")) {
-    dst_end_month = server.arg("dst_end_month").toInt();
-  }
-  if (server.hasArg("dst_end_day")) {
-    dst_end_day = server.arg("dst_end_day").toInt();
-  }
-  
-  
-  if (Prefs.TimeZoneOffset == 0 && (CheckWifiStatus(false)==1)) {
-    WEBHTML = WEBHTML + "<p>Detecting timezone information...</p>";
-    if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
-      WEBHTML = WEBHTML + "<p style=\"color: green;\">Timezone information detected successfully!</p>";
-    } else {
-      WEBHTML = WEBHTML + "<p style=\"color: red;\">Failed to detect timezone information. Using defaults.</p>";
-      // Set some reasonable defaults
-      utc_offset = -18000; // EST (UTC-5)
-      dst_enabled = true;
-      dst_start_month = 3; dst_start_day = 10;
-      dst_end_month = 11; dst_end_day = 3;
-    }
-  }  
-  
-  // Convert UTC offset to hours and minutes for display
-  int32_t offset_seconds = utc_offset;
-  
-  WEBHTML = WEBHTML + "<p><strong>UTC Offset:</strong> " + offset_seconds + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>DST Enabled:</strong> " + (dst_enabled ? "Yes" : "No") + "</p>";
-  if (dst_enabled) {
-    WEBHTML = WEBHTML + "<p><strong>DST Start:</strong> " + String(dst_start_month) + "/" + String(dst_start_day) + "</p>";
-    WEBHTML = WEBHTML + "<p><strong>DST End:</strong> " + String(dst_end_month) + "/" + String(dst_end_day) + "</p>";
-  }
-  
-  WEBHTML = WEBHTML + "<h3>Confirm Timezone Settings</h3>";
-  WEBHTML = WEBHTML + "<p>Please review and edit the timezone settings below if needed:</p>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/TimezoneSetup_POST\">";
-  WEBHTML = WEBHTML + "<p><label for=\"utc_offset_seconds\">UTC Offset (seconds):</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"utc_offset_seconds\" name=\"utc_offset_seconds\" value=\"" + String(offset_seconds) + "\" min=\"-86400\" max=\"86400\" step=\"15\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_enabled\">DST Enabled:</label><br>";
-  WEBHTML = WEBHTML + "<select id=\"dst_enabled\" name=\"dst_enabled\" style=\"width: 150px; padding: 8px; margin: 5px 0;\">";
-  WEBHTML = WEBHTML + "<option value=\"1\"" + (dst_enabled ? " selected" : "") + ">Yes</option>";
-  WEBHTML = WEBHTML + "<option value=\"0\"" + (!dst_enabled ? " selected" : "") + ">No</option>";
-  WEBHTML = WEBHTML + "</select></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_start_month\">DST Start Month:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_start_month\" name=\"dst_start_month\" value=\"" + String(dst_start_month) + "\" min=\"1\" max=\"12\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_start_day\">DST Start Day:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_start_day\" name=\"dst_start_day\" value=\"" + String(dst_start_day) + "\" min=\"1\" max=\"31\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_end_month\">DST End Month:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_end_month\" name=\"dst_end_month\" value=\"" + String(dst_end_month) + "\" min=\"1\" max=\"12\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_end_day\">DST End Day:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_end_day\" name=\"dst_end_day\" value=\"" + String(dst_end_day) + "\" min=\"1\" max=\"31\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><input type=\"submit\" value=\"Save Timezone Settings and Reboot\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\"></p>";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<p><a href=\"/InitialSetup\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">Back to WiFi Config</a></p>";
-  
-  WEBHTML = WEBHTML + "</body></html>";
-  serverTextClose(200, true);
-}
-
-void handleTimezoneSetup_POST() {
-  registerHTTPMessage("TZSetupP");
-  #ifdef _USETFT
-  tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
-  tft.setCursor(0, tft.height()-200);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextFont(2);
-  tft.setTextSize(1);
-  tft.printf("Saving timezone settings...\n");
-  #endif
-
-  if (server.hasArg("utc_offset_seconds") && 
-      server.hasArg("dst_enabled") && server.hasArg("dst_start_month") && 
-      server.hasArg("dst_start_day") && server.hasArg("dst_end_month") && 
-      server.hasArg("dst_end_day")) {
-    
-    // Parse timezone settings
-    int32_t offset_seconds = server.arg("utc_offset_seconds").toInt();
-    bool dst_enabled = server.arg("dst_enabled").toInt() == 1;
-    uint8_t dst_start_month = server.arg("dst_start_month").toInt();
-    uint8_t dst_start_day = server.arg("dst_start_day").toInt();
-    uint8_t dst_end_month = server.arg("dst_end_month").toInt();
-    uint8_t dst_end_day = server.arg("dst_end_day").toInt();
-    
-    // Calculate total UTC offset in seconds
-    int32_t total_offset = offset_seconds;
-    
-    // Use helper function to save timezone settings
-    saveTimezoneSettings(total_offset, dst_enabled, dst_start_month, dst_start_day, dst_end_month, dst_end_day);
-    
-    // Set DST offset
-    updateTime();
-    
-    // Save to NVS
-    BootSecure bootSecure;
-    int8_t ret = bootSecure.setPrefs();
-    SerialPrint("setPrefs returned: " + String(ret), true);
-    if (ret==-1) {
-      SerialPrint("Failed to encode Prefs", true);
-      #ifdef _USETFT
-      tft.setTextColor(TFT_RED);
-      tft.printf("Failed to encode settings!\n");
-      tft.setTextColor(FG_COLOR);
-      delay(3000);
-      #endif
-    } 
-    else if (ret==0) {
-      SerialPrint("Could not open Prefs", true);
-      #ifdef _USETFT
-      tft.printf("Could not open Prefs!\n");
-      delay(3000);
-      #endif
-    } else {
-      #ifdef _USETFT
-      tft.printf("Timezone settings saved!\n");
-      tft.printf("Rebooting...\n");
-      #endif
-      controlledReboot("Timezone settings saved successfully", RESET_TIME,true);
-    }
-  
-    
-    // Redirect to main page
-    server.sendHeader("Location", "/TimezoneSetup");
-    server.send(302, "text/plain", "Failed to save timezone data. Please try again.");
-  } else {
-    #ifdef _USETFT
-    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
-    tft.setCursor(0, tft.height()-200);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextFont(2);
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_RED);
-    if (!server.hasArg("UTC_OFFSET_SECONDS")) tft.println("No UTC offset seconds");
-    if (!server.hasArg("DST_ENABLED")) tft.println("No DST enabled");
-    if (!server.hasArg("DST_START_MONTH")) tft.println("No DST start month");
-    if (!server.hasArg("DST_START_DAY")) tft.println("No DST start day");
-    if (!server.hasArg("DST_END_MONTH")) tft.println("No DST end month");
-    if (!server.hasArg("DST_END_DAY")) tft.println("No DST end day");
-    tft.setTextColor(FG_COLOR);
-    #endif
-    server.sendHeader("Location", "/TimezoneSetup");
-    server.send(302, "text/plain", "Invalid timezone data. Please try again.");
-  }
-}
 
 
 void handleWeather() {
@@ -3922,6 +3915,7 @@ void handleWeather() {
   
   // Current weather icon
   int16_t currentWeatherID = WeatherData.getWeatherID(0);
+  if (currentWeatherID < 0) currentWeatherID = 999;
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Current Weather</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + WeatherData.nameWeatherIcon(currentWeatherID) + "</td></tr>";
   
@@ -4849,78 +4843,29 @@ void handleERROR_LOG() {
   htmlContent += "pre { background-color: #f8f8f8; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }";
   htmlContent += "</style></head><body>";
   htmlContent += "<h1>Device Error Log</h1>";
-  htmlContent += "<p>This shows the last 50 errors that have occurred on the device:</p>";
+  htmlContent += "<p>This shows the last 25 errors that have occurred on the device:</p>";
   
 
   // Read the file content
-  String content = "";
-  int8_t linesRead = readErrorFromSD(&content, 50);
-
-  if (linesRead < 0) {
-    htmlContent += "<p>Failed to read error log file</p>";
-    htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
-    htmlContent += "</body></html>";
-    server.send(200, "text/html", htmlContent);
-    return;
-  }
-
-  if (linesRead == 0) {
-    htmlContent += "<p>No errors have been logged yet.</p>";
-    htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
-    htmlContent += "</body></html>";
-    server.send(200, "text/html", htmlContent);
-    return;
-  }
-
-  
-  // Parse and format each line
-  int lineStart = 0;
-  int lineEnd = content.indexOf('\n');
-  int entryCount = 0;
-  
-  while (lineEnd >= 0 && entryCount < 100) { // Limit to 1000 entries to prevent memory issues
-    String line = content.substring(lineStart, lineEnd);
-    line.trim();
-    
-    if (line.length() > 0) {
-      // Parse the error log format: timestamp,errorcode,errormessage
-      int firstComma = line.indexOf(',');
-      int secondComma = line.indexOf(',', firstComma + 1);
-      
-      if (firstComma > 0 && secondComma > firstComma) {
-        String timestamp = line.substring(0, firstComma);
-        String errorCode = line.substring(firstComma + 1, secondComma);
-        String errorMessage = line.substring(secondComma + 1);
-        
-        htmlContent += "<div class=\"error-entry\">";
-        htmlContent += "<span class=\"error-time\">" + timestamp + "</span><br>";
-        htmlContent += "<span class=\"error-code\">Error Code: " + errorCode + "</span><br>";
-        htmlContent += "<div class=\"error-message\">" + errorMessage + "</div>";
-        htmlContent += "</div>";
-        
-        entryCount++;
-      } else {
-        // If the format doesn't match, just display the raw line
-        htmlContent += "<div class=\"error-entry\">";
-        htmlContent += "<div class=\"error-message\">" + line + "</div>";
-        htmlContent += "</div>";
-        entryCount++;
-      }
+uint8_t entryCount = 0;
+  for (int i = 0; i < 25; i++) {
+    ERROR_STRUCT LASTERROR;
+    if (readErrorFromSD(LASTERROR, i)) {
+      entryCount++;
+      htmlContent += "<div class=\"error-entry\">";
+      htmlContent += "<span class=\"error-time\">" + (String) dateify(LASTERROR.errorTime) + "</span><br>";
+      htmlContent += "<span class=\"error-code\">Error Code: " + String(LASTERROR.errorCode) + "</span><br>";
+      htmlContent += "<div class=\"error-message\">" + (String) LASTERROR.errorMessage + "</div>";
+      htmlContent += "</div>";      
     }
-    
-    lineStart = lineEnd + 1;
-    lineEnd = content.indexOf('\n', lineStart);
   }
+  
   
   if (entryCount == 0) {
     htmlContent += "<p>No error entries found in the file.</p>";
   } else {
     htmlContent += "<p><strong>Total entries: " + String(entryCount) + "</strong></p>";
   }
-  
-  // Also show the raw file content for debugging
-  htmlContent += "<h3>Raw File Content (for debugging)</h3>";
-  htmlContent += "<pre>" + content + "</pre>";
   
   htmlContent += "<a href=\"/STATUS\" class=\"back-button\">Back to Status</a>";
   htmlContent += "</body></html>";
@@ -5060,152 +5005,6 @@ void handleREBOOT_DEBUG() {
   serverTextClose(200, true);
 }
 
-/**
- * @brief Setup all HTTP server routes.
- * This function registers all the server handlers and should be called from main.cpp
- * instead of having the routes defined there.
- */
-void handleUPDATETIMEZONE() {
-  registerHTTPMessage("TZUpdate");
-  
-  // Check if WiFi is connected
-  if (CheckWifiStatus(false)!=1) {
-    server.sendHeader("Location", "/InitialSetup");
-    server.send(302, "text/plain", "WiFi not connected. Please configure WiFi first.");
-    return;
-  }
-  
-  // Get current timezone information
-  int32_t utc_offset = Prefs.TimeZoneOffset;
-  bool dst_enabled = Prefs.DST;
-  uint8_t dst_start_month = Prefs.DSTStartMonth;
-  uint8_t dst_start_day = Prefs.DSTStartDay;
-  uint8_t dst_end_month = Prefs.DSTEndMonth;
-  uint8_t dst_end_day = Prefs.DSTEndDay;
-  
-  // Try to get timezone info from API
-  if (Prefs.TimeZoneOffset == 0) {
-    if (getTimezoneInfo(&utc_offset, &dst_enabled, &dst_start_month, &dst_start_day, &dst_end_month, &dst_end_day)) {
-      // Update Prefs with detected values
-      Prefs.TimeZoneOffset = utc_offset;
-      Prefs.DST = dst_enabled ? 1 : 0;
-      Prefs.DSTStartMonth = dst_start_month;
-      Prefs.DSTStartDay = dst_start_day;
-      Prefs.DSTEndMonth = dst_end_month;
-      Prefs.DSTEndDay = dst_end_day;
-      Prefs.isUpToDate = false;
-    }
-  }
-  
-  
-  // Display timezone configuration page
-  serverTextHeader("Timezone Configuration");
-  String WEBHTML = "";
-  
-  WEBHTML = WEBHTML + "<p>WiFi connection established! Please review and confirm the detected timezone settings:</p>";
-  
-  WEBHTML = WEBHTML + "<form id=\"timezoneForm\" method=\"POST\" action=\"/UPDATETIMEZONE\">";
-  
-  // Current time display
-  WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; border: 1px solid #4CAF50; padding: 15px; margin: 10px 0; border-radius: 4px;\">";
-  WEBHTML = WEBHTML + "<h3>Current Time</h3>";
-  WEBHTML = WEBHTML + "<p><strong>Local Time:</strong> " + String(dateify(I.currentTime, "mm/dd/yyyy hh:mm:ss")) + "</p>";
-  WEBHTML = WEBHTML + "<p><strong>UTC Time:</strong> " + String(dateify(I.currentTime - (Prefs.TimeZoneOffset + (Prefs.DST ? 3600 : 0)), "mm/dd/yyyy hh:mm:ss")) + "</p>";
-  WEBHTML = WEBHTML + "</div>";
-  
-  // Timezone configuration
-  WEBHTML = WEBHTML + "<h3>Timezone Settings</h3>";
-  WEBHTML = WEBHTML + "<p><label for=\"utc_offset_seconds\">UTC Offset (seconds):</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"utc_offset_seconds\" name=\"utc_offset_seconds\" value=\"" + String(utc_offset) + "\" min=\"-12\" max=\"14\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_enabled\">DST Enabled:</label><br>";
-  WEBHTML = WEBHTML + "<select id=\"dst_enabled\" name=\"dst_enabled\" style=\"width: 150px; padding: 8px; margin: 5px 0;\">";
-  WEBHTML = WEBHTML + "<option value=\"1\" " + (dst_enabled ? "selected" : "") + ">Yes</option>";
-  WEBHTML = WEBHTML + "<option value=\"0\" " + (!dst_enabled ? "selected" : "") + ">No</option>";
-  WEBHTML = WEBHTML + "</select></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_start_month\">DST Start Month:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_start_month\" name=\"dst_start_month\" value=\"" + String(dst_start_month) + "\" min=\"1\" max=\"12\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_start_day\">DST Start Day:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_start_day\" name=\"dst_start_day\" value=\"" + String(dst_start_day) + "\" min=\"1\" max=\"31\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_end_month\">DST End Month:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_end_month\" name=\"dst_end_month\" value=\"" + String(dst_end_month) + "\" min=\"1\" max=\"12\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<p><label for=\"dst_end_day\">DST End Day:</label><br>";
-  WEBHTML = WEBHTML + "<input type=\"number\" id=\"dst_end_day\" name=\"dst_end_day\" value=\"" + String(dst_end_day) + "\" min=\"1\" max=\"31\" style=\"width: 100px; padding: 8px; margin: 5px 0;\"></p>";
-  
-  WEBHTML = WEBHTML + "<div style=\"margin: 20px 0;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Save Timezone Settings\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"padding: 10px 20px; background-color: #757575; color: white; text-decoration: none; border-radius: 4px;\">Cancel</a>";
-  WEBHTML = WEBHTML + "</div>";
-  
-  WEBHTML = WEBHTML + "</form>";
-  WEBHTML = WEBHTML + "</body></html>";
-  
-  serverTextClose(200);
-}
-
-void handleUPDATETIMEZONE_POST() {
-  registerHTTPMessage("TZUpdateP");
-  
-  // Parse timezone settings
-  if (server.hasArg("utc_offset_seconds")) {
-    int32_t utc_offset = server.arg("utc_offset_seconds").toInt();
-    Prefs.TimeZoneOffset = utc_offset;
-  }
-  
-  if (server.hasArg("dst_enabled")) {
-    Prefs.DST = server.arg("dst_enabled").toInt();
-    Prefs.DSTOffset = Prefs.DST ? 3600 : 0;
-  }
-  
-  if (server.hasArg("dst_start_month")) {
-    Prefs.DSTStartMonth = server.arg("dst_start_month").toInt();
-  }
-  
-  if (server.hasArg("dst_start_day")) {
-    Prefs.DSTStartDay = server.arg("dst_start_day").toInt();
-  }
-  
-  if (server.hasArg("dst_end_month")) {
-    Prefs.DSTEndMonth = server.arg("dst_end_month").toInt();
-  }
-  
-  if (server.hasArg("dst_end_day")) {
-    Prefs.DSTEndDay = server.arg("dst_end_day").toInt();
-  }
-  
-  // Mark prefs as needing to be saved
-  Prefs.isUpToDate = false;
-  
-  // Save prefs to NVS
-  #ifdef _USE32
-  BootSecure bootSecure;
-  if (bootSecure.setPrefs()<0) {
-    SerialPrint("Failed to store core data",true);
-  }
-  #endif
-  
-  // Update time client with new settings
-  checkDST();
-  
-  // Display confirmation and reboot
-  serverTextHeader("Timezone Settings Saved");
-  String WEBHTML = "";
-  WEBHTML = WEBHTML + "<p>Timezone settings have been saved successfully!</p>";
-  WEBHTML = WEBHTML + "<p><strong>UTC Offset:</strong> " + String(Prefs.TimeZoneOffset/3600) + "h " + String((Prefs.TimeZoneOffset%3600)/60) + "m</p>";
-  WEBHTML = WEBHTML + "<p><strong>DST Enabled:</strong> " + (Prefs.DST ? "Yes" : "No") + "</p>";
-  if (Prefs.DST) {
-    WEBHTML = WEBHTML + "<p><strong>DST Period:</strong> " + String(Prefs.DSTStartMonth) + "/" + String(Prefs.DSTStartDay) + " to " + String(Prefs.DSTEndMonth) + "/" + String(Prefs.DSTEndDay) + "</p>";
-  }
-  WEBHTML = WEBHTML + "<script>setTimeout(function(){ window.location.href = '/'; }, 3000);</script>";
-  WEBHTML = WEBHTML + "</body></html>";
-  
-  serverTextClose(200);
-
-}
 
 // ==================== DEVICE VIEWER FUNCTIONS ====================
 
@@ -5350,7 +5149,7 @@ void handleDeviceViewer() {
 
     uint8_t sensorCount = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-        ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
+        ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
         if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
             sensorCount++;
         }
@@ -5373,7 +5172,7 @@ void handleDeviceViewer() {
         WEBHTML = WEBHTML + "</tr>";
 
         for (int16_t i = 0; i < NUMSENSORS; i++) {
-            ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
+            ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
             if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
                 WEBHTML = WEBHTML + "<tr>";
                 WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
@@ -5543,12 +5342,15 @@ void setupServerRoutes() {
     server.on("/CONFIG", HTTP_GET, handleCONFIG);
     server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
     server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
+    server.on("/CONFIG_OTA_SWITCH", HTTP_POST, handleCONFIG_OTA_SWITCH);
     server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
     
     #ifdef _ISPERIPHERAL
     // Sensor configuration routes for peripheral devices
     server.on("/SENSOR_UPDATE", HTTP_POST, handleSENSOR_UPDATE_POST);
     server.on("/SENSOR_READ_SEND_NOW", HTTP_POST, handleSENSOR_READ_SEND_NOW);
+    server.on("/SENSOR_SETUP", HTTP_GET, handleSensorSetup);
+    server.on("/SNS_COILCAP_CALIBRATION", HTTP_POST, handleSNS_CALIBRATION_SOIL_CAPACITANCE);
     #endif
     
     // Google Sheets routes
@@ -5572,13 +5374,8 @@ void setupServerRoutes() {
     server.on("/InitialSetup", HTTP_GET, handleInitialSetup);
     server.on("/api/complete-setup", HTTP_POST, handleApiCompleteSetup);
     server.on("/api/complete-setup", HTTP_GET, handleApiCompleteSetup);
-        
-    // Timezone configuration routes (legacy - kept for backward compatibility)
-    server.on("/TimezoneSetup", HTTP_GET, handleTimezoneSetup);
-    server.on("/TimezoneSetup_POST", HTTP_POST, handleTimezoneSetup_POST);
-    server.on("/UPDATETIMEZONE", HTTP_GET, handleUPDATETIMEZONE);
-    server.on("/UPDATETIMEZONE", HTTP_POST, handleUPDATETIMEZONE_POST);
-    
+    server.on("/api/SNS_READ_NOW", HTTP_GET, handleSNS_READ_NOW);
+            
     // Weather routes
     server.on("/WEATHER", HTTP_GET, handleWeather);
     server.on("/WEATHER", HTTP_POST, handleWeather_POST);
@@ -5687,7 +5484,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool f
 
   bool first = true;
   for (int16_t i = 0; i < NUMSENSORS; ++i) {
-    ArborysSnsType* S = Sensors.getSensorBySnsIndex(i);
+    ArborysSnsType* S = Sensors.snsIndexToPointer(i);
     if (!S || S->deviceIndex != mydeviceIndex) continue;
 
     if (!first) tempJSON += ",";
@@ -5719,7 +5516,7 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool 
   int16_t snsType = -1;
   int16_t snsID = -1;
   if (snsIndex >= 0) {
-    ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndex);
     if (!S) {
       SerialPrint("JSONbuilder_DataRequestMSG: Sensor " + String(snsIndex) + " not found",true);
       storeError("JSONbuilder_DataRequestMSG: Sensor " + String(snsIndex) + " not found", ERROR_JSON_PARSE, true);
@@ -6011,7 +5808,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
 
      //is this a low power sensor?
      if (bitRead(flags,2) == 1) {
-      ArborysSnsType* OldS = Sensors.getSensorBySnsIndex(Sensors.findSensor(deviceMAC, snsType, snsID));
+      ArborysSnsType* OldS = Sensors.snsIndexToPointer(Sensors.findSensor(deviceMAC, snsType, snsID));
       // low power sensors do not know if they switched flag status... get the last reading, which has not yet been updated
       if (OldS) {        
         if (OldS->Flags != flags && (bitRead(flags,0) !=  bitRead(flags,0))) { //flag status changed
@@ -6090,14 +5887,14 @@ bool isSensorSendTime(int16_t snsIndex) {
   // When snsIndex == -1, check all sensors and return true if ANY sensor is due
   if (snsIndex < 0) {
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-      ArborysSnsType* Si = Sensors.getSensorBySnsIndex(i);
+      ArborysSnsType* Si = Sensors.snsIndexToPointer(i);
       if (checkThisSensorTime(Si)) return true;
     }
     return false;
   }
 
   // Single sensor path
-  ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+  ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndex);
   if (checkThisSensorTime(S)) return true;
   return false;
 }
@@ -6119,7 +5916,7 @@ void wrapupSendData(ArborysSnsType* S) {
   if (!S) {
     //special case, all sensors sent
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-      ArborysSnsType* S = Sensors.getSensorBySnsIndex(i);
+      ArborysSnsType* S = Sensors.snsIndexToPointer(i);
       if (!S) continue;
       if (S->deviceIndex != I.MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
@@ -6196,7 +5993,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     // Use static buffers to reduce memory fragmentation
     static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
 
-    ArborysSnsType* S = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndex);
     if (S == nullptr) { //send all sensors
       if (useUDP)  JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
       else JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
@@ -6801,3 +6598,4 @@ void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks) {
   }
 }
 #endif
+

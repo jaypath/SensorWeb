@@ -77,14 +77,16 @@ String createSensorFilename(uint64_t deviceMAC, uint8_t sensorType, uint8_t sens
 double findNearestValue(const std::vector<SensorDataPoint>& dataPoints, uint32_t targetTime);
 
 // Functions for storing/reading all sensors
-bool writeErrorToSD();
-int8_t readErrorFromSD(String* error, uint8_t MaxNumberofLines=50);
+bool writeErrorToSD(ERROR_STRUCT LASTERROR);
+int8_t readErrorFromSD(ERROR_STRUCT& LASTERROR, uint8_t NthFromLast);
 
 // Screen and utility functions
 bool storeScreenInfoSD();
 bool readScreenInfoSD();
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels);
+bool writeAnythingToSD(const char* filename, const void* data, uint16_t size, bool append=false);
+bool readAnythingFromSD(const char* filename, const void* data, uint16_t size);
 bool matchPattern(const char* filename, const char* pattern);
 uint16_t deleteFiles(const char* pattern,const char* directory);
 uint16_t deleteSensorDataSD();

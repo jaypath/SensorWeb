@@ -224,7 +224,7 @@ extern  Adafruit_BME280 bme; // I2C
 #endif
 
 
-int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false);
+int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false, bool uncalibrated=false);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
 void setupSensors();
@@ -238,6 +238,7 @@ float readPinValue(ArborysSnsType* P, byte nsamps);
 float readPinValue(int16_t pin, byte nsamps, int16_t powerPin=-1);
 void togglePowerPin(int16_t powerPin, bool on);
 bool readADS1115(byte avgN, ArborysSnsType* P);
+int8_t findSnsHistoryIndex(ArborysSnsType* P);
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps);
@@ -250,14 +251,16 @@ double readMUX(int16_t pin, byte nsamps);
   //create a struct type to hold sensor history
   struct STRUCT_SNSHISTORY {
     int16_t sensorIndex[_SENSORNUM]; //index to the sensor array
-    uint32_t PrefsSensorIDs[_SENSORNUM]; //Prefs based sensor ID, which is devID<<16 + snsType<<8 + snsID
+    //uint32_t PrefsSensorIDs[_SENSORNUM]; //Prefs based sensor ID, which is devID<<16 + snsType<<8 + snsID
     uint8_t HistoryIndex[_SENSORNUM] = {0}; //point in array that we are at for each sensor's history
     uint8_t PrefsIndex[_SENSORNUM]; //index to the Prefs array for the sensor
     uint32_t TimeStamps[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     double Values[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
     uint8_t Flags[_SENSORNUM][_SENSORHISTORYSIZE] = {0};
 
-    bool recordSentValue(ArborysSnsType *S, int16_t hIndex);
+    bool recordSentValue(ArborysSnsType *S);
+    int16_t getSensorHistoryIndex(ArborysSnsType *S);
+    int16_t getSensorHistoryIndex(int16_t index);
   };
 
 

@@ -1,0 +1,2019 @@
+{
+  "houseplants": {
+    "Snake Plant": {
+      "scientific_name": "Dracaena trifasciata",
+      "mature_size_in": { "height": 48, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+        },
+        "notes": "Balanced 10-10-10"
+      },
+      "additional_notes": "Fast draining soil; cactus mix."
+    },
+    "ZZ Plant": {
+      "scientific_name": "Zamioculcas zamiifolia",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Jun", "Sep"]
+        },
+        "notes": "Low-dose balanced"
+      },
+      "additional_notes": "Very sensitive to overwatering; well-drained."
+    },
+    "Pothos": {
+      "scientific_name": "Epipremnum aureum",
+      "mature_size_in": { "height": 120, "width": 24 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.1, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Trellis/Stake for vining; standard mix."
+    },
+    "Peace Lily": {
+      "scientific_name": "Spathiphyllum",
+      "mature_size_in": { "height": 40, "width": 30 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.8, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        },
+        "notes": "Balanced 20-20-20"
+      },
+      "additional_notes": "Will 'faint' if moisture < 40; no direct sun."
+    },
+    "Fiddle Leaf Fig": {
+      "scientific_name": "Ficus lyrata",
+      "mature_size_in": { "height": 120, "width": 48 },
+      "growth_rate_in_yr": "12-18",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "High Nitrogen"
+      },
+      "additional_notes": "Pruning required; stakes; barky soil."
+    },
+    "Monstera": {
+      "scientific_name": "Monstera deliciosa",
+      "mature_size_in": { "height": 96, "width": 60 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Balanced 20-20-20"
+      },
+      "additional_notes": "Moss pole for climbing; chunky aroid mix."
+    },
+    "Bird of Paradise": {
+      "scientific_name": "Strelitzia reginae",
+      "mature_size_in": { "height": 72, "width": 48 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 60, "max": 70 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "High Phosphorous"
+      },
+      "additional_notes": "Heavy feeder; needs bright direct light."
+    },
+    "African Violet": {
+      "scientific_name": "Saintpaulia",
+      "mature_size_in": { "height": 6, "width": 12 },
+      "growth_rate_in_yr": "3-5",
+      "humidity_percent": { "min": 50, "max": 60 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 70, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.8, "max": 6.2 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Weekly",
+        "season": {
+          "months": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        },
+        "notes": "High Phosphorus"
+      },
+      "additional_notes": "Bottom water; avoid leaf contact with water."
+    },
+    "String of Pearls": {
+      "scientific_name": "Senecio rowleyanus",
+      "mature_size_in": { "height": 36, "width": 4 },
+      "growth_rate_in_yr": "5-10",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 10, "max": 20 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.6, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug"]
+        },
+        "notes": "Diluted Cactus fert"
+      },
+      "additional_notes": "Sandy soil; rocks/grit; no standing water."
+    },
+    "Alocasia Polly": {
+      "scientific_name": "Alocasia x amazonica",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 70, "max": 80 },
+      "optimal_soil_moisture_pct": 72,
+      "moisture_range_pct": { "min": 65, "max": 80 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "High humidity; pebble tray or humidifier."
+    },
+    "Monstera Adansonii": {
+      "scientific_name": "Monstera adansonii",
+      "mature_size_in": { "height": 96, "width": 36 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Balanced 20-20-20"
+      },
+      "additional_notes": "Swiss Cheese Vine; requires trellis or moss pole; sensitive to draft."
+    },
+    "Spider Plant": {
+      "scientific_name": "Chlorophytum comosum",
+      "mature_size_in": { "height": 12, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 70 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.2 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Half-strength balanced"
+      },
+      "additional_notes": "Produces 'pups' on runners; sensitive to fluoride in tap water."
+    },
+    "Prayer Plant": {
+      "scientific_name": "Maranta leuconeura",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 85 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Water-soluble balanced"
+      },
+      "additional_notes": "Leaves fold at night; high humidity essential; avoid direct sun."
+    },
+    "Parlor Palm": {
+      "scientific_name": "Chamaedorea elegans",
+      "mature_size_in": { "height": 48, "width": 36 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.0, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+        },
+        "notes": "Slow-release palm fertilizer"
+      },
+      "additional_notes": "Low light tolerant; sensitive to over-fertilizing."
+    },
+    "Jade Plant": {
+      "scientific_name": "Crassula ovata",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Cactus/Succulent 2-7-7"
+      },
+      "additional_notes": "Prune to encourage trunk growth; avoid wet leaves."
+    },
+    "Calathea Ornata": {
+      "scientific_name": "Goeppertia ornata",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 65, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+        },
+        "notes": "Diluted nitrogen-rich"
+      },
+      "additional_notes": "Pinstripe plant; extremely sensitive to tap water chemicals."
+    },
+    "Blue Star Fern": {
+      "scientific_name": "Phlebodium aureum",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "Liquid fern fertilizer"
+      },
+      "additional_notes": "Epiphytic; likes chunky bark mix; blue-green foliage."
+    },
+    "Cast Iron Plant": {
+      "scientific_name": "Aspidistra elatior",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 40,
+      "moisture_range_pct": { "min": 30, "max": 55 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Indoor Dim", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+        },
+        "notes": "All-purpose indoor"
+      },
+      "additional_notes": "Virtually indestructible; handles low light and drafts easily."
+    },
+    "Polka Dot Begonia": {
+      "scientific_name": "Begonia maculata",
+      "mature_size_in": { "height": 36, "width": 20 },
+      "growth_rate_in_yr": "8-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.1, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": {
+          "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"]
+        },
+        "notes": "High potassium/phosphorus"
+      },
+      "additional_notes": "Angel wing variety; stakes needed for height; silver spots."
+    },
+    "Aloe Vera": {
+      "scientific_name": "Aloe barbadensis miller",
+      "mature_size_in": { "height": 24, "width": 12 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 30, "max": 45 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 10, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 7.0, "max": 8.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": {
+          "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"]
+        },
+        "notes": "Diluted 10-40-10"
+      },
+      "additional_notes": "Medicinal sap; let soil dry completely between watering."
+    },
+    "String of Hearts": {
+      "scientific_name": "Ceropegia woodii",
+      "mature_size_in": { "height": 144, "width": 12 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 50 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced liquid"
+      },
+      "additional_notes": "Trailing succulent; avoid overwatering tubers; likes bright light to keep variegation."
+    },
+    "Swiss Cheese Plant": {
+      "scientific_name": "Monstera adansonii",
+      "mature_size_in": { "height": 96, "width": 36 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced 20-20-20"
+      },
+      "additional_notes": "Requires moss pole for climbing; leaves develop more holes with better light."
+    },
+    "Watermelon Peperomia": {
+      "scientific_name": "Peperomia argyreia",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "4-6",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 6.6 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Half-strength balanced"
+      },
+      "additional_notes": "Sensitive to salt buildup; avoid getting leaves wet; compact growth."
+    },
+    "Rubber Tree": {
+      "scientific_name": "Ficus elastica",
+      "mature_size_in": { "height": 120, "width": 48 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "High nitrogen"
+      },
+      "additional_notes": "Large waxy leaves; needs wiping to remove dust; sap is a skin irritant."
+    },
+    "Chinese Money Plant": {
+      "scientific_name": "Pilea peperomioides",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 40, "max": 50 },
+      "optimal_soil_moisture_pct": 40,
+      "moisture_range_pct": { "min": 30, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Rotate weekly for even growth; produces pups; hates direct hot sun."
+    },
+    "Nerve Plant": {
+      "scientific_name": "Fittonia albivenis",
+      "mature_size_in": { "height": 6, "width": 12 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 65, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Diluted balanced"
+      },
+      "additional_notes": "Dramatic 'fainter' when dry; excellent for terrariums; needs consistent humidity."
+    },
+    "Croton": {
+      "scientific_name": "Codiaeum variegatum",
+      "mature_size_in": { "height": 72, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 4.5, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Acid-loving fertilizer"
+      },
+      "additional_notes": "Needs high light for color; drops leaves if moved; keep away from drafts."
+    },
+    "Asparagus Fern": {
+      "scientific_name": "Asparagus aethiopicus",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.5, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Actually a lily relative; has hidden thorns; tiny leaves drop when dry."
+    },
+    "African Mask Plant": {
+      "scientific_name": "Alocasia amazonica",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 70, "max": 80 },
+      "optimal_soil_moisture_pct": 72,
+      "moisture_range_pct": { "min": 65, "max": 80 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "High humidity; pebble tray; keep warm; dormant in winter."
+    },
+    "Flamingo Lily": {
+      "scientific_name": "Anthurium andraeanum",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] },
+        "notes": "High phosphorus"
+      },
+      "additional_notes": "Waxy flowers; needs high light to bloom; sensitive to cold."
+    },
+    "Elephant Ear": {
+      "scientific_name": "Colocasia esculenta",
+      "mature_size_in": { "height": 60, "width": 48 },
+      "growth_rate_in_yr": "24-36",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 80,
+      "moisture_range_pct": { "min": 70, "max": 95 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Weekly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Heavy feeder; balanced"
+      },
+      "additional_notes": "Huge leaves; bog plant; loves water; needs plenty of space."
+    },
+    "Blue Star Fern": {
+      "scientific_name": "Phlebodium aureum",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Liquid fern fertilizer"
+      },
+      "additional_notes": "Epiphytic; likes chunky bark mix; unique blue-green color."
+    },
+    "Boston Fern": {
+      "scientific_name": "Nephrolepis exaltata",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 65, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.0, "max": 5.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Half-strength liquid"
+      },
+      "additional_notes": "Prone to leaf drop if dry; loves bathrooms; avoid drafty spots."
+    },
+    "Heartleaf Philodendron": {
+      "scientific_name": "Philodendron hederaceum",
+      "mature_size_in": { "height": 120, "width": 24 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Very hardy; trails or climbs; great for beginners."
+    },
+    "Zebra Plant": {
+      "scientific_name": "Aphelandra squarrosa",
+      "mature_size_in": { "height": 24, "width": 18 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 60, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Yellow flower spikes; picky about water quality; hates drying out."
+    },
+    "Yucca Cane": {
+      "scientific_name": "Yucca gigantea",
+      "mature_size_in": { "height": 120, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 40 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Pointy leaves; very drought tolerant; can grow very tall indoors."
+    },
+    "Sago Palm": {
+      "scientific_name": "Cycas revoluta",
+      "mature_size_in": { "height": 48, "width": 48 },
+      "growth_rate_in_yr": "1-3",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 35,
+      "moisture_range_pct": { "min": 25, "max": 50 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Seasonally",
+        "season": { "months": ["Mar", "Jun", "Sep"] },
+        "notes": "Slow-release palm fertilizer"
+      },
+      "additional_notes": "Not a true palm; extremely toxic to pets; slow grower."
+    },
+    "Money Tree": {
+      "scientific_name": "Pachira aquatica",
+      "mature_size_in": { "height": 72, "width": 36 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Liquid balanced"
+      },
+      "additional_notes": "Often sold with braided trunk; rotate for even foliage; avoid overwatering."
+    },
+    "Lady Palm": {
+      "scientific_name": "Rhapis excelsa",
+      "mature_size_in": { "height": 72, "width": 48 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Slow-release"
+      },
+      "additional_notes": "Fan-shaped leaves; slow growing palm; handles low light well."
+    },
+    "Wax Plant": {
+      "scientific_name": "Hoya carnosa",
+      "mature_size_in": { "height": 120, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 30,
+      "moisture_range_pct": { "min": 20, "max": 45 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "High potassium/phosphorus"
+      },
+      "additional_notes": "Fragrant waxy flowers; succulent-like leaves; climbs or trails."
+    },
+    "Burro's Tail": {
+      "scientific_name": "Sedum morganianum",
+      "mature_size_in": { "height": 48, "width": 12 },
+      "growth_rate_in_yr": "4-6",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 5, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted cactus fertilizer"
+      },
+      "additional_notes": "Extremely fragile leaves drop at touch; trailing growth; avoid high humidity."
+    },
+    "Blue Columnar Cactus": {
+      "scientific_name": "Pilosocereus azureus",
+      "mature_size_in": { "height": 120, "width": 12 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 10,
+      "moisture_range_pct": { "min": 5, "max": 20 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Low-nitrogen cactus food"
+      },
+      "additional_notes": "Stunning blue hue; requires intense light to maintain color; keep bone dry in winter."
+    },
+    "Ponytail Palm": {
+      "scientific_name": "Beaucarnea recurvata",
+      "mature_size_in": { "height": 72, "width": 36 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 40 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Succulent trunk stores water; slow grower; non-toxic to pets."
+    },
+    "Staghorn Fern": {
+      "scientific_name": "Platycerium bifurcatum",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid (misted)"
+      },
+      "additional_notes": "Epiphytic; usually mounted on wood; requires frequent misting or soaking."
+    },
+    "Kimberly Queen Fern": {
+      "scientific_name": "Nephrolepis obliterata",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Slow-release balanced"
+      },
+      "additional_notes": "More sun-tolerant than Boston fern; upright growth; less messy."
+    },
+    "Rattlesnake Plant": {
+      "scientific_name": "Goeppertia insignis",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced"
+      },
+      "additional_notes": "Spotted leaves with purple undersides; leaves move up at night; dislikes tap water."
+    },
+    "African Milk Tree": {
+      "scientific_name": "Euphorbia trigona",
+      "mature_size_in": { "height": 72, "width": 24 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.1, "max": 7.8 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Low-nitrogen fertilizer"
+      },
+      "additional_notes": "Not a cactus; contains toxic milky sap; very fast-growing succulent."
+    },
+    "Dragon Tree": {
+      "scientific_name": "Dracaena marginata",
+      "mature_size_in": { "height": 96, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Slender leaves with red edges; handles low light; sensitive to fluoride."
+    },
+    "Coffee Plant": {
+      "scientific_name": "Coffea arabica",
+      "mature_size_in": { "height": 48, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Acidic fertilizer"
+      },
+      "additional_notes": "Shiny dark green leaves; loves high humidity; can produce berries after 3-4 years."
+    },
+    "Hoya Kerrii": {
+      "scientific_name": "Hoya kerrii",
+      "mature_size_in": { "height": 48, "width": 12 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 35 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Heart-shaped leaves; slow grower; single-leaf cuttings rarely grow a stem."
+    },
+    "Dumb Cane": {
+      "scientific_name": "Dieffenbachia seguine",
+      "mature_size_in": { "height": 60, "width": 36 },
+      "growth_rate_in_yr": "12-18",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.1, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Toxic sap; variegated large leaves; avoid direct afternoon sun."
+    },
+    "Chinese Evergreen": {
+      "scientific_name": "Aglaonema commutatum",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.6, "max": 6.5 },
+      "lighting": { "optimal": "Indoor Dim", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Seasonally",
+        "season": { "months": ["Apr", "Jul", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "One of the most reliable low-light plants; handles dry air well."
+    },
+    "Lipstick Plant": {
+      "scientific_name": "Aeschynanthus radicans",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "High phosphorus (bloom booster)"
+      },
+      "additional_notes": "Red tubular flowers; epiphytic nature; likes bright indirect light to bloom."
+    },
+    "English Ivy": {
+      "scientific_name": "Hedera helix",
+      "mature_size_in": { "height": 120, "width": 36 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced nitrogen-rich"
+      },
+      "additional_notes": "Vigorous climber; prone to spider mites in dry air; likes cool spots."
+    },
+    "Creeping Fig": {
+      "scientific_name": "Ficus pumila",
+      "mature_size_in": { "height": 180, "width": 12 },
+      "growth_rate_in_yr": "12-36",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Tiny leaves; fast climber with aerial roots; keep consistently moist."
+    },
+    "Moon Valley Pilea": {
+      "scientific_name": "Pilea mollis",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Half-strength balanced"
+      },
+      "additional_notes": "Deeply textured crinkly leaves; compact; excellent for terrariums."
+    },
+    "Flaming Katy": {
+      "scientific_name": "Kalanchoe blossfeldiana",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "4-6",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 30,
+      "moisture_range_pct": { "min": 20, "max": 40 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "High phosphorus"
+      },
+      "additional_notes": "Succulent leaves; vibrant blooms; requires bright light to rebloom."
+    },
+    "Desert Rose": {
+      "scientific_name": "Adenium obesum",
+      "mature_size_in": { "height": 48, "width": 24 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 35 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced water-soluble"
+      },
+      "additional_notes": "Succulent trunk (caudex); needs intense light; toxic sap; beautiful blooms."
+    },
+    "Crown of Thorns": {
+      "scientific_name": "Euphorbia milii",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 35,
+      "moisture_range_pct": { "min": 25, "max": 50 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Spiny stems; blooms throughout the year; drought tolerant."
+    },
+    "Purple Heart": {
+      "scientific_name": "Tradescantia pallida",
+      "mature_size_in": { "height": 12, "width": 24 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 65 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Deep purple foliage; fast grower; trails nicely; color fades in low light."
+    },
+    "Calathea Medallion": {
+      "scientific_name": "Goeppertia veitchiana",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 85 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced liquid"
+      },
+      "additional_notes": "Iconic prayer plant movement; very sensitive to chlorine and fluoride in water."
+    },
+    "Swiss Cheese Vine": {
+      "scientific_name": "Monstera obliqua",
+      "mature_size_in": { "height": 72, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Rare collector plant; extremely high humidity needs; more hole than leaf."
+    },
+    "Satin Pothos": {
+      "scientific_name": "Scindapsus pictus",
+      "mature_size_in": { "height": 120, "width": 12 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Silver variegated leaves; leaves curl when thirsty; slower than regular Pothos."
+    },
+    "Majesty Palm": {
+      "scientific_name": "Ravenea rivularis",
+      "mature_size_in": { "height": 120, "width": 60 },
+      "growth_rate_in_yr": "12-18",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 65, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Palm-specific with Epsom salt"
+      },
+      "additional_notes": "Demanding palm; needs high light and constant moisture; prone to spider mites."
+    },
+    "String of Turtles": {
+      "scientific_name": "Peperomia prostrata",
+      "mature_size_in": { "height": 24, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 40,
+      "moisture_range_pct": { "min": 30, "max": 50 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced liquid"
+      },
+      "additional_notes": "Tiny succulent-like leaves; patterns resemble turtle shells; avoid soggy soil."
+    },
+    "Elephant Bush": {
+      "scientific_name": "Portulacaria afra",
+      "mature_size_in": { "height": 48, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 5, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Cactus fertilizer"
+      },
+      "additional_notes": "Succulent shrub; leaves are edible; great for bonsai training."
+    },
+    "Frost Peperomia": {
+      "scientific_name": "Peperomia caperata",
+      "mature_size_in": { "height": 8, "width": 8 },
+      "growth_rate_in_yr": "3-5",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Half-strength balanced"
+      },
+      "additional_notes": "Silvery ripple leaves; very sensitive to cold; compact growth."
+    },
+    "Kimberly Queen Fern": {
+      "scientific_name": "Nephrolepis obliterata",
+      "mature_size_in": { "height": 36, "width": 36 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Slow-release balanced"
+      },
+      "additional_notes": "More sun-tolerant than Boston fern; upright growth; less messy foliage."
+    },
+    "Panda Plant": {
+      "scientific_name": "Kalanchoe tomentosa",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 30, "max": 45 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 5, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced"
+      },
+      "additional_notes": "Fuzzy, silver-blue leaves with brown tips; avoids leaf rot by keeping dry."
+    },
+    "Flaming Sword": {
+      "scientific_name": "Vriesea splendens",
+      "mature_size_in": { "height": 24, "width": 18 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Bromeliad specific"
+      },
+      "additional_notes": "Bands on leaves; keeps central cup filled with fresh water; flowers once."
+    },
+    "Rex Begonia": {
+      "scientific_name": "Begonia rex-cultorum",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Known for intense foliage colors; rhizomatous; avoid direct sun and wet leaves."
+    },
+    "Waffle Plant": {
+      "scientific_name": "Hemigraphis alternata",
+      "mature_size_in": { "height": 8, "width": 12 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 80 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Deeply textured purple leaves; 'faints' quickly when dry; great for air purification."
+    },
+    "String of Fishhooks": {
+      "scientific_name": "Senecio radicans",
+      "mature_size_in": { "height": 72, "width": 12 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.6, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Cactus liquid"
+      },
+      "additional_notes": "Fast-growing succulent vine; banana-shaped leaves; extremely drought tolerant."
+    },
+    "Silver Dragon Alocasia": {
+      "scientific_name": "Alocasia baginda",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Silvery, thick leaves with dark veins; sensitive to overwatering; likes tight pots."
+    },
+    "Earth Star": {
+      "scientific_name": "Cryptanthus bivittatus",
+      "mature_size_in": { "height": 6, "width": 12 },
+      "growth_rate_in_yr": "3-5",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Bromeliad liquid"
+      },
+      "additional_notes": "Terrestrial bromeliad; foliage turns pinker with more light; needs airy soil."
+    },
+    "Variegated Boxwood": {
+      "scientific_name": "Buxus sempervirens",
+      "mature_size_in": { "height": 48, "width": 36 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced slow-release"
+      },
+      "additional_notes": "Often used for indoor topiary; needs cool winters; dislikes wet feet."
+    },
+    "Bird's Nest Fern": {
+      "scientific_name": "Asplenium nidus",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Liquid fern fertilizer"
+      },
+      "additional_notes": "Wavy fronds emerge from central rosette; avoid watering directly into the center."
+    },
+    "Swiss Cheese Fern": {
+      "scientific_name": "Microsorum punctatum",
+      "mature_size_in": { "height": 24, "width": 24 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Texture looks like crumpled paper; very durable fern; handles low light."
+    },
+    "African Spear": {
+      "scientific_name": "Dracaena angolensis",
+      "mature_size_in": { "height": 48, "width": 12 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 30, "max": 40 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced 10-10-10"
+      },
+      "additional_notes": "Cylindrical leaves; extremely hardy; often sold braided; very slow grower."
+    },
+    "Elephant's Ear Philodendron": {
+      "scientific_name": "Philodendron domesticum",
+      "mature_size_in": { "height": 96, "width": 48 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 75 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Large spade-shaped leaves; climbs; requires support; easy care."
+    }, 
+    "Moth Orchid": {
+      "scientific_name": "Phalaenopsis",
+      "mature_size_in": { "height": 36, "width": 12 },
+      "growth_rate_in_yr": "4-6",
+      "humidity_percent": { "min": 50, "max": 80 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Weekly",
+        "season": {
+          "months": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        },
+        "notes": "Weakly, weekly with orchid-specific 20-20-20"
+      },
+      "additional_notes": "Epiphytic; grow in bark/moss; roots turn silver when thirsty; do not water crown."
+    },
+    "Venus Flytrap": {
+      "scientific_name": "Dionaea muscipula",
+      "mature_size_in": { "height": 6, "width": 8 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 50, "max": 80 },
+      "optimal_soil_moisture_pct": 85,
+      "moisture_range_pct": { "min": 70, "max": 95 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 3.5, "max": 5.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Do not use soil fertilizer; feed live insects only"
+      },
+      "additional_notes": "Requires distilled water/rain only; dormant in winter; no traditional soil."
+    },
+    "Pitcher Plant": {
+      "scientific_name": "Nepenthes",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 90 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 60, "max": 85 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 4.0, "max": 5.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Occasional insect in pitchers; avoid root fertilizer"
+      },
+      "additional_notes": "Vining habit; pitchers need water inside; sensitive to minerals in tap water."
+    },
+    "Pencil Cactus": {
+      "scientific_name": "Euphorbia tirucalli",
+      "mature_size_in": { "height": 72, "width": 24 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 10,
+      "moisture_range_pct": { "min": 5, "max": 20 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Low nitrogen"
+      },
+      "additional_notes": "Toxic milky sap; turns orange/red in high light; extremely drought tolerant."
+    },
+    "Elephant's Ear": {
+      "scientific_name": "Alocasia macrorrhizos",
+      "mature_size_in": { "height": 120, "width": 72 },
+      "growth_rate_in_yr": "24-48",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 75,
+      "moisture_range_pct": { "min": 60, "max": 90 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Weekly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Heavy feeder; balanced liquid"
+      },
+      "additional_notes": "Massive leaves; requires heavy watering; space-consuming."
+    },
+    "Fire Flash": {
+      "scientific_name": "Chlorophytum amaniense",
+      "mature_size_in": { "height": 12, "width": 18 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Bright orange stems; related to spider plant but no runners; sensitive to salts."
+    },
+    "Zebra Cactus": {
+      "scientific_name": "Haworthiopsis fasciata",
+      "mature_size_in": { "height": 6, "width": 6 },
+      "growth_rate_in_yr": "1-3",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 10, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Seasonally",
+        "season": { "months": ["Apr", "Jul", "Oct"] },
+        "notes": "Cactus fertilizer"
+      },
+      "additional_notes": "Slow grower; white horizontal stripes; handles lower light better than most succulents."
+    },
+    "Whale Fin Sansevieria": {
+      "scientific_name": "Dracaena masoniana",
+      "mature_size_in": { "height": 48, "width": 10 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Single giant leaf; architectural; extremely hardy; avoid overwatering at base."
+    },
+    "Cigar Cactus": {
+      "scientific_name": "Cereus forbesii spiralis",
+      "mature_size_in": { "height": 60, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 10,
+      "moisture_range_pct": { "min": 5, "max": 20 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Cactus specific"
+      },
+      "additional_notes": "Unique spiral growth; architectural; keep dry during winter months."
+    },
+    "String of Pearls Curio": {
+      "scientific_name": "Curio rowleyanus",
+      "mature_size_in": { "height": 36, "width": 6 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 10, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted balanced"
+      },
+      "additional_notes": "Round leaves; extremely sensitive to overwatering; bottom watering recommended."
+    },
+    "Jewel Orchid": {
+      "scientific_name": "Ludisia discolor",
+      "mature_size_in": { "height": 10, "width": 12 },
+      "growth_rate_in_yr": "3-6",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Indoor Dim", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Weak orchid fertilizer"
+      },
+      "additional_notes": "Terrestrial; grown for foliage (velvety dark red); avoid direct sun."
+    },
+    "Cape Primrose": {
+      "scientific_name": "Streptocarpus",
+      "mature_size_in": { "height": 12, "width": 15 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.8, "max": 6.2 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "High potassium"
+      },
+      "additional_notes": "Related to African Violet; long bloom season; avoid water on leaves."
+    },
+    "Hoya Crimson Queen": {
+      "scientific_name": "Hoya carnosa 'Krimson Queen'",
+      "mature_size_in": { "height": 120, "width": 18 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 30,
+      "moisture_range_pct": { "min": 20, "max": 45 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Phosphorus boost in summer"
+      },
+      "additional_notes": "Pink/white variegation; waxy flowers; succulent-like care."
+    },
+    "String of Dolphins": {
+      "scientific_name": "Curio x peregrinus",
+      "mature_size_in": { "height": 36, "width": 12 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 30, "max": 50 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Dolphin-shaped leaves; hybrid; sensitive to overwatering; needs bright light."
+    },
+    "Polka Dot Plant": {
+      "scientific_name": "Hypoestes phyllostachya",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.1, "max": 7.3 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Spotted foliage; pinch back to keep bushy; colors fade in low light."
+    },
+    "Copper Spoon": {
+      "scientific_name": "Kalanchoe orgyalis",
+      "mature_size_in": { "height": 48, "width": 24 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Low dose liquid"
+      },
+      "additional_notes": "Felted cinnamon-colored leaves; architectural; slow growing."
+    },
+    "Living Stones": {
+      "scientific_name": "Lithops",
+      "mature_size_in": { "height": 1, "width": 2 },
+      "growth_rate_in_yr": "0.1-0.2",
+      "humidity_percent": { "min": 10, "max": 30 },
+      "optimal_soil_moisture_pct": 5,
+      "moisture_range_pct": { "min": 0, "max": 10 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Seasonally",
+        "season": { "months": ["May", "Sep"] },
+        "notes": "Extremely diluted cactus fert"
+      },
+      "additional_notes": "Do not water during 'splitting' phase; requires inorganic grit; mimics desert pebbles."
+    },
+    "Variegated Monstera": {
+      "scientific_name": "Monstera deliciosa 'Albo'",
+      "mature_size_in": { "height": 96, "width": 60 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 65, "max": 85 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced 20-20-20"
+      },
+      "additional_notes": "Slower than non-variegated; white areas prone to browning; needs high indirect light."
+    },
+    "Philodendron Pink Princess": {
+      "scientific_name": "Philodendron erubescens 'PPP'",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "6-12",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Climbing; stakes/moss pole needed; light intensity determines pink variegation."
+    },
+    "Stingray Alocasia": {
+      "scientific_name": "Alocasia macrorrhizos 'Stingray'",
+      "mature_size_in": { "height": 60, "width": 36 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 70,
+      "moisture_range_pct": { "min": 60, "max": 85 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Heavy feeder; balanced liquid"
+      },
+      "additional_notes": "Unique leaf tail; requires significant vertical space; spider mite magnet."
+    },
+    "Fishbone Cactus": {
+      "scientific_name": "Epiphyllum anguliger",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "8-12",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 40,
+      "moisture_range_pct": { "min": 30, "max": 50 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Cactus fertilizer"
+      },
+      "additional_notes": "Epiphytic cactus; night-blooming fragrant flowers; likes more water than desert cacti."
+    },
+    "Blue Oil Fern": {
+      "scientific_name": "Microsorum thailandicum",
+      "mature_size_in": { "height": 10, "width": 12 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 70, "max": 90 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Indoor Dim", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Very diluted fern liquid"
+      },
+      "additional_notes": "Iridescent blue foliage; extremely high humidity; keep away from all direct sun."
+    },
+    "Dragon Scale Alocasia": {
+      "scientific_name": "Alocasia baginda 'Dragon Scale'",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "None",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Hard, textured leaves; prone to root rot if moisture > 80; keep warm."
+    },
+    "Friendship Plant": {
+      "scientific_name": "Pilea involucrata",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "6-10",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Indoor Dim" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Deeply textured bronzy leaves; handles lower light; easy to propagate."
+    },
+    "Mistletoe Cactus": {
+      "scientific_name": "Rhipsalis baccifera",
+      "mature_size_in": { "height": 72, "width": 24 },
+      "growth_rate_in_yr": "8-15",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 45,
+      "moisture_range_pct": { "min": 35, "max": 55 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Diluted cactus fertilizer"
+      },
+      "additional_notes": "Epiphytic jungle cactus; trailing cylindrical stems; tiny white berries."
+    },
+    "Persian Shield": {
+      "scientific_name": "Strobilanthes dyeriana",
+      "mature_size_in": { "height": 36, "width": 24 },
+      "growth_rate_in_yr": "12-18",
+      "humidity_percent": { "min": 60, "max": 80 },
+      "optimal_soil_moisture_pct": 65,
+      "moisture_range_pct": { "min": 55, "max": 75 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 5.5, "max": 7.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Biweekly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Iridescent purple foliage; needs warmth and consistent moisture; pinches for bushiness."
+    },
+    "Cebu Blue Pothos": {
+      "scientific_name": "Epipremnum pinnatum 'Cebu Blue'",
+      "mature_size_in": { "height": 120, "width": 12 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.1, "max": 6.5 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Silver-blue elongated leaves; fenestrates as it climbs; very fast grower."
+    },
+    "Fireball Bromeliad": {
+      "scientific_name": "Neoregelia 'Fireball'",
+      "mature_size_in": { "height": 6, "width": 10 },
+      "growth_rate_in_yr": "3-5",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 50,
+      "moisture_range_pct": { "min": 40, "max": 60 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.0, "max": 6.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Bromeliad specific"
+      },
+      "additional_notes": "Turns bright red in high light; produces stolons to form colonies; keep tank filled."
+    },
+    "Dancing Bones Cactus": {
+      "scientific_name": "Hatiora salicornioides",
+      "mature_size_in": { "height": 18, "width": 12 },
+      "growth_rate_in_yr": "4-8",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 35,
+      "moisture_range_pct": { "min": 25, "max": 45 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Part Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Segmented stems; yellow/orange flowers; avoids wet feet in winter."
+    },
+    "Crested Euphorbia": {
+      "scientific_name": "Euphorbia lactea f. cristata",
+      "mature_size_in": { "height": 24, "width": 12 },
+      "growth_rate_in_yr": "1-3",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 15,
+      "moisture_range_pct": { "min": 5, "max": 25 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.5, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Low nitrogen succulent fert"
+      },
+      "additional_notes": "Coral-like mutation; usually grafted onto a rootstock; extremely drought tolerant."
+    },
+    "Pink Quill": {
+      "scientific_name": "Wallisia cyanea",
+      "mature_size_in": { "height": 10, "width": 10 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 5.5, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Bromeliad fertilizer"
+      },
+      "additional_notes": "Can be grown in air or well-drained soil; hot pink bract with purple flowers."
+    },
+    "Copper King Mammillaria": {
+      "scientific_name": "Mammillaria elongata 'Copper King'",
+      "mature_size_in": { "height": 6, "width": 8 },
+      "growth_rate_in_yr": "1-3",
+      "humidity_percent": { "min": 10, "max": 30 },
+      "optimal_soil_moisture_pct": 10,
+      "moisture_range_pct": { "min": 5, "max": 20 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Full Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["May", "Jun", "Jul", "Aug"] },
+        "notes": "Cactus specific"
+      },
+      "additional_notes": "Copper-colored spines; forms clumps; very sensitive to winter overwatering."
+    },
+    "String of Spades": {
+      "scientific_name": "Ceropegia woodii 'Spades'",
+      "mature_size_in": { "height": 144, "width": 6 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 40, "max": 60 },
+      "optimal_soil_moisture_pct": 25,
+      "moisture_range_pct": { "min": 15, "max": 35 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Balanced liquid"
+      },
+      "additional_notes": "Leaves shaped like spade suits; darker than String of Hearts; trailing."
+    },
+    "African Blood Lily": {
+      "scientific_name": "Scadoxus multiflorus",
+      "mature_size_in": { "height": 12, "width": 12 },
+      "growth_rate_in_yr": "4-6",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 60,
+      "moisture_range_pct": { "min": 50, "max": 70 },
+      "dry_soil_tolerance": "Low",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "High potassium"
+      },
+      "additional_notes": "Spectacular pom-pom flowers; dormant in winter (stop watering); toxic if eaten."
+    },
+    "Ficus Audrey": {
+      "scientific_name": "Ficus benghalensis",
+      "mature_size_in": { "height": 120, "width": 48 },
+      "growth_rate_in_yr": "12-24",
+      "humidity_percent": { "min": 50, "max": 70 },
+      "optimal_soil_moisture_pct": 55,
+      "moisture_range_pct": { "min": 45, "max": 65 },
+      "dry_soil_tolerance": "Medium",
+      "soil_ph": { "min": 6.0, "max": 7.0 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"] },
+        "notes": "High nitrogen"
+      },
+      "additional_notes": "Velvety leaves; easier than Fiddle Leaf Fig; avoid drafts and sudden temperature drops."
+    },
+    "Desert Privet": {
+      "scientific_name": "Peperomia graveolens",
+      "mature_size_in": { "height": 10, "width": 10 },
+      "growth_rate_in_yr": "2-4",
+      "humidity_percent": { "min": 20, "max": 40 },
+      "optimal_soil_moisture_pct": 20,
+      "moisture_range_pct": { "min": 10, "max": 30 },
+      "dry_soil_tolerance": "High",
+      "soil_ph": { "min": 6.0, "max": 6.5 },
+      "lighting": { "optimal": "Full Sun", "minimum": "Partial Sun" },
+      "fertilizer": {
+        "frequency": "Monthly",
+        "season": { "months": ["Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"] },
+        "notes": "Succulent fertilizer"
+      },
+      "additional_notes": "Ruby-red leaf undersides; taco-shaped leaves; keep water out of leaf windows."
+    }
+   
+  }
+}

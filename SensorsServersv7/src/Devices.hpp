@@ -55,7 +55,8 @@ struct ArborysSnsType {
     #ifdef _ISPERIPHERAL
     int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address or other special pin number where actual pin is snsPin-100, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
     int16_t powerPin;          // pin number for the power pin, if applicable. -9999 means no power pin If -9999 then there is no power pin, if -200 then it is a special case
-
+    double snsCalibMin;        // minimum value for calibration
+    double snsCalibMax;        // maximum value for calibration
     #endif
 };
 
@@ -80,6 +81,7 @@ public:
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);
     ArborysDevType* getDeviceByDevIndex(int16_t devindex);
+    ArborysDevType* devIndexToPointer(int16_t devindex);
     ArborysDevType* getDeviceBySnsIndex(int16_t snsindex);
     ArborysDevType* getDeviceByMAC(uint64_t MAC);
     uint64_t getDeviceMACByDevIndex(int16_t devindex);
@@ -107,6 +109,9 @@ public:
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID);
+    int16_t findSensorByPointer(ArborysSnsType* P);
+    int16_t findMySensorBySnsTypeAndID(int16_t snsType, int16_t snsID);
+    ArborysSnsType* snsIndexToPointer(int16_t snsindex);
     ArborysSnsType* getSensorBySnsIndex(int16_t snsindex);
     uint8_t getNumSensors();
     bool isSensorInit(int16_t index);
@@ -135,18 +140,11 @@ public:
 
 
     //peripheral specific functions
-    #ifdef _ISPERIPHERAL
     uint32_t makeSensorID(uint8_t snsType, uint8_t snsID=-1, int16_t devID=-1); //make the sensor ID for this sensor. If snsID is -1, then it will be the next available sensor ID for the given sensor type
     uint32_t makeSensorID(ArborysSnsType* sensor); //make the sensor ID for this sensor
     uint32_t makeSensorID(int16_t index); //make the sensor ID for this sensor
-    int16_t getPrefsIndex(int16_t index); //get the preferences index for this sensor
-    int16_t getPrefsIndex(ArborysSnsType* sensor); //get the preferences index for this sensor
-    int16_t getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the preferences index for this sensor
-    int16_t getSensorHistoryIndex(int16_t index); //get the sensor history index for this sensor
-    int16_t getSensorHistoryIndex(ArborysSnsType* sensor); //get the sensor history index for this sensor
-    int16_t getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, int16_t devID=-1); //get the sensor history index for this sensor
-    #endif
-    
+    int16_t findSensorBySensorID(uint32_t sensorID);
+    int16_t findSensorBySensorID(ArborysSnsType* sensor);
     //informational functions
     bool isMySensor(int16_t index);
     int16_t isDeviceIndexValid(int16_t index);

@@ -93,8 +93,31 @@ uint8_t HVACSNSNUM = 0;
 
 
 
+int16_t STRUCT_SNSHISTORY::getSensorHistoryIndex(ArborysSnsType *S) {
+  if (S == NULL) return -1;
+  if (S->IsSet == false) return -1;
 
-bool STRUCT_SNSHISTORY::recordSentValue(ArborysSnsType *S, int16_t hIndex) {
+  int16_t index = Sensors.findSensorByPointer(S);
+  if (index < 0) return -1;
+  return SensorHistory.getSensorHistoryIndex(index);
+}
+
+int16_t STRUCT_SNSHISTORY::getSensorHistoryIndex(int16_t index) {
+  if (index < 0) return -1;
+
+
+  for (int16_t i = 0; i < _SENSORNUM; i++) {
+    if (SensorHistory.sensorIndex[i] == index) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+bool STRUCT_SNSHISTORY::recordSentValue(ArborysSnsType *S) {
+  //get the hIndex, index to sensor history
+  int16_t hIndex = SensorHistory.getSensorHistoryIndex(S);
+  
   if (hIndex < 0 || hIndex >= _SENSORNUM || isTimeValid(S->timeRead) == false) return false;
   HistoryIndex[hIndex]++;
   if (HistoryIndex[hIndex] >= _SENSORHISTORYSIZE) HistoryIndex[hIndex] = 0;
@@ -164,6 +187,8 @@ for (byte i=0;i<_SENSORNUM;i++) {
     Prefs.SNS_LIMIT_MIN[i] = limit_min[i];
     Prefs.SNS_INTERVAL_POLL[i] = interval_poll[i];
     Prefs.SNS_INTERVAL_SEND[i] = interval_send[i];
+    Prefs.SNS_CALIB_MIN[i] = NAN;
+    Prefs.SNS_CALIB_MAX[i] = NAN;
     Prefs.isUpToDate = false;
   }
 }
@@ -207,8 +232,8 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
 
     //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
     SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
-    SensorHistory.PrefsSensorIDs[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
-    SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index
+    //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
+    SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
     SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
 
     switch (sensortypes[i]) {
@@ -309,14 +334,14 @@ int8_t readAllSensors(bool forceRead) {
 }
 
 
-int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
+int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
   
   //is this my sensor?
   if (P->deviceIndex != I.MY_DEVICE_INDEX) return -1;
 
   // need the index to the Prefs arrays for the sensor
-  int16_t prefs_index = Sensors.getPrefsIndex(P->snsType, P->snsID, I.MY_DEVICE_INDEX);
+  int16_t prefs_index = SensorHistory.getSensorHistoryIndex(P);
   if (prefs_index == -2) return -2;
   if (prefs_index == -1) return -1;
 
@@ -378,8 +403,16 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
           
           } 
           if (P->snsType==33) {
-            P->snsValue = mapfloat(val, 0.15, 1.75, 0, 100); //this is the effective measurement range
-            if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+            if (uncalibrated) {
+              P->snsValue = val;
+            } else {
+              if (P->snsCalibMin==P->snsCalibMax) {
+                P->snsCalibMin = 0.15;
+                P->snsCalibMax = 1.75;
+              } 
+              P->snsValue = mapfloat(val, P->snsCalibMin, P->snsCalibMax, 0, 100); //this is the effective measurement range
+              if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+            }
           } 
         }
         else {
@@ -393,8 +426,12 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
               if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
             } 
             if (P->snsType==35) {
-              P->snsValue = mapfloat(P->snsValue, 0.15, 1.75, 0, 100); //this is the effective measurement range
-              if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+              if (uncalibrated) {
+                P->snsValue = P->snsValue;
+              } else {
+                P->snsValue = mapfloat(P->snsValue, 0.15, 1.75, 0, 100); //this is the effective measurement range
+                if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
+              }
             } 
           #endif
         }
@@ -456,22 +493,24 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
         #if defined(_USEADS1115) && defined(_THERMISTOR_B0) && defined(_THERMISTOR_R0) && defined(_THERMISTOR_RKNOWN) && defined(_THERMISTOR_TKNOWN) && defined(_THERMISTOR_VDD)
           // 1. read voltage 
           readADS1115(20, P); 
+          if (!uncalibrated) {
 
-          // 2. Calculate R_thermistor using the Voltage Divider formula
-          // V_in and R_known should be measured/confirmed for highest accuracy!
-          float R_thermistor = _THERMISTOR_RKNOWN * (_THERMISTOR_VDD / P->snsValue - 1.0);
+            // 2. Calculate R_thermistor using the Voltage Divider formula
+            // V_in and R_known should be measured/confirmed for highest accuracy!
+            float R_thermistor = _THERMISTOR_RKNOWN * (_THERMISTOR_VDD / P->snsValue - 1.0);
 
-          // 3. Calculate Temperature using the Steinhart-Hart (B-parameter) equation (Result is in Kelvin)
-          // T = 1 / [ (1/T0) + (1/B) * ln(R_thermistor / R0) ]
-          float T_kelvin = 1.0 / ( (1.0/_THERMISTOR_TKNOWN) + (1.0/_THERMISTOR_B0) * log(R_thermistor / _THERMISTOR_R0) );
-          
-          // 4. Convert Kelvin to Fahrenheit
-          // Step 4a: Convert Kelvin to Celsius
-          float T_celsius = T_kelvin - 273.15;
-          
-          // Step 4b: Convert Celsius to Fahrenheit
-          P->snsValue = (T_celsius * 9.0/5.0) + 32.0; 
-          if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+            // 3. Calculate Temperature using the Steinhart-Hart (B-parameter) equation (Result is in Kelvin)
+            // T = 1 / [ (1/T0) + (1/B) * ln(R_thermistor / R0) ]
+            float T_kelvin = 1.0 / ( (1.0/_THERMISTOR_TKNOWN) + (1.0/_THERMISTOR_B0) * log(R_thermistor / _THERMISTOR_R0) );
+            
+            // 4. Convert Kelvin to Fahrenheit
+            // Step 4a: Convert Kelvin to Celsius
+            float T_celsius = T_kelvin - 273.15;
+            
+            // Step 4b: Convert Celsius to Fahrenheit
+            P->snsValue = (T_celsius * 9.0/5.0) + 32.0; 
+            if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+          }
         #else
           SerialPrint("NTC thermistor not configured",true);
           P->snsValue = -1000;
@@ -898,7 +937,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     P->timeRead = I.currentTime; //localtime
 
     //add to sensor history
-    SensorHistory.recordSentValue(P, prefs_index);     
+    SensorHistory.recordSentValue(P);     
   }  else  {
     //set flag status
 
@@ -917,7 +956,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead) {
     }
     P->timeRead = I.currentTime; //localtime
     //add to sensor history
-    SensorHistory.recordSentValue(P, prefs_index);  
+    SensorHistory.recordSentValue(P);  
   }
 
   #ifdef _USELED
@@ -1355,8 +1394,7 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
 
   return val; 
 }
-
-
+  
 
 #ifdef _USEMUX
 double readMUX(int16_t pin, byte nsamps) {

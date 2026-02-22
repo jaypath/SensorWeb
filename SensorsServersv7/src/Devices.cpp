@@ -141,6 +141,11 @@ ArborysDevType* Devices_Sensors::getDeviceByDevIndex(int16_t devindex) {
     return nullptr;
 }
 
+ArborysDevType* Devices_Sensors::devIndexToPointer(int16_t devindex) {
+    //wrapper for backwards compatibility
+    return getDeviceByDevIndex(devindex);
+}
+
 ArborysDevType* Devices_Sensors::getDeviceByMAC(uint64_t MAC) {
     int16_t devindex = findDevice(MAC);
     if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
@@ -378,6 +383,29 @@ int16_t Devices_Sensors::findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t
 
     return -1;
 }
+ArborysSnsType* Devices_Sensors::getSensorBySnsIndex(int16_t snsIndex) {
+    //wrapper for backwards compatibility
+    return snsIndexToPointer(snsIndex);
+}
+
+ArborysSnsType* Devices_Sensors::snsIndexToPointer(int16_t snsIndex) {
+    if (snsIndex < 0 || snsIndex >= NUMSENSORS || sensors[snsIndex].IsSet == false) {
+        return nullptr;
+    }
+
+    return &sensors[snsIndex];
+}
+
+
+int16_t Devices_Sensors::findMySensorBySnsTypeAndID(int16_t snsType, int16_t snsID) {
+    //Special case: assume this is my sensor, I am the device.
+    int16_t devID = findMyDeviceIndex();
+    if (devID == -1) return -1;
+    return findSensor(devID, snsType, snsID);
+
+}
+
+
 
 int16_t Devices_Sensors::findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID) {
     if (deviceIndex < 0 || deviceIndex >= NUMDEVICES) {
@@ -392,6 +420,7 @@ int16_t Devices_Sensors::findSensor(int16_t deviceIndex, uint8_t snsType, uint8_
     }
     return -1;
 }
+
 
 int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID) {
     int16_t deviceIndex = findDevice(deviceIP);
@@ -409,6 +438,16 @@ int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t
     return -1;
 }
 
+
+
+int16_t Devices_Sensors::findSensorByPointer(ArborysSnsType* P) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (sensors[i].IsSet && &sensors[i] == P) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 bool Devices_Sensors::isOutsideSensor(int16_t index) {
     if (index >= 0 && index < NUMSENSORS && sensors[index].IsSet) {
@@ -489,14 +528,6 @@ double Devices_Sensors::getAverageOutsideParameterValue(String parameter, uint32
     if (count == 0) return -127;
     return totalvalue / count;
 
-}
-
-
-ArborysSnsType* Devices_Sensors::getSensorBySnsIndex(int16_t index) {
-    if (index >= 0 && index < NUMSENSORS  && sensors[index].IsSet) {
-        return &sensors[index];
-    }
-    return nullptr;
 }
 
 
@@ -1104,9 +1135,8 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
     return index;
 }
 
-#ifdef _ISPERIPHERAL
-
 uint32_t Devices_Sensors::makeSensorID(uint8_t snsType, uint8_t snsID, int16_t devID) {
+    //an ID that combines the device index, sensor type, and sensor ID
     if (devID == -1) devID = findMyDeviceIndex();
     if (devID == -1) return 0;
 
@@ -1128,62 +1158,20 @@ uint32_t Devices_Sensors::makeSensorID(int16_t index) {
     return makeSensorID(&sensors[index]);
 }
 
-
-int16_t Devices_Sensors::getPrefsIndex(int16_t index) {
-    if (index < 0 || index >= NUMSENSORS ) return -1;
-    if (sensors[index].IsSet == false) return -1;
-    return getPrefsIndex(&sensors[index]);
-}
-
-
-int16_t Devices_Sensors::getPrefsIndex(ArborysSnsType* sensor) {
-    if (sensor == NULL) return -1;
-    if (sensor->IsSet == false) return -1;
-    return getPrefsIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);
-}
-
-
-int16_t Devices_Sensors::getPrefsIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
-    //find the index to the Prefs values for the given sensor type, sensor ID, and device index
-    //this always references me as the device, unless devID is provided and is not -1
-    //returns -2 if I am not registered,  -1 if no Prefsindex found, otherwise the index to Prefs values 
-
-    return SensorHistory.PrefsIndex[getSensorHistoryIndex(snsType, snsID, devID)];
-}
-
-
-int16_t Devices_Sensors::getSensorHistoryIndex(int16_t index) {
-    if (index < 0 || index >= NUMSENSORS ) return -1;
-    if (sensors[index].IsSet == false) return -1;
-    return getSensorHistoryIndex(&sensors[index]);
-}
-
-int16_t Devices_Sensors::getSensorHistoryIndex(ArborysSnsType* sensor) {
-    if (sensor == NULL) return -1;
-    if (sensor->IsSet == false) return -1;
-    return getSensorHistoryIndex(sensor->snsType, sensor->snsID, sensor->deviceIndex);
-}
-
-int16_t Devices_Sensors::getSensorHistoryIndex(uint8_t snsType, uint8_t snsID, int16_t devID) {
-    if (devID == -1) devID = findMyDeviceIndex();
-
-    if (devID == -1) return -2;
-    
-
-    byte sensorHistoryIndex=0; //index of the sensor in the SensorHistory array
-    uint32_t sensorID = makeSensorID(snsType, snsID, devID);
-    for (sensorHistoryIndex=0; sensorHistoryIndex<_SENSORNUM; sensorHistoryIndex++) {
-    
-      if (SensorHistory.PrefsSensorIDs[sensorHistoryIndex] == sensorID) {
-        return sensorHistoryIndex;
-      }  
+int16_t Devices_Sensors::findSensorBySensorID(uint32_t sensorID) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (sensors[i].IsSet && makeSensorID(sensors[i].snsType, sensors[i].snsID,sensors[i].deviceIndex) == sensorID) {
+            return i;
+        }
     }
-  
     return -1;
-
 }
-#endif
 
+int16_t Devices_Sensors::findSensorBySensorID(ArborysSnsType* sensor) {
+    if (sensor == NULL) return -1;
+    if (sensor->IsSet == false) return -1;
+    return findSensorBySensorID(makeSensorID(sensor->snsType, sensor->snsID, sensor->deviceIndex));
+}
 
 bool Devices_Sensors::isMySensor(int16_t index) {
     if (index < 0 || index >= NUMSENSORS ) return false;

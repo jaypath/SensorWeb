@@ -65,7 +65,8 @@ void fncDrawCurrentCondition();
 void fcnDrawStatus();
 void fcnDrawSensorScreen();
 void fcnDrawSensorInfo();
-
+void fcnDrawTextBox(String text, int16_t X, int16_t Y, int16_t width, int16_t height, int16_t datum=TL_DATUM);
+void fcnDrawWeatherAlerts(int16_t X, int16_t Y, int16_t width, int16_t height);
 // Weather text functions
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);

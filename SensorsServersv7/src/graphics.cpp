@@ -198,7 +198,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
   char tempbuf[14];
 
   // Get sensor data - the sensor already contains its deviceIndex
-  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(sensorIndex);
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(sensorIndex);
   
   if (!sensor || sensor->IsSet == 0) {
     return; // Invalid sensor
@@ -540,9 +540,13 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
 // Screen drawing functions
 void fcnDrawHeader() {
   //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
-  if (((I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeaderTime+I.cycleHeaderMinutes*60<I.currentTime)     {
+
+
+  if (((bitRead(I.EventFlags,0) != bitRead(I.EventFlags,1)) || (I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeaderTime+I.cycleHeaderMinutes*60<I.currentTime)     {
     I.lastHeaderTime = I.currentTime;
-    if (I.wasFlagged != I.isFlagged) I.lastFlagViewTime = 0; //set the flag view time to 0 so we can show flags
+    if (I.wasFlagged != I.isFlagged || bitRead(I.EventFlags,0) != bitRead(I.EventFlags,1)) I.lastFlagViewTime = 0; //set the flag view time to 0 so we can show flags
+
+    bitWrite(I.EventFlags,1,bitRead(I.EventFlags,0)); //set bit 1 to the value of bit 0
     I.wasFlagged = I.isFlagged;
     I.wasAC = I.isAC;
     I.wasFan = I.isFan;
@@ -587,11 +591,11 @@ void fcnDrawHeader() {
 
 //add heat and AC icons to right 
   if ((I.isHeat&1)==1) {
-    st="/HVAC/flame.bmp";
+    st="/Icons/HVAC/flame.bmp";
     drawBmp(st.c_str(),tft.width()-30,0);
   }
   if ((I.isAC&1)==1) {
-    st="/HVAC/ac30.bmp";
+    st="/Icons/HVAC/ac30.bmp";
     drawBmp(st.c_str(),tft.width()-65,0);
   }
    
@@ -600,6 +604,16 @@ void fcnDrawHeader() {
 
   FH = setFont(2);
 
+//check if weather alerts. If yes, then display a red !!# in the upper right
+
+  if (WeatherData.NumWeatherEvents > 0) {
+    uint32_t FH = setFont(4);
+    tft.setTextColor(TFT_RED,TFT_BLUE); //without second arg it is transparent background
+    
+    tft.setTextDatum(TR_DATUM);
+    String st = "!!" + (String) WeatherData.NumWeatherEvents;
+    tft.drawString(st,tft.width()-10,0);
+  }
   //draw a  bar below header
   tft.fillRect(0,25,tft.width(),5, FG_COLOR);
 
@@ -655,7 +669,7 @@ void fcnDrawSensorInfo() {
   byte boxnum = I.ScreenNum-10;
   if (boxnum >= 0 && boxnum < MAXALARMS && alarms[boxnum] != 255) {
 //figure out which sensor boxnum equates to    
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(alarms[boxnum]);
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(alarms[boxnum]);
     if (sensor && sensor->IsSet ) {
 
 
@@ -808,6 +822,7 @@ void fcnDrawStatus() {
     tft.println("Status");
     tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
     tft.printf("Device IP:\n");
+    tft.printf("Version: %s\n",PROJECT_VER);
     tft.setTextFont(2);
     tft.printf("%s\n",WiFi.localIP().toString().c_str());
     tft.setTextFont(1);
@@ -828,13 +843,17 @@ void fcnDrawStatus() {
     tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
     tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
     tft.printf("-----------------------\n");
-    tft.printf("Timezone: %ld (DST: %s)\n", Prefs.TimeZoneOffset, Prefs.DST ? "Yes" : "No");
+    tft.printf("Timezone: %ld \n", Prefs.TimeZoneOffset);
     //if DST is enabled, print the DST offset and date of DST start and end
-    if (Prefs.DST) {
-      tft.printf("DST Offset: %ld sec\n", Prefs.DSTOffset);
-      tft.printf("DST Start: %d/%d\n", Prefs.DSTStartMonth, Prefs.DSTStartDay);
-      tft.printf("DST End: %d/%d\n", Prefs.DSTEndMonth, Prefs.DSTEndDay);
+    tft.printf("DST: ");
+    if (I.DST==1) tft.printf("Yes, %ld sec\n",I.DSTOffset);
+    else if (I.DST==0) tft.print("No\n");
+    else tft.print("Not used here\n");
+    if (I.DST>=0) {
+      tft.printf("DST Start: %s\n", dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
+      tft.printf("DST End: %s\n", dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
     }
+
     tft.printf("-----------------------\n");
     tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
     tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
@@ -948,7 +967,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
     while (cycleByteIndex(SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
-      ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorIndex);
+      ArborysSnsType* sensor = Sensors.snsIndexToPointer(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
       if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type
       bool isgood = true;
@@ -1063,7 +1082,7 @@ void fncDrawCurrentCondition() {
     //check for outside battery
 
     if (I.localBatteryIndex<255) {
-      ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(I.localBatteryIndex);
+      ArborysSnsType* sensor = Sensors.snsIndexToPointer(I.localBatteryIndex);
       if (sensor && sensor->IsSet && sensor->timeLogged + 7200>I.currentTime) {        
         st += " Bat" + (String) (Sensors.returnBatteryPercentage(sensor)) + "%";
       }
@@ -1145,7 +1164,7 @@ void fncDrawCurrentCondition() {
 }
 
 void fcnDrawCurrentWeather() {
-//this function will draw the current weather image and any flags that are flagged
+//this function will draw the current weather image and any flags (either sensor flags or weather alerts)
 bool forceweather = false;
 bool forceflags = false;
 
@@ -1153,35 +1172,52 @@ byte alarmcount = 0;
 
 if (I.lastWeatherTime==0) forceweather=true;
 else {
-  //are we flagged or expired? - depends on which are flagged and when
-  if (I.isFlagged>0 || I.isExpired>0) {
-    if (I.lastFlagViewTime==0) {
-      alarmcount = fcnGetAlarms(-1,3,3);
-      if (alarmcount>0) forceflags=true;
+  if (bitRead(I.EventFlags,0) == 1) {
+    if (I.lastFlagViewTime==0 || (I.lastFlagViewTime < I.lastWeatherTime && I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime)) {
+      forceflags = true;
     } else {
-      if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
-        if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) {
-          alarmcount = fcnGetAlarms(-1,3,3);
-          if (alarmcount>0) forceflags=true;
-        }          else return; //not time to do anything yet
-      } else {        //we are showing flags, not weather
-        if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
-        else return; //not time to do anything yet
+      if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
+      else return; //not time to do anything yet
+    }
+  } else {
+    //are we flagged or expired? - depends on which are flagged and when
+    if (I.isFlagged>0 || I.isExpired>0) {
+      if (I.lastFlagViewTime==0) {
+        alarmcount = fcnGetAlarms(-1,3,3);
+        if (alarmcount>0) forceflags=true;
+      } else {
+        if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
+          if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) {
+            alarmcount = fcnGetAlarms(-1,3,3);
+            if (alarmcount>0) forceflags=true;
+          }          else return; //not time to do anything yet
+        } else {        //we are showing flags, not weather
+          if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
+          else return; //not time to do anything yet
+        }
+      }       
+    } else {       // No critical flagged sensors, show weather if flags were previously shown
+      if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
+        forceweather = true;
       }
-    }       
-  } else {       // No critical flagged sensors, show weather if flags were previously shown
-    if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
-      forceweather = true;
     }
   }
 } 
 
 if (forceflags) {
   I.lastFlagViewTime = I.currentTime;
-  //check if alarm
-  tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-  fcnDrawSensors(8,I.HEADER_Y,3,3);      
-  return;
+
+  if (bitRead(I.EventFlags,0) == 1) {
+    //draw weather alerts
+    tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
+    fcnDrawWeatherAlerts(0,I.HEADER_Y,180,180);      
+    return;
+  } else {
+    //check if alarm
+    tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
+    fcnDrawSensors(8,I.HEADER_Y,3,3);      
+    return;
+  }
 }
 
 //do I draw  weather?
@@ -1204,9 +1240,10 @@ I.lastWeatherTime = I.currentTime;
 
   //draw icon for NOW
   int iconID = WeatherData.getWeatherID(0);
+  if (iconID < 0) iconID = 999;
   
-  if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/BMP180x180day/%d.bmp", iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
-  else     snprintf(tempbuf,44,"/BMP180x180night/%d.bmp",iconID);
+  if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/Icons/BMP180x180day/%d.bmp", iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
+  else     snprintf(tempbuf,44,"/Icons/BMP180x180night/%d.bmp",iconID);
 
   drawBmp(tempbuf,0,Y);
 
@@ -1273,9 +1310,10 @@ void fcnDrawFutureWeather() {
       Z=0;
       X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
       iconID = WeatherData.getWeatherID(I.currentTime+i*I.IntervalHourlyWeather*60*60);
+      if (iconID < 0) iconID = 999;
       uint32_t temptime = I.currentTime+i*I.IntervalHourlyWeather*3600;
-      if ((temptime > WeatherData.sunrise  && temptime < WeatherData.sunset) || temptime > WeatherData.sunrise + 86400) snprintf(tempbuf,29,"/BMP30x30day/%d.bmp",iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night. But if we are past the prior sunrise +24h we are in the NEXT day
-      else snprintf(tempbuf,29,"/BMP30x30night/%d.bmp",iconID);
+      if ((temptime > WeatherData.sunrise  && temptime < WeatherData.sunset) || temptime > WeatherData.sunrise + 86400) snprintf(tempbuf,29,"/Icons/BMP30x30day/%d.bmp",iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night. But if we are past the prior sunrise +24h we are in the NEXT day
+      else snprintf(tempbuf,29,"/Icons/BMP30x30night/%d.bmp",iconID);
       
       drawBmp(tempbuf,X,Y);
       Z+=30;
@@ -1311,9 +1349,9 @@ void fcnDrawFutureWeather() {
       X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
       iconID = WeatherData.getDailyWeatherID(i,true);
       if (I.lastFutureConditionsAlt==0) { //this prevents screen burn from prolonged use of same icon on screen
-        snprintf(tempbuf,29,"/BMP60x60day/%d.bmp",iconID); //icon
+        snprintf(tempbuf,29,"/Icons/BMP60x60day/%d.bmp",iconID); //icon
       } else {
-        snprintf(tempbuf,29,"/BMP60x60Alt/%d.bmp",iconID); //images
+        snprintf(tempbuf,29,"/Icons/BMP60x60Alt/%d.bmp",iconID); //images
       }
       
       drawBmp(tempbuf,X,Y);
@@ -1348,7 +1386,7 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   if (snsIndex !=255) {
     // Find the sensor by its index and get its value
     ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsIndex);
     
     if (device && sensor && device->IsSet && sensor->IsSet) {
       tempval = sensor->snsValue;
@@ -1395,7 +1433,7 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
     // Find the sensor by its index and get its value
     
     ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsIndex);
     
     if (device && sensor && device->IsSet && sensor->IsSet) {
       tempval = (int) sensor->snsValue;
@@ -1551,4 +1589,66 @@ void checkTouchScreen() {
 
 }
 
+void fcnDrawWeatherAlerts(int16_t X, int16_t Y, int16_t width, int16_t height) {
+  //draw the weather alerts
+  tft.fillRect(X,Y,width,height,BG_COLOR); //clear the area
+  //get the weather alert
+  if (!WeatherData.loadNextWeatherAlert()) {
+    tft.setTextColor(TFT_RED,BG_COLOR);
+    setFont(4);
+    fcnDrawTextBox("Alerts Cleared", X, Y,  width, height);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    I.EventFlags &= ~0x01; //clear bit 0
+    return;
+  }
+
+  //get the alert details
+  String event="", headline="", description="", severity="", certainty="", urgency="";
+  WeatherData.getWeatherAlertDetails(event, headline, description, severity, certainty, urgency);
+  
+  //draw the weather alert
+  char tempbuf[45];
+  snprintf(tempbuf,44,"/Icons/Events/%s.bmp",WeatherData.alertInfo.phenomenon);
+  drawBmp(tempbuf,0,Y);
+
+  //now draw the text
+
+  tft.setTextColor(TFT_RED,BG_COLOR);
+  
+  int16_t FH = setFont(4);
+  fcnDrawTextBox((String) "#" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + ": " + event, X, Y,  width, FH+2, TL_DATUM);  
+  Y+=FH*2+2;
+
+  FH = setFont(1);
+  fcnDrawTextBox((String) "When: " + (String) dateify(WeatherData.alertInfo.time_start,"mm-dd@hh"), X, Y,  width, FH+2);
+  Y+=FH+2;
+
+  fcnDrawTextBox((String) "Severity/Certainty: " + severity + "/" + certainty, X, Y,  width, FH+2);
+  Y+=FH+2;
+
+  description.replace("\n", " "); //replace newlines with spaces  
+  fcnDrawTextBox(description, X, Y,  width, height-Y);
+
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setTextDatum(TL_DATUM);
+}
+
+void fcnDrawTextBox(String text, int16_t X, int16_t Y, int16_t width, int16_t height, int16_t datum) {
+  LGFX_Sprite box(&tft);
+  box.setColorDepth(8); // Uses half the RAM of default 16-bit
+  box.createSprite(width, height); // Width, Height of your alert box
+  // 2. Define which color should be "invisible"
+  // Using 0x0001 or a specific hex is safer than pure black if you want black text
+  box.setPivot(0, 0); //not reallt needed, we aren't rotating this
+  box.fillSprite(0);
+  box.setTextColor(TFT_RED);
+  box.setTextDatum(TL_DATUM);
+
+  // LovyanGFX sprites support wrap automatically if you use println
+  box.setCursor(X, Y); 
+  box.print(text);
+
+  box.pushSprite(&tft,X, Y,0); // Push the finished box to the physical screen coordinates
+  box.deleteSprite();   // Free RAM if this is a one-time draw
+}
 #endif

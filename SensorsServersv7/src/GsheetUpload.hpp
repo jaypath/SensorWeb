@@ -27,6 +27,7 @@ struct STRUCT_GOOGLESHEET {
 };
 
 // Initialize with default values
+void startGsheet();
 void initGsheetInfo();
 bool initGsheet();
 String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase=0);

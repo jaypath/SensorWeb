@@ -178,8 +178,11 @@ struct Screen {
 	uint32_t clockChangeTimer; //time spent on the clock screen
 	uint8_t clockChangeTimerMax; //time to stay on the clock screen before going back to main screen (0)
 	uint32_t lastclockChange; //last time the clock screen was changed
-  
+
+	bool relayStates[3] = {false, false, false}; // Track ON/OFF for Relays 1, 2, and 3
 };
+
+void initRelays();
 
 byte fcnDrawClock();
 void drawBmp(const char *filename, int16_t x, int16_t y,int32_t transparent=-1, uint8_t luminosity=100);

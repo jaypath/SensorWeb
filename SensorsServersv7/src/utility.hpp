@@ -21,7 +21,6 @@ bool isI2CDeviceReady(byte address);
 int8_t initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
-void initGsheetHandler();
 void handleESPNOWPeriodicBroadcast(uint8_t interval);
 
 
@@ -38,6 +37,9 @@ bool isSoilCapacitanceValid(double soil);
 bool isSoilResistanceValid(double soil);
 bool isPressureValid(double pressure);
 
+
+int8_t shoutThis(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
+bool tftPrint(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 //serial printing
 bool SerialPrint(const char* S, bool newline=false );
 bool SerialPrint(String S, bool newline=false);
@@ -107,8 +109,11 @@ String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //w
 // --- PROCID byte access utility ---
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
-bool tftPrint(String S, bool newline, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 void systemHousekeeping(bool fullHousekeeping=false);
+int16_t force_switch_ota_slot(int slot_number=-1);
+
+int compare_versions(const char* v1, const char* v2);
+bool check_and_switch_to_newer_firmware(bool verbose=true,bool doswitch=false);
 #ifdef _USETFT
 void displaySetupProgress(bool success);
 void screenWiFiDown();

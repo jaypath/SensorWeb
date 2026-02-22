@@ -241,21 +241,20 @@ void setup() {
     }
     #endif
     delay(100);
-    tftPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
-    SerialPrint("Current time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
     
-    
-
 
     initOTA();
 
     //check time and ensure validity
     I.ALIVESINCE = 0;
-    I.currentTime = now();
     if (isTimeValid(I.currentTime)==false) {
         tftPrint("Current time is not valid", true, TFT_RED);
         SerialPrint("Current time is not valid",true);        
     } else {
+        tftPrint("Current UTC time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
+        tftPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
+        SerialPrint("Current UTC time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
+    SerialPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")),true);
         I.ALIVESINCE = I.currentTime;
     }
     
@@ -312,28 +311,22 @@ void setup() {
         
             if (WeatherData.updateWeatherOptimized(3600)>0) {
                 SerialPrint("Weather data loaded from SD card",true);
+                tftPrint("Weather data on SD card ok.", true, TFT_GREEN);
             } else {
                 SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);
+                tftPrint("Weather data on SD card stale.", true, TFT_YELLOW);
+                tftPrint("Weather data updating from NOAA.", true, TFT_YELLOW);
+                WeatherData.updateWeatherOptimized(3600);    
             }
+
         } else {
             SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
+            tftPrint("Weather data not on SD. Updating from NOAA.", true, TFT_YELLOW);
             WeatherData.updateWeatherOptimized(3600);
         }
 
         #ifdef _USEGSHEET
-        if (GSheetInfo.useGsheet) {
-            tftPrint("Initializing Gsheet... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-            initGsheetHandler();
-            if (GSheet.ready()) {
-                tftPrint("OK.", true, TFT_GREEN);
-            } else {
-                tftPrint("FAILED.", true, TFT_RED);
-                storeError("Gsheet initialization failed");
-            }
-        }
-        else {
-            tftPrint("Skipping Gsheet initialization.", true, TFT_GREEN);
-        }
+        startGsheet();
         #endif
 
 
@@ -493,7 +486,7 @@ void loop() {
         bool haveLocalBattery = false;
         ArborysSnsType* sensor = NULL;
         while (batteryIndex != -1 && haveLocalBattery == false) {
-          sensor = Sensors.getSensorBySnsIndex(batteryIndex);
+          sensor = Sensors.snsIndexToPointer(batteryIndex);
           if (!sensor || sensor->IsSet == false) continue;
           if (sensor && sensor->IsSet == true) {        
             if (sensor->timeLogged + 7200>I.currentTime) {
@@ -573,14 +566,13 @@ void loop() {
         
  
 
-        if (OldTime[2] == 4) {
-            //check if DST has changed every day at 4 am
-            checkDST();
+        if (OldTime[2] == 3) {
+            //check if DST has changed every day at 3 am
+            DSTsetup();
         }
     }
     if (OldTime[3] != weekday()) {
         OldTime[3] = weekday();
-        checkTimezoneUpdate();
         I.ESPNOW_SENDS = 0;
         I.ESPNOW_RECEIVES = 0;
         I.UDP_RECEIVES = 0;
@@ -613,6 +605,8 @@ void loop() {
     }
     if (OldTime[0] != second()) {
         OldTime[0] = second();
+        updateTime(); //sets I.currenttime
+
         //if time is invalid, completely reset the time
         if (isTimeValid(I.currentTime)==false) {
             SerialPrint("Time is invalid, completely resetting time",true);

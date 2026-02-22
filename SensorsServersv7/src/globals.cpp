@@ -24,7 +24,6 @@ double batteryArray[48] = {0};
 double LAST_BAR=0;
 #endif
 
-
 extern String WEBHTML;
 
 #ifdef _USETFT

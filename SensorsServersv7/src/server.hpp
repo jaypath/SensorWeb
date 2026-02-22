@@ -69,13 +69,14 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
 void APStation_Mode();
 String WiFiEventtoString(WiFiEvent_t event);
 String urlEncode(const String& str);
+String getPublicIP();
 
 String getCert(String filename);
 bool Server_Message(String &URL, String &payload, int &httpCode);
 // cacert: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" / "bundle" to use embedded CA bundle (requires sdkconfig.defaults)
-bool Server_SecureMessageEx(String& URL, String& payload, int& httpCode,
+bool Server_SecureMessageEx(String& URL, String& payload, int16_t& httpCode,
   String& cacert, String& method, String& contentType,
-  String& body, String& extraHeaders, JsonDocument* responseDoc = nullptr, const JsonDocument* filter = nullptr);
+  String& body, String& extraHeaders, JsonDocument* responseDoc = nullptr, const JsonDocument* filter = nullptr, bool setInsecure=false);
 void handleReboot();
 void handleNotFound();
 
@@ -107,6 +108,8 @@ void handleREADONLYCOREFLAGS();
 #ifdef _ISPERIPHERAL
 void handleSENSOR_UPDATE_POST();
 void handleSENSOR_READ_SEND_NOW();
+void handleSNS_CALIBRATION_SOIL_CAPACITANCE();
+void handleSensorSetup();
 #endif
 void handleGSHEET();
 void handleGSHEET_POST();
@@ -114,9 +117,6 @@ void handleGSHEET_UPLOAD_NOW();
 void handleGSHEET_SHARE_ALL();
 void handleGSHEET_DELETE_ALL();
 void handleREQUEST_BROADCAST();
-void handleTimezoneSetup();
-void handleTimezoneSetup_POST();
-bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day);
 void handleSDCARD();
 void handleSDCARD_DELETE_DEVICES();
 void handleSDCARD_DELETE_SENSORS();

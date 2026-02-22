@@ -17,14 +17,16 @@ extern NTPClient timeClient;
 extern char DATESTRING[];
 extern STRUCT_CORE I;
 
-void checkDST(void);
+bool getTimezoneInfo();
 bool updateTime();
-bool checkTime(void);
+void DSTsetup(void);
 bool setupTime(void);
-void checkTimezoneUpdate();
+
 String fcnDOW(time_t t, bool caps=false);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");
-time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) ;
-time_t convertStrTime(String str);
+time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s, bool asLocalTime=true);
+time_t convertStrTime(String str, bool asLocalTime=true);
+time_t iso8601ToUnix(String iso, bool asLocalTime=true);
+
 #endif
 

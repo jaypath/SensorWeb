@@ -103,6 +103,9 @@ typedef enum {
     ERROR_SD_WEATHERDATASIZE, //weather data file was the wrong size
     ERROR_SD_GSHEETINFOWRITE, //could not write GsheetInfo data
     ERROR_SD_GSHEETINFOREAD, //could not read GsheetInfo data
+    ERROR_SD_ERRORWRITE, //could not write error data
+    ERROR_SD_ERRORREAD, //could not read error data
+    ERROR_SD_ERRORFILESIZE, //error data file was the wrong size
     ERROR_DEVICE_ADD, //could not add a device
     ERROR_SENSOR_ADD, //could not add a sensor
     ERROR_ESPNOW_GENERAL, //ESPNow general error
@@ -164,6 +167,7 @@ typedef enum {
     uint32_t LASTBOOTTIME;
     
     char DEVICENAME[30]; // Device name (moved from Screen.SERVERNAME)
+    bool AUTOSWITCHNEWERFIRMWARE=false; //use new version when present
 
     STRUCT_KEYS KEYS;
 
@@ -177,14 +181,7 @@ typedef enum {
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
 
     //time zone info
-    int32_t TimeZoneOffset; //offset from UTC in seconds, on standard time rather than daylight time
-    uint8_t DST; //0 = no DST, 1 = DST in this locale (if DST=1, then use the DSToffset, which will be 3600 or 0)
-    int16_t DSTOffset; //offset from UTC in seconds, on standard time rather than daylight time
-    uint8_t DSTStartMonth; //month of DST start
-    uint8_t DSTStartDay; //day of DST start
-    uint8_t DSTEndMonth; //month of DST end
-    uint8_t DSTEndDay; //day of DST end
-
+    int32_t TimeZoneOffset= 90000; //offset from UTC in seconds, on standard time rather than daylight time
 
     double LATITUDE;
     double LONGITUDE;
@@ -195,9 +192,16 @@ typedef enum {
     uint16_t SNS_FLAGS[_SENSORNUM] = {0}; //store this, as user may have changed some settings here
     uint16_t SNS_INTERVAL_POLL[_SENSORNUM] = {0};
     uint16_t SNS_INTERVAL_SEND[_SENSORNUM] = {0};
+    double SNS_CALIB_MIN[_SENSORNUM] = {0}; //store min values for each sensor in NVS
+    double SNS_CALIB_MAX[_SENSORNUM] = {0}; //store max values for each sensor in NVS
     #endif
   };
   
+  struct ERROR_STRUCT {
+    char errorMessage[100];
+    ERRORCODES errorCode;
+    time_t errorTime;
+  };
   
   struct STRUCT_CORE {
     int16_t MY_DEVICE_INDEX; // local stored index of this device in Sensors
@@ -210,8 +214,17 @@ typedef enum {
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
       time_t wifiDownSince;
+
+      uint8_t DST; //0 = no DST used here, 1 = DST used in this locale, but not active. 2 = DST is active
+      time_t DSTStartUnixTime; 
+      time_t DSTEndUnixTime; 
+      int16_t DSTOffset; //offset from UTC in seconds, 0 if not in DST
+
+      //timezone offset is in prefs
       
+      time_t UTCTime; //UTC time
       time_t currentTime;
+
       int8_t WiFiStatus; //2= connected but wifi.status() doesn't list this correctly, 1 = connected, 0=unknown, -1 - no valid IP address, -2 - no valid RSSI range, -3 - no valid SSID, -4 - no valid gateway, -5 - no connection
       WiFiEvent_t WiFiLastEvent; //last WiFi event
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
@@ -250,6 +263,15 @@ typedef enum {
       int8_t Tmax;
       int8_t Tmin;
       int8_t lastCurrentOutsideTemp; //last current outside temperature
+      uint8_t EventFlags; 
+      //bit 0 = current flag status, 1 = flagged, 0 = not flagged
+      //bit 1 = was I flagged before, 1 = yes, 0 = no
+      //bit 2 = high risk flag
+      //bit 3 = 
+      //bit 4 = 
+      //bit 5 = 
+      //bit 6 = 
+      //bit 7 = 
       #endif
   
       #ifdef _USEBATTERY

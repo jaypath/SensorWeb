@@ -15,6 +15,13 @@
 #define MAX_RETRY_ATTEMPTS 3
 //#define PARALLEL_REQUESTS_ENABLED 1
 
+
+struct TimeInterval {
+    time_t start;
+    uint32_t duration;
+};
+
+
 // Weather data cache entry
 struct WeatherCacheEntry {
     uint32_t timestamp;
@@ -25,21 +32,53 @@ struct WeatherCacheEntry {
     uint32_t last_successful_update;
 };
 
+enum WeatherSeverity : byte { UNKNOWN, MINOR, MODERATE, SEVERE, EXTREME };
+enum WeatherCertainty : byte { UNCERTAIN, UNLIKELY, POSSIBLE, LIKELY, OBSERVED };
+enum WeatherUrgency : byte { INDETERMINATE, PAST, FUTURE, EXPECTED, IMMINENT };
+
+struct WeatherAlerts {
+    uint8_t eventnumber;
+    WeatherSeverity E_severity;
+    WeatherCertainty E_certainty;
+    WeatherUrgency E_urgency;
+    char phenomenon[3]; //for example WW = winter weather
+    char filename[22];
+    int16_t iconID;
+    time_t time_start;
+    time_t time_end;
+};
+
+struct WeatherEventFile {
+    char severity[10];
+    char certainty[10];
+    char urgency[10];
+    int16_t iconID;
+    time_t time_start;
+    time_t time_end;
+    char office[5]; //NWS office that issued the alert
+    char phenomenon[3]; //for example WW = winter weather
+    char significance[2]; //for example W = watch, A = advisory, etc
+    uint16_t event_number; //ETN number of the event, if more than one are active. The filename will use this number. 4 digits long
+    char event[100]; //event description
+    char headline[200]; //headline of the event
+    char description[1200]; //description of the event
+};
+
 // Optimized WeatherInfo class - maintains same interface as original
 class WeatherInfoOptimized {
 private:
     // Core data arrays (same as original WeatherInfo)
     uint32_t dT[NUMWTHRDAYS*24] = {0};
     int8_t temperature[NUMWTHRDAYS*24] = {0};
-    uint8_t humidity[NUMWTHRDAYS*24] = {0};
+    int8_t humidity[NUMWTHRDAYS*24] = {0};
     int16_t weatherID[NUMWTHRDAYS*24] = {0};
-    uint8_t PoP[NUMWTHRDAYS*24] = {0};
+    int8_t PoP[NUMWTHRDAYS*24] = {0};
     int8_t dewPoint[NUMWTHRDAYS*24] = {0};
-    uint8_t windspeed[NUMWTHRDAYS*24] = {0};
+    int16_t windspeed[NUMWTHRDAYS*24] = {0};
     int8_t wetBulbTemperature[NUMWTHRDAYS*24] = {0};
-    uint8_t rainmm[NUMWTHRDAYS*24] = {0};
-    uint8_t icemm[NUMWTHRDAYS*24] = {0};
-    uint8_t snowmm[NUMWTHRDAYS*24] = {0};
+    int16_t rainmm[NUMWTHRDAYS*24] = {0};
+    int16_t icemm[NUMWTHRDAYS*24] = {0};
+    int16_t snowmm[NUMWTHRDAYS*24] = {0};
 
     uint32_t daily_dT[14] = {0};
     int8_t daily_tempMax[14] = {0};
@@ -65,18 +104,19 @@ private:
     uint32_t average_response_time;
     
     // Helper methods
-    uint8_t getIndex(time_t dT = 0);
+    int16_t getIndex(time_t dT = 0);
     bool fetchGridCoordinates();
     bool fetchGridCoordinatesHelper();
     bool fetchHourlyForecast();
     bool fetchGridForecast();
     bool fetchDailyForecast();
     bool fetchSunriseSunset();
-    
+    bool fetchWeatherAlerts();
+
     // Optimized HTTP methods
     // cert_path: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" for embedded CA bundle (sdkconfig.defaults)
 //    bool makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, const char* cert_path= "/Certificates/NOAA.crt");
-    bool makeSecureRequest(String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, String& extraHeaders, const char* cert_path= "",  const JsonDocument* filter=nullptr);
+    bool makeSecureRequest(String& url, JsonDocument& doc, int16_t& httpCode, ERRORCODES HTTP, ERRORCODES JSON, String& extraHeaders, const char* cert_path= "",  const JsonDocument* filter=nullptr);
     
     // Caching methods
     bool isGridCoordinatesValid();
@@ -89,7 +129,7 @@ private:
     bool processGridData(JsonObject& properties);
     bool processDailyData(JsonObject& properties);
     void processPrecipitationData(JsonObject& properties, const char* field_name, 
-                                 uint8_t* data_array, bool& flag);
+                                 int16_t* data_array, bool& flag);
     
     // Error handling and recovery
     bool handleApiError(const String& operation, int httpCode);
@@ -99,8 +139,17 @@ private:
     void optimizeJsonDocument(JsonDocument& doc);
     void clearUnusedData();
 
+    bool filterAlerts(const char* phenomenon);
+    WeatherSeverity parseSeverity(const char* s);
+    WeatherCertainty parseCertainty(const char* s);
+    WeatherUrgency parseUrgency(const char* s);
+    bool parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end);
+    time_t vtecTimeToUnix(const char* vtecPart, bool asLocalTime);
 public:
-    // Public interface (same as original WeatherInfo)
+    WeatherAlerts alertInfo;
+    uint8_t NumWeatherEvents=0;
+    uint32_t lastAlertFetchTime = 0;
+
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt = 0;
     uint32_t lastUpdateError = 0;
@@ -120,14 +169,14 @@ public:
     uint32_t nextSnow();
     
     int8_t getTemperature(uint32_t dt=0, bool wetbulb=false, bool asindex=false);
-    uint8_t getHumidity(uint32_t dt=0);
+    int8_t getHumidity(uint32_t dt=0);
     int16_t getWeatherID(uint32_t dt=0);
-    uint8_t getPoP(uint32_t dt=0);
-    uint16_t getRain(uint32_t dt=0);
-    uint16_t getSnow(uint32_t dt=0);
-    uint16_t getIce(uint32_t dt=0);
+    int8_t getPoP(uint32_t dt=0);
+    int16_t getRain(uint32_t dt=0);
+    int16_t getSnow(uint32_t dt=0);
+    int16_t getIce(uint32_t dt=0);
     int8_t getDewPoint(uint32_t dt);
-    uint8_t getWindSpeed(uint32_t dt);
+    int16_t getWindSpeed(uint32_t dt);
 
     int16_t getDailyWeatherID(uint8_t intsfromnow, bool indays=false);
     void getDailyTemp(uint8_t daysfromnow, int8_t* temp);
@@ -140,8 +189,8 @@ public:
     uint16_t getDailyIce(uint32_t starttime, uint32_t endtime);
     String getGrid(uint8_t fc=0);
 
-    time_t breakNOAATimestamp(String tm);
-    int16_t breakIconLink(String icon, uint32_t starttime, uint32_t endtime);
+    TimeInterval parseNOAAInterval(String tm);
+    int16_t breakIconLink(String icon, TimeInterval ti);
     bool nameWeatherIcon(uint16_t icon, char* weathername);
     String nameWeatherIcon(uint16_t icon);
     bool updateWeather(uint16_t synctime = 3600);
@@ -156,6 +205,10 @@ public:
     // Memory management
     void optimizeMemoryUsage();
     size_t getMemoryUsage();
+
+    bool loadNextWeatherAlert();
+    bool getWeatherAlertDetails(String& event, String& headline, String& description, String& severity, String& certainty, String& urgency);
+
     
     // Grid coordinates access (for compatibility)
     int16_t getGridX() const { return Grid_x; }

@@ -407,6 +407,14 @@ int16_t Devices_Sensors::findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t
     return -1;
 }
 
+int16_t Devices_Sensors::findSensorByPointer(ArborysSnsType* P) {
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (sensors[i].IsSet && &sensors[i] == P) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 bool Devices_Sensors::isOutsideSensor(int16_t index) {
     if (index >= 0 && index < NUMSENSORS && sensors[index].IsSet) {

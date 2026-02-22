@@ -1,6 +1,7 @@
 #include "globals.hpp"
 #include "utility.hpp"
 #include "BootSecure.hpp"
+#include "esp_ota_ops.h"
 
 #ifdef _USETFT
 extern LGFX tft;
@@ -14,6 +15,8 @@ extern STRUCT_SNSHISTORY SensorHistory;
 
 //flags for sensors:
 ////  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+
+ERROR_STRUCT LASTERROR;
 
 
 //setup functions
@@ -77,7 +80,6 @@ void systemHousekeeping(bool fullHousekeeping) {
   #ifdef _USEUDP
   receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
   #endif
-  updateTime(); //sets I.currenttime
 
 
 }
@@ -124,7 +126,6 @@ bool initSystem() {
   #endif
   #endif
 
-
   BootSecure bootSecure;
   int8_t boot_status = bootSecure.setup();
   if (boot_status <= 0) {
@@ -155,6 +156,13 @@ bool initSystem() {
     Prefs.isUpToDate = false;
   }
 
+
+  tftprint("Cuurrent firmware version: " + String(PROJECT_VER), true);
+  bool newfirmware = check_and_switch_to_newer_firmware(true,false);
+  if (newfirmware && Prefs.AUTOSWITCHNEWERFIRMWARE) {
+    delay(1000);
+    check_and_switch_to_newer_firmware(false,true);
+  }
 
   tftPrint("Init Wifi... \n", true);
   SerialPrint("Init Wifi... ",false);
@@ -444,7 +452,7 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
     return -1;
   }
 
-  int8_t sensorHistoryIndex = Sensors.getPrefsIndex(sensorType, sensorID, -1);
+  int8_t sensorHistoryIndex = SensorHistory.getSensorHistoryIndex(sensorIndex);
 
     //how many valid data points are there? //cycle through the history timestamps and count the number of valid data points
     uint16_t validDataPoints = 0;    
@@ -567,36 +575,6 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t senso
 }
 #endif
 
-/**
- * @brief Initialize the Gsheet uploader 
- */
-void initGsheetHandler() {
-  #ifdef _USEGSHEET
-  if (!GSheetInfo.useGsheet) return;
-    
-    // Load credentials; if missing/empty, initialize defaults
-    if (!readGsheetInfoSD() ||
-        strlen(GSheetInfo.clientEmail) == 0 ||
-        strlen(GSheetInfo.projectID) == 0 ||
-        strlen(GSheetInfo.privateKey) == 0) {
-        initGsheetInfo();
-        storeGsheetInfoSD();        
-    }
-
-    // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
-    if (CheckWifiStatus(false)==1 && I.currentTime > 1000) {
-      initGsheet();
-    }
-    if (!(I.currentTime > 1000 && GSheet.ready())) { //wait for time to be set and gsheet to be ready
-        SerialPrint("gsheet setup: Gsheet not ready, waiting for time to be set and gsheet to be ready",true);
-        String reason = GSheet.errorReason();
-        if (reason.length() > 0) SerialPrint("GSheet not ready reason: " + reason, true);
-    }
-    // With per-sensor sheets, do not initialize a global monthly sheet.
-    // Ensure global name/ID remain empty to avoid accidental use.
-
-  #endif
-}
 
 
 void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
@@ -974,7 +952,7 @@ void checkHVAC() {
   int16_t snsindex = Sensors.findSnsOfType("HVAC", false, -1);
   if (snsindex == -1) return;
   while (snsindex != -1) {
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsindex);
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsindex);
     if (!sensor || !sensor->IsSet) continue;
     if (sensor->snsValue > 0) {
       switch (sensor->snsType) {
@@ -1060,23 +1038,19 @@ void storeError(String E, ERRORCODES CODE, bool writeToSD) {
 }
 
 void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
-    
-    if (E && strlen(E) < 75) {
-        strncpy(I.lastError, E, 74);
-        I.lastError[74] = '\0';
-    } else if (E) {
-        strncpy(I.lastError, E, 74);
-        I.lastError[74] = '\0';
-    } else {
-        I.lastError[0] = '\0';
-    }
+  ERROR_STRUCT LASTERROR;
+  strncpy(LASTERROR.errorMessage, E, 99);
+  LASTERROR.errorCode = CODE;
+  LASTERROR.errorTime = I.currentTime;
 
-    I.lastErrorCode = CODE;
-    I.lastErrorTime = I.currentTime;
+  #ifdef _USESDCARD
+  if (writeToSD) writeErrorToSD(LASTERROR);
+  #endif
 
-    #ifdef _USESDCARD
-    if (writeToSD) writeErrorToSD();
-    #endif
+  strncpy(I.lastError, LASTERROR.errorMessage, 75);
+  I.lastErrorCode = LASTERROR.errorCode;
+  I.lastErrorTime = LASTERROR.errorTime;
+
 }
 
 
@@ -1396,6 +1370,13 @@ uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet
 }
 
 
+int8_t shoutThis(String S, bool newline, uint16_t color, byte fontType, byte fontsize, bool cleartft, int x, int y) {
+  SerialPrint(S, newline);
+  tftPrint(S, newline, color, fontType, fontsize, cleartft, x, y);
+  return 0;
+}
+
+
 bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsize, bool cleartft, int x, int y) {
   //wrapper function to print to TFT, if available
   #ifdef _USETFT
@@ -1414,6 +1395,101 @@ bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsi
   #endif
   return false;
 }
+
+
+int16_t force_switch_ota_slot(int slot_number) {
+    const esp_partition_t* target_partition = NULL;
+    
+    if (slot_number == -1) {
+        // Correctly assign the "other" partition
+        target_partition = esp_ota_get_next_update_partition(NULL);
+        SerialPrint("Attempting to toggle to the other OTA slot...",true);
+    } 
+    else if (slot_number == 0) {
+        target_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    } 
+    else if (slot_number == 1) {
+        target_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    }
+
+    if (target_partition != NULL) {
+        // Safety: Check if we are already running on the target partition
+        const esp_partition_t* running_partition = esp_ota_get_running_partition();
+        if (target_partition == running_partition) {
+            SerialPrint("Already running from the target partition. No switch needed.",true);
+            return 0; 
+        }
+
+        esp_err_t err = esp_ota_set_boot_partition(target_partition);
+        if (err == ESP_OK) {
+            SerialPrint("Boot partition set to " + String(target_partition->label) + ". Restarting...", true);
+            delay(1000); // Give serial time to flush
+            //esp_restart();
+            return 1; //allow caller to restart
+        } else {
+            SerialPrint("Failed to set boot partition: " + String(esp_err_to_name(err)), true);
+            return -2; //error, could not set boot partition
+        }
+    } else {
+        SerialPrint("Target partition not found! Check your partition table.", true);
+        return -1; //error, target partition not found
+    }
+}
+
+// Helper to compare "1.2.3" style strings
+// Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal
+int compare_versions(const char* v1, const char* v2) {
+  int major1 = 0, minor1 = 0, patch1 = 0;
+  int major2 = 0, minor2 = 0, patch2 = 0;
+
+  sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
+  sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
+
+  if (major1 != major2) return (major1 > major2) ? 1 : -1;
+  if (minor1 != minor2) return (minor1 > major2) ? 1 : -1;
+  if (patch1 != patch2) return (patch1 > patch2) ? 1 : -1;
+  return 0;
+}
+
+bool check_and_switch_to_newer_firmware(bool verbose,bool doswitch) {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
+
+  bool newfirmware = false;
+  if (next == NULL) return false; // Only one OTA partition exists
+
+  esp_app_desc_t running_desc, next_desc;
+  
+  // Get info for both partitions
+  if (esp_ota_get_partition_description(running, &running_desc) == ESP_OK &&
+      esp_ota_get_partition_description(next, &next_desc) == ESP_OK) {
+      
+      ESP_LOGI("OTA", "Running: %s | Next: %s", running_desc.version, next_desc.version);
+      if (verbose) shoutThis("Running: " + String(running_desc.version) + " | Next: " + String(next_desc.version), true);
+        
+      if (compare_versions(next_desc.version, running_desc.version) > 0) {
+          ESP_LOGW("OTA", "Newer firmware detected in other partition...");
+          if (verbose) shoutThis("Newer firmware detected in other partition...", true);
+          newfirmware = true;
+
+          // Set the other partition as the boot target
+          if (doswitch) {
+            ESP_LOGW("OTA", "Switching to newer firmware...");
+            if (verbose) shoutThis("Switching to newer firmware...", true);
+            esp_err_t err = esp_ota_set_boot_partition(next);
+            if (err == ESP_OK) {
+                esp_restart(); // Reboot to start the new version
+            }
+          }
+      } else {
+          ESP_LOGI("OTA", "Current partition is up to date.");
+          if (verbose) shoutThis("Current partition is up to date.", true);
+          newfirmware = false;
+      }
+  }
+  return newfirmware;
+}
+
 
 #ifdef _USETFT
 void displaySetupProgress(bool success) {
@@ -1462,9 +1538,6 @@ void displayWiFiStatus(byte retries, bool success) {
     tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);
   }
 }
-
-
-
 
 
 #endif

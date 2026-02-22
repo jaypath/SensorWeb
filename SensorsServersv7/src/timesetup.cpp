@@ -15,23 +15,28 @@ char DATESTRING[25]="";
 
 
 bool setupTime(void) {
+  //call this at startup
   timeClient.begin();
   
-  // Initialize with base timezone offset from Prefs
-  timeClient.setTimeOffset(Prefs.TimeZoneOffset +  Prefs.DSTOffset );
-  setTime(timeClient.getEpochTime());
+  // Initialize to UTC
+  timeClient.setTimeOffset(0);
 
   byte i=0;
   
-  while (timeClient.forceUpdate()==false && i<25) {
+  while (timeClient.forceUpdate()==false && i<250) {
     i++;
+    delay(50);
   }
-  if (i>=25) return false;
-  checkDST(); //this also sets timelib, so no need to call settime separately
-
+  if (i>=250) return false;
+  
   setTime(timeClient.getEpochTime());
-  I.currentTime = now();
+  I.UTCTime = now();
 
+
+  getTimezoneInfo(); //this sets timezone and dstoffsets
+  DSTsetup(); //this sets I.DST
+
+  I.currentTime = I.UTCTime + Prefs.TimeZoneOffset + (I.DST==1? I.DSTOffset : 0);
 
   return true;
 }
@@ -40,58 +45,127 @@ bool setupTime(void) {
 
 //Time fcn
 bool updateTime() {
+  //run this every second
 
   bool isgood = false;
 
   if ( timeClient.update()) {  //returns false if not time to update
-    setTime(timeClient.getEpochTime());
-    
-    // Check DST and update offset accordingly
-    checkDST();
-
+    setTime(timeClient.getEpochTime());    
     isgood = true;
   }
 
-  I.currentTime=now();    
+
+  
+  //check if DST needs to be updated
+  if (I.DST>=0 && (I.currentTime == I.DSTStartUnixTime || I.currentTime == I.DSTEndUnixTime)) {
+      DSTsetup(); //this sets I.DST 
+  }
+
+
+  I.UTCTime = now();
+  I.currentTime = I.UTCTime + Prefs.TimeZoneOffset + (I.DST==1 ? I.DSTOffset : 0);
+
   return isgood;
 }
 
-void checkDST(void) {
-  
+bool getTimezoneInfo() {
+  //this needs to run at startup and at DST changes
+  //String myIP = getPublicIP();
+  //if (myIP == "") return false;
 
-  timeClient.setTimeOffset(Prefs.TimeZoneOffset);
-  setTime(timeClient.getEpochTime()); //set time without DST offset
-  I.currentTime = now();  
+  String tzURL = "";
+// Query TimeAPI.io (Secure/HTTPS using Bundle)
+if (Prefs.LATITUDE==0 || Prefs.LONGITUDE==0) { //use IP address to get timezone
+  String myIP = getPublicIP();
+  if (myIP == "") return false;
+  tzURL = "https://timeapi.io/api/timezone/ip?ipAddress=" + myIP;
 
-  if (Prefs.DST==0) {
-    Prefs.DSTOffset=0;
-    return;
+} else {
+  //use latitude and longitude to get timezone
+  tzURL = "https://timeapi.io/api/timezone/coordinate?latitude=" + String(Prefs.LATITUDE) + "&longitude=" + String(Prefs.LONGITUDE);  //https://timeapi.io/api/timezone/ip?ipAddress=" + myIP;
+}
+
+String cacert = "bundle"; // Triggers your _USE_CERT_BUNDLE logic
+JsonDocument doc;
+String payload = ""; // Not used when doc is provided
+
+// We pass &doc to let your function handle the stream-based deserialization
+
+String method = "GET";
+int16_t httpCode;
+String empty = "";
+
+bool tzSuccess = Server_SecureMessageEx(tzURL, payload, httpCode, cacert, method, empty, empty, empty, &doc, nullptr,true);
+
+if (tzSuccess && httpCode == 200) {
+  // Extract Standard Offset
+  time_t tzOffset = doc["standardUtcOffset"]["seconds"].as<int32_t>();
+  if (tzOffset != Prefs.TimeZoneOffset) {
+    SerialPrint("TimeZoneOffset changed from " + String(Prefs.TimeZoneOffset) + " to " + String(tzOffset), true);
+    Prefs.TimeZoneOffset = tzOffset;
+    Prefs.isUpToDate = false;
+  }
+
+  // Check if DST exists
+  I.DST = !doc["dstInterval"].isNull() ? -1 : 0; //DST is set to -1 if no dst here, or 0 if DST is used in this area. If 0, will be adjusted to 0 or 1 by DSTsetup()
+
+  if (I.DST>=0) {
+    I.DSTStartUnixTime = iso8601ToUnix(doc["dstInterval"]["dstStart"].as<String>(),true); //this is in local time
+    I.DSTEndUnixTime = iso8601ToUnix(doc["dstInterval"]["dstEnd"].as<String>(),true);
+    I.DSTOffset = doc["dstInterval"]["dstOffsetToStandardTime"]["seconds"].as<int32_t>(); //this is the offset from local time. offset to UTC is also available, but incorporates TZ offset as well
+  } else {
+    I.DSTStartUnixTime = 0;
+    I.DSTEndUnixTime = 0;
+    I.DSTOffset = 0;
   }
 
 
-  int m = month(I.currentTime);
-  int d = day(I.currentTime);
-  int y = year(I.currentTime);
+  return true;
+}
+
+I.DST = -1; //no DST info found
+I.DSTStartUnixTime = 0;
+I.DSTEndUnixTime = 0;
+I.DSTOffset = 0;
+
+
+
+return false;
+}
+
+
+void DSTsetup(void) {
+//this function needs only be called  once a day to check if DST is active - or at known DST change times
+
+  if (I.DST==-1) { // we don't use DST here
+    I.DSTOffset=0;        
+    return;
+  } 
+
   
-  // Check if current date is within DST period  
-  // Check if we're after DST start date
-  if (m > Prefs.DSTStartMonth || (m == Prefs.DSTStartMonth && d >= Prefs.DSTStartDay)) {
-    // Check if we're before DST end date
-    if (m < Prefs.DSTEndMonth || (m == Prefs.DSTEndMonth && d < Prefs.DSTEndDay)) {
-  
-      Prefs.DSTOffset = 3600;
+  int8_t DST_old = I.DST;
+
+  if (I.DSTStartUnixTime < I.DSTEndUnixTime) {
+    if (I.UTCTime >= I.DSTStartUnixTime && I.UTCTime < I.DSTEndUnixTime) {
+      I.DST = 1; //DST is active
     } else {
-  
-      Prefs.DSTOffset = 0;
+      I.DST = 0; //DST is inactive
     }
   } else {
-    Prefs.DSTOffset = 0;
+    if (I.UTCTime < I.DSTEndUnixTime) { //this check is only in case DSTStartUnixTime was updated to the NEXT start, while end time has not been updated yet
+      I.DST = 1; //DST is active
+    } else {
+      I.DST = 0; //DST is inactive
+    }
   }
-  
-  timeClient.setTimeOffset(Prefs.TimeZoneOffset + Prefs.DSTOffset);
-  setTime(timeClient.getEpochTime());
-  I.currentTime = now();  
+
+  if (DST_old != I.DST) {
+    SerialPrint("DST changed from " + String(DST_old) + " to " + String(I.DST), true);
+    //update dst
+    getTimezoneInfo();
+  }
 }
+
 
 
 String fcnDOW(time_t t, bool caps) {
@@ -164,91 +238,7 @@ char* dateify(time_t t, String dateformat) {
 
 
 
-// Function to periodically check and update timezone information
-void checkTimezoneUpdate() {
-  // Check once per day (86400 seconds = 24 hours)
-  
-  // Only check if we have WiFi connection and enough time has passed
-  if (Prefs.isUpToDate==false || CheckWifiStatus(false)!=1 ) {
-      return;
-  }
-  
-  SerialPrint("Checking for timezone updates...", true);
-  
-  // Get current timezone information from API
-  int32_t new_utc_offset = 0;
-  bool new_dst_enabled = false;
-  uint8_t new_dst_start_month = 3, new_dst_start_day = 9;
-  uint8_t new_dst_end_month = 11, new_dst_end_day = 2;
-  
-  // Call the getTimezoneInfo function from server.cpp
-  extern bool getTimezoneInfo(int32_t* utc_offset, bool* dst_enabled, uint8_t* dst_start_month, uint8_t* dst_start_day, uint8_t* dst_end_month, uint8_t* dst_end_day);
-  
-  if (getTimezoneInfo(&new_utc_offset, &new_dst_enabled, &new_dst_start_month, &new_dst_start_day, &new_dst_end_month, &new_dst_end_day)) {
-      bool needsUpdate = false;
-      
-      // Check if any timezone settings have changed
-      if (Prefs.TimeZoneOffset != new_utc_offset) {
-          SerialPrint("UTC offset changed from " + String(Prefs.TimeZoneOffset) + " to " + String(new_utc_offset), true);
-          Prefs.TimeZoneOffset = new_utc_offset;
-          needsUpdate = true;
-      }
-      
-      if (Prefs.DST != (new_dst_enabled ? 1 : 0)) {
-          SerialPrint("DST setting changed from " + String(Prefs.DST) + " to " + String(new_dst_enabled ? 1 : 0), true);
-          Prefs.DST = new_dst_enabled ? 1 : 0;
-          if (Prefs.DST) {
-              Prefs.DSTOffset = 3600;
-          } else {
-              Prefs.DSTOffset = 0;
-          }
-          needsUpdate = true;
-      }
-      
-      if (Prefs.DSTStartMonth != new_dst_start_month) {
-          SerialPrint("DST start month changed from " + String(Prefs.DSTStartMonth) + " to " + String(new_dst_start_month), true);
-          Prefs.DSTStartMonth = new_dst_start_month;
-          needsUpdate = true;
-      }
-      
-      if (Prefs.DSTStartDay != new_dst_start_day) {
-          SerialPrint("DST start day changed from " + String(Prefs.DSTStartDay) + " to " + String(new_dst_start_day), true);
-          Prefs.DSTStartDay = new_dst_start_day;
-          needsUpdate = true;
-      }
-      
-      if (Prefs.DSTEndMonth != new_dst_end_month) {
-          SerialPrint("DST end month changed from " + String(Prefs.DSTEndMonth) + " to " + String(new_dst_end_month), true);
-          Prefs.DSTEndMonth = new_dst_end_month;
-          needsUpdate = true;
-      }
-      
-      if (Prefs.DSTEndDay != new_dst_end_day) {
-          SerialPrint("DST end day changed from " + String(Prefs.DSTEndDay) + " to " + String(new_dst_end_day), true);
-          Prefs.DSTEndDay = new_dst_end_day;
-          needsUpdate = true;
-      }
-      
-      if (needsUpdate) {
-          // Mark prefs as needing to be saved
-          Prefs.isUpToDate = false;
-          
-          
-          SerialPrint("Timezone information updated and saved to preferences", true);
-          
-          // Update the time client with new offset
-          checkDST(); // Recalculate DST with new settings
-      } else {
-          SerialPrint("Timezone information is up to date", true);
-      }
-  } else {
-      SerialPrint("Failed to fetch timezone information from API", true);
-  }
-  
-}
-
-
-time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
+time_t convertStrTime(String str, bool asLocalTime) //take a text time, like "12:34:13 PM" and return unix time. If month, day, year are not provided then assume current m/d/y
 {
 
   //break string... format must be one of "10/24/2024", "10/24/24", "10/24/2024 13:23:14", "10/24/2024 1:23:14 PM", "13:23:25", although the seconds and am/pm  are optional
@@ -292,9 +282,9 @@ time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and ret
 
 
 
-    SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
+    SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s,asLocalTime) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
 
-    if (str.length()==0) return makeUnixTime((byte) yy, m,d,0,0,0);
+    if (str.length()==0) return makeUnixTime((byte) yy, m,d,0,0,0,asLocalTime);
   }
 
   byte hoffset = 0;
@@ -305,17 +295,17 @@ time_t convertStrTime(String str) //take a text time, like "12:34:13 PM" and ret
   h = breakString(&str,":",true).toInt() + hoffset;
   n = breakString(&str,":",true).toInt();
 
-  if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s); //no sec data
+  if(str.length()==0) return makeUnixTime((byte) yy, m,d,h,n,s,asLocalTime); //no sec data
 
   s = str.toInt();
 
   SerialPrint((String) "unixtime = " + makeUnixTime((byte) yy, m,d,h,n,s) + " humantime = " + m + "/" + d + "/" + yy + " " + h + ":" + n,true);
 
-  return makeUnixTime((byte) yy, m,d,h,n,s);
+  return makeUnixTime((byte) yy, m,d,h,n,s,asLocalTime);
 
 }
 
-time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
+time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s, bool asLocalTime) {
   //here yy is the year after 2000, so 0 = 2000 and 24 = 2024... unless yy>=70 (in which case it is year after 1900)
 
   int16_t y = 2000;
@@ -332,6 +322,65 @@ time_t makeUnixTime(byte yy, byte m, byte d, byte h, byte n, byte s) {
   unixTime.Minute = n;
   unixTime.Second = s;
 
-  return makeTime(unixTime);
+  return makeTime(unixTime) + (asLocalTime ?  (I.DST>0?I.DSTOffset:0) + Prefs.TimeZoneOffset : 0);
 }
 
+
+
+time_t iso8601ToUnix(String iso, bool asLocalTime) {
+  // ISO 8601: 2026-11-01T06:00:00Z or 2026-11-01T06:00:00-05:00 where the first is UTC and the second is local time. Z is at 19th index.
+  // Indices:  0123-56-89T11:13:15
+  //if asLocalTime is true, then the returned time is adjusted to be the local time, otherwise it is in UTC
+  
+  bool isUTC = true;
+  int32_t UTCmodifier = 0;
+  if (iso.length() < 19) return 0; // Basic safety check
+
+  tmElements_t tm;
+  
+  // Note: Year in TimeLib is offset from 1970
+  tm.Year   = (byte) ((uint16_t) iso.substring(0, 4).toInt()-1970);
+  tm.Month  = iso.substring(5, 7).toInt();
+  tm.Day    = iso.substring(8, 10).toInt();
+  tm.Hour   = iso.substring(11, 13).toInt();
+  tm.Minute = iso.substring(14, 16).toInt();
+  tm.Second = iso.substring(17, 19).toInt();
+
+
+  String tz = iso.substring(19);
+
+  if (tz.length()>=1) {    
+    if (tz.startsWith("Z")) {
+      //this is in UTC
+      isUTC=true;
+    } else if (tz.startsWith("+") || tz.startsWith("-")) {
+      //this is a local time string
+      isUTC=false;
+      UTCmodifier = (tz.substring(1,3).toInt()*3600 + tz.substring(4,6).toInt()*60);
+      if (UTCmodifier==0) {
+        isUTC=true;
+      } else if (tz.startsWith("-"))         UTCmodifier = -UTCmodifier;
+      }
+    }
+    
+  
+  time_t returnTime = makeTime(tm);
+  //if this is a UTC string, and user wants it in local time, convert a UTC time to local (add the TZ offset and DST offset)
+  if (isUTC && asLocalTime)     return returnTime +  (I.DST>0?I.DSTOffset:0) + Prefs.TimeZoneOffset ;
+  
+
+  //if this is a UTC string, and user wants it in UTC, then return the UTC time
+  if (isUTC && !asLocalTime)     return returnTime;
+  
+
+  //if this is a local string, and user wants it in local time, then return the local time
+  if (!isUTC && asLocalTime)     return returnTime;
+  
+
+  //if this is a local string, and user wants it in UTC, then convert a local time to UTC (subtract the provided UTC modifier)
+  if (!isUTC && !asLocalTime)     return returnTime - UTCmodifier;
+  
+
+  //if the string is not a valid ISO 8601 string, then return 0
+  return 0;
+}
