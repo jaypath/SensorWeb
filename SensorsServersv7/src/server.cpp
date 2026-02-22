@@ -4843,7 +4843,7 @@ void handleERROR_LOG() {
   htmlContent += "pre { background-color: #f8f8f8; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }";
   htmlContent += "</style></head><body>";
   htmlContent += "<h1>Device Error Log</h1>";
-  htmlContent += "<p>This shows the last 25 errors that have occurred on the device:</p>";
+  htmlContent += "<p>This shows up to the last 25 errors that have occurred on the device.  New errors are on top:</p>";
   
 
   // Read the file content
@@ -4861,7 +4861,6 @@ void handleERROR_LOG() {
     } else {
       errorFound = false;
     }
-
   }
   
   if (entryCount == 0) {
