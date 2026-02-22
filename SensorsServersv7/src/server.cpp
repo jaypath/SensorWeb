@@ -4847,19 +4847,22 @@ void handleERROR_LOG() {
   
 
   // Read the file content
-uint8_t entryCount = 0;
-  for (int i = 0; i < 25; i++) {
-    ERROR_STRUCT LASTERROR;
-    if (readErrorFromSD(LASTERROR, i)) {
+  uint8_t entryCount = 0;
+  bool errorFound = true;
+  ERROR_STRUCT LASTERROR;
+  while (errorFound && entryCount < 25) {
+    if (readErrorFromSD(LASTERROR, entryCount)) {
       entryCount++;
       htmlContent += "<div class=\"error-entry\">";
       htmlContent += "<span class=\"error-time\">" + (String) dateify(LASTERROR.errorTime) + "</span><br>";
       htmlContent += "<span class=\"error-code\">Error Code: " + String(LASTERROR.errorCode) + "</span><br>";
       htmlContent += "<div class=\"error-message\">" + (String) LASTERROR.errorMessage + "</div>";
       htmlContent += "</div>";      
+    } else {
+      errorFound = false;
     }
+
   }
-  
   
   if (entryCount == 0) {
     htmlContent += "<p>No error entries found in the file.</p>";
