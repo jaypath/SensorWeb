@@ -519,6 +519,11 @@ int8_t readErrorFromSD(ERROR_STRUCT& LASTERROR, uint8_t NthFromLast) {
     return false;
   }
 
+  if (file.size() != NthFromLast*sizeof(ERROR_STRUCT)) {
+    file.close();
+    return false;
+  }
+
   //go to the end of the file
   file.seek(file.size());
 

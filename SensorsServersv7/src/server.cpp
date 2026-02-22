@@ -4848,9 +4848,9 @@ void handleERROR_LOG() {
 
   // Read the file content
   uint8_t entryCount = 0;
-  bool errorFound = true;
+  bool entryFound = true;
   ERROR_STRUCT LASTERROR;
-  while (errorFound && entryCount < 25) {
+  while (entryFound && entryCount < 25) {
     if (readErrorFromSD(LASTERROR, entryCount)) {
       entryCount++;
       htmlContent += "<div class=\"error-entry\">";
@@ -4859,7 +4859,7 @@ void handleERROR_LOG() {
       htmlContent += "<div class=\"error-message\">" + (String) LASTERROR.errorMessage + "</div>";
       htmlContent += "</div>";      
     } else {
-      errorFound = false;
+      entryFound = false;
     }
   }
   
