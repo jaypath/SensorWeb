@@ -157,7 +157,7 @@ bool initSystem() {
   }
 
 
-  tftprint("Cuurrent firmware version: " + String(PROJECT_VER), true);
+  tftPrint("Cuurrent firmware version: " + String(PROJECT_VER), true);
   bool newfirmware = check_and_switch_to_newer_firmware(true,false);
   if (newfirmware && Prefs.AUTOSWITCHNEWERFIRMWARE) {
     delay(1000);
