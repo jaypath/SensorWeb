@@ -39,6 +39,100 @@ struct ArborysSnsType;
 //declared as global constants
 extern STRUCT_CORE I;
 
+//the following are to handle memory management for the secure message function
+#include <memory>
+// This "Deleter" ensures unique_ptr calls free() instead of delete
+struct MemoryDeleter {
+  void operator()(const void* p) const { 
+      if (p) free((void*)p); 
+  }
+};
+
+  
+struct HTTPMessage {
+  // --- Managed Memory (Auto-cleanup for ALL char buffers) ---
+  std::unique_ptr<char[], MemoryDeleter> url;
+  std::unique_ptr<char[], MemoryDeleter> payload; //return payload from server
+  std::unique_ptr<char[], MemoryDeleter> cacert;
+  std::unique_ptr<char[], MemoryDeleter> method;
+  std::unique_ptr<char[], MemoryDeleter> contentType;
+  std::unique_ptr<char[], MemoryDeleter> body; //send payload to server
+  std::unique_ptr<char[], MemoryDeleter> extraHeaders;
+
+  // --- External References (Calling function manages these) ---
+  JsonDocument* responseDoc = nullptr;
+  const JsonDocument* filter = nullptr;
+
+  // --- Standard Data ---
+  size_t payloadSize = 0;
+  int16_t httpCode = 0;
+  bool processStream = false;
+  bool allowInsecure = false;
+  bool success = false;
+  bool usePSRAM = false;
+  uint16_t timeout = 0; // 15 second timeout for geocoding
+  // --- Logic ---
+  bool initPayload(size_t size) {
+      if (size == 0) return false;
+      this->payloadSize = size;
+      
+      char* rawPtr = this->usePSRAM ? (char*)ps_malloc(size) : (char*)malloc(size);
+      if (rawPtr == nullptr) return false;
+
+      this->payload.reset(rawPtr); 
+      return true;
+  }
+
+  bool resizePayload(size_t newSize) {
+    if (newSize == 0) return false;
+    
+    // 1. Get the current raw pointer from the unique_ptr
+    char* oldPtr = payload.release(); // .release() gives us the pointer and stops unique_ptr from managing it
+    char* newPtr = nullptr;
+
+    // 2. Perform the realloc based on where the memory lives
+    if (this->usePSRAM) {
+        newPtr = (char*)ps_realloc(oldPtr, newSize);
+    } else {
+        newPtr = (char*)realloc(oldPtr, newSize);
+    }
+
+    // 3. Check if realloc failed
+    if (newPtr == nullptr) {
+        // If realloc fails, the OLD memory is still valid! 
+        // We must give it back to the unique_ptr so it doesn't leak.
+        payload.reset(oldPtr); 
+        return false;
+    }
+
+    // 4. Success! Give the new (possibly moved) pointer to unique_ptr
+    payload.reset(newPtr);
+    this->payloadSize = newSize;
+    return true;
+}
+
+  // Helper to set any string field safely
+  void setField(std::unique_ptr<char[], MemoryDeleter>& field, const char* value) {
+      if (!value) return;
+      char* buf = strdup(value);
+      if (buf) field.reset(buf);
+  }
+
+  // Sugar for setting specific fields
+  void setUrl(const char* val) { setField(url, val); }
+  void setMethod(const char* val) { setField(method, val); }
+  void setContentType(const char* val) { setField(contentType, val); }
+  void setExtraHeaders(const char* val) { setField(extraHeaders, val); }
+  void setCacert(const char* val) { setField(cacert, val); }
+  void setBody(const char* val) { setField(body, val); }
+
+  // Rule of Five compliance
+  HTTPMessage() = default;
+  HTTPMessage(const HTTPMessage&) = delete;
+  HTTPMessage& operator=(const HTTPMessage&) = delete;
+};
+
+
 #ifdef _USEWEATHER
   extern WeatherInfoOptimized WeatherData;
 #endif
@@ -72,11 +166,8 @@ String urlEncode(const String& str);
 String getPublicIP();
 
 String getCert(String filename);
-bool Server_Message(String &URL, String &payload, int &httpCode);
+bool SendHTTPMessage(HTTPMessage& M);
 // cacert: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" / "bundle" to use embedded CA bundle (requires sdkconfig.defaults)
-bool Server_SecureMessageEx(String& URL, String& payload, int16_t& httpCode,
-  String& cacert, String& method, String& contentType,
-  String& body, String& extraHeaders, JsonDocument* responseDoc = nullptr, const JsonDocument* filter = nullptr, bool setInsecure=false);
 void handleReboot();
 void handleNotFound();
 
@@ -204,8 +295,7 @@ String generateAPSSID();
 void setupServerRoutes();
 
     // Address to coordinates conversion
-    bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode);
+    bool getCoordinatesFromAddress(const String& zipCode, const String& street = "1 Main St", const String& city = "Unknown", const String& state = "MA");
     bool getCoordinatesFromZipCode(const String& zipCode);
-    bool getCoordinatesFromZipCodeFallback(const String& zipCode);
 
 #endif

@@ -58,13 +58,18 @@ bool initGsheet() {
     GSheet.setPrerefreshSeconds(300);
     //Gsheet.setCert(root_ca_google);
     
+    // Library expects UTC for JWT iat/exp; Google rejects tokens with wrong time (e.g. local passed as UTC)
+    time_t t = (I.UTCTime > 0) ? (time_t)I.UTCTime : now();
+    if (t > 1000) GSheet.setSystemTime(t);
+    
     //Begin the access token generation for Google API authentication
     GSheet.begin(GSheetInfo.clientEmail, GSheetInfo.projectID, GSheetInfo.privateKey);
     if (!GSheet.ready()) {
         tftPrint("GSHEET INIT FAILED.", true, TFT_RED);
         storeError("Gsheet initialization failed");
-        String reason = GSheet.errorReason();
-        if (reason.length() > 0) SerialPrint("GSheet not ready reason: " + reason, true);
+        // Do not call GSheet.errorReason() or use its return value - the library can return
+        // a String with an invalid buffer (e.g. LoadProhibited at 0x321) when token is "initializing".
+        SerialPrint("GSheet not ready (token still initializing or auth failed).", true);
         return false;
     }
     return true;
@@ -186,7 +191,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     bool success = GSheet.listFiles(&result /* returned list of all files */,20,"name");     //first page 
     if (!success) {
         result.clear(); // Clean up FirebaseJson
-        SerialPrint("ERROR: Failed to list files with error: " + String(GSheet.errorReason()),true);
+        SerialPrint("ERROR: Failed to list files (GSheet error).", true);
         return "";
     }
 
@@ -561,59 +566,69 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
 
 // GET file metadata (200 -> exists)
 bool file_sheetExists(String fileID) {
-    String url = "https://www.googleapis.com/drive/v3/files/" + fileID + "?fields=id,name,createdTime";
-    String token = GSheet.accessToken();
-    
-    String headers = "Authorization: Bearer " + token;  // newline if adding more
-    String method = "GET";
-    String contentType = "";   // none for GET
-    String body = "";
-    String resp;
-    int16_t code;
-    // Use "" or "*" for embedded CA bundle (see sdkconfig.defaults); or SD path e.g. "/Certificates/Google.crt"
-    //String cacert = "/Certificates/Google.crt"; //use the SD card certificate
-    String cacert = ""; //use the ESP-IDF certificate bundle
-    
-    bool ok = Server_SecureMessageEx(url, resp, code, cacert, method, contentType, body, headers);
+    char url[150];
+    snprintf(url, 149, "https://www.googleapis.com/drive/v3/files/%s?fields=id,name,createdTime", fileID.c_str());
+    String extraHeaders = "Authorization: Bearer " + GSheet.accessToken() + "\nContent-Type: application/json";
 
-    return ok && (code == 200 || code == 201 || code == 409);
-    
+
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.setCacert("");
+    M.timeout = 5000;
+    M.setExtraHeaders(extraHeaders.c_str());
+
+    if (SendHTTPMessage(M)) {
+        return M.httpCode == 200 || M.httpCode == 201 || M.httpCode == 409;
+    } else {
+        SerialPrint(" ERROR: file_sheetExists failed",true);
+        storeError("Gsheet: file_sheetExists failed",ERROR_GSHEET_CREATE,true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return false;
+    }
 }
 
 
 // Create permission
 bool file_createUserPermission(String fileID, bool notify, const char* message) {
   
-    String url = "https://www.googleapis.com/drive/v3/files/" + fileID + "/permissions?supportsAllDrives=true";
-    url += notify ? "&sendNotificationEmail=true" : "&sendNotificationEmail=false";
-    
+    char url[200];
+    snprintf(url, 149, "https://www.googleapis.com/drive/v3/files/%s/permissions?supportsAllDrives=true&sendNotificationEmail=%s", fileID.c_str(), notify ? "true" : "false");
+
     if (notify && message && strlen(message) > 0) {
-        String msg = message;
-        msg.replace(" ", "%20");  // light URL encoding
-        url += "&emailMessage=" + msg;
+        char msg[100];
+        snprintf(msg, 99, "%s", message);
+        strcat(url, "&emailMessage=");
+        strcat(url, msg);
       }
     
-    String token = GSheet.accessToken();
-    
+    String extraHeaders = "Authorization: Bearer " + GSheet.accessToken() + "\nContent-Type: application/json";
+
+    String body;
     FirebaseJson j;
     j.add("type", "user");
     j.add("role", "writer");
     j.add("emailAddress", GSheetInfo.userEmail);
-    String body;
     j.toString(body, false);
+
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("POST");
+    M.setCacert("");
+    M.timeout = 5000;
+    M.setExtraHeaders(extraHeaders.c_str());
+    M.setBody(body.c_str());
+    M.setContentType("application/json");
+
     
-    String headers = "Authorization: Bearer " + token + "\nContent-Type: application/json";
-    String resp;
-    int16_t code;
-    // Use "" or "*" for embedded CA bundle; or SD path "/Certificates/Google.crt"
-    //String cacert = "/Certificates/Google.crt"; //use the SD card certificate
-    String cacert = ""; //use the ESP-IDF certificate bundle
-    String method = "POST";
-    String contentType = "application/json";
-    
-    bool ok = Server_SecureMessageEx(url, resp, code, cacert, method, contentType, body, headers);
-    
-    return ok && (code == 200 || code == 201 || code == 409); //409 permission already exists
+    if (SendHTTPMessage(M)) {
+        return M.httpCode == 200 || M.httpCode == 201 || M.httpCode == 409;
+    } else {
+        SerialPrint(" ERROR: file_createUserPermission failed",true);
+        storeError("Gsheet: file_createUserPermission failed",ERROR_GSHEET_CREATE,true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return false;
+    }
 }
 
   #endif

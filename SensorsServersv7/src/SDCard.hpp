@@ -90,6 +90,7 @@ bool readAnythingFromSD(const char* filename, const void* data, uint16_t size);
 bool matchPattern(const char* filename, const char* pattern);
 uint16_t deleteFiles(const char* pattern,const char* directory);
 uint16_t deleteSensorDataSD();
+bool FileOrDirectoryExists(const char* filename);
 
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);

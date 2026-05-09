@@ -272,6 +272,7 @@ int8_t initSDCard() {
 }
 
 
+
 bool loadScreenFlags() {
   #ifdef _USESDCARD
   #ifdef _USETFT
@@ -279,7 +280,9 @@ bool loadScreenFlags() {
   #endif
   bool sdread = readScreenInfoSD();
   displaySetupProgress( sdread);
+
   initScreenFlags();
+
   return sdread;
   #endif
   return false;
@@ -321,7 +324,7 @@ bool isRHValid(double rh) {
 }
 
 bool isSoilCapacitanceValid(double soil) {
-  if (soil < 0 || soil > 200) return false;
+  if (soil < -100 || soil > 400) return false;
   return true;
 }
 
@@ -605,9 +608,8 @@ void initScreenFlags(bool completeInit) {
       I.currentTime=0;
 
       #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-      I.CLOCK_Y = 105;
-      I.HEADER_Y = 30;
       
+    
       I.isExpired = false; //are any critical sensors expired?
       I.wasFlagged=false;
       I.isHeat=false; //first bit is heat on, bits 1-6 are zones
@@ -623,15 +625,7 @@ void initScreenFlags(bool completeInit) {
       I.isCold=0;
       I.isSoilDry=0;
       I.isLeak=0;
-   
-      I.cycleHeaderMinutes = 30; //how many seconds to show header?
-      I.cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
-      I.cycleWeatherMinutes = 10; //how many minutes to show weather values?
-      I.cycleFutureConditionsMinutes = 5; //how many minutes to show future conditions?
-      I.lastFutureConditionsAlt = 0; //how many minutes to show future conditions?
-      I.cycleFlagSeconds = 3; //how many seconds to show flag values?
-      I.IntervalHourlyWeather = 2; //hours between daily weather display
-      I.screenChangeTimer = 30; //how many seconds before screen changes back to main screen
+
 
       I.localBatteryIndex=255; //index of outside sensor
 
@@ -643,20 +637,19 @@ void initScreenFlags(bool completeInit) {
       I.lastCurrentOutsideTemp=-127;
 
       #endif
-
+      
       I.lastErrorTime=0;
   }
 
+  
+  #ifdef _USETFT
+  initGraphics();
+  #endif
+
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-  I.lastHeaderTime=0; //last time header was drawn
-  I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
-  I.lastFlagViewTime=0; //last time clock was updated, whether flag or not
-  I.ScreenNum = 0;
-  I.oldScreenNum = 0;
+  
   #ifdef _USEWEATHER
-  I.lastWeatherTime=0; //last time weather was drawn
-  I.lastCurrentConditionTime=0; //last time current condition was drawn
-  I.lastFutureConditionTime=0; //last time future condition was drawn
+  I.EventFlags = 0;
   #endif
   #endif
 
@@ -716,21 +709,23 @@ void initScreenFlags(bool completeInit) {
 }
 
 
-bool SerialPrint(String S,bool newline) {
-  return SerialPrint(S.c_str(),newline);
+bool SerialPrint(String S,bool newline, int8_t level) {
+  return SerialPrint(S.c_str(),newline, level);
 }
 
-bool SerialPrint(const char* S,bool newline) {
-  bool printed =false;
+bool SerialPrint(const char* S,bool newline, int8_t level) {
   
   #ifdef _USESERIAL
-    Serial.printf("%s",S);
-    if (newline) Serial.println();
-    printed=true;
+
+    if (I.SerialPrintLevel == 0 || level < 0 && level == I.SerialPrintLevel || level > 0 && level >= I.SerialPrintLevel) {
+      Serial.printf("%s",S);
+      if (newline) Serial.println();
+      return true;
+    }
+    return false;
   #endif
 
-  return printed;
-
+  return false;
 
 }
 

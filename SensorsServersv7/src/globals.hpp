@@ -44,6 +44,7 @@ class Devices_Sensors;
 
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
 
+
 //potential reset issues
 typedef enum {
   RESET_DEFAULT, //reset due to some unknown fault, where the reset state could not be set (probably triggered by a hang and watchdog timer kicked)
@@ -147,6 +148,9 @@ typedef enum {
     ERROR_UDP_3, //UDP message error
     ERROR_UDP_4, //UDP message error
     ERROR_UDP_5, //UDP message error
+    ERROR_BMP_PLANES, //BMP error with planes
+    ERROR_BMP_BITDEPTH, //BMP error with bitDepth
+    ERROR_BMP_COMPRESSION, //BMP error with compression
   } ERRORCODES;
 
 
@@ -203,7 +207,10 @@ typedef enum {
     time_t errorTime;
   };
   
+
+
   struct STRUCT_CORE {
+
     int16_t MY_DEVICE_INDEX; // local stored index of this device in Sensors
       bool makeBroadcast=false;
       time_t lastStoreCoreDataTime;
@@ -224,36 +231,12 @@ typedef enum {
       
       time_t UTCTime; //UTC time
       time_t currentTime;
+      uint8_t currentSecond;
 
       int8_t WiFiStatus; //2= connected but wifi.status() doesn't list this correctly, 1 = connected, 0=unknown, -1 - no valid IP address, -2 - no valid RSSI range, -3 - no valid SSID, -4 - no valid gateway, -5 - no connection
       WiFiEvent_t WiFiLastEvent; //last WiFi event
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
 
-      #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-      byte CLOCK_Y = 105;
-      byte HEADER_Y = 30;
-      uint32_t lastHeaderTime=0; //last time header was drawn
-      uint32_t lastWeatherTime=0; //last time weather image was drawn
-      uint32_t lastCurrentConditionTime; //last time current condition was drawn
-      uint32_t lastClockDrawTime=0; //last time clock was updated, whether flag or not
-      uint32_t lastFutureConditionTime=0; //last time future condition was drawn
-      uint32_t lastFlagViewTime=0; //last time flags were drawn, instead of weather image
-      uint8_t cycleHeaderMinutes = 30; //how many seconds to show header?
-      uint8_t cycleCurrentConditionMinutes = 10; //how many minutes to show current condition?
-      uint8_t cycleWeatherMinutes = 10; //how many minutes to show weather values?
-      uint8_t cycleFutureConditionsMinutes = 10; //how many minutes to show future conditions?
-      uint8_t lastFutureConditionsAlt = 0; //was the last future conditions alternative display?
-      uint8_t cycleFlagSeconds = 3; //how many seconds to show flag values?
-      uint8_t IntervalHourlyWeather = 2; //hours between daily weather display
-
-      uint16_t touchX;
-      uint16_t touchY;
-      uint8_t alarmIndex;
-      uint8_t ScreenNum;
-      uint8_t oldScreenNum;
-      uint8_t screenChangeTimer = 0; //seconds before screen changes back to main screen
-      
-      #endif
   
       #ifdef _USEWEATHER
       bool haveOutsideTemperatureSensor;
@@ -263,11 +246,11 @@ typedef enum {
       int8_t Tmax;
       int8_t Tmin;
       int8_t lastCurrentOutsideTemp; //last current outside temperature
-      uint8_t EventFlags; 
+      uint8_t WeatherEventFlags; 
       //bit 0 = current flag status, 1 = flagged, 0 = not flagged
-      //bit 1 = was I flagged before, 1 = yes, 0 = no
-      //bit 2 = high risk flag
-      //bit 3 = 
+      //bit 1 = last flag status, 1 = flagged, 0 = not flagged
+      //bit 2 = Severe flag
+      //bit 3 = Imminent flag
       //bit 4 = 
       //bit 5 = 
       //bit 6 = 
@@ -355,6 +338,8 @@ typedef enum {
       char lastError[76];
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;
+
+      int8_t SerialPrintLevel=3; //negative values... print only that level, 0=print everything, 1=print outputs and worse, 2=print info and worse, 3=print errors and worse, 4=print serious faults, 5=print critical only
   
   
   };

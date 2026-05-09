@@ -12,6 +12,7 @@
 byte alarms[MAXALARMS] = {255};
 
 
+struct STRUCT_GRAPHICS GRAPHICS;
 
 LGFX tft;
 
@@ -21,8 +22,38 @@ extern STRUCT_PrefsH Prefs;
 extern Devices_Sensors Sensors;
 
 
+LGFX_Sprite Sprite180x180(&tft);
+LGFX_Sprite Sprite320x100(&tft);
+
 
 // Graphics utility functions
+bool initGraphics() {
+
+
+  Sprite180x180.createSprite(180, 180, true);
+  Sprite320x100.createSprite(320, 100, true);
+
+  //check if the sprites were created successfully
+  if (!Sprite180x180.getBuffer() || !Sprite320x100.getBuffer()) {
+    Serial.println("Error: Sprite creation failed");
+    return false;
+  }
+
+  GRAPHICS.IconSet = 0;
+  GRAPHICS.MainBMPAreaFlags = 0;
+
+  // GRAPHICS_TIMERS: initScreenFlags is called after memset in deleteCoreStruct, which zeros
+  // I entirely. Without this, Timer_*_RESET stay zero and get saved to SD, causing timers
+  // to fail on every boot. Explicitly set defaults to match SECOND_TIMER_STRUCT.
+  GRAPHICS.GRAPHICS_TIMERS.zeroTimers();
+
+    GRAPHICS.Screen_Now = SCREEN_MAIN;
+  GRAPHICS.Screen_Next = SCREEN_MAIN;
+
+
+  return true;
+}
+
 uint16_t set_color(byte r, byte g, byte b) {
   return tft.color565(r, g, b);
 }
@@ -132,14 +163,121 @@ uint16_t temp2color(int temp, bool invertgray) {
 }
 
 // Drawing functions
+
+int8_t drawBmp(const char *filename, int16_t x, int16_t y, LGFX_Sprite *sprite) {
+//return 1 if successful, 0 if bounds check failed, -1 if file not found, -2 if error with ps_malloc, -3 if error with rowBytes + outBytes > lineBufSize, -4 if error with file header
+
+  // 1. Initial Bounds Check (Only for direct screen draw)
+  if (!sprite && ((x >= tft.width()) || (y >= tft.height()))) return 0;
+  else if (sprite && ((x >= sprite->width()) || (y >= sprite->height()))) return 0;
+
+  File bmpFile = SD.open(filename, FILE_READ);
+  if (!bmpFile) {
+    SerialPrint("File not found: ", false, 5);
+    SerialPrint(filename, true, 5);
+    return -1;
+  }
+
+  uint32_t seekOffset;
+  uint16_t w, h, row, col;
+  uint8_t  r, g, b;
+
+  const size_t lineBufSize = 1024 * 2; 
+  uint8_t* lineBuffer = (uint8_t*)ps_malloc(lineBufSize);
+  if (!lineBuffer) {
+    bmpFile.close();
+    return -2;
+  }
+
+  uint16_t signature = read16(bmpFile);
+  if (signature == 0x4D42) {
+    read32(bmpFile); // File size
+    read32(bmpFile); // Reserved
+    seekOffset = read32(bmpFile);
+    read32(bmpFile); // Header size
+    w = read32(bmpFile);
+    h = read32(bmpFile);
+
+    if (sprite && ((x + w > sprite->width()) || (y + h > sprite->height()))) {
+      free(lineBuffer);
+      bmpFile.close();
+      return 0; //sprite cannot handle out of bounds
+    }
+
+    bool planes=true, bitDepth=true, nocompression=true; 
+    if (read16(bmpFile) != 1) planes = false;
+    if (read16(bmpFile) != 24) bitDepth = false;
+    if (read32(bmpFile) != 0) nocompression = false;
+
+    if (planes && bitDepth && nocompression) {
+      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
+      size_t rowBytes = (size_t)w * 3 + padding;
+      size_t outBytes = (size_t)w * 2;
+
+      if (rowBytes + outBytes > lineBufSize) {
+        free(lineBuffer);
+        bmpFile.close();
+        return -3; //error with rowBytes + outBytes > lineBufSize
+      }
+
+      // BMPs are stored bottom-to-top
+      uint16_t currentY = y + h - 1;
+      bmpFile.seek(seekOffset);
+
+      uint8_t* row24 = lineBuffer;
+      uint16_t* row16 = (uint16_t*)(lineBuffer + rowBytes);
+
+      // Handle byte swapping logic for direct TFT draw
+      bool oldSwapBytes = tft.getSwapBytes();
+      if (!sprite) tft.setSwapBytes(true);
+
+      for (row = 0; row < h; row++) {
+        if (bmpFile.read(row24, rowBytes) != (int)rowBytes) break;
+
+        for (col = 0; col < w; col++) {
+          b = row24[col * 3 + 0];
+          g = row24[col * 3 + 1];
+          r = row24[col * 3 + 2];
+          // Convert to RGB565
+          row16[col] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        }
+
+        if (sprite) {
+          // Push to Sprite
+          sprite->pushImage(x, currentY--, w, 1, row16);
+        } else {
+          // Push to Screen
+          tft.pushImage(x, currentY--, w, 1, row16);
+        }
+      }
+      if (!sprite) tft.setSwapBytes(oldSwapBytes);
+    } else {
+      free(lineBuffer);
+      bmpFile.close();
+      if (!planes) StoreError("BMP Error with planes", ERROR_BMP_PLANES, true);
+      if (!bitDepth) StoreError("BMP Error with bitDepth", ERROR_BMP_BITDEPTH, true);
+      if (!nocompression) StoreError("BMP Error with compression", ERROR_BMP_COMPRESSION, true);
+      return -4; //error with file header
+
+    }
+  }
+  bmpFile.close();
+  free(lineBuffer);
+  return 1;
+}
+
+
+/*
 void drawBmp(const char *filename, int16_t x, int16_t y,  uint16_t alpha) {
+
   if ((x >= tft.width()) || (y >= tft.height())) return;
 
   File bmpFile = SD.open(filename, FILE_READ);
   if (!bmpFile) {
     
-      SerialPrint("File not found: ",false);
-      SerialPrint(filename,true);
+      SerialPrint("File not found: ",false,5);
+      SerialPrint(filename,true,5);
+      storeError("drawBmp: File not found: " + String(filename), ERROR_SD_FILEREAD, true);
     
     return;
   }
@@ -148,6 +286,13 @@ void drawBmp(const char *filename, int16_t x, int16_t y,  uint16_t alpha) {
   uint16_t w, h, row, col;
   uint8_t  r, g, b;
   uint32_t startTime = millis();
+
+  const size_t lineBufSize = 1024 * 2; // 2K for 24-bit row + headroom
+  uint8_t* lineBuffer = (uint8_t*)ps_malloc(lineBufSize);
+  if (!lineBuffer) {
+    bmpFile.close();
+    return;
+  }
 
   uint16_t signature = read16(bmpFile);
   if (signature == 0x4D42) {
@@ -159,32 +304,105 @@ void drawBmp(const char *filename, int16_t x, int16_t y,  uint16_t alpha) {
     h = read32(bmpFile);
 
     if ((read16(bmpFile) == 1) && (read16(bmpFile) == 24) && (read32(bmpFile) == 0)) {
-      y += h - 1;
+      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
+      size_t rowBytes = (size_t)w * 3 + padding;
+      size_t outBytes = (size_t)w * 2;
+      if (rowBytes + outBytes > lineBufSize) {
+        free(lineBuffer);
+        bmpFile.close();
+        return;
+      }
 
+      y += h - 1;
       bool oldSwapBytes = tft.getSwapBytes();
       tft.setSwapBytes(true);
       bmpFile.seek(seekOffset);
 
-      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-      uint8_t lineBuffer[w * 3 + padding];
+      uint8_t* row24 = lineBuffer;           // 24-bit BGR input row
+      uint16_t* row16 = (uint16_t*)(lineBuffer + rowBytes);  // 16-bit RGB565 output row (no overlap)
 
       for (row = 0; row < h; row++) {
-        bmpFile.read(lineBuffer, sizeof(lineBuffer));
-        uint8_t*  bptr = lineBuffer;
-        uint16_t* tptr = (uint16_t*)lineBuffer;
-        // Convert 24 to 16 bit colours
+        if (bmpFile.read(row24, rowBytes) != (int)rowBytes) break;
         for (uint16_t col = 0; col < w; col++) {
-          b = *bptr++;
-          g = *bptr++;
-          r = *bptr++;
-          *tptr++ = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+          b = row24[col * 3 + 0];
+          g = row24[col * 3 + 1];
+          r = row24[col * 3 + 2];
+          row16[col] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
         }
-        // Push the pixel row to screen, pushImage will crop the line if needed
-        // y is decremented as the BMP image is drawn bottom up
-        tft.pushImage(x, y--, w, 1, (uint16_t*)lineBuffer);
+        tft.pushImage(x, y--, w, 1, row16);
       }
       tft.setSwapBytes(oldSwapBytes);
     }
+  }
+  bmpFile.close();
+  free(lineBuffer);
+}
+*/
+
+void loadBmpToSprite(LGFX_Sprite &sprite, const char *filename, int16_t sx, int16_t sy) {
+  File bmpFile = SD.open(filename, FILE_READ);
+  if (!bmpFile) {
+    Serial.print("File not found: ");
+    Serial.println(filename);
+    return;
+  }
+
+  uint32_t seekOffset;
+  uint16_t w, h, row, col;
+  uint8_t r, g, b;
+
+  // Read BMP Header
+  uint16_t signature = read16(bmpFile);
+  if (signature != 0x4D42) {
+    bmpFile.close();
+    return;
+  }
+
+  read32(bmpFile); // File size
+  read32(bmpFile); // Reserved
+  seekOffset = read32(bmpFile);
+  read32(bmpFile); // Header size
+  w = read32(bmpFile);
+  h = read32(bmpFile);
+
+  // Check if 24-bit and uncompressed
+  if ((read16(bmpFile) == 1) && (read16(bmpFile) == 24) && (read32(bmpFile) == 0)) {
+    uint16_t padding = (4 - ((w * 3) & 3)) & 3;
+    size_t rowBytes = (size_t)w * 3 + padding;
+    
+    // Allocate buffer for one row of 24-bit data
+    uint8_t* rowBuffer = (uint8_t*)ps_malloc(rowBytes);
+    if (!rowBuffer) {
+      bmpFile.close();
+      return;
+    }
+
+    bmpFile.seek(seekOffset);
+
+    // BMPs are stored bottom-to-top. 
+    // We iterate through rows and draw from (sy + h - 1) down to sy.
+    for (row = 0; row < h; row++) {
+      if (bmpFile.read(rowBuffer, rowBytes) != (int)rowBytes) break;
+      
+      int16_t pixelY = sy + (h - 1 - row);
+      
+      // Safety check: don't draw outside sprite boundaries
+      if (pixelY < 0 || pixelY >= sprite->height()) continue;
+
+      for (col = 0; col < w; col++) {
+        int16_t pixelX = sx + col;
+        if (pixelX < 0 || pixelX >= sprite->width()) continue;
+
+        b = rowBuffer[col * 3 + 0];
+        g = rowBuffer[col * 3 + 1];
+        r = rowBuffer[col * 3 + 2];
+
+        // Convert to RGB565 and push to sprite
+        uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        sprite->drawPixel(pixelX, pixelY, color);
+      }
+    }
+    free(rowBuffer);
   }
   bmpFile.close();
 }
@@ -357,6 +575,55 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
 } 
 
 // Text drawing functions
+
+void fcnPrintTxtCenter(String msg, byte FNTSZ, int x, int y, uint16_t color1, uint16_t color2, uint16_t bgcolor, LGFX_Device* target) {
+  // Default to the global 'tft' object if no target is provided
+  // Using LovyanGFX's base class allows this to work for both screen and sprites
+  auto& canvas = (target != nullptr) ? *target : tft;
+
+  int X, Y;
+  // Set the font and get height. setFont in LGFX returns font height.
+  uint32_t FH = canvas.setFont(setFont(FNTSZ)); 
+
+  // Calculate width using the canvas's current font
+  int textW = canvas.textWidth(msg);
+
+  if (x >= 0 && y >= 0) {
+      X = x - textW / 2;
+      if (X < 0) X = 0;
+      Y = y - (int)FH / 2;
+      if (Y < 0) Y = 0;
+  } else {
+      X = x;
+      Y = y;
+  }
+
+  canvas.setCursor(X, Y);
+
+  if (color1 == color2) {
+      canvas.setTextColor(color1, bgcolor);
+      canvas.print(msg.c_str());
+  } else {
+      int slashIdx = msg.indexOf("/");
+      if (slashIdx != -1) {
+          canvas.setTextColor(color1, bgcolor);
+          canvas.print(msg.substring(0, slashIdx).c_str());
+          
+          canvas.setTextColor(FG_COLOR, BG_COLOR);
+          canvas.print("/");
+          
+          canvas.setTextColor(color2, bgcolor);
+          canvas.print(msg.substring(slashIdx + 1).c_str());
+      } else {
+          // Fallback if no slash is found despite different colors
+          canvas.setTextColor(color1, bgcolor);
+          canvas.print(msg.c_str());
+      }
+  }
+
+  canvas.setTextDatum(text_datum_t::top_left);
+}
+/* old function that was restricted to tft, modified to work with sprite and tft now
 void fcnPrintTxtCenter(int msg,byte FNTSZ, int x, int y, uint16_t color1, uint16_t color2, uint16_t bgcolor) {
   String t = (String) msg + "";
   fcnPrintTxtCenter(t, FNTSZ,  x,  y, color1,  color2, bgcolor);
@@ -391,10 +658,8 @@ if (color1==color2) {
 tft.setTextDatum(TL_DATUM);
     
 return;
-
-
 }
-
+*/
 
 void fcnPrintTxtHeatingCooling(int X,int Y) {
 
@@ -537,30 +802,21 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
 
 } 
 
+
+
 // Screen drawing functions
 void fcnDrawHeader() {
-  //redraw header every  [flagged change, isheat, iscool] changed  or every new hour
+  //the header is on screen N, and is element 1
 
 
-  if (((bitRead(I.EventFlags,0) != bitRead(I.EventFlags,1)) || (I.isFlagged!=I.wasFlagged || I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat) ) || I.lastHeaderTime+I.cycleHeaderMinutes*60<I.currentTime)     {
-    I.lastHeaderTime = I.currentTime;
-    if (I.wasFlagged != I.isFlagged || bitRead(I.EventFlags,0) != bitRead(I.EventFlags,1)) I.lastFlagViewTime = 0; //set the flag view time to 0 so we can show flags
-
-    bitWrite(I.EventFlags,1,bitRead(I.EventFlags,0)); //set bit 1 to the value of bit 0
-    I.wasFlagged = I.isFlagged;
-    I.wasAC = I.isAC;
-    I.wasFan = I.isFan;
-    I.wasHeat = I.isHeat;
-  }   else return;
-
-
-  tft.fillRect(0,0,tft.width(),I.HEADER_Y,BG_COLOR); //clear the header area
+  //clear the header area
+  GRAPHICS.clearScreenArea(0,1);
 
   //draw header    
   String st = "";
-  uint16_t x = 0,y=0;
+  uint16_t x = GRAPHICS.SCREEN_0[1].X,y=GRAPHICS.SCREEN_0[1].Y;
   uint32_t FH = setFont(4);
-  tft.setCursor(0,0);
+  tft.setCursor(x,y);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   
   tft.setTextDatum(TL_DATUM);
@@ -569,7 +825,6 @@ void fcnDrawHeader() {
   x += tft.textWidth(st)+10;
   
 
-  y=4;
   tft.setTextDatum(TL_DATUM);
   FH = setFont(2);
 
@@ -577,7 +832,7 @@ void fcnDrawHeader() {
   if (I.isFlagged) {
     tft.setTextFont(2);
     tft.setTextColor(tft.color565(255,0,0),BG_COLOR); //without second arg it is transparent background
-    tft.drawString("FLAG",x,y);
+    tft.drawString("FLAG",x,y+4);
     tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   }
   x += tft.textWidth("FLAG")+10;
@@ -589,335 +844,461 @@ void fcnDrawHeader() {
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
 
-//add heat and AC icons to right 
-  if ((I.isHeat&1)==1) {
-    st="/Icons/HVAC/flame.bmp";
-    drawBmp(st.c_str(),tft.width()-30,0);
+  if (bitRead(I.WeatherEventFlags,0) == 1) {
+    st=WeatherData.alertInfo.event;
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_RED,BG_COLOR); 
+
+    tft.drawString(st,x,y+4);
+
+    x += tft.textWidth(st)+4;
+    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+
+  } else {
+
+    //add heat and AC icons to right 
+    if ((I.isHeat&1)==1) {
+      st="/Icons/HVAC/flame.bmp";
+      drawBmp(st.c_str(),GRAPHICS.SCREEN_0[1].W-30,y);
+    }
+    if ((I.isAC&1)==1) {
+      st="/Icons/HVAC/ac30.bmp";
+      drawBmp(st.c_str(),GRAPHICS.SCREEN_0[1].W-65,y);
+    }
+
   }
-  if ((I.isAC&1)==1) {
-    st="/Icons/HVAC/ac30.bmp";
-    drawBmp(st.c_str(),tft.width()-65,0);
-  }
+
    
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
   
 
   FH = setFont(2);
-
-//check if weather alerts. If yes, then display a red !!# in the upper right
-
-  if (WeatherData.NumWeatherEvents > 0) {
-    uint32_t FH = setFont(4);
-    tft.setTextColor(TFT_RED,TFT_BLUE); //without second arg it is transparent background
-    
-    tft.setTextDatum(TR_DATUM);
-    String st = "!!" + (String) WeatherData.NumWeatherEvents;
-    tft.drawString(st,tft.width()-10,0);
-  }
   //draw a  bar below header
   tft.fillRect(0,25,tft.width(),5, FG_COLOR);
+
+
+
+  //reset the draw timer.
+  GRAPHICS.GRAPHICS_TIMERS.Timers[1] = GRAPHICS.GRAPHICS_TIMERS.Timer0_RESET[1];
+
+  
 
   return;
 }
 
+void fcnDrawDailyWeather() {
+  return;
+}
+
+void fcnDrawHourlyWeather() {
+  return;
+}
+
+
 void fcnDrawScreen() {
-  
+  //screen 0 - main weather screen
+//screen 1 - sensor info screen
+//screen 2 - WeatherAlerts screen
+//screen 3 - daily weather info screen
+//screen 4 - hourly weather info screen
+//screen 5 - status screen
+
+
   if(WiFi.status()!= WL_CONNECTED){  
     screenWiFiDown();
+    return;
   }
 
-  if (I.ScreenNum==0 ) {    
-    if (I.oldScreenNum!=I.ScreenNum) { //switched from another screen 
-      I.lastHeaderTime=0; //last time header was drawn
-      I.lastWeatherTime=0; //last time weather was drawn
-      I.lastCurrentConditionTime=0; //last time current condition was drawn
-      I.lastClockDrawTime=0; //last time clock was updated, whether flag or not
-      I.lastFutureConditionTime=0; //last time future condition was drawn      
-      I.ScreenNum=0;
-      I.oldScreenNum = I.ScreenNum;
-      tft.fillScreen(BG_COLOR);
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      tft.setCursor(0,0);
-    }
-    fcnDrawClock(); 
-    fcnDrawHeader();
-    fncDrawCurrentCondition();
-    fcnDrawCurrentWeather();
-    fcnDrawFutureWeather();
-  } else {
-    if (I.ScreenNum==1 && I.oldScreenNum!=I.ScreenNum) {
-      fcnDrawSensorScreen();
-        I.oldScreenNum = I.ScreenNum;
-    } else {
-      if ((I.ScreenNum==2 || I.ScreenNum==3 || I.ScreenNum==4) && I.oldScreenNum!=I.ScreenNum) { //draw config or confirm
-        fcnDrawStatus();
-        I.oldScreenNum = I.ScreenNum;
-      } else {
-        if (I.ScreenNum>4 && I.oldScreenNum!=I.ScreenNum) { //draw sensor info
-          fcnDrawSensorInfo();
-          I.oldScreenNum = I.ScreenNum;
-        }
-      }
-    }
+  if (GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange == 0 && GRAPHICS.Screen_Now != SCREEN_MAIN) {
+    GRAPHICS.Screen_Next = SCREEN_MAIN;
+    GRAPHICS.SubScreen_Next = 0;
+    GRAPHICS.GRAPHICS_TIMERS.forceRedraw_MAIN = true;
+    GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange = GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET;
   }
+
+  //the current desired screen is different what was last drawn... prep for that change
+  if (GRAPHICS.SubScreen_Next != GRAPHICS.SubScreen_Now || GRAPHICS.Screen_Next!=GRAPHICS.Screen_Now) {
+    GRAPHICS.clearScreenArea(0,0);
+  }
+
+  if (GRAPHICS.Screen_Next!=GRAPHICS.Screen_Now) {
+    GRAPHICS.SubScreen_Next = 0;
+
+    if (GRAPHICS.Screen_Next==SCREEN_MAIN)       GRAPHICS.GRAPHICS_TIMERS.forceRedraw_MAIN = true;
+    
+  }
+
+
+  if (GRAPHICS.Screen_Next==SCREEN_MAIN ) fcnDrawMainScreen(); 
+  else if (GRAPHICS.Screen_Now==GRAPHICS.Screen_Next &&  GRAPHICS.SubScreen_Now==GRAPHICS.SubScreen_Next) return; //no screen update needed
+  else if (GRAPHICS.Screen_Next==SCREEN_SENSORS ) fcnDrawSensorScreen();
+  else if (GRAPHICS.Screen_Next==SCREEN_ALERT )      fcnDrawAlertScreen();
+  else if (GRAPHICS.Screen_Next==SCREEN_DAILY )      fcnDrawDailyWeather();
+  else if (GRAPHICS.Screen_Next==SCREEN_HOURLY )      fcnDrawHourlyWeather();  
+  else if (GRAPHICS.Screen_Next==SCREEN_STATUS )      fcnDrawStatus();  
+
+GRAPHICS.Screen_Now = GRAPHICS.Screen_Next;
+GRAPHICS.SubScreen_Now = GRAPHICS.SubScreen_Next;
+
+  return;
+}
+
+void fcnDrawMainScreen() {
+  if (GRAPHICS.GRAPHICS_TIMERS.Timers[6] == 0 ) fcnDrawClock(); 
+  if (GRAPHICS.GRAPHICS_TIMERS.Timers[1] == 0) fcnDrawHeader();
+  if (GRAPHICS.GRAPHICS_TIMERS.Timers[3] == 0 ) fcnDrawCurrentWeatherText();  
+  if (GRAPHICS.GRAPHICS_TIMERS.Timers[2] == 0 ) fcnDrawCurrentWeatherIconOrAlert();
+  if (GRAPHICS.GRAPHICS_TIMERS.Timers[4] == 0 ) fcnDrawFutureWeather();
+  return;
+}
+
+
+void fcnDrawNavButtons(const char* buttonText[6]) {
+  //clear the nav buttons area
+  tft.fillRect(0,GRAPHICS.Y_SCRALL_NAVBUTTONS,tft.width(),tft.height()-GRAPHICS.Y_SCRALL_NAVBUTTONS,BG_COLOR);
+  tft.setTextFont(2);
+  tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
+  tft.setTextDatum(MC_DATUM);
+  
+  byte width = GRAPHICS.buttonWidth-GRAPHICS.buttonInteriorMargin*2;
+  byte height = GRAPHICS.buttonWidth-GRAPHICS.buttonInteriorMargin*2;
+  uint16_t y = GRAPHICS.Y_SCRALL_NAVBUTTONS + GRAPHICS.buttonInteriorMargin;
+
+  //draw 6 boxes across the nav bar
+  for (byte k=0;k<6;k++) {
+
+    uint16_t x = k*GRAPHICS.buttonWidth + GRAPHICS.buttonInteriorMargin;
+
+    tft.fillRoundRect(x,y,width,height,10,TFT_LIGHTGREY);
+    tft.setTextColor(TFT_BLACK,TFT_LIGHTGREY);
+    fcnPrintTxtCenter(buttonText[k],2, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
+  }
+  tft.setTextColor(FG_COLOR,BG_COLOR);  
+  tft.setTextDatum(TL_DATUM);
+}
+
+
+void fcnDrawAlertScreen() {
+  String text;
+  text.reserve(1000); 
+  tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
+  tft.setCursor(0,0);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(4);
+  tft.setTextColor(TFT_RED,BG_COLOR);
+
+  if (WeatherData.NumWeatherEvents == 0) {
+    text = "No Weather Alerts\n";
+    tft.drawString(text,0,0);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    return;
+  } else {
+
+    //there is an alert, load the full details.
+    WeatherEventFile wEF;
+    wEF.getEvent(WeatherData.alertInfo.eventnumber);
+
+    text = "Weather Alert \n" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + "!! " + WeatherData.getAlertName(nullptr);
+    tft.drawString(text,0,0);
+    int16_t Y = tft.fontHeight(tft.getFont());
+
+    //draw the 180x80 icon next to the text
+    char tempbuf[45];
+    snprintf(tempbuf,44,"/Icons/Events/180x180/%s.bmp",wEF.phenomenon);
+    drawBmp(tempbuf,0,Y);
+    
+    text = "Severity: \n" + wEF.severity;
+    tft.drawString(text,184,Y);
+
+    text = "Urgency: \n" + wEF.urgency;
+    tft.drawString(text,184,Y+4+tft.fontHeight(tft.getFont()));
+
+    text = "Certainty: \n" + wEF.certainty;
+    tft.drawString(text,184,Y+8+tft.fontHeight(tft.getFont())*2);
+    
+    Y=Y+180+4;
+
+    setFont(1);
+    text = (String) wEF.event + "\nRecvd: " + String(dateify(WeatherData.lastAlertFetchTime,"mm/dd/yyyy hh:nn:ss")) + "\n" + "Start: " + String(dateify(WeatherData.alertInfo.time_start,"mm/dd/yyyy hh:nn:ss")) + "\n" +
+    "End: " + String(dateify(WeatherData.alertInfo.time_end,"mm/dd/yyyy hh:nn:ss")) + "\n" +
+    "Description: " + wEF.description;
+    tft.drawString(text,0,Y);
+
+    setFont(2);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  }
+  
   
   return;
 }
 
 
 void fcnDrawSensorInfo() {
-  byte boxnum = I.ScreenNum-10;
-  if (boxnum >= 0 && boxnum < MAXALARMS && alarms[boxnum] != 255) {
+  int16_t boxnum = GRAPHICS.SubScreen_Next;
+
+  if (boxnum < 0 || boxnum >= MAXALARMS || alarms[boxnum] == 255) {
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_RED,BG_COLOR);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("Sensor " + String(boxnum) + " not found",tft.width()/2,25);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    return;
+  }
+
 //figure out which sensor boxnum equates to    
-    ArborysSnsType* sensor = Sensors.snsIndexToPointer(alarms[boxnum]);
-    if (sensor && sensor->IsSet ) {
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(alarms[boxnum]);
+  if (!sensor || sensor->IsSet == 0) {
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_RED,BG_COLOR);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("Sensor not found",tft.width()/2,25);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+    return;
+  }
 
 
-    int16_t X=0,graphstart=0, graphheight=150,graphwidth=300;
-   byte rightmargin=5;
+  int16_t X=0,graphstart=0, graphheight=150,graphwidth=300;
+  byte rightmargin=5;
   
-    tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
-    tft.setTextFont(2);
+  tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
+  tft.setTextFont(2);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setCursor(0,0);
+  tft.printf("Sensor Info for sensor %s",sensor->snsName);
+  graphstart+=tft.fontHeight(tft.getFont())+4;
+
+  //draw an xy graph of the historical sensor data
+
+  //get the historical sensor data
+  
+  byte N=100;
+  uint32_t  endtime=-1;
+  
+  uint32_t t[N]={0};
+  double v[N]={0};
+  uint8_t f[N]={0};
+  
+  bool success=false;
+  success = retrieveSensorDataFromSD(Sensors.getDeviceMACBySnsIndex(alarms[boxnum]), sensor->snsType, sensor->snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
+  uint32_t maxt=0, mint=UINT32_MAX;
+  double maxv=0, minv=1000000;
+
+  if (success) {
+    tft.fillRect(0,graphstart,tft.width(),graphheight,BG_COLOR); //grid will be tft.width() wide and 100 pixels high
+    tft.setTextFont(1);
+    tft.drawLine(0,graphstart+graphheight,tft.width()-rightmargin,graphstart+graphheight,FG_COLOR);
+    
+    //find max and min of v
+    for (byte k=0;k<N;k++) {
+      if (v[k]>maxv) maxv=v[k];
+      if (v[k]<minv) minv=v[k];
+      if (t[k]>maxt) maxt=t[k];
+      if (t[k]<mint) mint=t[k];
+    }
+
+    //draw the y axis labels
+    tft.setTextFont(0);
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.setCursor(0,0);
-    tft.printf("Sensor Info for sensor %s",sensor->snsName);
-    graphstart+=tft.fontHeight(tft.getFont())+4;
+    tft.setCursor(0,graphstart);
+    tft.printf("%.0f",maxv);
+    tft.setCursor(0,graphstart+graphheight-tft.fontHeight(tft.getFont())-4);
+    tft.printf("%.0f",minv);
+    //draw the x axis labels
+    tft.setCursor(tft.width()-graphwidth,graphstart+graphheight+tft.fontHeight(tft.getFont())+4);
+    tft.printf("%s",dateify(mint,"mm/dd/yyyy hh:nn:ss"));
+    tft.setCursor(tft.width()-tft.textWidth("mm/dd/yyyy hh:nn:ss"),graphstart+graphheight+tft.fontHeight(tft.getFont())+4);
+    tft.printf("%s",dateify(maxt,"mm/dd/yyyy hh:nn:ss"));
 
-    //draw an xy graph of the historical sensor data
+    //draw a vertical line at the start of the graph
+    tft.drawLine(tft.width()-graphwidth,graphstart,tft.width()-graphwidth,graphstart+graphheight,FG_COLOR);
 
-    //get the historical sensor data
-    
-    byte N=100;
-    uint32_t  endtime=-1;
-    
-    uint32_t t[N]={0};
-    double v[N]={0};
-    uint8_t f[N]={0};
-    
-    bool success=false;
-    success = retrieveSensorDataFromSD(Sensors.getDeviceMACBySnsIndex(alarms[boxnum]), sensor->snsType, sensor->snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
-    SerialPrint(String("Success: ") + success + " N: " + N + "\n");
-    uint32_t maxt=0, mint=UINT32_MAX;
-    double maxv=0, minv=1000000;
-
-    if (success) {
-      tft.fillRect(0,graphstart,tft.width(),graphheight,BG_COLOR); //grid will be tft.width() wide and 100 pixels high
-      tft.setTextFont(1);
-      tft.drawLine(0,graphstart+graphheight,tft.width()-rightmargin,graphstart+graphheight,FG_COLOR);
-      
-      //find max and min of v
-      for (byte k=0;k<N;k++) {
-        if (v[k]>maxv) maxv=v[k];
-        if (v[k]<minv) minv=v[k];
-        if (t[k]>maxt) maxt=t[k];
-        if (t[k]<mint) mint=t[k];
-      }
-
-      //draw the y axis labels
-      tft.setTextFont(0);
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      tft.setCursor(0,graphstart);
-      tft.printf("%.0f",maxv);
-      tft.setCursor(0,graphstart+graphheight-tft.fontHeight(tft.getFont())-4);
-      tft.printf("%.0f",minv);
-      //draw the x axis labels
-      tft.setCursor(tft.width()-graphwidth,graphstart+graphheight+tft.fontHeight(tft.getFont())+4);
-      tft.printf("%s",dateify(mint,"mm/dd/yyyy hh:nn:ss"));
-      tft.setCursor(tft.width()-tft.textWidth("mm/dd/yyyy hh:nn:ss"),graphstart+graphheight+tft.fontHeight(tft.getFont())+4);
-      tft.printf("%s",dateify(maxt,"mm/dd/yyyy hh:nn:ss"));
-
-      //draw a vertical line at the start of the graph
-      tft.drawLine(tft.width()-graphwidth,graphstart,tft.width()-graphwidth,graphstart+graphheight,FG_COLOR);
-
-      double oldtval = -1;
-      //draw pixels representing each [time,value]. Scale to maxv and minv to fit in 100 pixel height and 300 pixel width, and to maxt and mint to fit in 300 pixel width
-      for (byte k=0;k<N;k++) {
-        //ensure pixels do not overlap
-        double tval = (double)(t[k]-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
-        //SerialPrint(String("tval: ") + tval + " oldtval: " + oldtval + "\n");
-        if ((int) tval != (int) oldtval || k==N-1) { //draw the last pixel no matter what
-          double vscale = (v[k]-minv)/(maxv-minv)*graphheight;          
-          if (bitRead(f[k],0)==1) {
-            tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_RED);
-          } else {
-            tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_GREEN);
-          }
-          oldtval = tval;
+    double oldtval = -1;
+    //draw pixels representing each [time,value]. Scale to maxv and minv to fit in 100 pixel height and 300 pixel width, and to maxt and mint to fit in 300 pixel width
+    for (byte k=0;k<N;k++) {
+      //ensure pixels do not overlap
+      double tval = (double)(t[k]-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
+      //SerialPrint(String("tval: ") + tval + " oldtval: " + oldtval + "\n");
+      if ((int) tval != (int) oldtval || k==N-1) { //draw the last pixel no matter what
+        double vscale = (v[k]-minv)/(maxv-minv)*graphheight;          
+        if (bitRead(f[k],0)==1) {
+          tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_RED);
+        } else {
+          tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_GREEN);
         }
+        oldtval = tval;
       }
-      double tval = (double)(sensor->timeLogged-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
-      double vscale = (sensor->snsValue-minv)/(maxv-minv)*graphheight;          
-      tft.fillCircle(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),2,TFT_GOLD); //most recent value
     }
-    tft.setTextFont(2);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.setCursor(0,graphstart+graphheight+tft.fontHeight(tft.getFont())*2);
-    tft.printf("Min: %.02f\n",minv);
-    if (bitRead(sensor->Flags,0)==1) {
-      tft.setTextColor(TFT_RED,BG_COLOR);
-    } else {
-      tft.setTextColor(TFT_GREEN,BG_COLOR);
-    }
-    tft.printf("Current: %0.02f\n",sensor->snsValue);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.printf("Max: %.02f\n",maxv);
+    double tval = (double)(sensor->timeLogged-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
+    double vscale = (sensor->snsValue-minv)/(maxv-minv)*graphheight;          
+    tft.fillCircle(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),2,TFT_GOLD); //most recent value
+  }
+  tft.setTextFont(2);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setCursor(0,graphstart+graphheight+tft.fontHeight(tft.getFont())*2);
+  tft.printf("Min: %.02f\n",minv);
+  if (bitRead(sensor->Flags,0)==1) {
+    tft.setTextColor(TFT_RED,BG_COLOR);
+  } else {
+    tft.setTextColor(TFT_GREEN,BG_COLOR);
+  }
+  tft.printf("Current: %0.02f\n",sensor->snsValue);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.printf("Max: %.02f\n",maxv);
 
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    tft.printf("Device IP:%s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
-    tft.printf("Sns type: %d\n",sensor->snsType);
-    tft.printf("Sns ID: %d\n",sensor->snsID);
-    tft.printf("Sns name: %s\n",sensor->snsName);
-    tft.printf("Sns last logged: %s\n",dateify(sensor->timeLogged,"mm/dd/yyyy hh:nn:ss"));
-    tft.printf("Sns flags: %s\n",String(sensor->Flags,BIN).c_str());
-
-    } else tft.printf("Sensor not set");
-    } else {
-      tft.setTextFont(2);
-      tft.setTextColor(TFT_RED,BG_COLOR);
-      tft.setCursor(tft.width()-150,tft.height()-25);
-      tft.printf("Sensor not found");
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      I.ScreenNum=1;
-      I.screenChangeTimer = 30;
-    }
-
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.printf("Device IP:%s\n",Sensors.getDeviceIPBySnsIndex(alarms[boxnum]).toString().c_str());
+  tft.printf("Sns type: %d\n",sensor->snsType);
+  tft.printf("Sns ID: %d\n",sensor->snsID);
+  tft.printf("Sns name: %s\n",sensor->snsName);
+  tft.printf("Sns last logged: %s\n",dateify(sensor->timeLogged,"mm/dd/yyyy hh:nn:ss"));
+  tft.printf("Sns flags: %s\n",String(sensor->Flags,BIN).c_str());
 
   return;
 }
 
-
 void fcnDrawSensorScreen() {
-        //on screen 1, draw the sensors. Touching a sensor box will move to screen 3, where that sensor's info will be displayed
-      //touching the bottom right corner will move to screen 2, where the status will be displayed
-      tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
-      tft.setTextFont(2);
-      tft.setTextColor(FG_COLOR,BG_COLOR);
-      tft.setCursor(0,0);
-      tft.printf("Sensors (Devices: %d; Sensors: %d)",Sensors.numDevices,Sensors.numSensors);
-      byte alarmcount = fcnGetAlarms(0,8,6);
-      fcnDrawSensors(0,18,8,6);
+  const char* buttonText[6] = {"Main", "Brdcst", "", "", "", ""};
+  byte alarmcount = fcnGetAlarms(0,8,6);
 
-      //draw a box at the bottom right corner of screen, that when pushed moves to next previous screen
-      tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-      tft.setCursor(25,tft.height()-25);
-      fcnPrintTxtCenter("Previous",1,25,tft.height()-25);
+ if (GRAPHICS.SubScreen_Next >0 && GRAPHICS.SubScreen_Next < 100) {    
+    fcnDrawNavButtons(buttonText);  
+    fcnDrawSensorInfo();    
+    return;
+  } 
+  else if (GRAPHICS.SubScreen_Next == 101) {    
+    //go to main
+    GRAPHICS.Screen_Next = SCREEN_MAIN;
+    GRAPHICS.SubScreen_Next = 0;
+    return;
+  }
+  else if (GRAPHICS.SubScreen_Next == 102) {
+    //broadcast my presence
+    broadcastServerPresence(true, 2);
+    tft.setTextFont(4);
+    tft.printf("Broadcast sent\n");
+    tft.setTextFont(2);
+    tft.printf("You must return to the main screen before retrying a broadcast.\n");
 
-      tft.fillRoundRect(54,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-      tft.setCursor(54+25,tft.height()-25);
-      fcnPrintTxtCenter("Next",1,54+25,tft.height()-25);
+    fcnDrawNavButtons(buttonText);  
+    return;
+  }
+
+
+  fcnDrawNavButtons(buttonText);  
+
+  tft.setTextFont(2);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  tft.setCursor(0,0);
+  fcnDrawSensors(0,18,8,6);
+  tft.setCursor(0,tft.height()-GRAPHICS.buttonWidth-20);
+  tft.printf("Sensors (Devices: %d; Sensors: %d; Alarms: %d)",Sensors.numDevices,Sensors.numSensors,alarmcount);
+
 
   return;
 }
 
 void fcnDrawStatus() {
+
+    
+  if (GRAPHICS.SubScreen_Next == 2) {    
+    tft.setTextFont(2);
+    tft.printf("Are you sure?\n");
+    tft.setTextFont(1);
+    tft.printf("This will delete stored screen data\n");
+    tft.printf("and reset screen defaults.\n");
+    tft.printf("The device will reboot.\n");
+    tft.printf("This will not delete sensor data.\n");
+    tft.printf("Confirm to continue.\n");
+    tft.printf("Touch anywhere else to abort.\n");
+
+    const char* altButtonText[6] = {"Confirm","Abort","","","",""};
+    fcnDrawNavButtons(altButtonText);  
+    return;
+  } 
+  else if (GRAPHICS.SubScreen_Next == 3) {
+    tft.printf("Are you sure?\n");
+    tft.setTextFont(1);
+    tft.printf("This will delete stored screen data\n");
+    tft.printf("and WiFi Settings.\n");
+    tft.printf("The device will reboot.\n");
+    tft.printf("This will not delete sensor data.\n");
+    tft.printf("Confirm to continue.\n");
+    tft.printf("Touch anywhere else to abort.\n");
+
+    const char* altButtonText[6] = {"Confirm","Abort","","","",""};
+    fcnDrawNavButtons(altButtonText);  
+    return;
+
+  }
+  else if (GRAPHICS.SubScreen_Next == 101) {
+    deleteCoreStruct(); //delete the screen flags file        
+    controlledReboot("Reset I",RESET_USER,true); //reset the device
+    return;
+  }
+  else if (GRAPHICS.SubScreen_Next == 102) {
+    deleteCoreStruct(); //delete the screen flags file   
+    BootSecure bootSecure;
+    if (!bootSecure.flushPrefs()) {
+      tft.setTextColor(TFT_RED);
+      tft.setCursor(0,tft.height()-75);
+      tft.println("Failed to reset settings");
+      tft.setTextColor(FG_COLOR);
+      delay(2000);
+    }
+    controlledReboot("Reset All",RESET_USER,true); //reset the device
+    return;
+  }
+
+  const char* buttonText[6] = {"Main","Del Core","Del All","","",""};
+  fcnDrawNavButtons(buttonText);  
+  
   //draw config screen
-  tft.fillRect(0,0,tft.width(),tft.height(),BG_COLOR);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
   tft.setTextDatum(TL_DATUM);  
-  if (I.ScreenNum==2) {
-    tft.setTextFont(1);
-    tft.println("Status");
-    tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
-    tft.printf("Device IP:\n");
-    tft.printf("Version: %s\n",PROJECT_VER);
-    tft.setTextFont(2);
-    tft.printf("%s\n",WiFi.localIP().toString().c_str());
-    tft.setTextFont(1);
-    tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("-----------------------\n");
-    tft.printf("LAN Messages Received today: %d\n",I.UDP_RECEIVES);    
-    tft.printf("LAN Messages Sent today: %d\n",I.UDP_SENDS);
-    tft.printf("HTTP Messages Received today: %d\n",I.HTTP_RECEIVES);
-    tft.printf("HTTP Messages Sent today: %d\n",I.HTTP_SENDS);
-    tft.printf("UDP Messages Received today: %d\n",I.UDP_RECEIVES);    
-    tft.printf("UDP Messages Sent today: %d\n",I.UDP_SENDS);
-    tft.printf("-----------------------\n");
+  tft.setTextFont(1);
+  tft.println("Status");
+  tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
+  tft.printf("Device IP:\n");
+  tft.printf("Version: %s\n",PROJECT_VER);
+  tft.setTextFont(2);
+  tft.printf("%s\n",WiFi.localIP().toString().c_str());
+  tft.setTextFont(1);
+  tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
+  tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
+  tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
+  tft.printf("-----------------------\n");
+  tft.printf("LAN Messages Received today: %d\n",I.UDP_RECEIVES);    
+  tft.printf("LAN Messages Sent today: %d\n",I.UDP_SENDS);
+  tft.printf("HTTP Messages Received today: %d\n",I.HTTP_RECEIVES);
+  tft.printf("HTTP Messages Sent today: %d\n",I.HTTP_SENDS);
+  tft.printf("UDP Messages Received today: %d\n",I.UDP_RECEIVES);    
+  tft.printf("UDP Messages Sent today: %d\n",I.UDP_SENDS);
+  tft.printf("-----------------------\n");
     
-    tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
-    tft.printf("Last Error: %s\n",I.lastError);
-    tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
-    tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
-    tft.printf("-----------------------\n");
-    tft.printf("Timezone: %ld \n", Prefs.TimeZoneOffset);
-    //if DST is enabled, print the DST offset and date of DST start and end
-    tft.printf("DST: ");
-    if (I.DST==1) tft.printf("Yes, %ld sec\n",I.DSTOffset);
-    else if (I.DST==0) tft.print("No\n");
-    else tft.print("Not used here\n");
-    if (I.DST>=0) {
-      tft.printf("DST Start: %s\n", dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
-      tft.printf("DST End: %s\n", dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
-    }
-
-    tft.printf("-----------------------\n");
-    tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
-    tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
-    tft.printf("Current Outside Temp: %d\n",I.currentOutsideTemp);
-    tft.printf("Current Outside Humidity: %d\n",I.currentOutsideHumidity);
-    tft.printf("Current Outside Pressure: %d\n",I.currentOutsidePressure);
-
-    tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-    fcnPrintTxtCenter("Clear",1,25,tft.height()-25-5);
-    fcnPrintTxtCenter("Flags",1,25,tft.height()-15-5);
-
-
-    //add a button to the right of the reset I button
-    tft.fillRoundRect(54,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-    fcnPrintTxtCenter("Fctry",1,54+25,tft.height()-25-5);
-    fcnPrintTxtCenter("Reset",1,54+25,tft.height()-15-5);
-    
-    //add a next button to the right of fctry reset
-    tft.fillRoundRect(108,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-    tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-    fcnPrintTxtCenter("Next",1,108+25,tft.height()-25);
-
-
-  } else {
-    if (I.ScreenNum==3) {
-      //draw confirm screen
-
-      tft.setTextFont(2);
-      tft.printf("Are you sure?\n");
-      tft.setTextFont(1);
-      tft.printf("This will delete stored screen data\n");
-      tft.printf("and reset screen defaults.\n");
-      tft.printf("The device will reboot.\n");
-      tft.printf("This will not delete sensor data.\n");
-      tft.printf("Touch CONFIRM to continue.\n");
-      tft.printf("Touch anywhere else to abort.\n");
-
-      tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-      tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-      tft.setCursor(25,tft.height()-25);
-      fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
-    } else {
-      if (I.ScreenNum==4) {
-        tft.setTextFont(2);
-        tft.printf("Are you sure?\n");
-        tft.setTextFont(1);
-        tft.printf("This will clear all settings .\n");
-        tft.printf("to factory defaults.\n");
-        tft.printf("The device will reboot.\n");
-        tft.printf("This will not delete sensor data.\n");
-        tft.printf("Touch CONFIRM to continue.\n");
-        tft.printf("Touch anywhere else to abort.\n");
-  
-        tft.fillRoundRect(0,tft.height()-50,50,50,10,TFT_LIGHTGREY);
-        tft.setTextColor(BG_COLOR,TFT_LIGHTGREY);
-        tft.setCursor(25,tft.height()-25);
-        fcnPrintTxtCenter("Confirm",1,25,tft.height()-25);
-  
-      }
-
-    }
+  tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
+  tft.printf("Last Error: %s\n",I.lastError);
+  tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
+  tft.printf("Reboots since last: %d\n",I.rebootsSinceLast);
+  tft.printf("-----------------------\n");
+  tft.printf("Timezone: %ld \n", Prefs.TimeZoneOffset);
+  //if DST is enabled, print the DST offset and date of DST start and end
+  tft.printf("DST: ");
+  if (I.DST==1) tft.printf("Yes, %ld sec\n",I.DSTOffset);
+  else if (I.DST==0) tft.print("No\n");
+  else tft.print("Not used here\n");
+  if (I.DST>=0) {
+    tft.printf("DST Start: %s\n", dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("DST End: %s\n", dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
   }
+
+  tft.printf("-----------------------\n");
+  tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
+  tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
+  tft.printf("Current Outside Temp: %d\n",I.currentOutsideTemp);
+  tft.printf("Current Outside Humidity: %d\n",I.currentOutsideHumidity);
+  tft.printf("Current Outside Pressure: %d\n",I.currentOutsidePressure);
+
 
 }
 
@@ -944,7 +1325,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   }
   
 //fill up to alarmsToDisplay alarm spots, and remember where we left off. Also, fill each sensor type before moving to the next sensor type
-  byte SensorIndex = I.alarmIndex;
+  byte SensorIndex = GRAPHICS.alarmIndex;
 
   if (whichSensors == 0) bitSet(whichSensors, 11); //all sensor types and flag states are allowed if whichSensors is 0
   String sensorType[10] = {"","","","","","","","","",""};
@@ -966,7 +1347,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
   byte alarmArrayInd = 0;
   for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
     if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
-    while (cycleByteIndex(SensorIndex,NUMSENSORS,I.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
+    while (cycleByteIndex(SensorIndex,NUMSENSORS,GRAPHICS.alarmIndex) == true && alarmArrayInd<(alarmsToDisplay)) {
       ArborysSnsType* sensor = Sensors.snsIndexToPointer(SensorIndex);
       if (!sensor || sensor->IsSet == 0) continue;
       if (!Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) continue; //only check sensors of this type
@@ -983,7 +1364,7 @@ if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
     }      
   } 
   byte count = alarmArrayInd;   
-  I.alarmIndex = SensorIndex;
+  GRAPHICS.alarmIndex = SensorIndex;
 
   return count;
 }
@@ -1032,45 +1413,35 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { //set whichsensor
 }
 
 void fcnDrawClock() {
-  
-  if (I.lastClockDrawTime==0 || (I.currentTime != I.lastClockDrawTime &&  second(I.currentTime)==0) || I.currentMinute != minute(I.currentTime)) {
-    I.lastClockDrawTime = I.currentTime;
-    I.currentMinute = minute(I.currentTime);
+  //the clock is on screen 0, and is element 6
 
-    int16_t X = tft.width();
-    uint8_t FNTSZ=8;
-    uint32_t FH = setFont(FNTSZ);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    char tempbuf[20];
-    int Y = tft.height() - I.CLOCK_Y;
-    tft.fillRect(0,Y,X,I.CLOCK_Y,BG_COLOR); //clear the  clock area
-    snprintf(tempbuf,16,"%s",dateify(I.currentTime,"h1:nn"));
-    fcnPrintTxtCenter((String) tempbuf,FNTSZ, X/2,Y+I.CLOCK_Y/2);
-  }
+  //clear the clock area
+  GRAPHICS.clearScreenArea(0,6);
 
+  //draw the clock
+  int16_t X = GRAPHICS.SCREEN_0[6].X + GRAPHICS.SCREEN_0[6].W/2;
+  int16_t Y = GRAPHICS.SCREEN_0[6].Y + GRAPHICS.SCREEN_0[6].H/2;
+  uint8_t FNTSZ=8;
+  uint32_t FH = setFont(FNTSZ);
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+  char tempbuf[20];
+  snprintf(tempbuf,16,"%s",dateify(I.currentTime,"h1:nn"));
+  fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y);
+
+  //reset the clock timer
+  GRAPHICS.GRAPHICS_TIMERS.Timers[6] = GRAPHICS.GRAPHICS_TIMERS.Timer0_RESET[6];
 
   return;
 }
 
-void fncDrawCurrentCondition() {
+void fcnDrawCurrentWeatherText() {
+  //clear the current weather text area, which is on screen 0, and is element 3
+  GRAPHICS.clearScreenArea(0,3);
 
-  //redraw current condition if 
-  //the last current temp does not match the current temp
-  //the current condition has not been updated in currentConditionInterval min
-
-  if ((uint32_t) (I.lastCurrentConditionTime!=0 && I.lastCurrentConditionTime + (uint32_t) I.cycleCurrentConditionMinutes*60 > I.currentTime)) {
-    return;
-  }
-
-  I.lastCurrentConditionTime = I.currentTime;
-  
   int FNTSZ = 8;
   uint32_t FH = setFont(FNTSZ);
-  int X = 180+(tft.width()-180)/2; //middle of area on side of icon
-  int Z = 10;
-  int Y = I.HEADER_Y;
-
-  tft.fillRect(180,Y,tft.width()-180,180,BG_COLOR); //clear the cc area
+  int16_t X = GRAPHICS.SCREEN_0[3].X + GRAPHICS.SCREEN_0[3].W/2; //middle of the area
+  int16_t Y = GRAPHICS.SCREEN_0[3].Y;
 
   String st = "";
   byte section_spacer = 3;
@@ -1092,20 +1463,17 @@ void fncDrawCurrentCondition() {
     Z = 2;
     tft.setCursor(X,Y+Z);
     tft.setTextColor(FG_COLOR,BG_COLOR);
-    fcnPrintTxtCenter(st,1,X,Y+Z+FH/2);    
-    
-      //Y+=FH+Z;
+    fcnPrintTxtCenter(st,1,X,Y+FH/2);    
+    Y=Y+FH+section_spacer;
   }
   
-  
+
   // draw current temp
   FH = setFont(FNTSZ);
-  X = 180+(tft.width()-180)/2; //middle of area on side of icon
-  Z = 10;
   tft.setTextColor(temp2color(I.currentOutsideTemp),BG_COLOR);
-  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+Z+FH/2);
+  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+FH/2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
-  Z+=FH+section_spacer;
+  Y=Y+FH+section_spacer;
 
   //print today max / min
     FNTSZ = 4;  
@@ -1119,10 +1487,10 @@ void fncDrawCurrentCondition() {
     I.Tmax = tempMaxmin[0];
     I.Tmin = tempMaxmin[1];
 
-    fcnPrintTxtCenter((String) I.Tmax + "/" + I.Tmin,FNTSZ,X,Y+Z+FH/2,temp2color(I.Tmax),temp2color(I.Tmin));  
+    fcnPrintTxtCenter((String) I.Tmax + "/" + I.Tmin,FNTSZ,X,Y+FH/2,temp2color(I.Tmax),temp2color(I.Tmin));  
     tft.setTextColor(FG_COLOR,BG_COLOR);
 
-    Z=Z+FH+section_spacer;
+    Y=Y+FH+section_spacer;
 
   //print pressure info
     uint16_t fg,bg;
@@ -1132,18 +1500,19 @@ void fncDrawCurrentCondition() {
     fcnPredictionTxt(tempbuf,&fg,&bg);
     tft.setTextColor(fg,bg);
     if (tempbuf[0]!=0) {// prediction made
-      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
-      Z=Z+FH+section_spacer;
-      FNTSZ=2;
+      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+FH/2);
+      Y=Y+FH+section_spacer;
     }
-    
+    FNTSZ=2;    
     FH = setFont(FNTSZ);
     tempbuf[0]=0;
     fcnPressureTxt(tempbuf,&fg,&bg);
-    tft.setTextColor(fg,bg);
-    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+Z+FH/2);
-    Z=Z+FH+section_spacer;
 
+    if (tempbuf[0]!=0) {
+      tft.setTextColor(fg,bg);
+      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+FH/2);
+      Y=Y+FH+section_spacer;
+    }
     FNTSZ = 4;
     FH = setFont(FNTSZ);
     if (WeatherData.flag_snow) snprintf(tempbuf,14,"Snow: %u%%",WeatherData.getDailyPoP(0));
@@ -1159,93 +1528,78 @@ void fncDrawCurrentCondition() {
 
   //end current wthr
   I.lastCurrentOutsideTemp = I.currentOutsideTemp;
+
+          //reset the timer
+
+          GRAPHICS.GRAPHICS_TIMERS.Timers[3] = GRAPHICS.GRAPHICS_TIMERS.Timer0_RESET[3];
+
   
   return;
 }
 
-void fcnDrawCurrentWeather() {
-//this function will draw the current weather image and any flags (either sensor flags or weather alerts)
-bool forceweather = false;
-bool forceflags = false;
+void fcnDrawCurrentWeatherIconOrAlert() {
 
-byte alarmcount = 0;
+  //this is element 2 on screen 0
 
-if (I.lastWeatherTime==0) forceweather=true;
-else {
-  if (bitRead(I.EventFlags,0) == 1) {
-    if (I.lastFlagViewTime==0 || (I.lastFlagViewTime < I.lastWeatherTime && I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime)) {
-      forceflags = true;
-    } else {
-      if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
-      else return; //not time to do anything yet
-    }
+  //if here we are going to draw over the sprite area. clear it.
+  tft.fillRect(GRAPHICS.SCREEN_0[2].X,GRAPHICS.SCREEN_0[2].Y,GRAPHICS.SCREEN_0[2].W,GRAPHICS.SCREEN_0[2].H,BG_COLOR);
+
+  //update the FlagsAndAlerts flag
+  if (bitRead(I.isFlagged,0) == 1) {
+    bitWrite(GRAPHICS.FlagsAndAlerts,0,1); //set bit 0 to 1 - there are flagged sensors
   } else {
-    //are we flagged or expired? - depends on which are flagged and when
-    if (I.isFlagged>0 || I.isExpired>0) {
-      if (I.lastFlagViewTime==0) {
-        alarmcount = fcnGetAlarms(-1,3,3);
-        if (alarmcount>0) forceflags=true;
-      } else {
-        if (I.lastFlagViewTime < I.lastWeatherTime) { //we are showing weather, not flags
-          if (I.lastWeatherTime + I.cycleFlagSeconds<I.currentTime) {
-            alarmcount = fcnGetAlarms(-1,3,3);
-            if (alarmcount>0) forceflags=true;
-          }          else return; //not time to do anything yet
-        } else {        //we are showing flags, not weather
-          if (I.lastFlagViewTime + I.cycleFlagSeconds<I.currentTime) forceweather=true; //showed flags for at least the cycle time and weather is due)
-          else return; //not time to do anything yet
-        }
-      }       
-    } else {       // No critical flagged sensors, show weather if flags were previously shown
-      if (I.lastFlagViewTime > 0 && I.lastFlagViewTime >= I.lastWeatherTime) {
-        forceweather = true;
+    bitWrite(GRAPHICS.FlagsAndAlerts,0,0); //set bit 0 to 0 - there are no flagged sensors
+  }
+
+  //update the weather alerts bit
+  if (bitRead(I.WeatherEventFlags,0) == 1) {
+    bitWrite(GRAPHICS.FlagsAndAlerts,1,1); //set bit 1 to 1 - there are weather alerts
+  } else {
+    bitWrite(GRAPHICS.FlagsAndAlerts,1,0); //set bit 1 to 0 - there are no weather alerts
+  }
+
+  
+
+  //what do I show on the screen?
+  //if bit 3 is set OR if bits 0 AND 1 are NOT set, then show icon, no need to think any harder!
+  if (bitRead(GRAPHICS.FlagsAndAlerts,3) == 1 || (bitRead(GRAPHICS.FlagsAndAlerts,0) == 0 && bitRead(GRAPHICS.FlagsAndAlerts,1) == 0)) {
+    fcnDrawWeatherSprite180(GRAPHICS.SCREEN_0[2].X,GRAPHICS.SCREEN_0[2].Y,GRAPHICS.SPRITE_180x180,false);   
+    bitWrite(GRAPHICS.FlagsAndAlerts,3,0); //set bit 3 to 0 - showed icon, so next show something else
+  } else {
+    //not going to show the icon... so what is next? If alerts are not set OR we didn't show flags last, show flags
+    if (bitRead(GRAPHICS.FlagsAndAlerts,1) == 0 || bitRead(GRAPHICS.FlagsAndAlerts,2) == 0) {
+      bitWrite(GRAPHICS.FlagsAndAlerts,2,1); //set bit 2 to 1 - showed flags, so next show something else
+      if (fcnGetAlarms(-1,3,3)>0) {
+        fcnDrawSensors(GRAPHICS.SCREEN_0[2].X,GRAPHICS.SCREEN_0[2].Y,3,3);            
+        return;
       }
+         
+    } else {
+      bitWrite(GRAPHICS.FlagsAndAlerts,2,0); //set bit 2 to 0 - showed alerts, so next show something else
+      fcnDrawWeatherSprite180(GRAPHICS.SCREEN_0[2].X,GRAPHICS.SCREEN_0[2].Y,GRAPHICS.SPRITE_180x180,true);   
     }
   }
-} 
 
-if (forceflags) {
-  I.lastFlagViewTime = I.currentTime;
-
-  if (bitRead(I.EventFlags,0) == 1) {
-    //draw weather alerts
-    tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-    fcnDrawWeatherAlerts(0,I.HEADER_Y,180,180);      
-    return;
-  } else {
-    //check if alarm
-    tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-    fcnDrawSensors(8,I.HEADER_Y,3,3);      
-    return;
-  }
 }
 
-//do I draw  weather?
-if (forceweather==false && (uint32_t) I.lastWeatherTime>0 && I.lastWeatherTime+I.cycleWeatherMinutes*60>I.currentTime)   return; //not time to show  weather and no need to redraw
 
-I.lastWeatherTime = I.currentTime;
+bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool useAlerts) {
+  //refill the sprite, then push to screen
 
-  int X=0,Y = I.HEADER_Y,Z=0; //header ends at 30
+  bool refilled = false;
+  if (sprite.getBuffer() == NULL) return false;
 
-  tft.fillRect(0,I.HEADER_Y,180,180,BG_COLOR); //clear the bmp area
-
-
-  int i=0,j=0;
-  char tempbuf[45];
-  uint8_t FNTSZ = 0;
-
-  byte deltaY = setFont(FNTSZ);
-
-  byte section_spacer = 3;
-
-  //draw icon for NOW
-  int iconID = WeatherData.getWeatherID(0);
-  if (iconID < 0) iconID = 999;
+  refilled =fillSprite180(X,Y,sprite);    
   
-  if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(tempbuf,44,"/Icons/BMP180x180day/%d.bmp", iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
-  else     snprintf(tempbuf,44,"/Icons/BMP180x180night/%d.bmp",iconID);
+  sprite.pushSprite(X,Y);
+  GRAPHICS.SPRITE_180x180.X = X;
+  GRAPHICS.SPRITE_180x180.Y = Y;
+  GRAPHICS.SPRITE_180x180.W = 180;
+  GRAPHICS.SPRITE_180x180.H = 180;
 
-  drawBmp(tempbuf,0,Y);
+  //now add text overlays if appropriate.
+  uint8_t FNTSZ = 0;
+  byte deltaY = setFont(FNTSZ);
 
   //add info atop icon
   if (WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in next 24 h
@@ -1254,51 +1608,143 @@ I.lastWeatherTime = I.currentTime;
     double rain =  WeatherData.getRain() * 0.0393701; //to inches
     uint32_t nextsnow = WeatherData.nextSnow();
     double snow =  (WeatherData.getSnow() +   WeatherData.getIce())*0.0393701;
+    char tempbuf[20];
     if (nextsnow < I.currentTime + 86400 && snow > 0) {
-        tft.setTextColor(tft.color565(255,0,0),tft.color565(255,0,0));
-        snprintf(tempbuf,30,"Snow %.1f\"",dateify(nextsnow,"hh"),snow);
+        sprite.setTextColor(sprite.color565(255,0,0),sprite.color565(0,0,255));
+        snprintf(tempbuf,20,"Snow %.1f\"",snow);
         FNTSZ=4;      
     } else {
       if (rain>0 && nextrain< I.currentTime + 86400 ) {
-        tft.setTextColor(tft.color565(255,255,0),tft.color565(0,0,255));
-        snprintf(tempbuf,30,"Rain@%s",dateify(Next_Precip,"hh:nn"));
+        sprite.setTextColor(sprite.color565(255,255,0),sprite.color565(0,0,255));
+        snprintf(tempbuf,20,"Rain@%s",dateify(Next_Precip,"hh:nn"));
         FNTSZ=2;
       }
     }
     deltaY = setFont(FNTSZ);
-    fcnPrintTxtCenter(tempbuf,FNTSZ,5,Y+170-deltaY);
+    sprite.setTextDatum(TL_DATUM);
+    sprite.setTextFont(FNTSZ);
+    sprite.drawString(tempbuf,5,Y+170-deltaY);    
   }
-  return;
+  return refilled;
+}
+
+
+bool getWeatherAlertDetails(WeatherEventFile* wEF) {
+  //get the weather alert details, return false if no alert found
+
+  //get the weather alert
+  if (!WeatherData.loadNextWeatherAlert()) {
+    return false;
+  }
+
+  //get the alert details
+  wEF.getEvent(WeatherData.alertInfo.eventnumber);
+  
+
+  String description = wEF.description;
+  description.replace("\n", " "); //replace newlines with spaces  
+  
+  //now draw the text
+
+  tft.setTextColor(TFT_RED,BG_COLOR);
+  
+  int16_t FH = setFont(1);
+  tft.drawString((String) "#" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + ": " + wEF.event, X, Y);  
+  Y+=FH*2+2;
+
+  tft.drawString((String) "When: " + (String) dateify(WeatherData.alertInfo.time_start,"mm-dd@hh"), X, Y);
+  Y+=FH+2;
+
+  tft.drawString((String) "Severity/Certainty: " + wEF.severity + "/" + wEF.certainty, X, Y);
+  Y+=FH+2;
+
+  tft.drawString(description, X, Y);
+
+  tft.setTextColor(FG_COLOR,BG_COLOR);
+}
+
+bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts) {
+
+  char filename[50];
+
+  if (useAlerts) {
+    snprintf(filename,50,"/Icons/Events/180x180/%s.bmp",WeatherData.alertInfo.phenomenon);
+  } else {
+    bool found = false;
+    byte failCount =0;
+    char filedir[21];
+    //get the weather icon, switching to the next available set
+    while (failCount < 10 && found == false) {
+      GRAPHICS.IconSet++;
+      if (GRAPHICS.IconSet > 99) GRAPHICS.IconSet = 0;
+      snprintf(filedir,30,"/Icons/Set%d", GRAPHICS.IconSet);
+      if (FileOrDirectoryExists(filedir))    found = true;
+      else     failCount++;  
+    }
+
+    if (found == false) {
+      GRAPHICS.IconSet = 0; //fallback to generic icons
+      snprintf(filedir,21,"/Icons/Set0");
+    }
+
+    //draw icon for NOW
+    int iconID = WeatherData.getWeatherID(0);
+    if (iconID < 0) iconID = 999;
+    
+    if (I.currentTime > WeatherData.sunrise  && I.currentTime< WeatherData.sunset) snprintf(filename,50,"%s/BMP180x180day/%d.bmp", filedir, iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
+    else     snprintf(filename,50,"%s/BMP180x180night/%d.bmp", filedir, iconID);
+
+  }
+
+  //check if the filename is different from the current filename
+  if (strcmp(filename,GRAPHICS.SPRITE_180x180.filename) != 0) {
+    strcpy(GRAPHICS.SPRITE_180x180.filename,filename);
+  } else {
+    return false;
+  }
+
+
+
+  if (drawBmp(GRAPHICS.SPRITE_180x180.filename,0,0,&sprite) != 1) {
+    //failed to draw the bitmap, so fill the sprite with an error message
+    char tempbuf[30];
+    //print to the sprite an error message indicating that there was a failure loading BMP file
+    snprintf(tempbuf,30,"BMP Load Error:\n%s", filename);
+    sprite.fillRect(0,0,180,180,BG_COLOR);
+    sprite.setTextColor(FG_COLOR,BG_COLOR);
+    sprite.setTextDatum(TL_DATUM);
+    sprite.setTextFont(2);
+    sprite.setTextSize(1);
+    sprite.drawString(tempbuf,5,5);    
+    return false;
+  }
+
+  return true;
 
 }  
 
 
 void fcnDrawFutureWeather() {
-  
+  GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather = GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET;
   //this function will draw futuer weather or flags
 
 
-  bool forcedraw = false;
-
-  //do I draw future weather?
-  if (forcedraw==false && (uint32_t) I.lastFutureConditionTime>0 && I.lastFutureConditionTime+I.cycleFutureConditionsMinutes*60>I.currentTime)   return; //not time to show future weather
-  
-
-  I.lastFutureConditionTime = I.currentTime;
-
-
   byte section_spacer = 3;
-  int16_t Y = I.HEADER_Y+180+section_spacer;
+  int16_t Y = GRAPHICS.Y_SCRMAIN_HEADER+180+section_spacer;
   int16_t X = tft.width(),Z=0;
-  int16_t deltaY = (tft.height()-I.CLOCK_Y)-Y-section_spacer+1;
+  int16_t deltaY = (tft.height()-GRAPHICS.Y_SCRMAIN_CLOCK)-Y-section_spacer+1;
 
+  int16_t FNTSZ = 0;
+  char tempbuf[50];
+
+  GRAPHICS.Y_SCRMAIN_HOURLY_START = Y;
   //clear the area
   tft.fillRect(0,Y,X,deltaY,BG_COLOR);
 
 
-  char tempbuf[45];
-  uint8_t FNTSZ = 0;
-  int iconID = 0;
+
+  //choose icon set
+  uint16_t iconID = 0;
   int i=0,j=0;
 
 
@@ -1306,15 +1752,15 @@ void fcnDrawFutureWeather() {
   tft.setCursor(0,Y);
   X=0;
     for (i=1;i<7;i++) { //draw 6 icons, with I.HourlyInterval hours between icons. Note that index 1 is  1 hour from now
-      if (i*I.IntervalHourlyWeather>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
+      if (i*GRAPHICS.IntervalHourlyWeatherDisplay>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
       Z=0;
       X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
-      iconID = WeatherData.getWeatherID(I.currentTime+i*I.IntervalHourlyWeather*60*60);
-      if (iconID < 0) iconID = 999;
-      uint32_t temptime = I.currentTime+i*I.IntervalHourlyWeather*3600;
-      if ((temptime > WeatherData.sunrise  && temptime < WeatherData.sunset) || temptime > WeatherData.sunrise + 86400) snprintf(tempbuf,29,"/Icons/BMP30x30day/%d.bmp",iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night. But if we are past the prior sunrise +24h we are in the NEXT day
-      else snprintf(tempbuf,29,"/Icons/BMP30x30night/%d.bmp",iconID);
-      
+      uint32_t temptime = I.currentTime+i*GRAPHICS.IntervalHourlyWeatherDisplay*60*60;
+      iconID = WeatherData.getWeatherID(temptime);
+      if (iconID < 0) iconID = 999;      
+      if (temptime > WeatherData.sunrise  && temptime< WeatherData.sunset) snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30day/%d.bmp", GRAPHICS.IconSet, iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
+      else     snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30night/%d.bmp", GRAPHICS.IconSet, iconID);
+            
       drawBmp(tempbuf,X,Y);
       Z+=30;
 
@@ -1323,7 +1769,7 @@ void fcnDrawFutureWeather() {
 
       FNTSZ=1;
       deltaY = setFont(FNTSZ);
-      snprintf(tempbuf,6,"%s:00",dateify(I.currentTime+i*I.IntervalHourlyWeather*60*60,"hh"));
+      snprintf(tempbuf,49,"%s:00",dateify(I.currentTime+i*GRAPHICS.IntervalHourlyWeatherDisplay*60*60,"hh"));
       tft.setTextFont(FNTSZ); //small font
       fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
       Z+=deltaY+section_spacer;
@@ -1331,7 +1777,7 @@ void fcnDrawFutureWeather() {
       FNTSZ=4;
       deltaY = setFont(FNTSZ);
       tft.setTextFont(FNTSZ); //med font
-      byte temp = WeatherData.getTemperature(I.currentTime + i*I.IntervalHourlyWeather*3600);
+      byte temp = WeatherData.getTemperature(I.currentTime + i*GRAPHICS.IntervalHourlyWeatherDisplay*3600);
       tft.setTextColor(temp2color(temp));
       fcnPrintTxtCenter(temp,FNTSZ,X,Y+Z+deltaY/2);
       tft.setTextColor(FG_COLOR,BG_COLOR);
@@ -1340,7 +1786,7 @@ void fcnDrawFutureWeather() {
     tft.setTextColor(FG_COLOR,BG_COLOR);
     Y+=Z;
 
-
+    GRAPHICS.Y_SCRMAIN_DAILY_START = Y;
   //now draw daily weather
     tft.setCursor(0,Y);
     for (i=1;i<6;i++) {
@@ -1348,11 +1794,7 @@ void fcnDrawFutureWeather() {
       Z=0;
       X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
       iconID = WeatherData.getDailyWeatherID(i,true);
-      if (I.lastFutureConditionsAlt==0) { //this prevents screen burn from prolonged use of same icon on screen
-        snprintf(tempbuf,29,"/Icons/BMP60x60day/%d.bmp",iconID); //icon
-      } else {
-        snprintf(tempbuf,29,"/Icons/BMP60x60Alt/%d.bmp",iconID); //images
-      }
+      snprintf(tempbuf,49,"/Icons/Set%d/BMP60x60day/%d.bmp", GRAPHICS.IconSet, iconID); //icon
       
       drawBmp(tempbuf,X,Y);
       Z+=60;
@@ -1360,7 +1802,7 @@ void fcnDrawFutureWeather() {
       X = (i-1)*(tft.width()/5) + ((tft.width()/5))/2; 
       FNTSZ=2;
       deltaY = setFont(FNTSZ);
-      snprintf(tempbuf,31,"%s",dateify(I.currentTime+i*60*60*24,"DOW"));
+      snprintf(tempbuf,50,"%s",dateify(I.currentTime+i*60*60*24,"DOW"));
       fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
       
       Z+=deltaY;
@@ -1371,7 +1813,6 @@ void fcnDrawFutureWeather() {
       Z+=deltaY+section_spacer;
 
     }
-    I.lastFutureConditionsAlt = !I.lastFutureConditionsAlt;
 
 }
 
@@ -1383,6 +1824,7 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   if (snsIndex==255) snsIndex = findSensorByName("Outside", 9); //bmp pressure
   if (snsIndex==255) snsIndex = findSensorByName("Outside", 19); //bme680 pressure
 
+  tempPres[0]=0;
   if (snsIndex !=255) {
     // Find the sensor by its index and get its value
     ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
@@ -1507,148 +1949,191 @@ void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
 }
 
 
-// Setup display functions
+
+
+
+void updateGraphics() {
+  fcnCheckGraphicsTimers();
+  checkTouchScreen();
+  fcnDrawScreen();
+}
+
+void fcnCheckGraphicsTimers() {
+  //check if any section needs to be redrawn now. This will be the case if time runs out, if forceRedraw is true, or for the special cases listed below.
+  //check the following areas of main screen:
+  //header - needs to be redrawn if: flags changed,  event flags changed, or HVAC changed
+
+  if (!GRAPHICS.GRAPHICS_TIMERS.decimateTimers(I.currentTime, I.currentSecond)) return;
+
+  bool flagchanged = (I.isFlagged!=I.wasFlagged);
+  bool eventflagchanged = (bitRead(I.WeatherEventFlags,0) != bitRead(I.WeatherEventFlags,1));
+  bool hvacchanged = (I.isAC != I.wasAC || I.isFan!=I.wasFan || I.isHeat != I.wasHeat);
+
+
+  if (GRAPHICS.GRAPHICS_TIMERS.forceRedraw_MAIN == true) {
+    GRAPHICS.GRAPHICS_TIMERS.zeroTimers();
+    GRAPHICS.GRAPHICS_TIMERS.forceRedraw_MAIN = false;
+  }
+
+  //header check
+  if (eventflagchanged ||
+      flagchanged || 
+      hvacchanged) GRAPHICS.GRAPHICS_TIMERS.Timer_Header = 0;
+
+
+  //current weather - redraw if we need to show flagged sensors or weather alerts, or switch back to icon
+  if (bitRead(I.isFlagged,0) == 1 && (GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon == 0 || GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert == 0)) {
+    //if either of these hits zero then they both do.
+    GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon = 0;
+    GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert = 0;
+  } 
+
+  //current condition
+  //just draw if timer is zero
+    //future weather
+  //just draw if timer is zero
+  
+  //clock
+  //clock timers are handled internally
+
+  //cleanup
+  bitWrite(I.WeatherEventFlags,1,bitRead(I.WeatherEventFlags,0)); //set bit 1 to the value of bit 0
+  I.wasFlagged = I.isFlagged;
+  I.wasAC = I.isAC;
+  I.wasFan = I.isFan;
+  I.wasHeat = I.isHeat;
+
+  
+}
 
 void checkTouchScreen() {
-  tft.getTouch(&I.touchX, &I.touchY);
-  
-  if (I.touchX > 0 && I.touchY > 0) {
-    tft.fillCircle(I.touchX,I.touchY,12,TFT_GOLD);
+  int32_t tX, tY;
+  if (tft.getTouch(&tX, &tY)) {
+    GRAPHICS.touchX = tX;
+    GRAPHICS.touchY = tY;
 
-    switch (I.ScreenNum) {
-      case 0:
-        I.screenChangeTimer = 30;
-        I.ScreenNum=1;
-        break; 
-      case 1:
-        I.screenChangeTimer = 30;
-        //touched previous screen button
-        if (I.touchY < tft.height()-50 ) {
-          if (I.touchX > 0 && I.touchX < tft.width()) {
-            //There are 8 rows and 6 cols, so MAXALARMS boxes
-            //figure out the box number, starting from upper left and moving right and then down.
-            byte boxnum = (I.touchX/54) + (I.touchY/54)*6;
-            I.ScreenNum=10+boxnum;
-          }
-        }
-        else if (I.touchX < 52 && I.touchY > tft.height()-50 && I.touchY < tft.height()) I.ScreenNum=0;        
-        else if(I.touchX > 52 && I.touchX < 104)           I.ScreenNum=2;
-        break;
-      case 2:
-        if (I.touchY > tft.height()-50 && I.touchY < tft.height()) {
-          I.screenChangeTimer = 30;
-          if (I.touchX < 50 && I.touchX > 0)  I.ScreenNum=3; //confirm deletion screen
-          else if (I.touchX > 52 && I.touchX < 104) I.ScreenNum=4; //confirm deletion screen
-          else if (I.touchX > 104 && I.touchX < 156) I.ScreenNum=0; 
-        }
-        break; 
-      case 3:
-        if (I.touchX < 50 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
-          //touched a reset button
-          deleteCoreStruct(); //delete the screen flags file        
-          controlledReboot("Reset I",RESET_USER,true); //reset the device
-        } else {
-          I.screenChangeTimer = 30;
-          I.ScreenNum=0;
-        }
-        break; 
-        case 4:
-          if (I.touchX < 50 && I.touchX > 0 && I.touchY > tft.height()-50 && I.touchY < tft.height()) {
-            deleteCoreStruct(); //delete the screen flags file              
-            BootSecure bootSecure;
-            if (!bootSecure.flushPrefs()) {
-              tft.setTextColor(TFT_RED);
-              tft.setCursor(0,tft.height()-75);
-              tft.println("Failed to reset settings");
-              tft.setTextColor(FG_COLOR);
-              delay(2000);
-            }
-            controlledReboot("Reset All",RESET_USER,true); //reset the device
-          } else {
-            I.screenChangeTimer = 30;
-            I.ScreenNum=0;
-          }
-          break;
 
-      default:
-        //displaying sensor info. any touch on this screen will return to sensor screen
-        I.screenChangeTimer = 30;
-        I.ScreenNum=1;
-        break; 
+    GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange = GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET;
 
-    }
+    tft.fillCircle(GRAPHICS.touchX,GRAPHICS.touchY,12,TFT_GOLD);
 
-    fcnDrawScreen();
-    delay(150);
- 
+    fcnHandleTouch(); //now Screen_Next, SubScreen_Next, touchX, touchY are updated.
+
+    
+    while (tft.getTouch(&tX, &tY)) { delay(10); }
 
   }
-
-  I.touchX = 0;
-  I.touchY = 0;
-
-}
-
-void fcnDrawWeatherAlerts(int16_t X, int16_t Y, int16_t width, int16_t height) {
-  //draw the weather alerts
-  tft.fillRect(X,Y,width,height,BG_COLOR); //clear the area
-  //get the weather alert
-  if (!WeatherData.loadNextWeatherAlert()) {
-    tft.setTextColor(TFT_RED,BG_COLOR);
-    setFont(4);
-    fcnDrawTextBox("Alerts Cleared", X, Y,  width, height);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    I.EventFlags &= ~0x01; //clear bit 0
-    return;
+  else {
+    GRAPHICS.touchX = -1;
+    GRAPHICS.touchY = -1;
   }
 
-  //get the alert details
-  String event="", headline="", description="", severity="", certainty="", urgency="";
-  WeatherData.getWeatherAlertDetails(event, headline, description, severity, certainty, urgency);
-  
-  //draw the weather alert
-  char tempbuf[45];
-  snprintf(tempbuf,44,"/Icons/Events/%s.bmp",WeatherData.alertInfo.phenomenon);
-  drawBmp(tempbuf,0,Y);
-
-  //now draw the text
-
-  tft.setTextColor(TFT_RED,BG_COLOR);
-  
-  int16_t FH = setFont(4);
-  fcnDrawTextBox((String) "#" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + ": " + event, X, Y,  width, FH+2, TL_DATUM);  
-  Y+=FH*2+2;
-
-  FH = setFont(1);
-  fcnDrawTextBox((String) "When: " + (String) dateify(WeatherData.alertInfo.time_start,"mm-dd@hh"), X, Y,  width, FH+2);
-  Y+=FH+2;
-
-  fcnDrawTextBox((String) "Severity/Certainty: " + severity + "/" + certainty, X, Y,  width, FH+2);
-  Y+=FH+2;
-
-  description.replace("\n", " "); //replace newlines with spaces  
-  fcnDrawTextBox(description, X, Y,  width, height-Y);
-
-  tft.setTextColor(FG_COLOR,BG_COLOR);
-  tft.setTextDatum(TL_DATUM);
 }
 
-void fcnDrawTextBox(String text, int16_t X, int16_t Y, int16_t width, int16_t height, int16_t datum) {
-  LGFX_Sprite box(&tft);
-  box.setColorDepth(8); // Uses half the RAM of default 16-bit
-  box.createSprite(width, height); // Width, Height of your alert box
-  // 2. Define which color should be "invisible"
-  // Using 0x0001 or a specific hex is safer than pure black if you want black text
-  box.setPivot(0, 0); //not reallt needed, we aren't rotating this
-  box.fillSprite(0);
-  box.setTextColor(TFT_RED);
-  box.setTextDatum(TL_DATUM);
+// Setup display functions
+void fcnHandleTouch() {
+  //determine what action to take based on the screen number, SubScreen_Next, and touch location
+int16_t boxsize6 = tft.width()/6;
+int16_t MenuArea = tft.height() - boxsize6;
 
-  // LovyanGFX sprites support wrap automatically if you use println
-  box.setCursor(X, Y); 
-  box.print(text);
+  switch (GRAPHICS.Screen_Next) {
+    case SCREEN_MAIN:
+      //what does the user want to do?
+      if (GRAPHICS.touchX > 0 && GRAPHICS.touchX < 180 && GRAPHICS.touchY > GRAPHICS.Y_SCRMAIN_HEADER && GRAPHICS.touchY < GRAPHICS.Y_SCRMAIN_HEADER+180) {        
+        GRAPHICS.Screen_Next=SCREEN_ALERT;
+        GRAPHICS.SubScreen_Next = 0;
+      }
+      else if (GRAPHICS.touchX > 180 && GRAPHICS.touchX < tft.width() && GRAPHICS.touchY > GRAPHICS.Y_SCRMAIN_HEADER && GRAPHICS.touchY < GRAPHICS.Y_SCRMAIN_HEADER+180) {
+        GRAPHICS.Screen_Next=SCREEN_SENSORS;
+        GRAPHICS.SubScreen_Next = 0; //overview screen
+      }
+      else if (GRAPHICS.touchX > 0 && GRAPHICS.touchX < tft.width() && GRAPHICS.touchY > GRAPHICS.Y_SCRMAIN_HOURLY_START && GRAPHICS.touchY < GRAPHICS.Y_SCRMAIN_DAILY_START) {
+        GRAPHICS.Screen_Next=SCREEN_HOURLY;
+        GRAPHICS.SubScreen_Next = 0;
+      }
+      else if (GRAPHICS.touchY > GRAPHICS.Y_SCRMAIN_DAILY_START && GRAPHICS.touchY < (tft.height() - GRAPHICS.Y_SCRMAIN_CLOCK)) {
+        //determine which day the user touched
+        uint16_t day = (int)GRAPHICS.touchX / (tft.width()/5) + 1;
+        GRAPHICS.Screen_Next=SCREEN_DAILY;
+        GRAPHICS.SubScreen_Next = day;
+      }
+      else if (GRAPHICS.touchY > (tft.height() - GRAPHICS.Y_SCRMAIN_CLOCK) && GRAPHICS.touchY < tft.height()) {
+        GRAPHICS.Screen_Next=SCREEN_STATUS;
+        GRAPHICS.SubScreen_Next = 0;
+      }
+      return;
+    case SCREEN_SENSORS:
+      //on this screen:
+      // if the user touches one of the sensor boxes, then zoom in on that box. If we were already on a zoom in screen, then go back to main.
+      //in the bottom menu buttons, 
+      //If the user touches the left most box then go back to main. 
+      //if the user touches the second box then broadcast my presence
+      //if the user touches the third box then 
+      //if the user touches the fourth box then 
+      //if the user touches the fifth box then 
+      //if the user touches the sixth box then 
 
-  box.pushSprite(&tft,X, Y,0); // Push the finished box to the physical screen coordinates
-  box.deleteSprite();   // Free RAM if this is a one-time draw
+      GRAPHICS.Screen_Next=SCREEN_SENSORS;
+        
+      //first, determine if the user touched the sensor area or one of the buttons
+      if (GRAPHICS.touchY > MenuArea) {
+        //touched a button... stay on this page for now
+        GRAPHICS.SubScreen_Next = (GRAPHICS.touchX / boxsize6)+1 + 100;
+      } else {
+        //touched a sensor box        
+        GRAPHICS.SubScreen_Next = ((uint16_t) GRAPHICS.touchX / boxsize6)+1 + ((uint16_t) GRAPHICS.touchY / boxsize6) + 1 -2; //the -2 is to convert 2 one-indexes to zero-indexex
+      }
+
+      return;
+
+    case SCREEN_ALERT:
+    case SCREEN_DAILY:    
+      //first, determine if the user touched the sensor area or one of the buttons
+      if (GRAPHICS.touchY > MenuArea) {
+        //touched a button... stay on this page for now        
+        GRAPHICS.SubScreen_Next = (GRAPHICS.touchX / boxsize6)+1 + 100;
+      } else {
+        GRAPHICS.Screen_Next=SCREEN_MAIN;
+        GRAPHICS.SubScreen_Next = 0;
+      }
+      return;      
+    case SCREEN_HOURLY:
+      //to be implemented
+      GRAPHICS.Screen_Next=SCREEN_MAIN;
+      return;
+    case SCREEN_STATUS:
+      //to be implemented. For now, just use the currently existing status screen
+      GRAPHICS.Screen_Next=SCREEN_STATUS;
+      if (GRAPHICS.touchY > MenuArea) {
+        //touched a button... this will dictate the subscreen actions based on:
+        //main, Delete I, Delete Prefs and I
+        //subsequently, requires confirmation.
+
+        uint16_t button = (uint16_t) (GRAPHICS.touchX / boxsize6)+1;
+        
+        if (GRAPHICS.SubScreen_Now == 0) {
+          GRAPHICS.SubScreen_Next = button ;
+        }
+        else {
+          if (button == 1) GRAPHICS.SubScreen_Next = GRAPHICS.SubScreen_Now + 100;
+          else {
+            GRAPHICS.Screen_Next=SCREEN_MAIN;
+            GRAPHICS.SubScreen_Next = 0;
+          }
+        }
+
+      } else {
+        GRAPHICS.Screen_Next=SCREEN_STATUS;
+        GRAPHICS.SubScreen_Next = 0;
+      }
+      return;
+
+    default:  
+      GRAPHICS.Screen_Next=SCREEN_MAIN;
+      return;
+  }
+  
 }
+
+
 #endif

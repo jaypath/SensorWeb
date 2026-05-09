@@ -163,7 +163,7 @@ esp_err_t addESPNOWPeer(uint8_t* macad) {
     
     if (result != ESP_OK) {
         String errormsg = "Failed to add ESPNow peer: " + MACToString(macad) + " Error: " + String(result);
-        SerialPrint(errormsg, true);
+        SerialPrint(errormsg, true,4);
         storeError(errormsg.c_str(),ERROR_ESPNOW_GENERAL);
     }
     
@@ -215,14 +215,14 @@ bool sendESPNOW(ESPNOW_type msg,bool forceencrypt) {
     esp_err_t result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
     if (result != ESP_OK) {
         String error = "SendESPNow: Error" + (String) result + ", to " + MACToString(msg.targetMAC);
-        SerialPrint(error,true);
+        SerialPrint(error,true,4);
         storeError(error.c_str(),ERROR_ESPNOW_SEND);
         espnowSuccess = false;
     } else {
         espnowSuccess = true;
         I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
         I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
-        SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true);
+        SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true,1);
     }
     
     if (!isBroadcast) {
@@ -308,7 +308,7 @@ void processLANMessage(ESPNOW_type* msg) {
 
         //is this message valid, and decryptable? If so, the first byte of the payload will be the type, so we can verify decryption
         if (msg->payload[0] != ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED && msg->payload[0] != UDP_MSG_BROADCAST_ALIVE_ENCRYPTED) {
-            storeError("ESPNow: Broadcast alive message is not valid");
+            storeError("ESPNow: Broadcast alive message is not valid from " + (msg->senderIP.toString()));            
             snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Broadcast alive message was invalid");
             I.ESPNOW_INCOMING_ERRORS++;
             return;
@@ -497,7 +497,7 @@ void processLANMessage(ESPNOW_type* msg) {
             return;
         } 
         #ifdef _DEBUG
-        SerialPrint("ESPNow: Sent ping response to " + MACToString(msg->senderMAC), true);
+        SerialPrint("ESPNow: Sent ping response to " + MACToString(msg->senderMAC), true,2);
         #endif
     }
     else if (msg->msgType== ESPNOW_MSG_PING_RESPONSE_SUCCESS) {
@@ -509,7 +509,7 @@ void processLANMessage(ESPNOW_type* msg) {
         I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD[63]=0; //null terminate the server name, juts in case
         
         #ifdef _DEBUG
-        SerialPrint("ESPNow: Received ping response from " + MACToString(msg->senderMAC) + " at time " + String(responseTime), true);
+        SerialPrint("ESPNow: Received ping response from " + MACToString(msg->senderMAC) + " at time " + String(responseTime), true,2);
         #endif
     }
     else if (msg->msgType== ESPNOW_MSG_REQUEST_SENSOR_DATA || msg->msgType== UDP_MSG_REQUEST_SENSOR_DATA) {

@@ -6,19 +6,15 @@
 #include "timesetup.hpp"
 #include "server.hpp"
 
-#ifdef _USESDCARD
 
-#include "SDCard.hpp"
-#endif
+
 
 
 // determine noaa timestamp intervals
-
-
 TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
     TimeInterval ti = {0, 3600}; // Default to 1 hour duration
     
-    int slashIndex = tm.indexOf('/');
+    int slashIndex = tm.indexOf('/');  
     
     if (slashIndex != -1) {
         String durationStr = tm.substring(slashIndex + 1); // e.g., "PT6H" or "P1D"
@@ -37,7 +33,8 @@ TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
     }
 
     // Parse ISO8601 date/time (required)
-    ti.start = iso8601ToUnix(tm, true);
+    ti.start = iso8601ToUnix(tm);
+    ti.start = unixToLocal(ti.start);
 
     return ti;
 }
@@ -132,16 +129,21 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
 
 // Helper function for grid coordinates fetching
 bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
-    char cbuf[100];
-    snprintf(cbuf, 99, "https://api.weather.gov/points/%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
-    String url = String(cbuf);
+    char url[100];
+    snprintf(url, 99, "https://api.weather.gov/points/%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
     
     JsonDocument doc;
-    int16_t httpCode;
-    String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
 
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.setContentType("application/json");
+    M.setExtraHeaders("User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n");    
+    M.timeout = 15000; // 15 second timeout for geocoding
+    M.usePSRAM = true;
+    M.responseDoc = &doc;
 
-    if (makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_BOX,ERROR_JSON_BOX,extraHeaders)) {
+    if (SendHTTPMessage(M)) {
         if (doc["properties"].is<JsonVariantConst>() && doc["properties"]["gridId"].is<JsonVariantConst>()) {
             strncpy(this->Grid_id, doc["properties"]["gridId"], sizeof(this->Grid_id) - 1);
             this->Grid_id[sizeof(this->Grid_id) - 1] = '\0';
@@ -154,8 +156,7 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
             storeError("Grid coordinates Json had incorrect format", ERROR_JSON_BOX,true);
             this->lastUpdateError = I.currentTime;
         }
-        
-    } 
+    }
     return false;
 }
 
@@ -169,43 +170,11 @@ bool WeatherInfoOptimized::fetchGridCoordinates() {
 }
 
 
-// Optimized HTTP request method: uses Server_SecureMessageEx with stream (JsonDocument*) to avoid getString() RAM spike
-bool WeatherInfoOptimized::makeSecureRequest(String& url, JsonDocument& doc, int16_t& httpCode, ERRORCODES HTTP, ERRORCODES JSON, String& extraHeaders, const char* cert_path, const JsonDocument* filter) {
-    if (CheckWifiStatus(false) != 1) {
-        return false;
-    }
-
-    String payload_dummy;
-    String method = "GET";
-    String contentType = "";
-    String body = "";
-    String cacert = String(cert_path);
-
-    uint32_t start_time = millis();
-    bool success = Server_SecureMessageEx(url, payload_dummy, httpCode, cacert, method, contentType, body, extraHeaders, &doc, filter);
-    uint32_t response_time = millis() - start_time;
-
-    if (success) {
-        if (average_response_time == 0) {
-            average_response_time = response_time;
-        } else {
-            average_response_time = (average_response_time + response_time) / 2;
-        }
-    } else {
-        this->lastUpdateError = I.currentTime;
-        if (httpCode >= 400) {
-            storeError(enumErrorToName(HTTP).c_str(), HTTP, true);
-        } else {
-            storeError(enumErrorToName(JSON).c_str(), JSON, true);
-        }
-    }
-    return success;
-}
 
 // Optimized data processing methods
 bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
     JsonArray periodsArray = properties["periods"].as<JsonArray>();
-    uint32_t midnightToday = makeUnixTime(year()-2000, month(), day(), 0, 0, 0); //midnight local time, default behavior is to return local time
+    uint32_t midnightToday = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0,false)); //midnight local time, default behavior is to return local time
     uint8_t processedCount = 0;
         
     for (JsonObject period : periodsArray) {        
@@ -333,13 +302,48 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
     JsonArray periodsArray = properties["periods"].as<JsonArray>();
     
     // Get current day start (Midnight)
-    uint32_t midnightToday = makeUnixTime(year()-2000, month(), day(), 0, 0, 0); //this is local time unless asLocalTime is false
+    uint32_t midnightToday = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0,false)); //this is local time unless asLocalTime is false
 
     for (JsonObject period : periodsArray) {
-        String startStr = period["startTime"].as<const char*>();
-        TimeInterval ti = parseNOAAInterval(startStr);
+        TimeInterval ti = parseNOAAInterval(period["startTime"].as<const char*>());
+        TimeInterval ti_end = parseNOAAInterval(period["endTime"].as<const char*>());
         // FIX: Subtract 6 hours (21600s) before calculating dayOffset.
         // This ensures "Saturday Night" (starts 6pm) groups with "Saturday Day".
+        const char* icon = period["icon"];
+        double temp = (double)period["temperature"];
+        const char* tu = period["temperatureUnit"];
+        if (tu && strcmp(tu, "C") == 0) {
+            temp = (temp * 9.0 / 5.0) + 32.0;
+        }
+
+        uint8_t currentPeriodNumber = (uint8_t)period["number"];
+        
+        //initialize the tomorrowPeriodNumber and isDaytime variables
+        if (currentPeriodNumber == 1) {
+            this->isDaytime = period["isDaytime"].as<bool>();
+            if (period["isDaytime"]) this->tomorrowPeriodNumber = 3;
+            else this->tomorrowPeriodNumber = 2;
+        } 
+
+        //save the daily forecast to a file for this day
+        dailyWeatherForecast dWF;
+        dWF.initDailyWeatherForecast();
+        dWF.dT_start = ti.start;
+        dWF.dT_end = ti_end.start;
+        dWF.tempF = (int8_t)temp;
+        dWF.weatherID = breakIconLink(String(icon), ti);
+        dWF.PoP = (uint8_t)period["probabilityOfPrecipitation"]["value"];
+        dWF.isDaytime = period["isDaytime"];
+        strncpy(dWF.details, period["detailedForecast"].as<const char*>(), sizeof(dWF.details));
+
+        //store this daily forecast to a file for this day, relative to now
+        char filename[35];
+        snprintf(filename, 34, "/Data/DailyWthr/%d.bin", currentPeriodNumber);
+        if (!writeAnythingToSD(filename, &dWF, sizeof(dailyWeatherForecast))) {
+            SerialPrint("Could not write daily forecast to file: " + String(filename), true);
+            return false;
+        }
+
         int dayOffset = (ti.start - 21600 - midnightToday) / 86400;
         
         // Safety: If it's early morning and we subtracted 6 hours, 
@@ -347,30 +351,23 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
         if (dayOffset < 0) dayOffset = 0;
         if (dayOffset >= 14) continue;
 
-        double temp = (double)period["temperature"];
-        const char* tu = period["temperatureUnit"];
-        if (tu && strcmp(tu, "C") == 0) {
-            temp = (temp * 9.0 / 5.0) + 32.0;
-        }
 
         if (period["isDaytime"]) {
             // It's a High temp for that day
-            this->daily_tempMax[dayOffset] = (int8_t)temp;
+            this->daily_tempMax[dayOffset] = dWF.tempF;
             
             // Daytime data is usually the primary for the daily summary
-            this->daily_PoP[dayOffset] = (uint8_t)period["probabilityOfPrecipitation"]["value"];
-            const char* icon = period["icon"];
-            this->daily_weatherID[dayOffset] = breakIconLink(String(icon), ti);
+            this->daily_PoP[dayOffset] = dWF.PoP;
+            this->daily_weatherID[dayOffset] = dWF.weatherID;
         } else {
             // It's a Low temp for that day
-            this->daily_tempMin[dayOffset] = (int8_t)temp;
+            this->daily_tempMin[dayOffset] = dWF.tempF;
             
             // If Max is still -120, it means it's already evening and "Today's" High 
             // wasn't sent. Use Night's PoP/Icon as the fallback representative.
             if (this->daily_tempMax[dayOffset] == -120) { 
-                this->daily_PoP[dayOffset] = (uint8_t)period["probabilityOfPrecipitation"]["value"];
-                const char* icon = period["icon"];
-                this->daily_weatherID[dayOffset] = breakIconLink(String(icon), ti);
+                this->daily_PoP[dayOffset] = dWF.PoP;
+                this->daily_weatherID[dayOffset] = dWF.weatherID;
             }
         }
     }
@@ -471,8 +468,8 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
         int16_t httpCode;
         String url = getGrid(2);
 
-        bool b1=false,b2 = false,b3=false;
-        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
+        bool b1=false;
+        String extraHeaders = "User-Agent:(ArborysWeatherProject, contact@yourdomain.com)\n";
 
         JsonDocument filter;
         filter["properties"]["periods"][0]["startTime"] = true;
@@ -484,10 +481,25 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
         filter["properties"]["periods"][0]["windSpeed"] = true;
         filter["properties"]["periods"][0]["icon"] = true;
 
+        HTTPMessage M;
+        M.setUrl(url.c_str());
+        M.setMethod("GET");
+        M.setContentType("application/json");
+        M.setCacert("bundle");
+        M.timeout = 15000; // 15 second timeout for nws
+        M.usePSRAM = true;
+        M.responseDoc = &doc;
+        M.filter = &filter;
+        M.setExtraHeaders(extraHeaders.c_str());
 
-        b1=makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_HOURLY,ERROR_JSON_HOURLY,extraHeaders, "", &filter);
-        if (b1) {
+        if (SendHTTPMessage(M)) {
             // Check specifically for the properties object
+
+            if (M.httpCode == 304) {
+                SerialPrint("fetchHourlyForecast: data is not modified", true);
+                return true;
+            }
+
             JsonObject props = doc["properties"];
             if (!props.isNull()) {
                 return processHourlyData(props);
@@ -497,27 +509,27 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
             
         } else {
             SerialPrint("Hourly request failed",true);
-            SerialPrint("HTTP Code: " + String(httpCode),true);
-            storeError("Hourly request failed", ERROR_HTTPFAIL_HOURLY,true);
+            SerialPrint("HTTP Code: " + String(M.httpCode),true);
+            storeError("Hourly request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
             this->lastUpdateError = I.currentTime;
         }
-        return b1 && b2 && b3;
-
+        return false;
     });
 }
 
 bool WeatherInfoOptimized::fetchGridForecast() {
     return retryWithBackoff("grid forecast", [this]() {
 
+        SerialPrint("fetchGridForecast: starting", true);
         JsonDocument doc;
 
-        int16_t httpCode;
         String url = getGrid(0);
         String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
 
         // Filter can stay in Stack/Internal RAM as it is very small
         JsonDocument filter;
         JsonObject props = filter["properties"];
+        /*
         props["wetBulbGlobeTemperature"]["values"][0]["validTime"] = true;
         props["wetBulbGlobeTemperature"]["values"][0]["value"] = true;
         props["quantitativePrecipitation"]["values"][0]["validTime"] = true;
@@ -526,20 +538,47 @@ bool WeatherInfoOptimized::fetchGridForecast() {
         props["iceAccumulation"]["values"][0]["value"] = true;
         props["snowfallAmount"]["values"][0]["validTime"] = true;
         props["snowfallAmount"]["values"][0]["value"] = true;
+        */
 
-        bool b1 = makeSecureRequest(url, doc, httpCode, ERROR_HTTPFAIL_GRID, ERROR_JSON_GRID, extraHeaders, "", &filter);
-        
-        if (b1) {
-            // ArduinoJson 7 returns a reference to the root object
-            if (doc.containsKey("properties")) {
-                JsonObject tempobj = doc["properties"];
-                return processGridData(tempobj);
-            } else {
-                SerialPrint("Grid Json format incorrect or doc failed to grow in PSRAM", true);
-                SerialPrint("Doc memory usage: " + String(doc.memoryUsage()) + " bytes", true);
-                this->lastUpdateError = I.currentTime;
+        props["wetBulbGlobeTemperature"]["values"] = true;
+        props["quantitativePrecipitation"]["values"] = true;
+        props["iceAccumulation"]["values"] = true;
+        props["snowfallAmount"]["values"] = true;
+
+
+        HTTPMessage M;
+        M.setUrl(url.c_str());
+        M.setMethod("GET");
+        M.setContentType("application/json");
+        M.setCacert("bundle");
+        M.timeout = 15000; // 15 second timeout for nws
+        M.usePSRAM = true;
+        M.responseDoc = &doc;
+        //M.filter = &filter;
+        M.setExtraHeaders(extraHeaders.c_str());
+
+        if (SendHTTPMessage(M)) {
+            // Check specifically for the properties object
+
+            if (M.httpCode == 304) {
+                SerialPrint("fetchGridForecast: data is not modified", true);
+                return true;
             }
+
+            JsonObject props = doc["properties"];
+            if (!props.isNull()) {
+                return processGridData(props);
+            } else {
+                SerialPrint("Grid properties missing or doc too small", true);
+            }
+            
+        } else {
+            SerialPrint("Grid request failed",true);
+            SerialPrint("HTTP Code: " + String(M.httpCode),true);
+            storeError("Grid request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
+            this->lastUpdateError = I.currentTime;
         }
+
         return false;
     });
 }
@@ -547,32 +586,43 @@ bool WeatherInfoOptimized::fetchGridForecast() {
 bool WeatherInfoOptimized::fetchDailyForecast() {
     return retryWithBackoff("daily forecast", [this]() {
         JsonDocument doc;
-        int16_t httpCode;        
         String url = getGrid(1);
-        bool b1=false,b2 = false,b3=false;
         String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
 
-       
-        JsonDocument filter;
-        filter["properties"]["periods"][0]["startTime"] = true;
-        filter["properties"]["periods"][0]["isDaytime"] = true;
-        filter["properties"]["periods"][0]["temperature"] = true;
-        filter["properties"]["periods"][0]["temperatureUnit"] = true;
-        filter["properties"]["periods"][0]["probabilityOfPrecipitation"]["value"] = true;
-        filter["properties"]["periods"][0]["icon"] = true;
 
-        b1=makeSecureRequest(url, doc, httpCode,ERROR_HTTPFAIL_DAILY,ERROR_JSON_DAILY,extraHeaders, "", &filter);
-        if (b1) {
-            b2 = doc["properties"].is<JsonVariantConst>();
-            if (b2) {
-                JsonObject tempobj = doc["properties"].as<JsonObject>();
-                b3 =  processDailyData(tempobj);
-            } else {
-                storeError("Daily Json had incorrect format", ERROR_JSON_DAILY,true);
-                this->lastUpdateError = I.currentTime;
+        HTTPMessage M;
+        M.setUrl(url.c_str());
+        M.setMethod("GET");
+        M.setContentType("application/json");
+        M.setCacert("bundle");
+        M.timeout = 15000; // 15 second timeout for nws
+        M.usePSRAM = true;
+        M.responseDoc = &doc;
+        //M.filter = nullptr;
+        M.setExtraHeaders(extraHeaders.c_str());
+
+        if (SendHTTPMessage(M)) {
+            // Check specifically for the properties object
+
+            if (M.httpCode == 304) {
+                SerialPrint("fetchDailyForecast: data is not modified", true);
+                return true;
             }
+
+            JsonObject props = doc["properties"];
+            if (!props.isNull()) {
+                return processDailyData(props);
+            } else {
+                SerialPrint("Daily properties missing or doc too small", true);
+            }
+            
+        } else {
+            SerialPrint("Daily request failed",true);
+            SerialPrint("HTTP Code: " + String(M.httpCode),true);
+            storeError("Daily request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
+            this->lastUpdateError = I.currentTime;
         }
-        return b1 && b2 && b3;
+        return false;
     });
 }
 
@@ -582,13 +632,28 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
     String url = String(cbuf);
     
     JsonDocument doc;
-    int16_t httpCode;
     
     String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
 
-    //is cert_path is specified then use specific certificate, otherwise use the ESP-IDF certificate bundle
-    //if (makeSecureRequest(url, doc, httpCode, ERROR_HTTPFAIL_SUNRISE, ERROR_JSON_SUNRISE, "/Certificates/sunrisesunset.crt")) {
-    if (makeSecureRequest(url, doc, httpCode, ERROR_HTTPFAIL_SUNRISE, ERROR_JSON_SUNRISE,extraHeaders)) {
+
+    HTTPMessage M;
+    M.setUrl(url.c_str());
+    M.setMethod("GET");
+    M.setContentType("application/json");
+    M.setCacert("bundle");
+    M.timeout = 15000; // 15 second timeout for nws
+    M.usePSRAM = true;
+    M.responseDoc = &doc;
+    //M.filter = nullptr;
+    M.setExtraHeaders(extraHeaders.c_str());
+
+    if (SendHTTPMessage(M)) {
+        // Check specifically for the properties object
+
+        if (M.httpCode == 304) {
+            SerialPrint("fetchSunriseSunset: data is not modified", true);
+        }
+
         if (doc["results"].is<JsonVariantConst>()) {
             JsonObject results = doc["results"];
             const char* srise = results["sunrise"];
@@ -597,17 +662,26 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
 
             
             String sun = String(sdat) + " " + String(srise);
-            this->sunrise = convertStrTime(sun);
-            
+            this->sunrise = convertStrTime(sun,true); //false, was reported in local time so do not try to convert from UTC to local
+            this->sunrise = unixToLocal(this->sunrise);
+
             sun = String(sdat) + " " + String(sset);
-            this->sunset = convertStrTime(sun);
-            
+            this->sunset = convertStrTime(sun,true); //false, was reported in local time so do not try to convert from UTC to local
+            this->sunset = unixToLocal(this->sunset);
             return true;
         } else {
-            storeError("Sunrise IO Json had incorrect format", ERROR_JSON_SUNRISE,true);
+            SerialPrint("Sunrise Sunset Json had incorrect format", true);
+            storeError("Sunrise Sunset Json had incorrect format", ERROR_JSON_SUNRISE,true);
             this->lastUpdateError = I.currentTime;
         }
+    } else {
+        SerialPrint("Sunrise Sunset request failed",true);
+        SerialPrint("HTTP Code: " + String(M.httpCode),true);
+        storeError("Sunrise Sunset request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
+        this->lastUpdateError = I.currentTime;
     }
+
+
     return false;
 }
 
@@ -621,7 +695,7 @@ int16_t WeatherInfoOptimized::getIndex(time_t targetTime) {
     if (targetTime == 0) targetTime = I.currentTime;
 
     // Midnight (year/month/day from global clock are in local not utc)
-    uint32_t midnightLocal = makeUnixTime(year()-2000, month(), day(), 0, 0, 0, true);
+    uint32_t midnightLocal = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0, false));
 
     // Hour offset from midnight
     int16_t i = (targetTime - midnightLocal) / 3600;
@@ -891,7 +965,7 @@ bool WeatherInfoOptimized::initWeather() {
 
 // Implement remaining daily methods
 uint16_t WeatherInfoOptimized::getDailyRain(uint8_t daysfromnow) {
-    uint32_t MN0 = makeUnixTime(year()-2000,month(),day(),0,0,0);
+    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
     uint16_t totalrain = 0;
     for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
         if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
@@ -912,7 +986,7 @@ uint16_t WeatherInfoOptimized::getDailyRain(uint32_t starttime, uint32_t endtime
 }
 
 uint16_t WeatherInfoOptimized::getDailySnow(uint8_t daysfromnow) {
-    uint32_t MN0 = makeUnixTime(year()-2000,month(),day(),0,0,0);
+    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
     uint16_t total = 0;
     for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
         if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
@@ -933,7 +1007,7 @@ uint16_t WeatherInfoOptimized::getDailySnow(uint32_t starttime, uint32_t endtime
 }
 
 uint16_t WeatherInfoOptimized::getDailyIce(uint8_t daysfromnow) {
-    uint32_t MN0 = makeUnixTime(year()-2000,month(),day(),0,0,0);
+    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
     uint16_t total = 0;
     for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
         if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
@@ -986,7 +1060,6 @@ void WeatherInfoOptimized::getDailyTemp(uint8_t daysfromnow, int8_t* temp) {
         temp[0] = this->getTemperature(); 
     }
 }
-
 
 String WeatherInfoOptimized::getGrid(uint8_t fc) {
     if (fc==1) return (String) "https://api.weather.gov/gridpoints/" + (String) this->Grid_id + "/" + (String) this->Grid_x + "," + (String) this->Grid_y + (String) "/forecast";
@@ -1064,6 +1137,33 @@ bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
     return false;
 }
 
+String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
+    if (phenomenon == nullptr) {
+        //use the currently loaded alertinfo
+        phenomenon = this->alertInfo.phenomenon;
+        if (phenomenon == nullptr) return "Unknown";
+    }
+    if (strcmp(phenomenon, "TO") == 0) return "Tornado";
+    if (strcmp(phenomenon, "SV") == 0) return "Severe Thunderstorm";
+    if (strcmp(phenomenon, "SQ") == 0) return "Snow Squall";
+    if (strcmp(phenomenon, "HW") == 0) return "High Wind";
+    if (strcmp(phenomenon, "HU") == 0) return "Hurricane";
+    if (strcmp(phenomenon, "TS") == 0) return "Tropical Storm";
+    if (strcmp(phenomenon, "HI") == 0) return "Inland Hurricane";
+    if (strcmp(phenomenon, "FF") == 0) return "Flash Flood";
+    if (strcmp(phenomenon, "WS") == 0) return "Winter Storm";
+    if (strcmp(phenomenon, "WW") == 0) return "Winter Weather";
+    if (strcmp(phenomenon, "IS") == 0) return "Ice Storm";
+    if (strcmp(phenomenon, "BZ") == 0) return "Blizzard";
+    if (strcmp(phenomenon, "ZR") == 0) return "Freezing Rain";
+    if (strcmp(phenomenon, "EC") == 0) return "Extreme Cold";
+    if (strcmp(phenomenon, "WC") == 0) return "Wind Chill";
+    if (strcmp(phenomenon, "EH") == 0) return "Excessive Heat";
+    if (strcmp(phenomenon, "AS") == 0) return "Air Quality";
+    if (strcmp(phenomenon, "AF") == 0) return "Ashfall";
+    return "Unknown";
+}
+
 bool WeatherInfoOptimized::parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end) {
     // 1. Check Product Class (must be /O for Operational)
     // Format: /O.NEW.KBOX.WS.W.0004.260221T1800Z-260222T1200Z/
@@ -1092,16 +1192,16 @@ bool WeatherInfoOptimized::parseVTEC(const char* vtec, char* office, char* pheno
     strncpy(etn, vtec + 17, 4);
     etn[4] = '\0';
 
-    // 7. Parse Dates (Indices: Start at 22, End at 38)
+    // 7. Parse Dates (Indices: Start at 22, End at 36)
     // Format: YYMMDDTHHMMZ
-    *start = vtecTimeToUnix(vtec + 22, true);
-    *end   = vtecTimeToUnix(vtec + 36, true);
+    *start = unixToLocal(vtecTimeToUnix(vtec + 22));
+    *end   = unixToLocal(vtecTimeToUnix(vtec + 36));
 
     return true;
 }
 
 // Helper to convert VTEC timestamp (YYMMDDTHHMMZ) to time_t
-time_t WeatherInfoOptimized::vtecTimeToUnix(const char* vtecPart, bool asLocalTime) {
+time_t WeatherInfoOptimized::vtecTimeToUnix(const char* vtecPart) {
     // Input: "260221T1800Z" (13 chars)
     // Target: "2026-02-21T18:00:00Z"
     
@@ -1114,49 +1214,72 @@ time_t WeatherInfoOptimized::vtecTimeToUnix(const char* vtecPart, bool asLocalTi
                 vtecPart[9], vtecPart[10] // Minute
     );
 
-    return iso8601ToUnix(String(expanded), asLocalTime);
+    return iso8601ToUnix(String(expanded));
 }
 
 bool WeatherInfoOptimized::fetchWeatherAlerts() {
     return retryWithBackoff("weather alerts", [this]() {
 
+        SerialPrint("fetchWeatherAlerts: Starting", true);
         // 1. Initial Cleanup: Clear the internal alert active count
-        this->NumWeatherEvents = 0;
-        //set eventflags bit 0 to 0
-        I.EventFlags &= ~0x01; //clear bit 0
-
-        deleteFiles("/data/events/*", "/data/events");
 
         JsonDocument doc;
         int16_t httpCode;
         
         // NOAA Alerts endpoint by coordinates
-        char cbuf[128];
-        snprintf(cbuf, 127, "https://api.weather.gov/alerts/active?point=%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
-        String url = String(cbuf);
+        char url[128];
+        snprintf(url, 127, "https://api.weather.gov/alerts/active?point=%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
         String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
         extraHeaders += "If-Modified-Since: " + String(this->lastAlertFetchTime) + "\n";
 
 
         // Filter to only extract the features of interest from each alert 
         JsonDocument filter;
-        filter["features"][0]["properties"]["headline"] = true;
-        filter["features"][0]["properties"]["event"] = true;
-        filter["features"][0]["properties"]["description"] = true;
-        filter["features"][0]["properties"]["severity"] = true;
-        filter["features"][0]["properties"]["certainty"] = true;
-        filter["features"][0]["properties"]["urgency"] = true;
-        filter["features"][0]["properties"]["onset"] = true;
-        filter["features"][0]["properties"]["ends"] = true;
-        filter["features"][0]["properties"]["parameters"]["VTEC"] = true;
+        filter.clear();
+        filter["features"][0]["properties"] = true;
 
+//        filter["features"][0]["properties"]["headline"] = true;
+//        filter["features"][0]["properties"]["event"] = true;
+//        filter["features"][0]["properties"]["description"] = true;
+//        filter["features"][0]["properties"]["severity"] = true;
+//        filter["features"][0]["properties"]["certainty"] = true;
+//        filter["features"][0]["properties"]["urgency"] = true;
+//        filter["features"][0]["properties"]["onset"] = true;
+//        filter["features"][0]["properties"]["ends"] = true;
+//        filter["features"][0]["properties"]["parameters"]["VTEC"] = true;
 
-        if (makeSecureRequest(url, doc, httpCode, ERROR_HTTPFAIL_BOX, ERROR_JSON_BOX, extraHeaders, "", &filter)) {
+        HTTPMessage M;
+        M.setUrl(url);
+        M.setMethod("GET");
+        M.setContentType("application/json");
+        M.setCacert("bundle");
+        M.timeout = 15000; // 15 second timeout for nws
+        M.usePSRAM = true;
+        M.responseDoc = &doc;
+        //M.filter = &filter;
+        M.setExtraHeaders(extraHeaders.c_str());
 
-            if (httpCode == 304) {
+        bool success = SendHTTPMessage(M);
+        if (success) {
+            this->lastAlertUpdateTime = unixToLocal(iso8601ToUnix(doc["updated"].as<String>()));
+            this->lastAlertFetchTime = I.currentTime;
+
+            if (M.httpCode == 304) {
                 //no changes
                 return true;
             } 
+
+            //cleanup
+            this->NumWeatherEvents = 0;
+            deleteFiles("*", "/data/events");    
+            //clear bits 0,2,3
+            bitWrite(I.WeatherEventFlags, 0, 0); //bit 0 is for flagged alerts
+            bitWrite(I.WeatherEventFlags, 2, 0); //bit 2 is for severe alerts
+            bitWrite(I.WeatherEventFlags, 3, 0); //bit 3 is for imminent alerts
+
+            this->NumWeatherEvents = 0;    
+            this->alertInfo.initAlertInfo();
+    
             JsonArray features = doc["features"].as<JsonArray>();
             
             if (features.size() == 0) {
@@ -1165,6 +1288,7 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
             } else {
 
                 for (JsonObject feature : features) {
+                    this->NumWeatherEvents++;
 
                     JsonObject props = feature["properties"];
                     const char* vtecRaw = props["parameters"]["VTEC"][0]; // VTEC is usually the first element
@@ -1177,11 +1301,16 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
 
                     if (!filterAlerts(phen)) continue;
 
+                    //set event bit one, bit 0 is for flagged alerts are present                    
+                    bitWrite(I.WeatherEventFlags, 0, 1);
+
                     WeatherEventFile fileData;
                     memset(&fileData, 0, sizeof(WeatherEventFile));
                     strncpy(fileData.severity, props["severity"], 9);
+                    
                     strncpy(fileData.certainty, props["certainty"], 9);
                     strncpy(fileData.urgency, props["urgency"], 9);
+
                     fileData.time_start = tStart;
                     fileData.time_end = tEnd;
                     strncpy(fileData.office, off, 4);
@@ -1191,29 +1320,51 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
                     strncpy(fileData.event, props["event"] | "", 99);
                     strncpy(fileData.headline, props["headline"] | "", 199);
                     strncpy(fileData.description, props["description"] | "", 1199);
-
                     // Generate Filename: expdate-office-phenomenon-ETN.txt
                     char filename[22];
-                    snprintf(filename, 21, "/data/events/%d.txt", 
+                    snprintf(filename, 21, "/Data/Events/%d.txt", 
                         this->NumWeatherEvents+1);
-            
+
+                    int16_t eseverity = parseSeverity(fileData.severity);
+                    int16_t eurgency = parseUrgency(fileData.urgency);
+
+                    
+                    if (eseverity>this->alertInfo.E_severity) {
+                        //set the local info
+                        this->alertInfo.E_severity = parseSeverity(fileData.severity);
+                        this->alertInfo.E_certainty = parseCertainty(fileData.certainty);
+                        this->alertInfo.E_urgency = parseUrgency(fileData.urgency);
+                        strncpy(this->alertInfo.phenomenon, phen, 2);
+                        this->alertInfo.time_start = tStart;
+                        this->alertInfo.time_end = tEnd;
+                        this->alertInfo.eventnumber = fileData.event_number;
+                        strncpy(this->alertInfo.event, fileData.event, 32);
+
+                        if (eseverity == WeatherSeverity::EXTREME || eseverity == WeatherSeverity::SEVERE) bitWrite(I.WeatherEventFlags, 2,1); //set bit 2 to 1
+                        if (eurgency == WeatherUrgency::IMMINENT) bitWrite(I.WeatherEventFlags, 3,1); //set bit 3 to 1
+                    }
+
+
                     if (!writeAnythingToSD(filename, &fileData, sizeof(WeatherEventFile))) {
+                        SerialPrint("fetchWeatherAlerts: Could not write weather event file: " + String(filename), true);
                         storeError("fetchWeatherAlerts: Could not write weather event file");
                         continue;
                     }
 
-                    this->NumWeatherEvents++;
-                    //set EventFlagsbit 0 to 1
-                    I.EventFlags |= 0x01; //set bit 0 to 1
-
-                    this->lastAlertFetchTime = I.currentTime;
                 }
             }
+            SerialPrint("fetchWeatherAlerts: " + String(this->NumWeatherEvents) + " alerts fetched successfully", true);
+            return true;
+            
         } else {
-                //error
-                storeError("fetchWeatherAlerts: Could not fetch weather alerts");
+            SerialPrint("Alert request failed",true);
+            SerialPrint("HTTP Code: " + String(M.httpCode),true);
+            storeError("Alert request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
+            this->lastUpdateError = I.currentTime;
+            return false;
         }
-        return true;
+
+        return false;
     });
 }
 
@@ -1225,12 +1376,15 @@ bool WeatherInfoOptimized::loadNextWeatherAlert() {
     if (this->alertInfo.eventnumber == 0 || this->alertInfo.eventnumber == this->NumWeatherEvents) this->alertInfo.eventnumber = 1;
     else this->alertInfo.eventnumber++;
 
-    snprintf(this->alertInfo.filename, 21, "/data/events/%d.txt", 
+    char filename [32] = "";
+    snprintf(filename, 31, "/data/events/%d.txt", 
         this->alertInfo.eventnumber);
     
     WeatherEventFile fileData;
 
-    if (!readAnythingFromSD(this->alertInfo.filename, &fileData, sizeof(WeatherEventFile))) return false;
+    if (!readAnythingFromSD(filename, &fileData, sizeof(WeatherEventFile))) return false;
+    if (fileData.time_end < I.currentTime) return false; //alert is in the past, so no longer active
+
     this->alertInfo.E_severity = parseSeverity(fileData.severity);
     this->alertInfo.E_certainty = parseCertainty(fileData.certainty);
     this->alertInfo.E_urgency = parseUrgency(fileData.urgency);
@@ -1240,26 +1394,6 @@ bool WeatherInfoOptimized::loadNextWeatherAlert() {
 
     return true;
 }
-
-bool WeatherInfoOptimized::getWeatherAlertDetails(String& event, String& headline, String& description, String& severity, String& certainty, String& urgency) {
-    if (this->NumWeatherEvents == 0) return false;
-    if (this->alertInfo.eventnumber == 0 || this->alertInfo.eventnumber > this->NumWeatherEvents) return false;
-
-    WeatherEventFile fileData;
-
-    if (!readAnythingFromSD(this->alertInfo.filename, &fileData, sizeof(WeatherEventFile))) return false;
-
-    if (description != "") description = (String) fileData.description;
-    if (headline != "") headline = (String) fileData.headline;
-    if (event != "") event = (String) fileData.event;
-    if (severity != "") severity = (String) fileData.severity;
-    if (certainty != "") certainty = (String) fileData.certainty;
-    if (urgency != "") urgency = (String) fileData.urgency;
-    
-    return true;
-}
-
-
 
 WeatherSeverity WeatherInfoOptimized::parseSeverity(const char* s) {
     if (strcmp(s, "Extreme") == 0) return WeatherSeverity::EXTREME;
@@ -1284,4 +1418,6 @@ WeatherUrgency WeatherInfoOptimized::parseUrgency(const char* s) {
     if (strcmp(s, "Imminent") == 0) return WeatherUrgency::IMMINENT;
     return WeatherUrgency::INDETERMINATE;
 }
+
+
 #endif

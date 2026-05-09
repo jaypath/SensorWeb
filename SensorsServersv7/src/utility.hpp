@@ -41,8 +41,8 @@ bool isPressureValid(double pressure);
 int8_t shoutThis(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 bool tftPrint(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 //serial printing
-bool SerialPrint(const char* S, bool newline=false );
-bool SerialPrint(String S, bool newline=false);
+bool SerialPrint(const char* S, bool newline=false, int8_t level=0);
+bool SerialPrint(String S, bool newline=false, int8_t level=0);
 
 // Legacy compatibility functions - these are now methods of the Devices_Sensors class
 // but we keep them as standalone functions for backward compatibility

@@ -129,7 +129,7 @@ int8_t BootSecure::setPrefs(bool forceUpdate) {
     Prefs.isUpToDate = true;
     int8_t ret = BootSecure::encrypt((const unsigned char*)&Prefs, sizeof(STRUCT_PrefsH), (char*)BOOTKEY, tempPrefs, &outlen, 32);
     if (ret < 0) { //negative return codes are errors
-        SerialPrint("Failed to encrypt Prefs with error code: " + String(ret), true);
+        SerialPrint("Failed to encrypt Prefs with error code: " + String(ret), true,5);
         p.end();
         return -1;
     }

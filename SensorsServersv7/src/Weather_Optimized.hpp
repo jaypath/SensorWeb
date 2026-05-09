@@ -10,11 +10,72 @@
 #include <functional>
 
 
+#ifdef _USESDCARD
+
+#include "SDCard.hpp"
+#endif
+
+
 #define NUMWTHRDAYS 5
 #define WEATHER_CACHE_SIZE 3
 #define MAX_RETRY_ATTEMPTS 3
 //#define PARALLEL_REQUESTS_ENABLED 1
 
+
+/*
+struct PsramAllocator {
+    void* allocate(size_t size) { return ps_malloc(size); }
+    void deallocate(void* ptr) { free(ptr); }
+    void* reallocate(void* ptr, size_t new_size) { return ps_realloc(ptr, new_size); }
+  };
+  
+  // Type alias for an ArduinoJson 7 doc in PSRAM
+  using PsramJsonDocument = basicJsonDocument<PsramAllocator>;
+
+struct WeatherResult {
+    char* rawBuffer = nullptr; 
+    PsramJsonDocument* doc = nullptr;
+    size_t PSRAM_size;
+
+
+    bool initialize(size_t buffer_size=100*1024) {
+
+        if (this->isValid()) return false; //already initialized
+
+        this->rawBuffer = (char*)ps_malloc(buffer_size);
+        this->PSRAM_size = buffer_size;
+        if (!this->rawBuffer) return false; //failed to allocate
+
+        this->doc = new PsramJsonDocument();
+        if (!this->doc) return false; //failed to allocate
+
+        return true;
+    }
+
+    DeserializationError deserialize() {
+        //zero copy is used here, so the json string is not copied to the PSRAM buffer
+        return deserializeJson(*(this->doc), this->rawBuffer);
+    }
+
+    // The key to Zero-Copy is keeping BOTH alive until this is called
+    void cleanup() {
+        if (doc) {
+            delete doc; 
+            doc = nullptr;
+        }
+        if (rawBuffer) {
+            free(rawBuffer);
+            rawBuffer = nullptr;
+            this->PSRAM_size = 0;
+        }
+    }
+
+    // Check if we actually have data
+    bool isValid() {
+        return (doc != nullptr && rawBuffer != nullptr);
+    }
+};
+*/
 
 struct TimeInterval {
     time_t start;
@@ -36,16 +97,66 @@ enum WeatherSeverity : byte { UNKNOWN, MINOR, MODERATE, SEVERE, EXTREME };
 enum WeatherCertainty : byte { UNCERTAIN, UNLIKELY, POSSIBLE, LIKELY, OBSERVED };
 enum WeatherUrgency : byte { INDETERMINATE, PAST, FUTURE, EXPECTED, IMMINENT };
 
-struct WeatherAlerts {
+struct WeatherAlertSummary {
     uint8_t eventnumber;
     WeatherSeverity E_severity;
     WeatherCertainty E_certainty;
     WeatherUrgency E_urgency;
     char phenomenon[3]; //for example WW = winter weather
-    char filename[22];
     int16_t iconID;
     time_t time_start;
     time_t time_end;
+    char event[33];
+
+    // Constructor: Runs automatically when the struct is created
+    WeatherAlertSummary() {
+        initAlertInfo();
+    }
+
+    void initAlertInfo() {
+        this->eventnumber = 0;
+        this->E_severity = WeatherSeverity::UNKNOWN;
+        this->E_certainty = WeatherCertainty::UNCERTAIN;
+        this->E_urgency = WeatherUrgency::INDETERMINATE;
+        memset(this->phenomenon, 0, sizeof(this->phenomenon));
+        this->iconID = 0;
+        this->time_start = 0;
+        this->time_end = 0;
+        memset(this->event, 0, sizeof(this->event));
+    }
+
+
+};
+
+struct dailyWeatherForecast {
+    uint32_t dT_start;
+    uint32_t dT_end;
+    int8_t tempF;
+    int16_t weatherID;
+    bool isDaytime;
+    uint8_t PoP;
+    char details[400];
+
+    // Constructor: Runs automatically when the struct is created
+    dailyWeatherForecast() {
+        initDailyWeatherForecast();
+    }
+
+    void initDailyWeatherForecast() {
+        this->dT_start = 0;
+        this->dT_end = 0;
+        this->tempF = 0;
+        this->weatherID = 0;
+        this->isDaytime = false;
+        this->PoP = 0;
+        memset(this->details, 0, sizeof(this->details));
+    }
+
+    bool getPeriod(uint8_t periodNumber) {
+        char filename[26];
+        snprintf(filename, 25, "/Data/DailyWthr/%d.bin", periodNumber);
+        return readAnythingFromSD(filename, this, sizeof(*this));
+    }
 };
 
 struct WeatherEventFile {
@@ -62,6 +173,33 @@ struct WeatherEventFile {
     char event[100]; //event description
     char headline[200]; //headline of the event
     char description[1200]; //description of the event
+
+    // Constructor: Runs automatically when the struct is created
+    WeatherEventFile() {
+        initWeatherEventFile();
+    }
+
+    void initWeatherEventFile() {
+        this->iconID = 0;
+        this->time_start = 0;
+        this->time_end = 0;
+        this->office[0] = '\0';
+        this->phenomenon[0] = '\0';
+        this->significance[0] = '\0';
+        this->event_number = 0;
+        memset(this->severity, 0, sizeof(this->severity));
+        memset(this->certainty, 0, sizeof(this->certainty));
+        memset(this->urgency, 0, sizeof(this->urgency));
+        memset(this->event, 0, sizeof(this->event));
+        memset(this->headline, 0, sizeof(this->headline));
+        memset(this->description, 0, sizeof(this->description));
+    }
+
+    bool getEvent(uint16_t eventNumber) {
+        char filename[26];
+        snprintf(filename, 25, "/Data/Events/%d.txt", eventNumber);
+        return readAnythingFromSD(filename, this, sizeof(*this));
+    }
 };
 
 // Optimized WeatherInfo class - maintains same interface as original
@@ -88,8 +226,11 @@ private:
     char Grid_id[10] = "";
     int16_t Grid_x = 0;
     int16_t Grid_y = 0;
+    uint8_t tomorrowPeriodNumber = 0; //in a noaa forecast, this is the "period" or "number" for tomorrow daytime (it is 2 if we checked weather at night, because 1 is "tonight" and 2 is "tomorrow day", it is 3 if this weather report was checked during the day (1 is "today day", 2 is "today night", 3 is "tomorrow day", 4 is "tomorrow night", etc,))
+    bool isDaytime = false; //is it currently a day period or night period? This can be used to determine offset to future periods.
 
     // Optimization features
+    //WeatherResult weatherResult; //memory storage for json trees
     WeatherCacheEntry cache[WEATHER_CACHE_SIZE];
     uint8_t cache_index;
     bool grid_coordinates_cached;
@@ -104,6 +245,7 @@ private:
     uint32_t average_response_time;
     
     // Helper methods
+    void initAlertInfo();
     int16_t getIndex(time_t dT = 0);
     bool fetchGridCoordinates();
     bool fetchGridCoordinatesHelper();
@@ -113,10 +255,6 @@ private:
     bool fetchSunriseSunset();
     bool fetchWeatherAlerts();
 
-    // Optimized HTTP methods
-    // cert_path: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" for embedded CA bundle (sdkconfig.defaults)
-//    bool makeSecureRequest(const String& url, JsonDocument& doc, int& httpCode, ERRORCODES HTTP, ERRORCODES JSON, const char* cert_path= "/Certificates/NOAA.crt");
-    bool makeSecureRequest(String& url, JsonDocument& doc, int16_t& httpCode, ERRORCODES HTTP, ERRORCODES JSON, String& extraHeaders, const char* cert_path= "",  const JsonDocument* filter=nullptr);
     
     // Caching methods
     bool isGridCoordinatesValid();
@@ -144,11 +282,12 @@ private:
     WeatherCertainty parseCertainty(const char* s);
     WeatherUrgency parseUrgency(const char* s);
     bool parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end);
-    time_t vtecTimeToUnix(const char* vtecPart, bool asLocalTime);
+    time_t vtecTimeToUnix(const char* vtecPart);
 public:
-    WeatherAlerts alertInfo;
+    WeatherAlertSummary alertInfo;
     uint8_t NumWeatherEvents=0;
     uint32_t lastAlertFetchTime = 0;
+    uint32_t lastAlertUpdateTime = 0;
 
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt = 0;
@@ -206,9 +345,9 @@ public:
     void optimizeMemoryUsage();
     size_t getMemoryUsage();
 
+    String getAlertName(const char* phenomenon = nullptr);
     bool loadNextWeatherAlert();
-    bool getWeatherAlertDetails(String& event, String& headline, String& description, String& severity, String& certainty, String& urgency);
-
+    
     
     // Grid coordinates access (for compatibility)
     int16_t getGridX() const { return Grid_x; }

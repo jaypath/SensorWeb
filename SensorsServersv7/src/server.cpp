@@ -191,270 +191,216 @@ extern "C" {
 }
 #endif
 
-bool Server_SecureMessageEx(String& URL, String& payload, int16_t& httpCode, String& cacert, String& method, String& contentType,  String& body, String& extraHeaders, JsonDocument* responseDoc, const JsonDocument* filter, bool allowInsecure) {
+// A simple helper to let HTTPClient write directly into your M.payload
+class PayloadWrapper : public Stream { // Change Print to Stream
+  public:
+      HTTPMessage* msg;
+      size_t written = 0;
+      PayloadWrapper(HTTPMessage* m) : msg(m) {}
   
-  if (CheckWifiStatus(false)!=1)
-  return false;
+      // Required by Stream but not used for this
+      int available() override { return 0; }
+      int read() override { return -1; }
+      int peek() override { return -1; }
+      void flush() override {}
+  
+      // The actual workhorse
+      size_t write(uint8_t c) override {
+          if (written + 1 >= msg->payloadSize) {
+              if (!msg->resizePayload(msg->payloadSize + 4096)) return 0;
+          }
+          msg->payload.get()[written++] = (char)c;
+          msg->payload.get()[written] = '\0';
+          return 1;
+      }
+  
+      size_t write(const uint8_t *buffer, size_t size) override {
+          if (written + size + 1 >= msg->payloadSize) {
+              if (!msg->resizePayload(msg->payloadSize + size + 4096)) return 0;
+          }
+          memcpy(&msg->payload.get()[written], buffer, size);
+          written += size;
+          msg->payload.get()[written] = '\0';
+          return size;
+      }
+  };
 
-  WiFiClientSecure wfclient;
-  HTTPClient http; // In the ESP32 library, HTTPClient is the wrapper
 
-
-  //0. reserve a block to start off any json parsing
-  /*
-  if (responseDoc) {
-    responseDoc->clear(); 
-    (*responseDoc)[0] = 0; // Forces an initial allocation block
-    responseDoc->clear(); // Content is gone, but the allocated block remains
-  }
-    */
-   if (responseDoc) {
-    responseDoc->clear(); 
-   }
-    
-
-  // 1. Setup Security
-  if (!allowInsecure) {
-    bool use_bundle = (cacert.length() == 0 || cacert == "*" || cacert == "bundle");
-
-    if (use_bundle) {
-      #if defined(_USE_CERT_BUNDLE)
-      size_t bundle_len = (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start);
-      wfclient.setCACertBundle(x509_crt_imported_bundle_bin_start, bundle_len);
-      #else
-      SerialPrint("securemessageex: No cert bundle and no certificate. No HTTPS connection possible.", true);
-      storeError("securemessageex: No certifcates");
-      wfclient.setInsecure(); // Fallback if bundle isn't compiled
-      #endif
-    } else {
-      wfclient.setCACert(getCert(cacert).c_str());
-    } 
-  } else {
-    wfclient.setInsecure();
-  }
-
-  // 2. Initialize Connection
-  if (!http.begin(wfclient, URL.c_str())) {
-      SerialPrint("[HTTPS] Unable to connect to: " + URL, true);
-      storeError("Unable to connect to: " + URL);
+bool SendHTTPMessage(HTTPMessage& M) {
+  if (!M.url) {
+      M.success = false;
       return false;
   }
 
-  // 3. Add Required Headers (Crucial for NOAA)
-// --- Content-Type header ---
-  if (contentType.length() > 0) http.addHeader("Content-Type", contentType);
+  if (CheckWifiStatus(false) != 1) return false;
 
-// --- Extra headers: newline-separated list ---
-  if (extraHeaders.length() > 0) {
-   int start = 0;
-    while (true) {
-      int end = extraHeaders.indexOf('\n', start);
-      String line;
-      if (end == -1) line = extraHeaders.substring(start);
-      else    line = extraHeaders.substring(start, end);
+  WiFiClient wfclient;
+  WiFiClientSecure wfsclient;
+  HTTPClient http;
 
-      line.trim();
-      if (line.length() > 0) {
-        int colon = line.indexOf(':');
-        if (colon > 0) {
-          String key = line.substring(0, colon);
-          String val = line.substring(colon + 1);
-          key.trim();
-          val.trim();
-          if (key.length() > 0) http.addHeader(key, val);
-        }
-      }
-      if (end == -1) break;
-      start = end + 1;
-    }
-  }
 
-  // 4. Execute the  HTTP method ---
-  http.useHTTP10(true); //before http.GET(). This forces the server to send the whole payload as a steady stream without chunking, which is much easier for the esp32 to handle
-  if (method == "GET") {
-  httpCode = http.GET();
-  } else if (method == "POST") {
-  httpCode = http.POST(body);
-  } else if (method == "DELETE") {
-  httpCode = http.sendRequest("DELETE", (uint8_t*)nullptr, 0);
-  } else if (method == "PATCH") {
-  httpCode = http.sendRequest("PATCH", (uint8_t*)body.c_str(), body.length());
+  bool isSecure = String(M.url.get()).startsWith("https");
+  if (!isSecure) {
+
+  
+    http.begin(wfclient,M.url.get());
+    //
   } else {
-  httpCode = http.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
-  }
-  // 5. Integrated Error Checking
-  if (httpCode <= 0) {
-      // --- CHECK 1 & 3: Connection/TLS Failure ---
-      SerialPrint("[HTTPS] Connection failed! Error: " + http.errorToString(httpCode), true);
-      storeError("HTTPS Connection Error: " + http.errorToString(httpCode));
-      
-      // Log heap to check for memory-related TLS failure
-      uint32_t freeHeap = ESP.getFreeHeap();
-      SerialPrint("[System] Free Heap: " + String(freeHeap, DEC) + " bytes", true);
-      if (freeHeap < 10000) {
-        storeError("securemessageex: Free Heap <10kb");
-      }
 
-      // --- CHECK 2: SSL Specific Error ---
-      char lastError[100];
-      // Note: Using the underlying WiFiClientSecure for deep SSL errors
-      wfclient.lastError(lastError, 100);
-      if (strlen(lastError) > 0) {
-          SerialPrint("SSL Deep Error: " + String(lastError), true);
-          storeError("securemessageex: SSL Deep Error");
-      }
-
-      storeError("HTTPS Error: " + URL);
-      
-  } else {
-      // --- CHECK 1 & 3: Server Response Error ---
-      if (httpCode != HTTP_CODE_OK) {
-        if (httpCode == 304) {
-          SerialPrint("securemessageex: 304. Not Modified and no new data.", true);
-          //not an error, just no new data          
-        }
-        else if (httpCode == 403) {
-            SerialPrint("securemessageex: 403. User-Agent or coordinates requried?", true);
-            storeError("securemessageex: 403");
-        } else if (httpCode == 404) {
-            SerialPrint("404 Not Found. Check URL formatting.", true);
-            storeError("securemessageex: 404");
+    //Setup Security
+    if (!M.allowInsecure) {
+        bool use_bundle = (M.cacert.get() == nullptr || strcmp(M.cacert.get(), "*") == 0 || strcmp(M.cacert.get(), "bundle") == 0 || strcmp(M.cacert.get(), "BUNDLE") == 0 || strcmp(M.cacert.get(), "") == 0);
+        if (use_bundle) {
+            #if defined(_USE_CERT_BUNDLE)
+            wfsclient.setCACertBundle(x509_crt_imported_bundle_bin_start, (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
+            #else
+            M.success = false;
+            storeError("SendHTTPMessage: No certificate bundle found", ERROR_HTTP_CERT_BUNDLE,true);
+            SerialPrint("SendHTTPMessage: No certificate bundle found", true);
+            return false;
+            #endif
         } else {
-          SerialPrint("Code: " + String(httpCode) + " " + http.errorToString(httpCode), true);
-          storeError("securemessageex: " + String(httpCode) + " error");
-        }      
+            wfsclient.setCACert(M.cacert.get());
+        }
+    } else {
+        SerialPrint("SendHTTPMessage: WARNING - insecure connection for " + String(M.url.get()), true);
+        wfsclient.setInsecure();
+    }
+      // 2. Initialize Connection
+    if (!http.begin(wfsclient, M.url.get())) {
+      M.success = false;
+      SerialPrint("SendHTTPMessage: Failed to initialize connection for " + String(M.url.get()), true);
+      storeError("SendHTTPMessage: Failed for " + String(M.url.get()), ERROR_HTTP_REQUEST,true);
+      return false;
+    }
+
+  }
+
+//  http.useHTTP10(true); //always prefer HTTP/1.0 for no chunked encoding
+  if (M.timeout > 0) http.setTimeout(M.timeout); // 15 second timeout for geocoding
+
+  // 3. Headers & Method execution
+  if (M.contentType) http.addHeader("Content-Type", M.contentType.get());
+  
+  // Parse Extra Headers (Key: Value\nKey: Value)
+  if (M.extraHeaders) {
+      String headers = String(M.extraHeaders.get());
+      int start = 0;
+      while (start < headers.length()) {
+          int end = headers.indexOf('\n', start);
+          String line = (end == -1) ? headers.substring(start) : headers.substring(start, end);
+          int colon = line.indexOf(':');
+          if (colon != -1) {
+              http.addHeader(line.substring(0, colon), line.substring(colon + 1));
+          }
+          if (end == -1) break;
+          start = end + 1; 
+      }
+  }
+
+  const char* method = M.method ? M.method.get() : "GET";
+  M.httpCode = http.sendRequest(method, (uint8_t*)M.body.get(), M.body ? strlen(M.body.get()) : 0);
+
+
+  if (M.httpCode < 200 || M.httpCode >= 400) {
+    SerialPrint("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), true);
+    SerialPrint("SendHTTPMessage: Error: " + String(http.errorToString(M.httpCode).c_str()), true);
+    storeError("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), ERROR_HTTP_RESPONSE,true);
+    M.success = false;
+    http.end();
+
+    return false;
+  }
+
+  // 4. Handle Response
+  int serverSize = http.getSize();
+
+  if (serverSize == 0) {
+    SerialPrint("SendHTTPMessage: FYI: No payload from " + String(M.url.get()), true);
+    M.success = true; //no payload
+    http.end();
+    return true;
+  }
+    
+  if (serverSize == -1) {
+    // Case: Chunked Encoding (Unknown size)
+
+    if (!M.payload ) { //user did not make a payload in advance, I'll have to guess
+
+      size_t ramSize = 0;
+      if (M.usePSRAM) {
+        //correct call is for me to set the payload size, but the caller is allowed to do so
+        //use 400kb of esp_get_free_psrampsram if that is available
+        ramSize = ESP.getFreePsram();
+
+        if (ramSize >= 450 * 1024) ramSize = 400 * 1024;
+        else if (ramSize > 250*1024) ramSize = 200 * 1024;
+        else if (ramSize > 150*1024) ramSize = 100 * 1024;
+        else if (ramSize > 100*1024) ramSize = 50 * 1024;
+        else if (ramSize > 50*1024) ramSize = 20 * 1024;
+        else if (ramSize > 20*1024) ramSize = 10 * 1024;
+        else {
+          M.usePSRAM = false;
+          ramSize = 2*1024;
+        }
+      } else {
+        ramSize = esp_get_free_heap_size();
+        if (ramSize >= 70 * 1024) ramSize = 20 * 1024;
+        else if (ramSize > 50*1024) ramSize = 10 * 1024;
+        else ramSize = 2*1024;
+      }
+      M.initPayload(ramSize);
+    }
+
+  } else {
+    if (!M.payload) {
+      if (!M.initPayload(serverSize + 1)) {
+        SerialPrint("SendHTTPMessage: Failed to initialize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), true);
+        storeError("SendHTTPMessage: Failed to initialize payload for " + String(M.url.get()), ERROR_HTTP_RESPONSE,true);
+        M.success = false;
         http.end();
         return false;
-      
-      } else {
-        // 6. Handle Payload
-        // Create a buffer in PSRAM. 
-        // We use a pointer to ensure we control the allocation.
-
-        // Check how much data the server is sending
-        int contentLength = http.getSize();
-
-        // Create a buffer in PSRAM. 
-        // We use a pointer to ensure we control the allocation.
-        char* psramBuffer = nullptr;
-
-        if (contentLength > 0) {
-          // Allocate exact size + 1 for null terminator
-          psramBuffer = (char*)ps_malloc(contentLength + 1024);
-        } else {
-          // If Content-Length is unknown (chunked), allocate a safe large block
-          // NOAA responses are rarely over 100KB, but PSRAM is huge.
-          psramBuffer = (char*)ps_malloc(512 * 1024); 
-        }
-
-        if (!psramBuffer) {
-          SerialPrint("securemessageex: PSRAM allocation failed!", true);
+      }
+    } else {
+      if (M.payloadSize < serverSize) {
+        if (!M.resizePayload(serverSize + 1)) {
+          SerialPrint("SendHTTPMessage: Failed to resize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), true);
+          storeError("SendHTTPMessage: Failed to resize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), ERROR_HTTP_RESPONSE,true);
+          M.success = false;
           http.end();
           return false;
         }
-
-        // Use a stream to fill our PSRAM buffer
-        WiFiClient* stream = http.getStreamPtr();
-        size_t bytesRead = 0;
-        uint32_t startMs = millis();
-        // Fill the buffer manually to ensure we don't hit timing gaps
-        while (http.connected() && (contentLength < 0 || bytesRead < contentLength)) {
-          while (stream->available()) {
-              psramBuffer[bytesRead++] = stream->read();
-              startMs = millis(); // Reset timeout on every byte
-          }
-          if (millis() - startMs > 5000) break; // 5s gap timeout
-        }
-        psramBuffer[bytesRead] = '\0'; // Null terminate
-
-        http.end();
-
-        DeserializationError error;
-
-        // Now deserialize from the stable PSRAM buffer
-        if (filter) {
-          error = deserializeJson(*responseDoc, (const char*)psramBuffer, DeserializationOption::Filter(*filter));
-        } else {
-          error = deserializeJson(*responseDoc, (const char*)psramBuffer);
-        }
-
-        // CRITICAL: Free the PSRAM memory
-        free(psramBuffer);
-
-/*
-//old method used SD card for buffering
-          //download the data to the SD Card
-          File dumpFile = SD.open("/Data/temp_stream.json", FILE_WRITE);
-          if (!dumpFile) {
-            SerialPrint("securemessageex: Failed to open SD for writing", true);
-            storeError("securemessageex: Failed to open SD for writing");
-            return false;
-          }
-          http.writeToStream(&dumpFile);
-          dumpFile.close();
-
-          dumpFile = SD.open("/Data/temp_stream.json", FILE_READ);
-          if (!dumpFile) {
-            SerialPrint("securemessageex: Failed to open SD for reading", true);
-            storeError("securemessageex: Failed to open SD for reading");
-            return false;
-          } else {
-            // Standard full deserialization
-            error = deserializeJson(*responseDoc, dumpFile, DeserializationOption::Filter(filter));
-            dumpFile.close();
-          }
-*/
-
-        
-        if (error) {
-          
-            SerialPrint("securemessageex: JSON Deserialization failed: " + String(error.c_str()), true);
-            SerialPrint("The original URL: " + URL, true);
-            SerialPrint("securemessageex: HEAP MEMORY: " + String(ESP.getFreeHeap(), DEC) + " bytes", true);
-            SerialPrint("securemessageex: Error Code: " + String(error.c_str()), true);
-            storeError("securemessageex: JSON deserialization error: "  + String(error.c_str()));
-    
-            if (error == DeserializationError::IncompleteInput) {
-                SerialPrint("securemessageex: IncompleteInput", true);
-                storeError("securemessageex: IncompleteInput");
-            } else if (error == DeserializationError::NoMemory) {
-                SerialPrint("securemessageex: NoMemory", true);
-                storeError("securemessageex: NoMemory");
-            } else if (error == DeserializationError::InvalidInput) {
-                SerialPrint("securemessageex: InvalidInput", true);
-                storeError("securemessageex: InvalidInput");
-            }
-
-            
-            return false;
-        }
-        return true;
       }
+    }
+
+  } 
+
+  //now stream the response to the payload
+  PayloadWrapper wrapper(&M);
+  http.writeToStream(&wrapper); 
+  M.success = true;
+
+  M.success = true;
+// 5. Optional JSON Deserialization
+if (M.success && M.responseDoc) {
+  DeserializationError error;
+  if (M.filter) {
+    SerialPrint("SendHTTPMessage: Deserializing JSON with filter for " + String(M.url.get()), true);
+    error = deserializeJson(*M.responseDoc, M.payload.get(), DeserializationOption::Filter(*M.filter));
+  } else {
+    error = deserializeJson(*M.responseDoc, M.payload.get());
   }
-  return false;
+  if (error) {
+      M.success = false;
+      SerialPrint("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), true);
+      storeError("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), ERROR_JSON_PARSE,true);
+  }
 }
 
 
-bool Server_Message(String& URL, String& payload, int &httpCode) { 
-  
-  if (URL.indexOf("https:")>-1) return false; //this cannot connect to https server!
-  HTTPClient http;
-  WiFiClient wfclient;
-  
 
-  if(CheckWifiStatus(false)==1){
-    
-    http.begin(wfclient,URL.c_str());
-    //http.useHTTP10(true);
-    httpCode = http.GET();
-    
-    payload = http.getString();
-  
-    http.end();
-    return true;
-  } 
-
-  return false;
+  http.end();
+  return M.success;
 }
 
 
@@ -1009,7 +955,7 @@ void apiDetectTimezone() {
   
   String json = "{\"success\":" + String(success ? "true" : "false") + 
                 ",\"utc_offset\":" + String(Prefs.TimeZoneOffset) +
-                ",\"dst_enabled\":" + String(I.DST != 0 ? "true" : "false") +
+                ",\"dst_enabled\":" + String(I.DST) +
                 ",\"dst_offset\":" + String(I.DSTOffset) +
                 ",\"dst_start_date\":" + String(I.DSTStartUnixTime) +
                 ",\"dst_end_date\":" + String(I.DSTEndUnixTime) + "}";
@@ -1021,13 +967,13 @@ void apiSaveTimezone() {
   registerHTTPMessage("API_TZ");
   
   int32_t utc_offset = server.hasArg("utc_offset") ? server.arg("utc_offset").toInt() : 0;
-  bool dst_enabled = server.hasArg("dst_enabled") ? (server.arg("dst_enabled") == "true" || server.arg("dst_enabled") == "1") : false;
+  uint8_t dst_enabled = server.hasArg("dst_enabled") ? server.arg("dst_enabled").toInt() : 0;
   uint32_t dst_start_date = server.hasArg("dst_start_date") ? server.arg("dst_start_date").toInt() : 0;
   uint32_t dst_end_date = server.hasArg("dst_end_date") ? server.arg("dst_end_date").toInt() : 0;
   int32_t dst_offset = server.hasArg("dst_offset") ? server.arg("dst_offset").toInt() : 0;
 
   Prefs.TimeZoneOffset = utc_offset;
-  I.DST = dst_enabled?0:-1,0; //note that 0 still means DST is used, but -1 means no DST info found
+  I.DST = dst_enabled; //note that 0=no DST here, 1=DST not active, 2=DST active
   I.DSTStartUnixTime = dst_start_date;
   I.DSTEndUnixTime = dst_end_date;
   I.DSTOffset = dst_offset;
@@ -1508,7 +1454,7 @@ void handleInitialSetup() {
         </div>
         
         <div class="form-group">
-          <label for="dst_enabled">DST (-1 - none, 0 - inactive, 1 - active)</label>
+          <label for="dst_enabled">DST (0 - none, 1 - inactive, 2 - active)</label>
           <input type="number" id="dst_enabled" value="0" step="1">          
         </div>
         
@@ -1522,7 +1468,7 @@ void handleInitialSetup() {
         </div>
         <div class="form-group">
           <label for="dst_offset">DST Offset (seconds)</label>
-          <input type="number" id="dst_offset" value="3600" step="900">
+          <input type="number" id="dst_offset" value="3600" step="600">
         </div>
         
         <button class="btn btn-primary" onclick="saveTimezone()">Save Timezone</button>
@@ -1795,7 +1741,7 @@ async function autoDetectTimezone() {
     if (data.success || data.utc_offset !== 0) {
       // Populate form
       document.getElementById('utc_offset').value = data.utc_offset;
-      document.getElementById('dst_enabled').value = data.dst_enabled ? 'true' : 'false';
+      document.getElementById('dst_enabled').value = data.dst_enabled ;
       document.getElementById('dst_start_date').value = data.dst_start_date;
       document.getElementById('dst_end_date').value = data.dst_end_date;
       document.getElementById('dst_offset').value = data.dst_offset;
@@ -1926,14 +1872,25 @@ void handleREQUESTUPDATE() {
     if (server.argName(i)=="SensorNum") j=server.arg(i).toInt();
   }
 
-  String payload;
-  int httpCode;
-  
   // Get the device IP for the specified sensor
   ArborysDevType* device = Sensors.getDeviceBySnsIndex(j);
   if (device) {
-    String URL = device->IP.toString() + "/UPDATEALLSENSORREADS";
-    Server_Message(URL, payload, httpCode);
+    HTTPMessage M;
+    char url[100];
+    snprintf(url, 99, "%s/UPDATEALLSENSORREADS", device->IP.toString().c_str());
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.usePSRAM = false;
+    M.timeout = 5000;
+    M.allowInsecure = true;
+
+    if (SendHTTPMessage(M)) {
+      WEBHTML = "Updated-- Press Back Button";  //This returns to the main page
+      serverTextClose(M.httpCode,false);
+    } else {
+      WEBHTML = "Failed to update sensor reads";
+      serverTextClose(M.httpCode,false);
+    }
   }
 
   server.sendHeader("Location", "/");
@@ -2830,45 +2787,50 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
 
   // Editable fields from STRUCT_CORE I in specified order
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">UTC Offset</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"utc_offset\" value=\"" + (String) Prefs.TimeZoneOffset + "\" maxlength=\"7\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">UTC Offset (sec)</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"utc_offset\" name=\"utc_offset\" value=\"" + (String) Prefs.TimeZoneOffset + "\" maxlength=\"7\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 
-  //add DST value box where values are -1 (no DST) or 0 (DST is used) or 1 (DST is active)
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">DST</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"dst_enabled\" value=\"" + (String) I.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  //add DST value box where values are 0 (no DST) or 1 (DST is used) or 2 (DST is active)
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">DST is used in this locale (0 = no, 1 = yes but not active, 2 = active)</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" id=\"dst_enabled\" name=\"dst_enabled\" value=\"" + (String) I.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   //add DST start unixtime and end unixtime and DST offset
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Start UnixTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_start_date\" value=\"" + (String) I.DSTStartUnixTime + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End UnixTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_end_date\" value=\"" + (String) I.DSTEndUnixTime + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"dst_offset\" value=\"" + (String) I.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Start</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset (sec)</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_offset\" name=\"dst_offset\" value=\"" + (String) I.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 //add a button to autodetect DST
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"button\" value=\"Autodetect DST\" onclick=\"autodetectTimezone()\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Button</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"button\" id=\"detect-tz-btn\" value=\"Autodetect DST\" onclick=\"autodetectTimezone()\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
     
   // Device Name Configuration
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"deviceName\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   // CYCLE fields
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleHeaderMinutes</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleHeaderMinutes\" value=\"" + (String) I.cycleHeaderMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleWeatherMinutes</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleWeatherMinutes\" value=\"" + (String) I.cycleWeatherMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleCurrentConditionMinutes</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleCurrentConditionMinutes\" value=\"" + (String) I.cycleCurrentConditionMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleFutureConditionsMinutes</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleFutureConditionsMinutes\" value=\"" + (String) I.cycleFutureConditionsMinutes + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">cycleFlagSeconds</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"cycleFlagSeconds\" value=\"" + (String) I.cycleFlagSeconds + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalHourlyWeather\" value=\"" + (String) I.IntervalHourlyWeather + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  // Timer_ScreenChange_RESET
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ScreenChangeTimer</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"ScreenChangeTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  // Timer_Header_RESET
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">HeaderTimer</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"HeaderTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  // Timer_CurrentWeatherIcon_RESET
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CurrentWeatherIconTimer</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"CurrentWeatherIconTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+  // Timer_CurrentWeatherIconAlert_RESET
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CurrentWeatherIconAlertTimer</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"CurrentWeatherIconAlertTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
+
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalFutureWeather</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalFutureWeather\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+
 
   // showTheseFlags - 8 individual checkboxes for each bit
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">showTheseFlags (Display Settings)</div>";
@@ -2944,28 +2906,29 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<script>";
   WEBHTML = WEBHTML + R"===(
 // Auto-detect timezone
-async function autoDetectTimezone() {
-  showStatus('timezone-status', 'Detecting timezone...', 'info');
-  document.getElementById('detect-tz-btn').disabled = true;
-  
+async function autodetectTimezone() {
+const btn = document.getElementById('detect-tz-btn');
+  btn.disabled = true;
+  btn.value = "Detecting...";
+
   try {
     const response = await fetch('/api/timezone');
     const data = await response.json();
     
-    if (data.success || data.utc_offset !== 0) {
-      // Populate form
+    // Using IDs to fill the values
+    if (data.utc_offset !== undefined) {
       document.getElementById('utc_offset').value = data.utc_offset;
-      document.getElementById('dst_enabled').value = data.dst_enabled ? 'true' : 'false';
-      document.getElementById('dst_start_date').value = data.dst_start_date;
-      document.getElementById('dst_end_date').value = data.dst_end_date;
-      document.getElementById('dst_offset').value = data.dst_offset;
-      
-      showStatus('timezone-status', 'Timezone detected and saved.', 'success');
-    } else {
-      showStatus('timezone-status', 'Auto-detection failed. Please set manually.', 'info');
+      document.getElementById('dst_enabled').value = data.dst_enabled;
+      document.getElementById('dst_start_date').value = data.dst_start_date || '';
+      document.getElementById('dst_end_date').value = data.dst_end_date || '';
+      document.getElementById('dst_offset').value = data.dst_offset || '3600';
+      alert('Timezone detected!');
     }
   } catch (error) {
-    showStatus('timezone-status', 'Detection error. Manually set timezone.', 'info');
+    alert('Detection failed. Please set manually.');
+  } finally {
+    btn.disabled = false;
+    btn.value = "Autodetect DST";
   }
 }
   </script>
@@ -3063,40 +3026,25 @@ void handleREADONLYCOREFLAGS() {
 
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.CLOCK_Y + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Y_SCRMAIN_CLOCK + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">HEADER_Y</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.HEADER_Y + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastHeaderTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (String) (I.lastHeaderTime ? dateify(I.lastHeaderTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastWeatherTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastWeatherTime ? dateify(I.lastWeatherTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastClockDrawTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastClockDrawTime ? dateify(I.lastClockDrawTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastFlagViewTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastFlagViewTime ? dateify(I.lastFlagViewTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentConditionTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastCurrentConditionTime ? dateify(I.lastCurrentConditionTime) : "???") + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Y_SCRMAIN_HEADER + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.IntervalHourlyWeather + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.IntervalHourlyWeatherDisplay + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchX</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.touchX + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.touchX + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchY</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.touchY + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.touchY + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">alarmIndex</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.alarmIndex + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.alarmIndex + "</div>";
   
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ScreenNum</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.ScreenNum + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Screen_Now + "</div>";
   #endif
 
   #ifdef _USEWEATHER
@@ -3422,27 +3370,33 @@ void handleCONFIG_POST() {
   // Timezone configuration is now handled through the timezone setup page
 
   #if defined(_USEWEATHER) && defined(_USETFT)
-  if (server.hasArg("cycleCurrentConditionMinutes")) {
-    I.cycleCurrentConditionMinutes = server.arg("cycleCurrentConditionMinutes").toInt();
-  }
-  if (server.hasArg("cycleFlagSeconds")) {
-    I.cycleFlagSeconds = server.arg("cycleFlagSeconds").toInt();
-  }
-  if (server.hasArg("cycleFutureConditionsMinutes")) {
-    I.cycleFutureConditionsMinutes = server.arg("cycleFutureConditionsMinutes").toInt();
-  }
+
   if (server.hasArg("IntervalHourlyWeather")) {
-    I.IntervalHourlyWeather = server.arg("IntervalHourlyWeather").toInt();
+    I.GRAPHICS.IntervalHourlyWeatherDisplay = server.arg("IntervalHourlyWeather").toInt();
   }
   if (server.hasArg("screenChangeTimer")) {
-    I.screenChangeTimer = server.arg("screenChangeTimer").toInt();
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET = server.arg("screenChangeTimer").toInt();
   }
   if (server.hasArg("cycleHeaderMinutes")) {
-    I.cycleHeaderMinutes = server.arg("cycleHeaderMinutes").toInt();
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET = server.arg("cycleHeaderMinutes").toInt();
   }
-  if (server.hasArg("cycleWeatherMinutes")) {
-    I.cycleWeatherMinutes = server.arg("cycleWeatherMinutes").toInt();
+  if (server.hasArg("CurrentWeatherIconTimer")) {
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET = server.arg("CurrentWeatherIconTimer").toInt();
   }
+
+  if (server.hasArg("CurrentWeatherIconAlertTimer")) {
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET = server.arg("CurrentWeatherIconAlertTimer").toInt();
+  }
+
+  if (server.hasArg("CurrentConditionTimer")) {
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET = server.arg("CurrentConditionTimer").toInt();
+  }
+
+  if (server.hasArg("IntervalFutureWeather")) {
+    I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET = server.arg("IntervalFutureWeather").toInt();
+  }
+
+
   #endif
   
   // Process device name
@@ -3479,11 +3433,13 @@ void handleCONFIG_POST() {
     I.isUpToDate = false;
   }
   if (server.hasArg("dst_start_date")) {
-    I.DSTStartUnixTime = server.arg("dst_start_date").toInt();
+     String tmp = server.arg("dst_start_date");
+     I.DSTStartUnixTime = convertStrTime(tmp);     
     I.isUpToDate = false;
   }
   if (server.hasArg("dst_end_date")) {
-    I.DSTEndUnixTime = server.arg("dst_end_date").toInt();
+    String tmp = server.arg("dst_end_date");
+    I.DSTEndUnixTime = convertStrTime(tmp);     
     I.isUpToDate = false;
   }
   if (server.hasArg("dst_offset")) {
@@ -3529,42 +3485,29 @@ void handleCONFIG_POST() {
 
 #if defined(_USEWEATHER) && defined(_USETFT)
   //check for invalid values
-if (I.cycleHeaderMinutes < 1) {
-  I.cycleHeaderMinutes = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET < 10) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET = 60;
 }
-if (I.cycleWeatherMinutes < 1) {
-  I.cycleWeatherMinutes = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET < 10 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET > 240) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET = 30;
 }
-if (I.cycleFutureConditionsMinutes < 1) {
-  I.cycleFutureConditionsMinutes = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET < 10) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET = 30;
 }
-if (I.cycleCurrentConditionMinutes < 1) {
-  I.cycleCurrentConditionMinutes = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET > 120 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET < 3) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET = 5;
 }
-if (I.screenChangeTimer < 1) {
-  I.screenChangeTimer = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET > 200 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET < 5) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET = 75;
 }
-if (I.IntervalHourlyWeather < 1) {
-  I.IntervalHourlyWeather = 1;
+if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET > 120 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET < 10) {
+  I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET = 30;
 }
-if (I.cycleHeaderMinutes > 120) {
-  I.cycleHeaderMinutes = 120;
+
+if (I.GRAPHICS.IntervalHourlyWeatherDisplay < 1) {
+  I.GRAPHICS.IntervalHourlyWeatherDisplay = 1;
 }
-if (I.cycleWeatherMinutes > 120) {
-  I.cycleWeatherMinutes = 120;
-}
-if (I.cycleFutureConditionsMinutes > 120) {
-  I.cycleFutureConditionsMinutes = 120;
-}
-if (I.cycleCurrentConditionMinutes > 60) {
-  I.cycleCurrentConditionMinutes = 60;
-}
-if (I.screenChangeTimer > 120) {
-  I.screenChangeTimer = 120;
-}
-if (I.IntervalHourlyWeather > 4) {
-  I.IntervalHourlyWeather = 4;
-}
+
 #endif
 
   // Save the updated configuration to persistent storage
@@ -3832,16 +3775,17 @@ void handleSNS_CALIBRATION_SOIL_CAPACITANCE() {
 
 // Helper to get external IP
 String getPublicIP() {
-  HTTPClient http;
-  WiFiClient client; // ipify uses HTTP (port 80) by default
-  http.begin(client, "http://api.ipify.org");
-  int httpCode = http.GET();
-  String ip = "";
-  if (httpCode == HTTP_CODE_OK) {
-    ip = http.getString();
+  HTTPMessage M;
+  M.allowInsecure = true;
+  M.usePSRAM = false;
+  M.timeout = 10000;  
+  M.setUrl("http://api.ipify.org");
+  M.setMethod("GET");
+
+  if (SendHTTPMessage(M)) {
+    return String(M.payload.get());
   }
-  http.end();
-  return ip;
+  return "";
 }
 
 
@@ -3918,7 +3862,10 @@ void handleWeather() {
   if (currentWeatherID < 0) currentWeatherID = 999;
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Current Weather</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + WeatherData.nameWeatherIcon(currentWeatherID) + "</td></tr>";
-  
+
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Number of events</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(WeatherData.NumWeatherEvents) + "</td></tr>";
+
   WEBHTML = WEBHTML + "</table>";
   
   // Daily forecast for next 3 days
@@ -4137,7 +4084,7 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
     tft.setTextColor(FG_COLOR);
     #endif
   
-    if (getCoordinatesFromAddress(street, city, state, zipCode)) {
+    if (getCoordinatesFromAddress(zipCode, street, city, state)) {
       
       if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) {
         #ifdef _USETFT
@@ -5567,7 +5514,7 @@ uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer) {
 void processJSONMessage(String& postData, String& responseMsg) {
  //this is called when json data is received.
 
-  SerialPrint("Processing sensor data JSON: " + postData,true);
+  SerialPrint("Processing sensor data JSON: " + postData,true); //default to level 0
    //process the sensor data JSON buffer
 
    StaticJsonDocument<512> doc;
@@ -5947,28 +5894,17 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType)
   static char urlBuffer[64];
   snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
 
-  // Create HTTP client with proper cleanup
-  WiFiClient wfclient;
-  HTTPClient http;
-  
-  // Set timeout to prevent hanging
-  http.setTimeout(5000); // 5 second timeout
-  
-  http.useHTTP10(true);
-
-  if (http.begin(wfclient, urlBuffer)) {
-  http.addHeader("Content-Type","application/x-www-form-urlencoded");
-  int httpCode = http.POST((uint8_t*)jsonBuffer, strlen(jsonBuffer));
-  //String payload = http.getString();
-    
-    // Always end the connection
-  http.end();
-
-  registerHTTPSend(ip, msgType);
-  return httpCode;
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(jsonBuffer);
+  if (SendHTTPMessage(M)) {
+    registerHTTPSend(ip, msgType);
+    return M.httpCode;
   }
   I.HTTP_OUTGOING_ERRORS++;
-  return -1000; //failed to begin connection
+  return -1000; //failed to send message
 }  
 
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
@@ -6138,7 +6074,7 @@ String getWiFiModeString() {
 
 
 // Complete address to coordinates conversion using US Census Bureau Geocoding API
-bool getCoordinatesFromAddress(const String& street, const String& city, const String& state, const String& zipCode) {
+bool getCoordinatesFromAddress(const String& zipCode, const String& street, const String& city, const String& state) {
 
   double lat = 0, lon = 0;
 
@@ -6170,244 +6106,97 @@ bool getCoordinatesFromAddress(const String& street, const String& city, const S
   url += "&benchmark=Public_AR_Current&format=json";
   
   JsonDocument doc;
-  int httpCode;
   
   SerialPrint(("Fetching coordinates for address: " + street + ", " + city + ", " + state + " " + zipCode).c_str(), true);
   SerialPrint(("API URL: " + url).c_str(), true);
-  
-  // Make HTTP request to Census Geocoding API
-  HTTPClient http;
-  http.begin(url);
-  http.setTimeout(15000); // 15 second timeout for geocoding
-  
-  httpCode = http.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      http.end();
-      
-      SerialPrint("Received response from Census Geocoding API", true);
-      
-      // Parse JSON response
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (error) {
-          SerialPrint("Failed to parse JSON response from Census Geocoding API", true);
-          SerialPrint(("JSON Error: " + String(error.c_str())).c_str(), true);
-          storeError("Failed to parse JSON response from Census Geocoding API", ERROR_JSON_GEOCODING,true);
-          return false;
-      }
-      
+
+
+  HTTPMessage M;
+  M.setUrl(url.c_str());
+  M.setMethod("GET");
+  M.setContentType("application/json");
+  M.timeout = 5000; // 5 second timeout for geocoding
+  M.usePSRAM = false;
+  M.responseDoc = &doc;
+  if (SendHTTPMessage(M)) {
       // Check if we have address matches
       if (doc["result"]["addressMatches"].is<JsonArray>()) {
-          JsonArray addressMatches = doc["result"]["addressMatches"];
-          
-          if (addressMatches.size() > 0) {
-              // Get the first (best) match
-              JsonObject match = addressMatches[0];
-              
-              if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
-                  lon = match["coordinates"]["x"].as<double>();
-                  lat = match["coordinates"]["y"].as<double>();
-                  
-                  SerialPrint(("Coordinates found: " + String(lat, 6) + ", " + String(lon, 6)).c_str(), true);
-                  Prefs.LATITUDE = lat;
-                  Prefs.LONGITUDE = lon;
-                  Prefs.isUpToDate = false;
-                  // Log the matched address for verification
-                  if (match["matchedAddress"].is<String>()) {
-                      String matchedAddress = match["matchedAddress"].as<String>();
-                      SerialPrint(("Matched Address: " + matchedAddress).c_str(), true);
-                  }
-                  
-                  return true;
-              }
-          }
-      }
-      
-      SerialPrint("No address matches found in the response", true);
-  } else {
-      SerialPrint(("HTTP request failed with code: " + String(httpCode)).c_str(), true);
-      http.end();
+        JsonArray addressMatches = doc["result"]["addressMatches"];
+        
+        if (addressMatches.size() > 0) {
+            // Get the first (best) match
+            JsonObject match = addressMatches[0];
+            
+            if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
+                lon = match["coordinates"]["x"].as<double>();
+                lat = match["coordinates"]["y"].as<double>();
+                
+                SerialPrint(("Coordinates found: " + String(lat, 6) + ", " + String(lon, 6)).c_str(), true);
+                Prefs.LATITUDE = lat;
+                Prefs.LONGITUDE = lon;
+                Prefs.isUpToDate = false;
+                // Log the matched address for verification
+                if (match["matchedAddress"].is<String>()) {
+                    String matchedAddress = match["matchedAddress"].as<String>();
+                    SerialPrint(("Matched Address: " + matchedAddress).c_str(), true);
+                }
+                
+                return true;
+            }
+        }
+      } 
   }
-  
-  // Fallback to ZIP code only method
   SerialPrint("Falling back to ZIP code only method", true);
-  return getCoordinatesFromZipCodeFallback(zipCode);
-}
-
-// ZIP code to coordinates conversion using US Census Bureau Geocoding API (legacy function)
-bool getCoordinatesFromZipCode(const String& zipCode) {
-  double lat = 0, lon = 0;
-  // Validate ZIP code format (5 digits)
-  if (zipCode.length() != 5) {
-      SerialPrint("Invalid ZIP code format. Must be 5 digits.", true);
-      storeError("Invalid ZIP code format. Must be 5 digits.", ERROR_JSON_GEOCODING,true);
-      return false;
-  }
-  
-  for (int i = 0; i < 5; i++) {
-      if (!isdigit(zipCode.charAt(i))) {
-          SerialPrint("Invalid ZIP code format. Must contain only digits.", true);
-          storeError("Invalid ZIP code format. Must contain only digits.", ERROR_JSON_GEOCODING,true);
-          return false;
-      }
-  }
-  
-  // For now, we'll use a default address structure since we only have ZIP code
-  // In a full implementation, you would collect street, city, state from the user
-  String street = "1 Main St";  // Default street address
-  String city = "Unknown";      // Default city
-  String state = "MA";          // Default state (you might want to make this configurable)
-  
-  // Build the URL for the Census Bureau Geocoding API
-  String url = "https://geocoding.geo.census.gov/geocoder/locations/address?";
-  url += "street=" + urlEncode(street);
-  url += "&city=" + urlEncode(city);
-  url += "&state=" + urlEncode(state);
-  url += "&zip=" + zipCode;
-  url += "&benchmark=Public_AR_Current&format=json";
-  
-  JsonDocument doc;
-  int httpCode;
-  
-  SerialPrint(("Fetching coordinates for ZIP code: " + zipCode).c_str(), true);
-  
-  // Make HTTP request to Census Geocoding API
-  HTTPClient http;
-  http.begin(url);
-  http.setTimeout(15000); // 15 second timeout for geocoding
-  
-  httpCode = http.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      http.end();
-      
-      SerialPrint("Received response from Census Geocoding API", true);
-      
-      // Parse JSON response
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (error) {
-          SerialPrint("Failed to parse JSON response from Census Geocoding API", true);
-          storeError("Failed to parse JSON response from Census Geocoding API", ERROR_JSON_GEOCODING,true);
-          return false;
-      }
-      
-      // Check if we have address matches
-      if (doc["result"]["addressMatches"].is<JsonArray>()) {
-          JsonArray addressMatches = doc["result"]["addressMatches"];
-          
-          if (addressMatches.size() > 0) {
-              // Get the first (best) match
-              JsonObject match = addressMatches[0];
-              
-              if (match["coordinates"]["x"].is<double>() && match["coordinates"]["y"].is<double>()) {
-                  lon = match["coordinates"]["x"].as<double>();
-                  lat = match["coordinates"]["y"].as<double>();
-                  
-                  SerialPrint(("Coordinates found: " + String(lat, 6) + ", " + String(lon, 6)).c_str(), true);
-                  Prefs.LATITUDE = lat;
-                  Prefs.LONGITUDE = lon;
-                  Prefs.isUpToDate = false;
-                  
-                  // Save to NVS
-                  BootSecure bootSecure;
-                  int8_t ret = bootSecure.setPrefs();
-                  if (ret < 0) {
-                    SerialPrint("getCoordinatesFromZipCode: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
-                  }
-                  
-                  // Log the matched address for verification
-                  if (match["matchedAddress"].is<String>()) {
-                      String matchedAddress = match["matchedAddress"].as<String>();
-                      SerialPrint(("Matched Address: " + matchedAddress).c_str(), true);
-                  }
-                  
-                  return true;
-              }
-          }
-      }
-      storeError("No address matches found in the response", ERROR_JSON_GEOCODING,true);
-      SerialPrint("No address matches found in the response", true);
-
-  } else {
-      SerialPrint(("HTTP request failed with code: " + String(httpCode)).c_str(), true);
-
-      String error = "HTTP request failed with code: " + String(httpCode);
-      storeError(error.c_str(), ERROR_JSON_GEOCODING,true);
-      http.end();
-  }
-  
-  // Fallback to ZIP code only method
-  SerialPrint("Falling back to ZIP code only method", true);
-  return getCoordinatesFromZipCodeFallback(zipCode);
+  return getCoordinatesFromZipCode(zipCode);
 }
 
 
 // Fallback method using a simple geocoding service
-bool getCoordinatesFromZipCodeFallback(const String& zipCode) {
+bool getCoordinatesFromZipCode(const String& zipCode) {
   // Use a simple geocoding service (example with a free API)
   // Note: This is a simplified approach. In production, you might want to use
   // a more reliable service like Google Geocoding API (requires API key)
   
+  SerialPrint(("Using fallback geocoding service for ZIP: " + zipCode).c_str(), true);
+
   double lat = 0, lon = 0;
   String url = "http://api.zippopotam.us/US/" + zipCode;
   
   JsonDocument doc;
-  int httpCode;
-  
-  SerialPrint(("Using fallback geocoding service for ZIP: " + zipCode).c_str(), true);
-  
-  HTTPClient http;
-  http.begin(url);
-  http.setTimeout(10000);
-  
-  httpCode = http.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      http.end();
-      
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (error) {
-          SerialPrint("Failed to parse JSON response from geocoding service", true);
-          storeError("Failed to parse JSON response from geocoding service", ERROR_JSON_GEOCODING,true);
+  HTTPMessage M;
+  M.setUrl(url.c_str());
+  M.setMethod("GET");
+  M.setContentType("application/json");
+  M.timeout = 5000; // 5 second timeout for geocoding
+  M.usePSRAM = false;
+  M.responseDoc = &doc;
+  if (SendHTTPMessage(M)) {
+    if (doc["places"][0]["latitude"].is<String>() && doc["places"][0]["longitude"].is<String>()) {
+      lat = doc["places"][0]["latitude"].as<double>();
+      lon = doc["places"][0]["longitude"].as<double>();
+      Prefs.LATITUDE = lat;
+      Prefs.LONGITUDE = lon;
+      Prefs.isUpToDate = false;
 
-          return false;
+      // Save to NVS now that we have the coordinates
+      BootSecure bootSecure;
+      int8_t ret = bootSecure.setPrefs();
+      if (ret < 0) {
+        SerialPrint("getCoordinatesFromZipCode: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
       }
       
-      // Extract coordinates from the response
-      if (doc["places"][0]["latitude"].is<String>() && doc["places"][0]["longitude"].is<String>()) {
-          lat = doc["places"][0]["latitude"].as<double>();
-          lon = doc["places"][0]["longitude"].as<double>();
+      return true;
+    }
+    SerialPrint("Fallback geocoding failed due to no coordinates found", true);
+    storeError("Fallback geocoding failed due to no coordinates found", ERROR_JSON_GEOCODING,true);
 
-          Prefs.LATITUDE = lat;
-          Prefs.LONGITUDE = lon;
-          Prefs.isUpToDate = false;
-          
-          // Save to NVS
-          BootSecure bootSecure;
-          int8_t ret = bootSecure.setPrefs();
-          if (ret < 0) {
-            SerialPrint("getCoordinatesFromZipCodeFallback: Failed to save Prefs to NVS (error " + String(ret) + ")", true);
-          }
-          
-          SerialPrint(("Coordinates found: " + String(lat, 6) + ", " + String(lon, 6)).c_str(), true);
-          return true;
-      }
+    return false;
   } else {
-      SerialPrint(("Fallback geocoding failed with HTTP code: " + String(httpCode)).c_str(), true);
-      String error = "Fallback geocoding failed with HTTP code: " + String(httpCode);
-      storeError(error.c_str(), ERROR_JSON_GEOCODING,true);
-      http.end();
+    SerialPrint(("Fallback geocoding failed with HTTP code: " + String(M.httpCode)).c_str(), true);
+    storeError("Fallback geocoding failed with HTTP code: " + String(M.httpCode), ERROR_JSON_GEOCODING,true);
+    return false;
   }
-  
-  // If all methods fail, return false
-  SerialPrint("All geocoding methods failed for ZIP code: " + zipCode, true);
-  return false;
+return false;
 } 
 
 #ifdef _USEUDP

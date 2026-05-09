@@ -164,8 +164,8 @@ bool storeWeatherDataSD() {
 bool readWeatherDataSD() {
   String filename = "/Data/WeatherData.dat";
   File f = SD.open(filename, FILE_READ);
-  if (f==false) {
-    storeError("readWeatherDataSD: Could not read weather data",ERROR_SD_WEATHERDATAREAD);
+  if (!f) {
+    storeError("readWeatherDataSD: Could not open /Data/WeatherData.dat",ERROR_SD_WEATHERDATAREAD);
     return false;
   }
   if (f.size() != sizeof(WeatherData)) {
@@ -470,7 +470,7 @@ bool readDevicesSensorsSD() {
     String filename = "/Data/DevicesSensors.dat";
     SerialPrint("readDevicesSensorsSD: opening file: " + filename,true);
     File f = SD.open(filename, FILE_READ);
-    if (f==false) {
+    if (!f) {
         storeError("readDevicesSensorsSD: Could not read Devices_Sensors data",ERROR_SD_DEVICESENSORSOPEN);
         f.close();
         return false;
@@ -499,7 +499,7 @@ int8_t readErrorFromSD(ERROR_STRUCT& LASTERROR, uint8_t NthFromLast) {
 
   //open the file
   File file = SD.open("/Data/DeviceErrors.txt", FILE_READ);
-  if (file==false) {
+  if (!file) {
     storeError("readErrorFromSD: Could not open file",ERROR_SD_ERRORREAD);
     return false;
   }
@@ -519,18 +519,14 @@ int8_t readErrorFromSD(ERROR_STRUCT& LASTERROR, uint8_t NthFromLast) {
     return false;
   }
 
-  if (file.size() != NthFromLast*sizeof(ERROR_STRUCT)) {
+  if (file.size() < (NthFromLast+1)*sizeof(ERROR_STRUCT)) {
+    //not enough entries in the file
     file.close();
     return false;
   }
 
-  //go to the end of the file
-  file.seek(file.size());
-
-  //rewind nthfromlast times
-  for (int i = 0; i < NthFromLast; i++) {
-    file.seek(file.position()-sizeof(ERROR_STRUCT));
-  }
+  //go to the end of the file and then back NthFromLast entries
+  file.seek(file.size()-sizeof(ERROR_STRUCT)*(NthFromLast+1));
 
   //read the entry
   file.read((uint8_t*)&LASTERROR, sizeof(ERROR_STRUCT));
@@ -955,10 +951,34 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
 }
 
 
+// Ensure parent directory (and its parents) of file path exist.
+// E.g. for "/Data/DailyWthr/1.bin" creates /Data then /Data/DailyWthr.
+// SD.open() does not create directories; writes fail if the path does not exist.
+static void ensureParentDir(const char* filepath) {
+  char path[64];
+  size_t n = strnlen(filepath, sizeof(path) - 1);
+  if (n >= sizeof(path)) return;
+  memcpy(path, filepath, n + 1);
+  // Find last '/' so we only create dirs, not the filename segment
+  size_t last_slash = 0;
+  for (size_t i = 1; i < n; i++) if (path[i] == '/') last_slash = i;
+  if (last_slash == 0) return;
+  for (size_t i = 1; i < last_slash; i++) {
+    if (path[i] == '/') {
+      path[i] = '\0';
+      if (!SD.exists(path)) SD.mkdir(path);
+      path[i] = '/';
+    }
+  }
+  path[last_slash] = '\0';
+  if (!SD.exists(path)) SD.mkdir(path);
+}
+
 bool writeAnythingToSD(const char* filename, const void* data, uint16_t size, bool append) {
+  ensureParentDir(filename);
   File file = SD.open(filename, append ? FILE_APPEND : FILE_WRITE);
   if (!file) {
-    storeError("writeAnythingToSD: Could not open file",ERROR_SD_FILEWRITE);
+    storeError("writeAnythingToSD: Could not open file " + String(filename),ERROR_SD_FILEWRITE);
     return false;
   }
   file.write((uint8_t*)data, size);
@@ -992,6 +1012,14 @@ uint32_t read32(fs::File &f) {
   ((uint8_t *)&result)[3] = f.read(); // MSB
   return result;
 }
+
+
+bool FileOrDirectoryExists(const char* filename) {
+  //this works for both files and directories
+  if (filename == nullptr) return false;
+  return SD.exists(filename);
+}
+
 
 #ifdef _USEGSHEET
 extern STRUCT_GOOGLESHEET GSheetInfo;
