@@ -88,6 +88,9 @@ public:
     uint64_t getDeviceMACBySnsIndex(int16_t snsindex);
     IPAddress getDeviceIPByDevIndex(int16_t devindex);
     IPAddress getDeviceIPBySnsIndex(int16_t snsindex);
+    IPAddress getMyDeviceIP(); //wrapper for getDeviceIPByDevIndex(-1)
+
+    
     uint8_t getNumDevices();
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countServers(); // count the servers

@@ -219,8 +219,6 @@ void setup() {
     tftPrint("Serial disabled.", true);
     #endif
 
-    SerialPrint((String) "RESET timer data before loadScreenFlags: Timer_Clock_RESET: " + String(I.GRAPHICS.GRAPHICS_TIMERS.Timer_Clock_RESET)  + "\n",true);
-  
 
     #ifdef _USESDCARD
     int8_t sdResult = initSDCard();
@@ -233,7 +231,6 @@ void setup() {
     }
     #endif //_USESDCARD
 
-    SerialPrint((String) "RESET timer data after loadScreenFlags: Timer_Clock_RESET: " + String(I.GRAPHICS.GRAPHICS_TIMERS.Timer_Clock_RESET)  + "\n",true);
 
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
     #ifdef _USETFT
@@ -609,7 +606,6 @@ void loop() {
         #endif
     }    
     if (OldTime[0] != second()) {
-        updateTime(); //sets I.currenttime
         OldTime[0] = I.currentSecond;
 
         //if time is invalid, completely reset the time

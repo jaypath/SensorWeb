@@ -9,6 +9,7 @@
     #include "graphics.hpp"
   #endif
   extern LGFX tft;
+  extern STRUCT_GRAPHICS GRAPHICS;
 #endif
 
 #ifdef _USELEDMATRIX
@@ -2811,27 +2812,6 @@ WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST B
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   // CYCLE fields
 
-  // Timer_ScreenChange_RESET
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ScreenChangeTimer</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"ScreenChangeTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
-  // Timer_Header_RESET
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">HeaderTimer</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"HeaderTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
-  // Timer_CurrentWeatherIcon_RESET
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CurrentWeatherIconTimer</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"CurrentWeatherIconTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
-  // Timer_CurrentWeatherIconAlert_RESET
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CurrentWeatherIconAlertTimer</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"CurrentWeatherIconAlertTimer\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalFutureWeather</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" name=\"IntervalFutureWeather\" value=\"" + (String) I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-
-
   // showTheseFlags - 8 individual checkboxes for each bit
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">showTheseFlags (Display Settings)</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
@@ -3025,26 +3005,9 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
 
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">CLOCK_Y</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Y_SCRMAIN_CLOCK + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">HEADER_Y</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Y_SCRMAIN_HEADER + "</div>";
-  
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.IntervalHourlyWeatherDisplay + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) GRAPHICS.IntervalHourlyWeatherDisplay + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchX</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.touchX + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">touchY</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.touchY + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">alarmIndex</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.alarmIndex + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ScreenNum</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.GRAPHICS.Screen_Now + "</div>";
   #endif
 
   #ifdef _USEWEATHER
@@ -3372,28 +3335,7 @@ void handleCONFIG_POST() {
   #if defined(_USEWEATHER) && defined(_USETFT)
 
   if (server.hasArg("IntervalHourlyWeather")) {
-    I.GRAPHICS.IntervalHourlyWeatherDisplay = server.arg("IntervalHourlyWeather").toInt();
-  }
-  if (server.hasArg("screenChangeTimer")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET = server.arg("screenChangeTimer").toInt();
-  }
-  if (server.hasArg("cycleHeaderMinutes")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET = server.arg("cycleHeaderMinutes").toInt();
-  }
-  if (server.hasArg("CurrentWeatherIconTimer")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET = server.arg("CurrentWeatherIconTimer").toInt();
-  }
-
-  if (server.hasArg("CurrentWeatherIconAlertTimer")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET = server.arg("CurrentWeatherIconAlertTimer").toInt();
-  }
-
-  if (server.hasArg("CurrentConditionTimer")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET = server.arg("CurrentConditionTimer").toInt();
-  }
-
-  if (server.hasArg("IntervalFutureWeather")) {
-    I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET = server.arg("IntervalFutureWeather").toInt();
+    GRAPHICS.IntervalHourlyWeatherDisplay = server.arg("IntervalHourlyWeather").toInt();
   }
 
 
@@ -3484,28 +3426,9 @@ void handleCONFIG_POST() {
 
 
 #if defined(_USEWEATHER) && defined(_USETFT)
-  //check for invalid values
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET < 10) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_Header_RESET = 60;
-}
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET < 10 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET > 240) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIcon_RESET = 30;
-}
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET < 10) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_ScreenChange_RESET = 30;
-}
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET > 120 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET < 3) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentWeatherIconAlert_RESET = 5;
-}
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET > 200 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET < 5) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_CurrentCondition_RESET = 75;
-}
-if (I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET > 120 || I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET < 10) {
-  I.GRAPHICS.GRAPHICS_TIMERS.Timer_FutureWeather_RESET = 30;
-}
 
-if (I.GRAPHICS.IntervalHourlyWeatherDisplay < 1) {
-  I.GRAPHICS.IntervalHourlyWeatherDisplay = 1;
+if (GRAPHICS.IntervalHourlyWeatherDisplay < 1) {
+  GRAPHICS.IntervalHourlyWeatherDisplay = 1;
 }
 
 #endif

@@ -38,6 +38,12 @@ bool isSoilResistanceValid(double soil);
 bool isPressureValid(double pressure);
 
 
+//bit manipulation functions
+bool isBit(uint8_t value, uint8_t bit);
+void clearBit(uint8_t &value, uint8_t bit);
+void setBit(uint8_t &value, uint8_t bit);
+void flipBit(uint8_t &value, uint8_t bit);
+
 int8_t shoutThis(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 bool tftPrint(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 //serial printing

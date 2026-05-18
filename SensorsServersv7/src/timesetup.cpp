@@ -36,7 +36,8 @@ bool setupTime(void) {
   getTimezoneInfo(); //this sets timezone and dstoffsets
   DSTsetup(); //this sets I.DST
 
-  I.currentTime = I.UTCTime + Prefs.TimeZoneOffset + (I.DST==1? I.DSTOffset : 0);
+  SerialPrint("DST settings are DST=" + String(I.DST==0?"Not used":(I.DST==1?"Inactive":"Active")) + ", DSTStartUnixTime=" + String(I.DSTStartUnixTime) + ", DSTEndUnixTime=" + String(I.DSTEndUnixTime) + ", DSTOffset=" + String(I.DSTOffset),true);
+  I.currentTime = I.UTCTime + Prefs.TimeZoneOffset + (I.DST==2? I.DSTOffset : 0);
   I.currentSecond = second();
 
   return true;
@@ -46,7 +47,9 @@ bool setupTime(void) {
 
 //Time fcn
 bool updateTime() {
+
   //run this every second
+  if (I.currentSecond == second()) return false;
 
   bool isgood = false;
 

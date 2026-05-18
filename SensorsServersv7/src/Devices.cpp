@@ -169,6 +169,10 @@ uint64_t Devices_Sensors::getDeviceMACByDevIndex(int16_t devindex) {
     return 0;
 }
 
+IPAddress Devices_Sensors::getMyDeviceIP() {
+    return getDeviceIPByDevIndex(-99);
+}
+
 IPAddress Devices_Sensors::getDeviceIPBySnsIndex(int16_t snsindex) {
     if (snsindex >= 0 && snsindex < NUMSENSORS  && sensors[snsindex].IsSet) {
         return getDeviceIPByDevIndex(sensors[snsindex].deviceIndex);
@@ -180,6 +184,25 @@ IPAddress Devices_Sensors::getDeviceIPByDevIndex(int16_t devindex) {
     if (devindex >= 0 && devindex < NUMDEVICES  && devices[devindex].IsSet) {
         return devices[devindex].IP;
     }
+
+    //special case, if devindex is -99, then return the IP address of the device that is the current device
+    if (devindex == -99) {
+        int16_t mydevindex = findMyDeviceIndex();
+        if (mydevindex < 0) return IPAddress(0,0,0,0); //this is an error!
+        //check if the registered IP address is the same as my wifi ip address
+        IPAddress myIP = getDeviceIPByDevIndex(mydevindex);
+        if (myIP == WiFi.localIP()) {
+            return myIP;
+        } else {
+            //update the registered IP address to the current wifi ip address
+            devices[mydevindex].IP = WiFi.localIP();
+            #ifdef _USESDCARD
+            storeDevicesSensorsSD();
+            #endif
+            return WiFi.localIP();
+        }
+    }
+
     return IPAddress(0,0,0,0);
 }
 

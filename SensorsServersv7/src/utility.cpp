@@ -21,8 +21,31 @@ ERROR_STRUCT LASTERROR;
 
 //setup functions
 void systemHousekeeping(bool fullHousekeeping) {
+  //this should run on every loop cycle
+  updateTime();
 
   if (fullHousekeeping) {
+    I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
+
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t minFreeHeap = ESP.getMinFreeHeap();
+      
+    // If memory is critically low, restart
+    if (freeHeap < 1000) { // Less than 1KB free
+      SerialPrint("CRITICAL: Low memory detected, restarting system", true);
+      storeError("CRITICAL: Low memory detected, restarting system", ERROR_HARDWARE_MEMORY,true);
+      delay(1000);
+      ESP.restart();
+    }
+    
+    // If minimum free heap is very low, log warning
+    if (minFreeHeap < 5000) { // Less than 5KB minimum
+      SerialPrint("WARNING: Memory fragmentation detected", true);
+      storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
+      ESP.restart();
+    }
+
+
     if (isTimeValid(I.ALIVESINCE)==false) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not valid, set it to the current time
 
     if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = I.currentTime; //if lastResetTime is not valid, set it to the current time
@@ -45,27 +68,9 @@ void systemHousekeeping(bool fullHousekeeping) {
         I.wifiFailCount = 0;
     }
 
-    if (I.wifiFailCount > 20) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
+    if (I.wifiFailCount > 60) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
 
-    I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
 
-    size_t freeHeap = ESP.getFreeHeap();
-    size_t minFreeHeap = ESP.getMinFreeHeap();
-      
-    // If memory is critically low, restart
-    if (freeHeap < 1000) { // Less than 1KB free
-      SerialPrint("CRITICAL: Low memory detected, restarting system", true);
-      storeError("CRITICAL: Low memory detected, restarting system", ERROR_HARDWARE_MEMORY,true);
-      delay(1000);
-      ESP.restart();
-    }
-    
-    // If minimum free heap is very low, log warning
-    if (minFreeHeap < 5000) { // Less than 5KB minimum
-      SerialPrint("WARNING: Memory fragmentation detected", true);
-      storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
-      ESP.restart();
-    }
 
   }
 
@@ -503,7 +508,7 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
         if (SensorHistory.TimeStamps[sensorHistoryIndex][j] >= windowEnd) continue;
         if (SensorHistory.TimeStamps[sensorHistoryIndex][j] < windowStart) continue;
         avgVal+= SensorHistory.Values[sensorHistoryIndex][j];
-        if (bitRead(SensorHistory.Flags[sensorHistoryIndex][j],0)==1) avgFlag=1;
+        if (isBit(SensorHistory.Flags[sensorHistoryIndex][j],0)) avgFlag=1;
         numPointsInWindow++;
       }
     }
@@ -649,7 +654,6 @@ void initScreenFlags(bool completeInit) {
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   
   #ifdef _USEWEATHER
-  I.EventFlags = 0;
   #endif
   #endif
 
@@ -954,19 +958,15 @@ void checkHVAC() {
         case 50: //total time          
         break;
         case 51: //heat - gas valve
-          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
-        break;
-        case 52: //heat
-          if (bitRead(sensor->Flags,0)==1) I.isHeat = 1;
+        case 52: //heat        
+          if (isBit(sensor->Flags,0)) I.isHeat = 1;
         break;
         case 55: // Fan
-          if (bitRead(sensor->Flags,0)==1) I.isFan = 1;
+          if (isBit(sensor->Flags,0)) I.isFan = 1;
         break;
         case 56: //ac
-          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
-        break;
         case 57: //ac
-          if (bitRead(sensor->Flags,0)==1) I.isAC = 1;
+          if (isBit(sensor->Flags,0)) I.isAC = 1;
         break;
       }
     }
@@ -975,6 +975,22 @@ void checkHVAC() {
   return;
 }
 #endif
+
+bool isBit(uint8_t value, uint8_t bit) {
+  return (value & (1 << bit)) != 0;
+}
+
+void clearBit(uint8_t &value, uint8_t bit) {
+  value &= ~(1 << bit);
+}
+
+void setBit(uint8_t &value, uint8_t bit) {
+  value |= (1 << bit);
+}
+
+void flipBit(uint8_t &value, uint8_t bit) {
+  value ^= (1 << bit);
+}
 
 String breakString(String *inputstr,String token,bool reduceOriginal) 
 //take a pointer to input string and break it to the token.

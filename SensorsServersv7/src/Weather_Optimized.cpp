@@ -247,6 +247,11 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
     if (cnt==0) {
         storeError("Could not parse Grid JSON",ERROR_JSON_GRID,true);
         this->lastUpdateError = I.currentTime;
+        // Precipitation flags are updated only inside processPrecipitationData — clear them
+        // so a failed/partial grid response does not leave stale rain/snow/ice indicators.
+        this->flag_rain = false;
+        this->flag_ice = false;
+        this->flag_snow = false;
         return false;
     }
 
@@ -259,7 +264,8 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
 
 void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, const char* field_name, int16_t* data_array, bool& flag) {
     // Reset the 168-hour array (7 days * 24 hours)
-    memset(data_array, 0, NUMWTHRDAYS * 24); 
+    memset(data_array, 0, NUMWTHRDAYS * 24);
+    flag = false;
 
     JsonArray values = properties[field_name]["values"].as<JsonArray>();
 
@@ -269,8 +275,6 @@ void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, cons
 
         float totalValue = value["value"]; // Total mm for the whole duration
         if (totalValue <= 0) continue;
-        
-        flag = true;
 
         // Calculate how many hours this record covers
         int hoursInInterval = ti.duration / 3600;
@@ -288,6 +292,7 @@ void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, cons
                 // If NWS sends overlapping intervals, we take the max rate 
                 // or you could add them, but assignment is safer for grid data.
                 data_array[idx] = (int16_t)hourlyRate;
+                flag = true;
             }
         }
     }
@@ -956,6 +961,10 @@ bool WeatherInfoOptimized::initWeather() {
     
     this->sunrise = 0;
     this->sunset = 0;
+
+    this->flag_rain = false;
+    this->flag_ice = false;
+    this->flag_snow = false;
     
     this->lastUpdateT = 0;
     this->lastUpdateAttempt = 0;

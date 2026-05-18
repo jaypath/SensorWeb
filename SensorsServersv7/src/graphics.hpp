@@ -15,7 +15,7 @@ struct ArborysSnsType;
 class Devices_Sensors;
 class WeatherInfoOptimized;
 
-
+#define MAXSCREENELEMENTS 8
 
 
 #ifdef _USEGSHEET
@@ -35,61 +35,70 @@ const uint16_t TRANSPARENT_COLOR = 0; //black
 #endif
 
 
-// Graphics utility functions
+  //enumerate the screens
+  typedef enum {
+    SCREEN_NONE, //no screen selected
+    SCREEN_MAIN,
+    SCREEN_ALERT,
+    SCREEN_HOURLY,
+    SCREEN_DAILY,
+    SCREEN_SENSORS,  
+    SCREEN_STATUS
+  } SCREENS;
+
+// Graphics implementation (graphics.cpp) — declarations for other translation units
 bool initGraphics();
 uint16_t set_color(byte r, byte g, byte b);
 uint16_t invert_color(uint16_t color);
+uint16_t convertColor565ToGrayscale(uint16_t color);
 uint32_t setFont(uint8_t FNTSZ);
 uint16_t temp2color(int temp, bool invertgray = false);
-uint16_t convertColor565ToGrayscale(uint16_t color) ;
-
-// Drawing functions
-void drawBmp(const char *filename, int16_t x, int16_t y, LGFX_Sprite *sprite = nullptr);
-//void drawBmp(const char* filename, int16_t x, int16_t y, uint16_t alpha = TRANSPARENT_COLOR);
+int8_t drawBmp(const char *filename, int16_t x, int16_t y, LGFX_Sprite *sprite = nullptr);
 void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x, byte boxsize_y);
-byte fcnGetAlarms(int32_t whichSensors=-1, byte rows=0, byte cols=0);
-
-// Text drawing functions
-void fcnPrintTxtCenter(String msg, byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR, LGFX_Device* target = nullptr);
-//void fcnPrintTxtCenter(String msg,byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR);
-void fcnPrintTxtCenter(int msg,byte FNTSZ, int x=-1, int y=-1, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR);
-void fcnPrintTxtColor(int value, byte FNTSZ, int x = -1, int y = -1, bool autocontrast = false);
-void fcnPrintTxtColor2(int value1, int value2, byte FNTSZ, int x = -1, int y = -1, bool autocontrast = false);
-void fcnPrintTxtHeatingCooling(int x, int y);
-
-// Screen drawing functions
-void fcnDrawScreen();
-void fcnDrawMainScreen();
-void fcnDrawHeader();
-void fcnDrawClock();
-void fcnDrawCurrentWeatherIconOrAlert();
-void fcnDrawFutureWeather();
-void fcnDrawSensors(int X,int Y, uint8_t rows=0, uint8_t cols=0);
-void fcnDrawCurrentWeatherText();
-void fcnDrawStatus();
-void fcnDrawAlertScreen();
-void fcnDrawSensorScreen();
-void fcnDrawSensorInfo();
-void fcnDrawDailyWeather();
-void fcnDrawHourlyWeather();
-void fcnDrawTextBox(String text, int16_t X, int16_t Y, int16_t width, int16_t height, int16_t datum, uint16_t color, bool textwrap);
-void fcnDrawWeatherAlerts(int16_t X, int16_t Y, int16_t width, int16_t height);
-// Weather text functions
-void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg);
-void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg);
-void fcnDrawWeatherAlertsOnMainScreen(int16_t X, int16_t Y, int16_t width, int16_t height);
-
-// Setup display functions
-void checkTouchScreen();
-void fcnDrawNavButtons(const char* buttonText[6]);
-void fcnCheckGraphicsTimers();
+void fcnPrintTxtCenter(int msg, byte FNTSZ, int x, int y, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR, LGFX_Device *target = nullptr);
+void fcnPrintTxtCenter(String msg, byte FNTSZ, int x, int y, uint16_t color1=FG_COLOR, uint16_t color2=FG_COLOR, uint16_t bgcolor=BG_COLOR, LGFX_Device *target = nullptr);
+void fcnPrintTxtHeatingCooling(int X, int Y);
+void fcnPrintTxtColor2(int value1, int value2, byte FNTSZ, int x, int y, bool autocontrast);
+void fcnPrintTxtColor(int value, byte FNTSZ, int x, int y, bool autocontrast);
+byte fcnGetAlarms(int32_t whichSensors = -1, byte rows = 0, byte cols = 0);
+void fcnDrawSensors(int X, int Y, uint8_t rows = 0, uint8_t cols = 0);
+void fcnPressureTxt(char *tempPres, uint16_t *fg, uint16_t *bg);
+void fcnPredictionTxt(char *tempPred, uint16_t *fg, uint16_t *bg);
 void updateGraphics();
-void fcnHandleTouch();
-
-//sprite functions
-bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite);
-bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite);
-
+void fcnDrawScreen();
+void loadFunctionsForScreen();
+void fcnSwitchScreen(int16_t index);
+void fcnSwitchToNewScreen(SCREENS newScreen = SCREEN_MAIN);
+void fcnSwitchSubScreen(int16_t index);
+int8_t helper_findIndex(void (*drawFunction)(int16_t));
+int16_t helper_runScreenElementFunction(int16_t index, bool failOnTimeLeft);
+void fcnDrawNavButtons(int16_t index);
+void fcnDrawAlertScreen(int16_t index);
+void fcnDrawAlertText(int16_t index);
+void fcnDrawMainScreen(int16_t index);
+void fcnDrawHeader(int16_t index);
+void fcnDrawHeaderInfo(int16_t index);
+void fcnDrawClock(int16_t index);
+void fcnDrawCurrentWeatherText(int16_t index);
+void fcnDrawCurrentWeatherIconOrAlert(int16_t index);
+bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool useAlerts);
+bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts);
+void fcnDrawHourlyWeather(int16_t index);
+void fcnDrawDailyWeather(int16_t index);
+void fcnDrawSensorScreen(int16_t index);
+void fcnConvertTouchToSensorSubscreen(int16_t index);
+void fcnDrawSensorDelSnsConfirm(int16_t index);
+void fcnDrawSensorDelSns(int16_t index);
+void fcnDrawStatusWeatherUpdate(int16_t index);
+void fcnDrawSensorDetailsSubscreen(int16_t index);
+void fcnDrawSensorSummarySubcreen(int16_t index);
+void fcnDrawSensorBroadcast(int16_t index);
+void fcnDrawStatusScreen(int16_t index);
+void fcnDrawStatusDelCoreConfirm(int16_t index);
+void fcnDrawStatusDelCore(int16_t index);
+void fcnDrawStatusReboot(int16_t index);
+void fcnDrawStatusText(int16_t index);
+void checkTouchScreen();
 
 //__________________________Graphics
 
@@ -191,39 +200,22 @@ public:
   }
 };
 
-  //enumerate the screens
-  typedef enum {
-    SCREEN_MAIN,
-    SCREEN_ALERT,
-    SCREEN_HOURLY,
-    SCREEN_DAILY,
-    SCREEN_SENSORS,  
-    SCREEN_STATUS
-  } SCREENS;
+extern LGFX tft;
+
   
   struct SECOND_TIMER_STRUCT {
-    time_t lastSecond=0;
+    uint8_t lastSecond=0;
     
     uint8_t Timers[10]={0}; //each screen has 10 possible elements [0-9]
-    uint8_t Timer0_RESET[10]={255,15,30,120,120,180,60,0,0,0,0}; //main screen defaults, note that element 0 is the entire screen timer (global redraw)
-    uint8_t TimerN_RESET=30; //other screens defaults - only 1 element on those screens
+    
+    bool decimateTimers(uint8_t currentSecond) {
+      if (currentSecond == this->lastSecond) return false;
+      this->lastSecond = currentSecond;
 
-    bool decimateTimers(uint32_t currentTime, uint8_t currentSecond) {
-      if (currentTime == this->lastSecond) return false;
-      this->lastSecond = currentTime;
 
-      if (Timers[0] > 0) Timers[0]--;
-      
-      if (Timers[0] == 0) {
-        for (int i=1; i<10; i++) {
-          Timers[i] = 0;
-        }
-      } else {
-        for (int i=0; i<10; i++) {
-          if (Timers[i] > 0) Timers[i]--;
-        }
+      for (int i=0; i<10; i++) {
+       if (Timers[i] > 0) Timers[i]--;
       }
-
 
       return true;
     }
@@ -237,10 +229,50 @@ public:
   
   
   struct SCREEN_ELEMENTS {
+    void (*drawFunction)(int16_t); //pointer to the draw function for each element. takes the index of the element as an argument
     uint16_t X; //upper left corner X position
     uint16_t Y; //upper left corner Y position
     uint16_t W; //width
     uint16_t H; //height
+    SCREENS Screen_Next; //the next screen to show if this element is touched
+    int16_t Local_Code; //Local code for this element. May store subscreen data, current icon set, etc.
+    uint8_t TimerIndex; //timer index for this element
+    uint8_t Timer_RESET; //timer reset value for this element
+    uint8_t ScreenElement; //index of this element in the SCREEN_DATA array. 255 = erased
+    void (*RunFcnOnTouch)(int16_t); //pointer to a function to run the next time this element is loaded
+    
+
+    void loadScreenElements(void (*drawFunction)(int16_t), uint16_t X, uint16_t Y, uint16_t W, uint16_t H, SCREENS Screen_Next, int16_t Local_Code, uint8_t TimerIndex, uint8_t Timer_RESET, uint8_t ScreenElement, void (*RunFcnOnTouch)(int16_t) = nullptr) {
+      this->drawFunction = drawFunction;
+      this->X = X;
+      this->Y = Y;
+      this->W = W;
+      this->H = H;
+      this->Screen_Next = Screen_Next;
+      this->Local_Code = Local_Code;
+      this->TimerIndex = TimerIndex;
+      this->Timer_RESET = Timer_RESET;
+      this->ScreenElement = ScreenElement; //this allows the draw functions to be agnostic to their order
+      this->RunFcnOnTouch = RunFcnOnTouch;
+    }
+
+    void clearScreenElementArea() {
+      tft.fillRect(this->X,this->Y,this->W,this->H,BG_COLOR);
+    }
+
+    void initScreenElement() {
+      this->drawFunction = nullptr;
+      this->X = 0;
+      this->Y = 0;
+      this->W = 0;
+      this->H = 0;
+      this->Screen_Next = SCREEN_NONE;
+      this->Local_Code = 0;
+      this->TimerIndex = 0;
+      this->Timer_RESET = 0;
+      this->ScreenElement = 255;
+      this->RunFcnOnTouch = nullptr;
+    }
   };
 
   struct SPRITE_DETAILS {
@@ -254,43 +286,40 @@ public:
   struct STRUCT_GRAPHICS {
     //define the screen elements for each screen that has adjustable/reusable elements
 
-    SCREEN_ELEMENTS SCREEN_0[6] = {{0,0,320,30},{0,32,180,180},{181,32,139,180},{0,214,320,60},{0,276,320,100},{0,377,320,103}}; //main screen elements
-    SCREEN_ELEMENTS SCREEN_N_NAVBUTTONS = {0,400,320,80};
+    SCREEN_ELEMENTS SCREEN_DATA[MAXSCREENELEMENTS];
     SPRITE_DETAILS SPRITE_180x180 = {0,0,0,0,0}; //where does the sprite currently live? X,Y,W,H,filename where X,Y are the upper left corner coordinates, W and H are used width and height (normally 180x180) and filename is the filename of the sprite bmp
-    SPRITE_DETAILS SPRITE_320x100 = {0,0,0,0,0}; //where does the sprite currently live? X,Y,W,H,filename where X,Y are the upper left corner coordinates, W and H are used width and height (normally 320x100) and filename is the filename of the sprite bmp
-  
+    
     SECOND_TIMER_STRUCT GRAPHICS_TIMERS;
   
     byte buttonWidth = 50;
     byte buttonInteriorMargin=2;
   
     uint8_t IconSet=0; //using this icon set
-    uint8_t FlagsAndAlerts=0; //bit 0 - there are flagged sensors, bit 1 - there are weather alerts, bit 2 - I showed flags last, bit 3 - show icon next
-//if bits 0 and 1 are set, then alternate icon, flags, and alerts. keeping track of this... if bit 3 is one then icon is next. Otherwise, if bit 2 is set, then alerts are next.
-
+    uint8_t StatusFlags=0; //bit 0 - sensors currently flagged (ack for sensor flags), bit 1 = weather alert flag ack. These are set and stay until main flag is cleared.
+    uint8_t StatusFlagsChanged=0; //bit 0 - sensors changed, bit 1 = weather alert flag changed, bit 2 = HVAC changed. If any action is taken based on these, they will be cleared.
+    
+    
     uint8_t IntervalHourlyWeatherDisplay = 2; //hours between daily weather display
-    uint8_t IntervalSecondsFlags = 5; //seconds between flag switch
-  
+    
     int16_t touchX;
     int16_t touchY;
     uint8_t alarmIndex;
+    uint8_t alarmCount;
     SCREENS Screen_Now;
     SCREENS Screen_Next;
     int16_t SubScreen_Now;
     int16_t SubScreen_Next;
-    
-    bool clearScreenArea (uint8_t screen, uint8_t element) {
-      if (screen == 0) { //main screen
-        tft.fillRect(SCREEN_0[element].X,SCREEN_0[element].Y,SCREEN_0[element].W,SCREEN_0[element].H,BG_COLOR);
-        GRAPHICS.GRAPHICS_TIMERS.Timers[element]=0;
-        if (element == 0) {
-          tft.setTextColor(FG_COLOR,BG_COLOR);
-          tft.setCursor(0,0);
-        }      
-      } else {
-        tft.fillRect(0,0,320,480,BG_COLOR);
-      }
+
+    int16_t miscData; //misc data for the current screen
+
+    bool clearScreenArea (uint8_t element) {
+      SCREEN_DATA[element].clearScreenElementArea();
+      this->GRAPHICS_TIMERS.Timers[element]=0;
       return true;
+    }
+
+    void initRemainingScreenElements(byte elementStart) {
+      for (int i=elementStart; i<MAXSCREENELEMENTS; i++) SCREEN_DATA[i].initScreenElement();      
     }
    
   };
