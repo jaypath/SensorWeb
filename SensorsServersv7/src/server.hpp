@@ -271,6 +271,7 @@ void processJSONMessage(String& postData, String& responseMsg);
 void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck=false);
 void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
+void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg);
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
 static void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg);
 
