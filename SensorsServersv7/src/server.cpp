@@ -256,7 +256,7 @@ bool SendHTTPMessage(HTTPMessage& M) {
             wfsclient.setCACertBundle(x509_crt_imported_bundle_bin_start, (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
             #else
             M.success = false;
-            storeError("SendHTTPMessage: No certificate bundle found", ERROR_HTTP_CERT_BUNDLE,true);
+            storeError("SendHTTPMessage: No certificate bundle found", ERROR_HTTP_POST,true);
             SerialPrint("SendHTTPMessage: No certificate bundle found", true);
             return false;
             #endif
@@ -2809,61 +2809,7 @@ WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST B
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"deviceName\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 
-  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-  // CYCLE fields
-
-  // showTheseFlags - 8 individual checkboxes for each bit
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">showTheseFlags (Display Settings)</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
-  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px;\">";
-  
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit0\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 0) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 0 (Show if flagged)</label>";
-  
-  // Bit 1 - Set for expired only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit1\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 1) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 1 (Show if expired)</label>";
-  
-  // Bit 2 - Set for soil dry only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit2\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 2) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 2 (Soil)</label>";
-  
-  // Bit 3 - Set for leak only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit3\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 3) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 3 (Leak)</label>";
-  
-  // Bit 4 - Set for temperature only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit4\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 4) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 4 (Temperature)</label>";
-  
-  // Bit 5 - Set for humidity only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit5\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 5) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 5 (Humidity)</label>";
-  
-  // Bit 6 - Set for pressure only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit6\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 6) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 6 (Pressure)</label>";
-  
-  // Bit 7 - Set for battery only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit7\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 7) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 7 (Battery)</label>";
-
-  // Bit 8 - Set for HVAC only
-  WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
-  WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit8\" value=\"1\"" + (String)(bitRead(I.showTheseFlags, 8) ? " checked" : "") + ">";
-  WEBHTML = WEBHTML + "Bit 8 (HVAC)</label>";
-
-  WEBHTML = WEBHTML + "</div>";
-  WEBHTML = WEBHTML + "</div>";
-  #endif
+  //can add a div here if "show these flags" becomes editable
   
   
   WEBHTML = WEBHTML + "</div>";
@@ -3394,35 +3340,6 @@ void handleCONFIG_POST() {
   }
 
   
-#if defined(_USETFT) && !defined(_ISPERIPHERAL)
-  // Process showTheseFlags checkboxes - reconstruct byte from individual bits
-  I.showTheseFlags = 0; // Start with all bits cleared
-  
-  if (server.hasArg("flag_bit0")) {
-    bitSet(I.showTheseFlags, 0);
-  }
-  if (server.hasArg("flag_bit1")) {
-    bitSet(I.showTheseFlags, 1);
-  }
-  if (server.hasArg("flag_bit2")) {
-    bitSet(I.showTheseFlags, 2);
-  }
-  if (server.hasArg("flag_bit3")) {
-    bitSet(I.showTheseFlags, 3);
-  }
-  if (server.hasArg("flag_bit4")) {
-    bitSet(I.showTheseFlags, 4);
-  }
-  if (server.hasArg("flag_bit5")) {
-    bitSet(I.showTheseFlags, 5);
-  }
-  if (server.hasArg("flag_bit6")) {
-    bitSet(I.showTheseFlags, 6);
-  }
-  if (server.hasArg("flag_bit7")) {
-    bitSet(I.showTheseFlags, 7);
-  }
-#endif
 
 
 #if defined(_USEWEATHER) && defined(_USETFT)
@@ -5474,6 +5391,10 @@ void processJSONMessage(String& postData, String& responseMsg) {
     //we have received a ping ack
     processJSONMessage_ping(root, responseMsg, false);
   }
+  else if (msgType == "setFlagsReq") {
+    //we have received a sensor request
+    processJSONMessage_setFlagsReq(root, responseMsg);
+  }
   else {
     SerialPrint("Unknown message type: " + msgType,true);
     SerialPrint("Erroneous Post data: " + postData,true);
@@ -5628,6 +5549,86 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
   responseMsg = "Invalid JSON message format - missing sensor data";
 }
 
+void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg) {
+  #ifdef _ISPERIPHERAL
+  //attempt to register the sender device, not an error if it fails
+  int16_t deviceIndex = processJSONMessage_addDevice(root, responseMsg);
+
+  //check the message for flags keyword
+  if (!root.containsKey("flags")) {
+    responseMsg = "Flag set: Missing flags keyword";
+    storeError("Flag set: Missing flags keyword", ERROR_JSON_PARSE, true);
+    return;
+  }
+  //get the flags from the request
+  uint8_t flags = root["flags"].as<uint8_t>();
+
+  //check the message for the toDevice keyword
+  if (!root.containsKey("toMAC")) {
+    responseMsg = "Flag set: Missing toMAC keyword";
+    storeError("Flag set: Missing toMAC keyword", ERROR_JSON_PARSE, true);
+    return;
+  }
+  //get the toMAC from the request
+  uint64_t toMAC = root["toMAC"].as<uint64_t>();
+  //check if the toMAC is valid, and MY mac address
+  if (toMAC != ESP.getEfuseMac()) {
+    responseMsg = "Flag set: Not my MAC address";
+    storeError("Flag set: Not my MAC address", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  //check if there is a sensor Type in the message
+  if (!root.containsKey("sensorType")) {
+    responseMsg = "Flag set: Missing sensorType keyword";
+    storeError("Flag set: Missing sensorType keyword", ERROR_JSON_PARSE, true);
+    return;
+  }
+  //get the sensorType from the request
+  uint8_t sensorType = root["sensorType"].as<uint8_t>();
+  //check if the sensorType is valid
+  if (sensorType > 255) {
+    responseMsg = "Flag set: Invalid sensorType";
+    storeError("Flag set: Invalid sensorType", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  //check if there is a sensor ID in the message
+  if (!root.containsKey("sensorID")) {
+    responseMsg = "Flag set: Missing sensorID keyword";
+    storeError("Flag set: Missing sensorID keyword", ERROR_JSON_PARSE, true);
+    return;
+  }
+  //get the sensorID from the request
+  uint8_t sensorID = root["sensorID"].as<uint8_t>();
+  //check if the sensorID is valid
+  if (sensorID > 255) {
+    responseMsg = "Flag set: Invalid sensorID";
+    storeError("Flag set: Invalid sensorID", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  //now update the flags for the sensor
+  int16_t sensorIndex = Sensors.findSensor(toMAC, sensorType, sensorID);
+  if (Sensors.isSensorIndexInvalid(sensorIndex, false) > 0) {
+    responseMsg = "Flag set: Sensor not found";
+    storeError("Flag set: Sensor not found", ERROR_JSON_PARSE, true);
+    return;
+  }
+  ArborysSnsType* S = Sensors.snsIndexToPointer(sensorIndex);
+  if (!S) {
+    responseMsg = "Flag set: Sensor not found";
+    storeError("Flag set: Sensor not found", ERROR_JSON_PARSE, true);
+    return;
+  }
+  S->Flags = flags;
+  //now read and send this sensor
+  SendData(sensorIndex, true, -1, true); //force send data to sensorindex using UDP
+
+  #endif
+  responseMsg = "OK";
+  return;
+}
 
 void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg) {
   if (!sensor.containsKey("type") || !sensor.containsKey("id") || !sensor.containsKey("name") || !sensor.containsKey("value")) {

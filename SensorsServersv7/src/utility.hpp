@@ -39,10 +39,17 @@ bool isPressureValid(double pressure);
 
 
 //bit manipulation functions
+//uint8_t
 bool isBit(uint8_t value, uint8_t bit);
 void clearBit(uint8_t &value, uint8_t bit);
 void setBit(uint8_t &value, uint8_t bit);
 void flipBit(uint8_t &value, uint8_t bit);
+
+//uint16_t
+bool isBit(uint16_t value, uint8_t bit);
+void clearBit(uint16_t &value, uint8_t bit);
+void setBit(uint16_t &value, uint8_t bit);
+void flipBit(uint16_t &value, uint8_t bit);
 
 int8_t shoutThis(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
 bool tftPrint(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=2, byte fontsize=1, bool cleartft=false, int x=-1, int y=-1);
@@ -71,6 +78,7 @@ bool inIndex(byte lookfor,byte used[],byte arraysize);
 void pushDoubleArray(double arr[], byte N, double value);
 float mapfloat(float x, float in_min, float in_max, float out_min, float out_max);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
+void uint16ToBin(uint16_t value, char* output, bool invert = false);
 char* strPad(char* str, char* pad, byte L);
 bool stringToLong(String s, uint32_t* val);
 bool stringToUInt64(String s, uint64_t* val, bool isHex);
@@ -89,7 +97,7 @@ bool compareMAC(byte *MAC1,byte *MAC2);
 
 int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest);
 int16_t findSnsOfType(byte snstype, bool newest = false);
-uint8_t countFlagged(int snsType=0, uint8_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0);
+uint8_t countFlagged(int16_t snsType=0, uint16_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false, uint16_t optionalsnsflags=0);
 uint8_t countDev();
 void checkHVAC(void);
 uint8_t findSensorByName(String snsname, uint8_t snsType=0, uint8_t snsID = 0);

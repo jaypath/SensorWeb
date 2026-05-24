@@ -694,99 +694,74 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
 } 
 
 
-byte fcnGetAlarms(int32_t whichSensors, byte rows, byte cols) {
+byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFlags,  byte rows, byte cols) {
   //fill an array with next row*cols alarm entries
 //  byte alarms[rows*cols];
+//sensorflags uses the sensor flags to match sensors, for example 00000001 = flagged sensors
+//checktheseflags indicates which flags to check, for example 00000011 = flagged and monitored bits only
+//sensortypes must match the countFlagged criteria optionalsnsflags, a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 13 = everything else, 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
 
-
-if (whichSensors == -1) whichSensors = I.showTheseFlags;
-
-if (whichSensors != 0) {
-  if ((whichSensors != I.showTheseFlags) && Sensors.countFlagged(0,0b10000011,0b10000011,0,true,false)==0) return 0; //no critical flagged sensors, don't bother checking for other flagged sensors
-
-  if ((whichSensors == I.showTheseFlags) && Sensors.countFlagged(-1000,0b10000011,0b10000011,0,true,false)==0)     return 0; //no critical flagged sensors per I.showTheseFlags
-}
-
-byte alarmsToDisplay = rows*cols;
-if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
-
-//init alarms
+  if (GRAPHICS.alarmIndex >= NUMSENSORS) GRAPHICS.alarmIndex = 0;
+  //init alarms
   for (byte k = 0;k<(MAXALARMS);k++) {
     alarms[k] = 255;
   }
   
-//fill up to alarmsToDisplay alarm spots, and remember where we left off. Also, fill each sensor type before moving to the next sensor type
+  byte alarmsToDisplay = rows*cols;
+  if (alarmsToDisplay>MAXALARMS) alarmsToDisplay = MAXALARMS;
+    
+  //fill up to alarmsToDisplay alarm spots, and remember where we left off. Also, fill each sensor type before moving to the next sensor type
   byte SensorIndex = GRAPHICS.alarmIndex;
 
-  if (whichSensors == 0) bitSet(whichSensors, 11); //all sensor types and flag states are allowed if whichSensors is 0
-  String sensorType[10] = {"","","","","","","","","",""};
-  //populate sensorType based on whichSensors
-  //note that if bit 11 is set, we still want to add each sensor type individually, as this creates the order of sensors to display. The ending all just adds all other sensors in no particular order.
-    if (bitRead(whichSensors, 3) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[0] = "leak";
-    if (bitRead(whichSensors, 2) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[1] = "soil";
-    if (bitRead(whichSensors, 4) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[2] = "temperature";
-    if (bitRead(whichSensors, 5) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[3] = "humidity";
-    if (bitRead(whichSensors, 6) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[4] = "pressure";
-    if (bitRead(whichSensors, 7) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[5] = "battery";
-    if (bitRead(whichSensors, 8) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[6] = "HVAC";
-    if (bitRead(whichSensors, 9) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[7] = "human";
-    if (bitRead(whichSensors, 10) == 1 || bitRead(whichSensors, 11) == 1)   sensorType[8] = "distance";
-    if (bitRead(whichSensors, 11) == 1) sensorType[9] = "all"; //this bit only set if whichSensors is 0
-    
-  //0 = leak, 1 = soil dry, 2 = temperature, 3 = humidity, 4 = pressure, 5 = battery, 6 = HVAC, 7 = human, 8 = distance, 9 = all others (if whichSensors is not 0), but in no particular order
 
   byte alarmArrayInd = 0;
-  for (byte snstypeindex = 0; snstypeindex<10; snstypeindex++) {
-    if (sensorType[snstypeindex] == "") continue; //skip if no sensor type
-    // Visit SensorIndex before advancing. Calling cycleByteIndex in the while-condition advanced first,
-    // which skipped sensor slot GRAPHICS.alarmIndex (always skipped sensor 0 when alarmIndex was 0).
-    while (alarmArrayInd < alarmsToDisplay) {
-      ArborysSnsType* sensor = Sensors.snsIndexToPointer(SensorIndex);
-      if (sensor && sensor->IsSet != 0 && Sensors.isSensorOfType(sensor,sensorType[snstypeindex])) {
-        bool isgood = true;
+  uint16_t snsTypeBitmask = 1; //starting at bit 1 , which is "all"
 
-        if (bitRead(whichSensors,11)==0) {
-          //this only applies if whichSensors was not 0
-          if ((bitRead(whichSensors, 0) == 1) && (bitRead(sensor->Flags, 0) == 0)) isgood = false; //not flagged, exclude
-          if ((bitRead(whichSensors, 1) == 1) && (sensor->expired) && (bitRead(sensor->Flags,7) == 1)) isgood = true; //expired and critical/monitored, so include
+  for (byte bitshift = 0; bitshift<12; bitshift++) {
+    //check if sensortypes bitmasked with thissensortype is > 0
+
+    uint16_t thisSensorType = snsTypeBitmask<<bitshift;
+
+    if ((sensorTypes & thisSensorType) != 0) {
+
+      while (alarmArrayInd < alarmsToDisplay) {
+        if (Sensors.isSensorIndexInvalid(SensorIndex,false)==0) {
+          //print the name of the sensor and flag mask of sensor being checked
+          if (Sensors.isSensorFlagged(SensorIndex, thisSensorType,checkTheseFlags, sensorFlags, 0, true, true) >0) {
+            if (inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
+          } 
         }
-        if (isgood && inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) {
-          alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
-        }
+        if (!cycleByteIndex(SensorIndex,NUMSENSORS,GRAPHICS.alarmIndex)) break;
       }
-      if (!cycleByteIndex(SensorIndex,NUMSENSORS,GRAPHICS.alarmIndex)) break;
     }
+    
   } 
-  byte count = alarmArrayInd;   
   GRAPHICS.alarmIndex = SensorIndex;
 
-  return count;
+  return alarmArrayInd; //return the number of alarms displayed
 }
 
-void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { //set whichsensors to -1 to show I.showTheseFlags
+void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { 
     /*
     going to show rowsxcols flagged sensors (so up to rows*cols)
     starting at X,Y
+
+    This is determined by the fcnGetAlarms function, which fills the alarms array with the sensor indices of the flagged sensors.
   
     returns the number of sensors to display
   
     note that the alarms array will be filled up to MAXALARMS sensors, but we may only be able to display rows*cols of these. In that case only fill alarms array up to rows*cols
   */
-  
-    int16_t init_X = X;
-    if (rows==0) rows = 2;
-    if (cols==0) cols = 6;
-  
-  
 
-    
-    byte boxsize_x=50,boxsize_y=50;
-    byte gapx = 4;
-    byte gapy = 2;
+  int16_t init_X = X;
+  if (rows==0) rows = 2;
+  if (cols==0) cols = 6;
   
-    String roomname;
-  
+  byte boxsize_x=50,boxsize_y=50;
+  byte gapx = 4;
+  byte gapy = 2;
 
+  String roomname;
 
   byte alarmArrayInd=0;
   for (byte r=0;r<rows;r++) {
@@ -1178,52 +1153,82 @@ void fcnDrawAlertText(int16_t index) {
   GRAPHICS.SCREEN_DATA[3].drawFunction(3);
 
   //draw the alert screen
-  tft.setTextFont(2);
+  uint32_t FH = setFont(2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
 
   String text;
   text.reserve(1000); 
   tft.setCursor(0,0);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextFont(4);
+  FH = setFont(4);
   tft.setTextColor(TFT_RED,BG_COLOR);
 
   if (WeatherData.NumWeatherEvents == 0) {
-    text = "No Weather Alerts\n";
-    tft.drawString(text,0,0);
+    text = "No Weather Alerts";
+    tft.print(text.c_str());
     tft.setTextColor(FG_COLOR,BG_COLOR);
     return;
   } else {
 
-    //there is an alert, load the full details.
+    //there is an alert, load the next alert.
     WeatherEventFile wEF;
+    WeatherData.loadNextWeatherAlert();
     wEF.getEvent(WeatherData.alertInfo.eventnumber);
 
-    text = "Weather Alert \n" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + "!! " + WeatherData.getAlertName(nullptr);
-    tft.drawString(text,0,0);
-    int16_t Y = tft.fontHeight(tft.getFont());
+    tft.setCursor(0,0);
+    tft.print("Weather Alert");
+    int16_t Y = FH+4;
+    tft.setCursor(0,Y);
+    text = (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + " - " + WeatherData.getAlertName(nullptr);
+    tft.printf("%s",text.c_str());
+    Y += FH+4;
 
-    //draw the 180x80 icon next to the text
+    //draw the 180x80 icon next to the text, upper right corner
     char tempbuf[45];
-    snprintf(tempbuf,44,"/Icons/Events/180x180/%s.bmp",wEF.phenomenon);
-    drawBmp(tempbuf,0,Y);
+    snprintf(tempbuf,44,"/Icons/Events/60x60/%s.bmp",wEF.phenomenon);
+    if (drawBmp(tempbuf,tft.width()-60,0)==-1) {
+      SerialPrint("Error drawing weather alert icon: " + String(tempbuf), true);
+      storeError("Error drawing weather alert icon: " + String(tempbuf));
+      snprintf(tempbuf,44,"/Icons/Events/60x60/ZZ.bmp",wEF.phenomenon);
+      drawBmp(tempbuf,tft.width()-60,0);
+    }
+
+    //Y is already at the right place, so just continue
+    FH = setFont(2);
+    text = "Severity: " + String(wEF.severity);
+    tft.setCursor(0,Y);
+    tft.printf("%s",text.c_str());
+    Y+=FH+4;
+    text = "Urgency: " + String(wEF.urgency);
+    tft.setCursor(0,Y);
+    tft.printf("%s",text.c_str());
+    Y+=FH+4;
+    text = "Certainty: " + String(wEF.certainty);
+    tft.setCursor(0,Y);
+    tft.printf("%s",text.c_str());
+    Y+=FH+4;
     
-    text = "Severity: \n" + String(wEF.severity);
-    tft.drawString(text,184,Y);
+    FH = setFont(1);
+    tft.setCursor(0,Y);
+    text = (String) wEF.event + "Rcvd: " + String(dateify(WeatherData.lastAlertFetchTime,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("%s",text.c_str());
+    Y+=FH+2;
 
-    text = "Urgency: \n" + String(wEF.urgency);
-    tft.drawString(text,184,Y+4+tft.fontHeight(tft.getFont()));
 
-    text = "Certainty: \n" + String(wEF.certainty);
-    tft.drawString(text,184,Y+8+tft.fontHeight(tft.getFont())*2);
+    tft.setCursor(0,Y);
+    text = (String) "Start: " + String(dateify(WeatherData.alertInfo.time_start,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("%s",text.c_str());
+    Y+=FH+2;
     
-    Y=Y+180+4;
-
-    setFont(1);
-    text = (String) wEF.event + "\nRecvd: " + String(dateify(WeatherData.lastAlertFetchTime,"mm/dd/yyyy hh:nn:ss")) + "\n" + "Start: " + String(dateify(WeatherData.alertInfo.time_start,"mm/dd/yyyy hh:nn:ss")) + "\n" +
-    "End: " + String(dateify(WeatherData.alertInfo.time_end,"mm/dd/yyyy hh:nn:ss")) + "\n" +
-    "Description: " + String(wEF.description);
-    tft.drawString(text,0,Y);
+    tft.setCursor(0,Y);
+    text = "End: " + String(dateify(WeatherData.alertInfo.time_end,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("%s",text.c_str());
+    Y+=FH+2;
+    
+    tft.setCursor(0,Y);
+    text = "Description: " + String(wEF.description);
+    tft.printf("%s",text.c_str());
+    Y+=FH+2;
 
     setFont(2);
     tft.setTextColor(FG_COLOR,BG_COLOR);
@@ -1272,9 +1277,17 @@ void fcnDrawMainScreen(int16_t index) {
       clearBit(GRAPHICS.StatusFlags,1); //clear bit 1 if weather event flag is not set
     }
 
-    GRAPHICS.alarmCount = fcnGetAlarms(-1,3,3);
+    uint8_t checkTheseFlags = 0;
+    setBit(checkTheseFlags,1); //monitored
+    setBit(checkTheseFlags,0); //flagged
+    uint16_t sensorTypes = 0;
+    setBit(sensorTypes,3); //soil
+    setBit(sensorTypes,8); //binary
+    setBit(sensorTypes,9); //leak
+    setBit(sensorTypes,10); //battery
+    GRAPHICS.alarmCount =  Sensors.countFlagged(-1000,checkTheseFlags,checkTheseFlags,0,true,false,sensorTypes);    
     if (GRAPHICS.alarmCount>0) {
-      if (isBit(GRAPHICS.StatusFlags,2)==false) setBit(GRAPHICS.StatusFlagsChanged,2); //set bit 2 to 1 if alarm count is >0
+      if (isBit(GRAPHICS.StatusFlags,2)==false)         setBit(GRAPHICS.StatusFlagsChanged,2); //set bit 2 to 1 if alarm count is >0
       setBit(GRAPHICS.StatusFlags,2); //set bit 2 to 1 if alarm count is >0
     }
     else {
@@ -1427,7 +1440,7 @@ void fcnDrawHeaderInfo(int16_t index) {
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
   uint8_t InfoFlags = GRAPHICS.SCREEN_DATA[index].Local_Code; //bit 0 - showing wifi out, bit 1 =  showing weather alerts, bit 2 = last error msg within 2h, bit 3 = IP in header, bit 4 = dawn/dusk info
-
+  uint16_t textWidth = 0;
 
   //Order is: no wifi, then weather alerts, then cycle amongst [IP address, dawn/dusk info, last error msg within 2h]
   if(WiFi.status()!= WL_CONNECTED){  
@@ -1436,8 +1449,9 @@ void fcnDrawHeaderInfo(int16_t index) {
     setFont(2);
     st = "NO WIFI!";
     tft.setTextColor(TFT_RED,BG_COLOR);
-    tft.drawString(st,x,y+4);
-    x += tft.textWidth(st)+4;
+    //calculate the width of the text
+    textWidth = tft.textWidth(st);
+    tft.drawString(st,tft.width()-textWidth-4,y+2);
   } else {
     clearBit(InfoFlags,0); //clear bit 0
     //check if there are weather alerts
@@ -1445,20 +1459,19 @@ void fcnDrawHeaderInfo(int16_t index) {
       InfoFlags =0;
       setBit(InfoFlags,1); //set bit 1 to 1
 
-      FH = setFont(1);
+      FH = setFont(2);
       //set text color to dark gray
       tft.setTextColor(TFT_RED,BG_COLOR);
       //draw the IP address
-      st = "Wthr Alrt: " + String(WeatherData.alertInfo.phenomenon);
-      tft.drawString(st,x,y+4);
-      st = WeatherData.alertInfo.event;
-      tft.drawString(st,x,y+FH + 2);
+      st = String(WeatherData.alertInfo.event) + "!";
+      textWidth = tft.textWidth(st);
+      tft.drawString(st,tft.width()-textWidth-4,y + 2);
 
     } else {      
       //Check if there was an error message within the past 5 min
       FH = setFont(1);
 
-      if (false && (I.lastErrorTime > 0 && I.lastErrorTime > I.currentTime - 300) && isBit(GRAPHICS.SCREEN_DATA[index].Local_Code,2)==false) {
+      if (false && (I.lastErrorTime > 0 && I.lastErrorTime > I.currentTime - 300) && isBit((uint16_t)GRAPHICS.SCREEN_DATA[index].Local_Code,2)==false) {
         InfoFlags =0;
         setBit(InfoFlags,2); //set bit 2 to 1
         //set text color to dark gray
@@ -1478,7 +1491,8 @@ void fcnDrawHeaderInfo(int16_t index) {
           //show IP address
           FH = setFont(2);
           st = "My IP: " + Sensors.getMyDeviceIP().toString();
-          tft.drawString(st,x,y+2);
+          textWidth = tft.textWidth(st);
+          tft.drawString(st,tft.width()-textWidth-4,y+2);
     
         } else {
           //show dawn/dusk info
@@ -1489,11 +1503,13 @@ void fcnDrawHeaderInfo(int16_t index) {
 
           if (WeatherData.sunrise > I.currentTime) {          
             st = "Dawn: " + String(dateify(WeatherData.sunrise,"hh:nn"));
-            tft.drawString(st,x,y+2);          
+            textWidth = tft.textWidth(st);
           } else {
             st = "Dusk: " + String(dateify(WeatherData.sunset,"hh:nn"));
-            tft.drawString(st,x,y+2);          
+            textWidth = tft.textWidth(st);
           }
+          tft.drawString(st,tft.width()-textWidth-4,y+2);          
+
         }
       }
     }
@@ -1638,12 +1654,13 @@ void fcnDrawCurrentWeatherText(int16_t index) {
         bg = TFT_WHITE;
       }
       else {
-        snprintf(tempbuf,14,"Rain: %u%%",WeatherData.getDailyPoP(0));
-        if (WeatherData.getDailyPoP(0)>30)  {
+        if (WeatherData.getDailyPoP(0)>20)  {
+          snprintf(tempbuf,14,"Rain: %u%%",WeatherData.getDailyPoP(0));
           fg = tft.color565(255,0,0);
           bg = tft.color565(0,0,255);
         }
         else {
+          tempbuf[0] = 0;
           fg = FG_COLOR;
           bg = BG_COLOR;
         }
@@ -1692,8 +1709,8 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
     IconFlags = 1; //was showing alerts or there was an error, now showing flags
   }
 
-  if (IconFlags == oldIconFlags && skipcount <12 && IconFlags == 1) {
-    //do nothing, already showing what we need!
+  if (IconFlags == oldIconFlags && skipcount <4 && IconFlags == 1) {
+    //do nothing, already showing what we need! maintain this for 20 seconds
     skipcount++;
     GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
     return;
@@ -1707,8 +1724,24 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
     GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show sensors
   }
   else if (IconFlags == 2)  { //show alerts
-        fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);            
-        GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show alerts      
+    uint8_t checkTheseFlags = 3; //bits 0 and 1 are set to 1
+    uint16_t sensorTypes = 0xFFFF; //set all bits to 1
+    clearBit(sensorTypes, 15); //do not exclude all sensor types
+    clearBit(sensorTypes, 14); //do not use a specific sensor type
+    clearBit(sensorTypes, 0); //no need to use 
+    //now we will check all sensortypes, but in order!
+
+    //previously I was checking for specific sensors, but now I will only check for sensors that are monitored and flagged. Up to user to decide
+    //clearBit(sensorTypes, 0); //clear bit 0 for "all"
+    // setBit(sensorTypes, 3);
+    // setBit(sensorTypes, 8);
+    // setBit(sensorTypes, 9);
+    // setBit(sensorTypes, 10);
+    byte alarmcount = fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,3,3);
+    if (alarmcount>0) {
+      fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);            
+    }
+    GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show alerts      
   }
   else if (IconFlags == 4) {
     fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,Sprite180x180,true);   
@@ -1802,8 +1835,13 @@ bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts) {
 
   if (useAlerts && WeatherData.NumWeatherEvents>0) {
     WeatherData.loadNextWeatherAlert();
-    if (WeatherData.alertInfo.phenomenon != 0) snprintf(filename,50,"/Icons/Events/180x180/%s.bmp",WeatherData.alertInfo.phenomenon);
-    else snprintf(filename,50,"/Icons/Events/180x180/Unknown.bmp");
+
+
+    snprintf(filename,50,"/Icons/Events/180x180/%s.bmp",WeatherData.alertInfo.phenomenon);
+    //check if file exists
+
+    if (FileOrDirectoryExists(filename)==false)   snprintf(filename,50,"/Icons/Events/180x180/zz.bmp");
+
   } else {
     bool found = false;
     byte failCount =0;
@@ -1844,8 +1882,10 @@ bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts) {
     //failed to draw the bitmap, so fill the sprite with an error message
     char tempbuf[30];
     //print to the sprite an error message indicating that there was a failure loading BMP file
+    snprintf(GRAPHICS.SPRITE_180x180.filename,50,"/Icons/Set0/BMP180x180night/999.bmp");
+
     sprite.setCursor(0,0);
-    sprite.print("BMP Load Error:\n");
+    sprite.printf("BMP Load Error:\n");
     sprite.println(filename);
     return false;
   }
@@ -1887,7 +1927,12 @@ void fcnDrawHourlyWeather(int16_t index) {
     if (temptime > WeatherData.sunrise  && temptime< WeatherData.sunset) snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30day/%d.bmp", GRAPHICS.IconSet, iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
     else     snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30night/%d.bmp", GRAPHICS.IconSet, iconID);
           
-    drawBmp(tempbuf,X,Y);
+    if (drawBmp(tempbuf,X,Y)==-1) {
+      SerialPrint("Error drawing hourly weather icon: " + String(tempbuf), true);
+      storeError("Error drawing hourly weather icon: " + String(tempbuf));
+      snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30day/999.bmp", GRAPHICS.IconSet);
+      drawBmp(tempbuf,X,Y);
+    }
     Z+=30;
 
     tft.setTextColor(FG_COLOR,BG_COLOR);
@@ -1951,7 +1996,12 @@ void fcnDrawDailyWeather(int16_t index) {
     iconID = WeatherData.getDailyWeatherID(i,true);
     snprintf(tempbuf,49,"/Icons/Set%d/BMP60x60day/%d.bmp", GRAPHICS.IconSet, iconID); //icon
     
-    drawBmp(tempbuf,X,Y);
+    if (drawBmp(tempbuf,X,Y)==-1) {
+      SerialPrint("Error drawing daily weather icon: " + String(tempbuf), true);
+      storeError("Error drawing daily weather icon: " + String(tempbuf));
+      snprintf(tempbuf,49,"/Icons/Set%d/BMP60x60day/999.bmp", GRAPHICS.IconSet);
+      drawBmp(tempbuf,X,Y);
+    }
     Z+=60;
     
     X = (i-1)*(tft.width()/5) + ((tft.width()/5))/2; 
@@ -2264,7 +2314,14 @@ void fcnDrawSensorSummarySubcreen(int16_t index) {
   GRAPHICS.SCREEN_DATA[2].drawFunction(2);
   GRAPHICS.SCREEN_DATA[3].drawFunction(3);
 
-  byte alarmcount = fcnGetAlarms(0,8,6);
+  uint8_t checkTheseFlags = 0; 
+  uint16_t sensorTypes = 0xFFFF; //set all bits to 1
+  clearBit(sensorTypes, 15); //do not exclude all sensor types
+  clearBit(sensorTypes, 14); //do not use a specific sensor type
+  clearBit(sensorTypes, 0); //no need to use 
+  //now we will check all sensortypes, but in order!
+
+  fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,8,6); //8 rows, 6 columns
 
 
   int16_t FH = setFont(2);
@@ -2272,7 +2329,7 @@ void fcnDrawSensorSummarySubcreen(int16_t index) {
   tft.setCursor(0,0);
   fcnDrawSensors(0,18,8,6);
   tft.setCursor(0,tft.height()-FH-62);
-  tft.printf("Devices: %d; Sensors: %d; Alarms: %d",Sensors.numDevices,Sensors.numSensors,alarmcount);
+  tft.printf("Devices: %d; Sensors: %d; Alarms: %d",Sensors.numDevices,Sensors.numSensors,I.isFlagged);
 
   return;
 }

@@ -624,7 +624,6 @@ void initScreenFlags(bool completeInit) {
       I.wasAC=false; //first bit is compressor on, bits 1-6 are zones
       I.wasFan=false; //first bit is fan on, bits 1-6 are zones
       I.localBatteryIndex=255;
-      I.showTheseFlags=(1<<3) + (1<<2) + (1<<1) + 1; //bit 0 = 1 for flagged only, bit 1 = 1 include expired, bit 2 = 1 include soil alarms, bit 3 =1 include leak, bit 4 =1 include temperature, bit 5 =1 include  RH, bit 6=1 include pressure, 7 = 1 include battery, 8 = 1 include HVAC
 
       I.isHot=0;
       I.isCold=0;
@@ -786,21 +785,35 @@ bool inIndex(byte lookfor,byte used[],byte arraysize) {
   return false;
 }
 
+
 void Byte2Bin(uint8_t value, char* output, bool invert) {
-  snprintf(output,9,"00000000");
-  for (byte i = 0; i < 8; i++) {
-    if (invert) {
-      if (value & (1 << i)) output[i] = '1';
-      else output[i] = '0';
-    } else {
-      if (value & (1 << i)) output[7-i] = '1';
-      else output[7-i] = '0';
-    }
+  uint16_t value16 = value;
+  char output16[17];
+  uint16ToBin(value16, output16, invert);
+
+  //copy the first 8 chars of output16 to output if invert is false, or the last 8 chars if invert is true
+  if (invert) {
+    memcpy(output, output16, 8);
+  } else {
+    memcpy(output, output16+8, 8);
   }
+  output[8] = '\0';
 
   return;
 }
 
+void uint16ToBin(uint16_t value, char* output, bool invert) {
+  //invert puts the LSB on the LEFT: so the value two would be 0000000000000010 with invert false, but with invert true it would be 0100000000000000
+  snprintf(output,17,"0000000000000000");
+  for (byte i = 0; i < 16; i++) {
+    uint16_t testbit = value & (1 << i);
+    if (testbit != 0) {
+      if (invert)         output[i] = '1';
+      else                output[15-i] = '1';      
+    } 
+  }
+  return;
+}
 
 char* strPad(char* str, char* pad, byte L)     // Simple C string function
 {
@@ -933,8 +946,8 @@ int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest)
   return Sensors.findSnsOfType(snstype, newest);
 }*/
 
-uint8_t countFlagged(int snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan) {
-  return Sensors.countFlagged(snsType, flagsthatmatter, flagsettings, MoreRecentThan);
+uint8_t countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags) {
+  return Sensors.countFlagged(snsType, flagsthatmatter, flagsettings, MoreRecentThan,  countCriticalExpired, countAnyExpired, optionalsnsflags);    
 }
 
 #ifndef _ISPERIPHERAL
@@ -976,21 +989,36 @@ void checkHVAC() {
 }
 #endif
 
+
+//bit functions
+//uint8_t
 bool isBit(uint8_t value, uint8_t bit) {
   return (value & (1 << bit)) != 0;
 }
-
 void clearBit(uint8_t &value, uint8_t bit) {
   value &= ~(1 << bit);
 }
-
 void setBit(uint8_t &value, uint8_t bit) {
   value |= (1 << bit);
 }
-
 void flipBit(uint8_t &value, uint8_t bit) {
   value ^= (1 << bit);
 }
+
+//uint16_t
+bool isBit(uint16_t value, uint8_t bit) {
+  return (value & (1 << bit)) != 0;
+}
+void clearBit(uint16_t &value, uint8_t bit) {
+  value &= ~(1 << bit);
+}
+void setBit(uint16_t &value, uint8_t bit) {
+  value |= (1 << bit);
+}
+void flipBit(uint16_t &value, uint8_t bit) {
+  value ^= (1 << bit);
+}
+
 
 String breakString(String *inputstr,String token,bool reduceOriginal) 
 //take a pointer to input string and break it to the token.

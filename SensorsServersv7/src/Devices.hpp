@@ -124,7 +124,10 @@ public:
     // Utility functions
     int16_t findOldestDevice();
     int16_t findOldestSensor();
-    uint8_t countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false);
+    int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0);
+    int8_t countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags); 
+    String getSensorTypeFlaggedString(byte snstypeindex);
+
     uint8_t getSensorFlag(int16_t index);
     byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     ArborysDevType* getNextExpiredDevice(int16_t& startIndex);

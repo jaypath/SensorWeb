@@ -595,89 +595,160 @@ int16_t Devices_Sensors::findOldestSensor() {
     return oldestIndex;
 }
 
-uint8_t Devices_Sensors::countFlagged(int16_t snsType, uint8_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired) { //provide the sensortypes, where this can include -1 for all temperature, -2 for all humidity, -9 for all pressure. Flag settings is a bitmask of the flags that matter (0b00000011 = flagged and monitored). MoreRecentThan is the time in seconds since the last update.
-     //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
-    //if snsType is 0, then count all sensors (meeting the flag criteria)
-    //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
-    //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
-    //if snsType is -3, then count all soil sensors (meeting the flag criteria)
-    //if snsType is -9, then count all pressure sensors (meeting the flag criteria)
-    //if snstype is -50 to -59, then count all HVAC sensors (meeting the flag criteria)
-    //if snsType is <=-100, then count all server sensors (meeting the flag criteria)
-    //if snsType is <=-1000 then use flags to specify multiple types: 0 = all EXCEPT the specified types , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary...
+int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType) { 
+//checks if a sensor is flagged based on the criteria used by countFlagged
+//order of operations:
+//1. check if the sensor is set
+//2. check if the sensor is of the specified type
+//3. check if the sensor is expired (either critical or any, depending on the criteria)
+//4. check if the sensor is within the time range
+//5. check if the sensor is within the flag settings
+//here snsIndex is the index of the sensor to check, and snsType is an explicit declaration of the sesnor type if optionalsnsflags is set to 14
+//optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, ..., 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
+    
 
-    uint16_t count = 0;
-    int16_t snsFlagType;
-    if (snsType < -1000) {
-        snsFlagType = (-1 *snsType)-1000;
-        //flags are as follows: but 0 means all types, 1 means temp, 2 means humidity, 3 means soil, 4 means pressure, 5 means HVAC, 6 means server, 7 means dist, 8 means binary...
-    } else snsFlagType = 0;
+    if (!sensors[snsIndex].IsSet) return 0; //no sensor
 
-    //count the number of sensors that match the flags
-    for (int16_t i = 0; i < NUMSENSORS ; i++) {
-        if (!sensors[i].IsSet) continue;
-        
-        // Check sensor type filter
-        if (snsType != 0) { //special case for all sensors
-            if (snsType > 0 && sensors[i].snsType != snsType) continue;
-            if (snsType == -1 && (isSensorOfType(i,"temperature") == false)) continue; // Temperature sensors only
-            if (snsType == -2 && (isSensorOfType(i,"humidity") == false)) continue; // Humidity sensors only
-            if ((snsType == -3 ) && (isSensorOfType(i,"soil") == false)) continue; // Soil sensors only
-            if (snsType == -9 && (isSensorOfType(i,"pressure") == false)) continue; // Pressure sensors only
-            if (snsType <= -50 && snsType >= -59 && (isSensorOfType(i,"HVAC") == false)) continue; // HVAC sensors only
-            if (snsType <= -60 && snsType >= -63 && (isSensorOfType(i,"battery") == false)) continue; // Battery sensors only
-            if (snsType == -100 && (isSensorOfType(i,"server") == false)) continue; // Server sensors only
-            if (snsType == -1000) {
-                //use I.showTheseFlags to determine which types to count
-                bool isgood = false;
-                if (bitRead(I.showTheseFlags, 11) == 1) isgood = true;
-                if (bitRead(I.showTheseFlags, 3) == 1 && isSensorOfType(i,"leak") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 2) == 1 && isSensorOfType(i,"soil") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 4) == 1 && isSensorOfType(i,"temperature") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 5) == 1 && isSensorOfType(i,"humidity") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 6) == 1 && isSensorOfType(i,"pressure") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery_li") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 7) == 1 && isSensorOfType(i,"battery_pb") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 8) == 1 && isSensorOfType(i,"HVAC") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 9) == 1 && isSensorOfType(i,"human") == true)   isgood = true;
-                if (bitRead(I.showTheseFlags, 10) == 1 && isSensorOfType(i,"distance") == true)   isgood = true;
-                if (isgood == false) continue; //sensor does not meet the criteria
-            }
-            if (snsType  < -1000) {
-                //multiple selectable types, based on provided value
-                bool isgood = false;
-                bool isgoodupdated = false;
+    bool isgood=true;
 
-                if (bitRead(snsFlagType, 0)) {
-                    isgood = true;
-                    isgoodupdated = false;
-                } else {
-                    isgood = false;
-                    isgoodupdated = true;
+    if (isBit(optionalsnsflags, 14) == 1) { //using a specific sensory type, not that exclude still allowed
+        if (isBit(optionalsnsflags, 15) == 0) {
+            if (sensors[snsIndex].snsType != snsType) return 0; //not the specified sensor
+        } else {
+            if (sensors[snsIndex].snsType == snsType) return 0; //not the specified sensor
+        }
+        isgood = true;
+
+    }
+    else if (isBit(optionalsnsflags, 0) == 1 || isBit(optionalsnsflags, 13) == 1) { // all sensor types or "everything else"
+        //do nothing, it's already good
+        isgood = true;
+    }
+    else {
+        if (isBit(optionalsnsflags, 15) == 0) { //do not exclude all sensor types
+            isgood = false;
+
+            for (byte optionalsnsflagindex = 0; optionalsnsflagindex<11; optionalsnsflagindex++) {
+                if (isBit(optionalsnsflags, optionalsnsflagindex) ) {
+                    isgood = isSensorOfType(snsIndex, getSensorTypeFlaggedString(optionalsnsflagindex));
+                    if (isgood) break; //regardless of how many types, if we hit even one then we are good
                 }
-                if (bitRead(snsFlagType, 1) && isSensorOfType(i,"temperature") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 2) && isSensorOfType(i,"humidity") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 3) && isSensorOfType(i,"soil") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 4) && isSensorOfType(i,"pressure") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 5) && isSensorOfType(i,"HVAC") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 6) && isSensorOfType(i,"server") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 7) && isSensorOfType(i,"dist") == true) isgood = isgoodupdated;
-                if (bitRead(snsFlagType, 8) && isSensorOfType(i,"binary") == true) isgood = isgoodupdated;
-                if (isgood == false) continue; //sensor does not meet the criteria
             }
         }
-        // Check time filter
-        if (MoreRecentThan > 0 && sensors[i].timeRead < MoreRecentThan) continue;
-        
-        // Check flags
-        uint8_t sensorFlags = sensors[i].Flags & flagsthatmatter;
-        if (sensorFlags == flagsettings || (countCriticalExpired && bitRead(sensors[i].Flags,7) && sensors[i].expired) || (countAnyExpired && sensors[i].expired)) {
-            count++;
+        else {
+            isgood = true;
+            for (byte optionalsnsflagindex = 0; optionalsnsflagindex<11; optionalsnsflagindex++) {
+                if (isBit(optionalsnsflags, optionalsnsflagindex) ) {
+                    isgood = !isSensorOfType(snsIndex, getSensorTypeFlaggedString(optionalsnsflagindex));
+                    if (isgood==false) break; //regardless of how many types, if we fail anywhere we are done
+                }
+            }
         }
     }
 
+    if (isgood == false) return 0; //sensor not matching the criteria
+
+    //now check the flags and expiration rules
+    //is this expired?
+    if ((countCriticalExpired && bitRead(sensors[snsIndex].Flags,7) && sensors[snsIndex].expired)) return 2; //critical expired
+
+    //for regular expired, the sensor must be monitored 
+    if (countAnyExpired && sensors[snsIndex].expired && bitRead(sensors[snsIndex].Flags,1) == 1) return 3; //any expired
+
+    // Check time filter
+    if (MoreRecentThan > 0 && sensors[snsIndex].timeRead < MoreRecentThan) return -2; //not recent enough
+
+    if ((sensors[snsIndex].Flags & flagsthatmatter) == flagsettings) return 1; //flagged
+
+
+    return -1; //found the sensor, but it is not flagged according to the specified criteria
+
+}
+
+int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags) { 
+     //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
+     //if snstype is 1-200 then count all sensors of that type (meeting the flagsthatmatter criteria)
+    //if snsType is 0, then count all sensors (meeting the flagsthatmatter criteria)
+    //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
+    //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
+    //if snsType is -3, then count all soil sensors (meeting the flag criteria)
+    //if snsType is -4, then count all pressure sensors (meeting the flag criteria)
+    //if snsType is -5, then count all HVAC sensors (meeting the flag criteria)
+    //if snsType is -6, then count all server sensors (meeting the flag criteria)
+    //if snsType is -7, then count all dist sensors (meeting the flag criteria)
+    //if snsType is -8, then count all binary sensors (meeting the flag criteria)
+    //if snsType is -9, then count all leak sensors (meeting the flag criteria)
+    //if snsType is -10, then count all battery sensors (meeting the flag criteria)
+    //if snsType is -11, then count all human sensors (meeting the flag criteria)
+
+    //if snsType is =-1000 then use then use optionalsnsflags to determine sensor types to count (along with flagsthatmatter and flagsettings)
+    //if snsType is <-1000 then count all sensors EXCEPT the specified types in optionalsnsflags (meeting the flagsthatmatter criteria)
+    //optionalsnsflags is a bitmask of the sensor types to count: 
+    //0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 
+    //12 = TBD, 13 = TBD, 
+    //14 = use specified sensor type
+    //15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
+    
+    uint16_t count = 0;
+
+    //special case for all sensors, which means no filtering by type
+    if (snsType == 0) {
+        setBit(optionalsnsflags, 0); //all sensor types
+        clearBit(optionalsnsflags, 15); //do not exclude all sensor types
+    }
+    else if (snsType > 0) {
+        setBit(optionalsnsflags, 14); //using a specific sensory type, not that exclude still allowed        
+    }
+    else if (snsType < -1000) {
+        setBit(optionalsnsflags, 15); //exclude all sensor types
+    }
+    else if (snsType == -1000) {
+        clearBit(optionalsnsflags, 15); //do not exclude all sensor types
+    }
+    else if (snsType <0 && snsType >= -11) {
+        //convert to explicit sensor group
+        optionalsnsflags = 0;
+        if (snsType == -1) setBit(optionalsnsflags, 1); //temperature
+        else if (snsType == -2) setBit(optionalsnsflags, 2); //humidity
+        else if (snsType == -3) setBit(optionalsnsflags, 3); //soil
+        else if (snsType == -4) setBit(optionalsnsflags, 4); //pressure
+        else if (snsType == -5) setBit(optionalsnsflags, 5); //HVAC
+        else if (snsType == -6) setBit(optionalsnsflags, 6); //server
+        else if (snsType == -7) setBit(optionalsnsflags, 7); //dist
+        else if (snsType == -8) setBit(optionalsnsflags, 8); //binary
+        else if (snsType == -9) setBit(optionalsnsflags, 9); //leak
+        else if (snsType == -10) setBit(optionalsnsflags, 10); //battery
+        else if (snsType == -11) setBit(optionalsnsflags, 11); //human
+    }
+
+
+    //count the number of sensors that match the flags
+    for (int16_t i = 0; i < NUMSENSORS ; i++) {
+        if (isSensorFlagged(i, optionalsnsflags,flagsthatmatter, flagsettings, MoreRecentThan, countCriticalExpired, countAnyExpired, snsType) <=0) continue;
+        count++;
+    }
+
     return count;
+}
+
+String Devices_Sensors::getSensorTypeFlaggedString(byte snstypeindex) {
+    //returns the string name of the sensor types that are used by countFlagged and isFlagged
+    
+    if (snstypeindex == 0) return "all";
+    else if (snstypeindex == 1) return "temperature";
+    else if (snstypeindex == 2) return "humidity";
+    else if (snstypeindex == 3) return "soil";
+    else if (snstypeindex == 4) return "pressure";
+    else if (snstypeindex == 5) return "HVAC";
+    else if (snstypeindex == 6) return "server";
+    else if (snstypeindex == 7) return "dist";
+    else if (snstypeindex == 8) return "binary";
+    else if (snstypeindex == 9) return "leak";
+    else if (snstypeindex == 10) return "battery";
+    else if (snstypeindex == 11) return "human";    
+
+
+    return "";
 }
 
 // Search functions
@@ -1068,6 +1139,7 @@ String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
     if (snsType == 12 ) return "weather";
     if (snsType == 11 || snsType == 16) return "altitude";
     if (snsType == 98) return "clock";
+    if (snsType == 71) return "binary";
     if (snsType >= 100) return "server";
     return "unknown";
 }
@@ -1125,6 +1197,10 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "clock") {//clock
         return (snsType == 98);
     }
+    if (type == "binary") {//binary
+        return (snsType == 71);
+    }
+    
     if (type == "all" || type == "any") {//all
         return true;
     }
