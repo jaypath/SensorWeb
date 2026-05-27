@@ -283,6 +283,7 @@ void apiScanWiFi();
 void apiClearWiFi();
 void apiLookupLocation();
 void apiDetectTimezone();
+void apiDetectDST();
 void apiSaveTimezone();
 void apiGetSetupStatus();
 void handleInitialSetup();

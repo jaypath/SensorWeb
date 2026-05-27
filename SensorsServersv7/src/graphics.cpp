@@ -786,71 +786,52 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) {
 // Weather text functions
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   // print air pressure
-  double tempval;
-  uint8_t snsIndex = findSensorByName("Outside", 13); //bme pressure
-  if (snsIndex==255) snsIndex = findSensorByName("Outside", 9); //bmp pressure
-  if (snsIndex==255) snsIndex = findSensorByName("Outside", 19); //bme680 pressure
+  double tempval = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 3600); //get the average pressure in the last hour
 
-  tempPres[0]=0;
-  if (snsIndex !=255) {
-    // Find the sensor by its index and get its value
-    ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsIndex);
-    
-    if (device && sensor && device->IsSet && sensor->IsSet) {
-      tempval = sensor->snsValue;
-      if (isnan(tempval)) {
-        snprintf(tempPres,10,"??? hPa");
-        *fg=FG_COLOR;
-        *bg=BG_COLOR;
-        return;
-      }
-      if (tempval>LAST_BAR+.5) {
-        snprintf(tempPres,10,"%dhPa^",(int) tempval);
-        *fg=tft.color565(255,0,0);
-        *bg=BG_COLOR;
-      } else {
-        if (tempval<LAST_BAR-.5) {
-          snprintf(tempPres,10,"%dhPa_",(int) tempval);
-          *fg=tft.color565(0,0,255);
-          *bg=BG_COLOR;
-        } else {
-          snprintf(tempPres,10,"%dhPa-",(int) tempval);
-          *fg=FG_COLOR;
-          *bg=BG_COLOR;
-        }
-      }
-
-      if (tempval>=1022) {
-        *fg=tft.color565(255,0,0);
-        *bg=tft.color565(255,255,255);
-      }
-
-      if (tempval<=1000) {
-        *fg=tft.color565(0,0,255);
-        *bg=tft.color565(255,0,0);
-      }
+  if (tempval == -127) {
+    snprintf(tempPres,10,"");
+    *fg=FG_COLOR;
+    *bg=BG_COLOR;
+    return;
+  }
+  if (tempval>LAST_BAR+.5) {
+    snprintf(tempPres,10,"%dhPa^",(int) tempval);
+    *fg=tft.color565(255,0,0);
+    *bg=BG_COLOR;
+  } else {
+    if (tempval<LAST_BAR-.5) {
+      snprintf(tempPres,10,"%dhPa_",(int) tempval);
+      *fg=tft.color565(0,0,255);
+      *bg=BG_COLOR;
+    } else {
+      snprintf(tempPres,10,"%dhPa-",(int) tempval);
+      *fg=FG_COLOR;
+      *bg=BG_COLOR;
     }
   }
-  return;
+
+  if (tempval>=1022) {
+    *fg=tft.color565(255,0,0);
+    *bg=tft.color565(255,255,255);
+  }
+
+  if (tempval<=1000) {
+    *fg=tft.color565(0,0,255);
+    *bg=tft.color565(255,0,0);
+  }
 }
 
 void fcnPredictionTxt(char* tempPred, uint16_t* fg, uint16_t* bg) {
-  double tempval;
-  uint8_t snsIndex = findSensorByName("Outside",12);
-  if (snsIndex!=255) {
-    // Find the sensor by its index and get its value
-    
-    ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
-    ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsIndex);
-    
-    if (device && sensor && device->IsSet && sensor->IsSet) {
-      tempval = (int) sensor->snsValue;
-    } else {
-      tempval = 0; //currently holds predicted weather
-    }
-  } else {
-    tempval = 0; //currently holds predicted weather
+  int16_t tempval;
+
+
+  tempval = Sensors.getAverageOutsideParameterValue("weather", I.currentTime - 900); //get the predicted weather
+
+  if (tempval == -127) {
+    snprintf(tempPred,10,"");
+    *fg=FG_COLOR;
+    *bg=BG_COLOR;
+    return;
   }
 
   if ((int) tempval!=0) {
@@ -1313,8 +1294,8 @@ void fcnDrawMainScreen(int16_t index) {
   if (GRAPHICS.SubScreen_Next != GRAPHICS.SubScreen_Now || GRAPHICS.Screen_Next != GRAPHICS.Screen_Now
       || GRAPHICS.SCREEN_DATA[1].drawFunction == nullptr) {    
     GRAPHICS.clearScreenArea(0); //clear the screen
-    GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawHeader, 0,0,160,30, SCREEN_NONE, 0, 1, 5, 1, nullptr); 
-    GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawHeaderInfo, 160,0,160,30, SCREEN_NONE, 0, 2, 5, 2, nullptr); 
+    GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawHeader, 0,0,180,30, SCREEN_NONE, 0, 1, 5, 1, nullptr); 
+    GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawHeaderInfo, 180,0,140,30, SCREEN_NONE, 0, 2, 5, 2, nullptr); 
     GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawCurrentWeatherIconOrAlert, 0,32,180,180, SCREEN_SENSORS,0, 3, 5, 3, &fcnSwitchScreen); 
     GRAPHICS.SCREEN_DATA[4].loadScreenElements(&fcnDrawCurrentWeatherText, 180,32,140,180, SCREEN_ALERT, 0, 4, 90, 4, &fcnSwitchScreen);
     GRAPHICS.SCREEN_DATA[5].loadScreenElements(&fcnDrawHourlyWeather, 0,218,320,60, SCREEN_NONE,0, 5, 60, 5, nullptr);
@@ -2543,12 +2524,12 @@ void fcnDrawStatusText(int16_t index) {
   tft.printf("Timezone: %ld \n", Prefs.TimeZoneOffset);
   //if DST is enabled, print the DST offset and date of DST start and end
   tft.printf("DST: ");
-  if (I.DST==1) tft.printf("Not active\n");
-  else if (I.DST==2) tft.printf("Active, offset %ld min\n",I.DSTOffset/60);
+  if (Prefs.DST==1) tft.printf("Not active\n");
+  else if (Prefs.DST==2) tft.printf("Active, offset %ld min\n",Prefs.DSTOffset/60);
   else tft.printf("Not used here\n");
-  if (I.DST>=0) {
-    tft.printf("DST Start: %s\n", dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
-    tft.printf("DST End: %s\n", dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
+  if (Prefs.DST>=0) {
+    tft.printf("DST Start: %s\n", dateifyDstBoundary(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("DST End: %s\n", dateifyDstBoundary(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
   }
 
   tft.printf("-----------------------\n");

@@ -2,6 +2,10 @@
 #include "globals.hpp"
 #include "sensors.hpp"
 
+#ifdef _USENETWORKMONITOR
+#include "NetworkMonitor.hpp" 
+#endif
+
 /*sens types - see hpp file
 */
 
@@ -137,10 +141,12 @@ analogSetAttenuation(_USEADCATTEN);
 #endif
 
 #ifdef _USEADCBITS
-analogSetWidth(_USEADCBITS); //this sets the number of bits to 12
+  #if CONFIG_IDF_TARGET_ESP32
+  analogReadResolution(_USEADCBITS);  // e.g. 10, 11, or 12
+  #else
+  analogSetWidth(_USEADCBITS); //this sets the number of bits to 12
+  #endif
 #endif
-
-
 #endif
 
 String myname = String(Prefs.DEVICENAME);
@@ -248,6 +254,20 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
       case 61: //battery percent
         {
           bitWrite(Prefs.SNS_FLAGS[i],3,1);
+        break;
+        }
+
+      case 80: //Network Monitor
+      case 81: //Network Monitor
+      case 82: //Network Monitor
+      case 83: //Network Monitor
+      case 84: //Network Monitor
+      case 85: //Network Monitor
+      case 86: //Network Monitor
+        {
+          bitWrite(Prefs.SNS_FLAGS[i],7,0); 
+          bitWrite(Prefs.SNS_FLAGS[i],3,1); 
+          bitWrite(Prefs.SNS_FLAGS[i],1,0);
         break;
         }
       case 90: //Sleep info
@@ -894,7 +914,55 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
       break;
       }
-
+    case 80: //Network Monitor, IGMPv2 Group-Specific Query
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_IGMP(P->snsValue);
+        #endif
+        break;
+      }
+    case 81: //Network Monitor, RSSI of the current connected Access Point
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_RSSI(P->snsValue);
+        #endif
+        break;
+      }
+    case 82: //Network Monitor, MAC address of the current connected Access Point
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_BSSID(P->snsValue);
+        #endif
+        break;
+      }
+    case 83: //Network Monitor, octet of the allocated IP address
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_LocalIPByte(P->snsValue);
+        #endif
+        break;
+      }
+    case 84: //Network Monitor, time taken to resolve a DNS query
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_DNSResolutionTime(P->snsValue);
+        #endif
+        break;
+      }
+    case 85: //Network Monitor, total number of transmission failures registered since boot up
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_TxFailures(P->snsValue);
+        #endif
+        break;
+      }
+    case 86: //Network Monitor, latency to the local default gateway
+      {
+        #ifdef _USENETWORKMONITOR
+          NetworkMonitor_GatewayLatency(P->snsValue);
+        #endif
+        break;
+      }
     case 90:
       {
         //don't do anything here

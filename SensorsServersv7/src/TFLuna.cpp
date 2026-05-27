@@ -5,6 +5,8 @@
 #include "Devices.hpp"
 #include "timesetup.hpp"
 
+extern STRUCT_SNSHISTORY SensorHistory;
+
  TFLunaType LocalTF;
  TFLI2C tflI2C;
 
@@ -25,7 +27,7 @@ bool setupTFLuna() {
   }
 
 
-  int16_t prefs_index = Sensors.getPrefsIndex(P);
+  int16_t prefs_index = SensorHistory.getSensorHistoryIndex(P);
   if (prefs_index == -1) {
     SerialPrint("TFLunaUpdateMAX: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
     LocalTF.TFLUNASNS = -1;

@@ -978,7 +978,7 @@ bool writeAnythingToSD(const char* filename, const void* data, uint16_t size, bo
   ensureParentDir(filename);
   File file = SD.open(filename, append ? FILE_APPEND : FILE_WRITE);
   if (!file) {
-    storeError("writeAnythingToSD: Could not open file " + String(filename),ERROR_SD_FILEWRITE);
+    storeError("writeAnythingToSD: Could not open file " + String(filename), ERROR_SD_FILEWRITE, false);
     return false;
   }
   file.write((uint8_t*)data, size);
@@ -989,7 +989,7 @@ bool writeAnythingToSD(const char* filename, const void* data, uint16_t size, bo
 bool readAnythingFromSD(const char* filename, const void* data, uint16_t size) {
   File file = SD.open(filename, FILE_READ);
   if (!file) {
-    storeError("readAnythingFromSD: Could not open file",ERROR_SD_FILEREAD);
+    storeError("readAnythingFromSD: Could not open file", ERROR_SD_FILEREAD, false);
     return false;
   }
   file.read((uint8_t*)data, size);

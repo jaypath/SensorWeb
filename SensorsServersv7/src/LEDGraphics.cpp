@@ -5,6 +5,10 @@
 #include "LEDGraphics.hpp"
 #include "Devices.hpp"
 
+#ifdef _ISPERIPHERAL
+extern STRUCT_SNSHISTORY SensorHistory;
+#endif
+
 #ifdef _USE8266
   #define PI 3.14159265
 #endif
@@ -179,8 +183,9 @@ void Animation_type::LED_set_color_soil(struct ArborysSnsType *sns) {
   byte r1=0,g1=0,b1=0,r2=0,g2=0,b2=0;      
   byte animStyle = 0;
 
-  // Get the sensor limits from Prefs
-  int16_t prefs_index = Sensors.getPrefsIndex(sns->snsType, sns->snsID);
+  // Prefs slot: same index as SensorHistory row (see setupSensors / ReadData in sensors.cpp)
+  int16_t prefs_index = SensorHistory.getSensorHistoryIndex(sns);
+  if (prefs_index < 0 || prefs_index >= _SENSORNUM) return;
   double limitUpper = Prefs.SNS_LIMIT_MAX[prefs_index];
   double limitLower = Prefs.SNS_LIMIT_MIN[prefs_index];
   uint16_t  snspct =  (100*((double)sns->snsValue - limitLower) / (limitUpper - limitLower)); 

@@ -59,7 +59,9 @@
 #include "LowPower.hpp"
 #endif
 
-
+#ifdef _USENETWORKMONITOR
+#include "NetworkMonitor.hpp"
+#endif
 
 #ifdef _USETFT
 extern LGFX tft;
@@ -361,6 +363,7 @@ void setup() {
 
 
 #endif //_USELOWPOWER/else
+SerialPrint("Setup complete", true);
     
 }
 
@@ -371,6 +374,7 @@ void setup() {
 void loop() {
 
     systemHousekeeping();
+
 
     #ifdef _USETFLUNA    
 //    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
@@ -539,6 +543,9 @@ void loop() {
     if (OldTime[2] != hour()) {
         OldTime[2] = hour();
       
+        //check if DST has changed every hour
+        DSTsetup();
+        
         //check if my IP address has changed
         ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(I.MY_DEVICE_INDEX);
         bool storeToSD = false;
@@ -569,8 +576,7 @@ void loop() {
         if (OldTime[2] == 3) {
             //check if the day is Wednesday
             if (weekday() == 3) controlledReboot("Weekly scheduled reboot", RESET_DEFAULT);
-            //check if DST has changed every day at 3 am
-            DSTsetup();
+            
         }
     }
     if (OldTime[3] != weekday()) {
@@ -616,6 +622,12 @@ void loop() {
             setupTime();
             SerialPrint((String) "New time is: " + dateify(I.currentTime),true);
         }
+
+
+        #if defined(_USENETWORKMONITOR) && !defined(_ISPERIPHERAL)
+        NetworkMonitor.update();
+        #endif
+    
 
 
         #ifdef _ISPERIPHERAL

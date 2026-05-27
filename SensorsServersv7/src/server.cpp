@@ -2,6 +2,9 @@
 #include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
+#ifdef _USENETWORKMONITOR
+#include "NetworkMonitor.hpp"
+#endif
 #ifdef _USETFT
   #ifdef _ISCLOCK480X480
     #include "Clock480X480.hpp"
@@ -940,6 +943,26 @@ void apiLookupLocation() {
   }
 }
 
+// Recompute DST state and local time after timezone offset/DST fields change.
+static void applyTimezoneToCurrentTime() {
+  I.UTCTime = now();
+  DSTsetup();
+  I.currentTime = I.UTCTime + Prefs.TimeZoneOffset + (Prefs.DST > 0 ? (Prefs.DST - 1) * Prefs.DSTOffset : 0);
+  I.currentSecond = second();
+}
+
+static void sendTimezoneDetectJson(bool success) {
+  String dstStart = Prefs.DSTStartUnixTime ? dateifyDstBoundary(Prefs.DSTStartUnixTime, "mm/dd/yyyy hh:nn") : "";
+  String dstEnd = Prefs.DSTEndUnixTime ? dateifyDstBoundary(Prefs.DSTEndUnixTime, "mm/dd/yyyy hh:nn") : "";
+  String json = "{\"success\":" + String(success ? "true" : "false") +
+                ",\"utc_offset\":" + String(Prefs.TimeZoneOffset) +
+                ",\"dst_enabled\":" + String(Prefs.DST) +
+                ",\"dst_offset\":" + String(Prefs.DSTOffset) +
+                ",\"dst_start_date\":\"" + dstStart + "\"" +
+                ",\"dst_end_date\":\"" + dstEnd + "\"}";
+  server.send(200, "application/json", json);
+}
+
 /**
  * API: Auto-detect timezone
  * GET /api/timezone
@@ -951,17 +974,27 @@ void apiDetectTimezone() {
   bool success = getTimezoneInfo();
   if (success==false) {
     Prefs.TimeZoneOffset = 90000; //some arbitrarily large and impossible value
+  } else {
+    applyTimezoneToCurrentTime();
   }
 
-  
-  String json = "{\"success\":" + String(success ? "true" : "false") + 
-                ",\"utc_offset\":" + String(Prefs.TimeZoneOffset) +
-                ",\"dst_enabled\":" + String(I.DST) +
-                ",\"dst_offset\":" + String(I.DSTOffset) +
-                ",\"dst_start_date\":" + String(I.DSTStartUnixTime) +
-                ",\"dst_end_date\":" + String(I.DSTEndUnixTime) + "}";
-  
-  server.send(200, "application/json", json);
+  sendTimezoneDetectJson(success);
+}
+
+/**
+ * API: Auto-detect DST rules only (does not change UTC offset)
+ * GET /api/timezone/dst
+ */
+void apiDetectDST() {
+  registerHTTPMessage("API_DST");
+
+  bool success = getTimezoneInfo(0, 0, false);
+  if (success) {
+    applyTimezoneToCurrentTime();
+    Prefs.isUpToDate = false;
+  }
+
+  sendTimezoneDetectJson(success);
 }
 
 void apiSaveTimezone() {
@@ -969,21 +1002,34 @@ void apiSaveTimezone() {
   
   int32_t utc_offset = server.hasArg("utc_offset") ? server.arg("utc_offset").toInt() : 0;
   uint8_t dst_enabled = server.hasArg("dst_enabled") ? server.arg("dst_enabled").toInt() : 0;
-  uint32_t dst_start_date = server.hasArg("dst_start_date") ? server.arg("dst_start_date").toInt() : 0;
-  uint32_t dst_end_date = server.hasArg("dst_end_date") ? server.arg("dst_end_date").toInt() : 0;
   int32_t dst_offset = server.hasArg("dst_offset") ? server.arg("dst_offset").toInt() : 0;
 
   Prefs.TimeZoneOffset = utc_offset;
-  I.DST = dst_enabled; //note that 0=no DST here, 1=DST not active, 2=DST active
-  I.DSTStartUnixTime = dst_start_date;
-  I.DSTEndUnixTime = dst_end_date;
-  I.DSTOffset = dst_offset;
+  Prefs.DST = dst_enabled; //note that 0=no DST here, 1=DST not active, 2=DST active
+  if (server.hasArg("dst_start_date")) {
+    Prefs.DSTStartUnixTime = convertDstBoundaryStrTime(server.arg("dst_start_date"));
+  }
+  if (server.hasArg("dst_end_date")) {
+    Prefs.DSTEndUnixTime = convertDstBoundaryStrTime(server.arg("dst_end_date"));
+  }
+  Prefs.DSTOffset = dst_offset;
   Prefs.isUpToDate = false;
 
-  String json = "{\"success\":true,\"message\":\"Timezone settings saved\"}";
+  applyTimezoneToCurrentTime();
+
+  BootSecure bootSecure;
+  int8_t ret = bootSecure.setPrefs(true);
+
+  bool saved = (ret > 0);
+  String json = "{\"success\":" + String(saved ? "true" : "false") +
+                ",\"message\":\"" + String(saved ? "Timezone settings saved" : "Failed to save timezone to NVS") + "\"}";
   server.send(200, "application/json", json);
   
-  SerialPrint("Timezone settings saved: UTC offset = " + String(utc_offset), true);
+  if (saved) {
+    SerialPrint("Timezone settings saved: UTC offset = " + String(utc_offset), true);
+  } else {
+    SerialPrint("Timezone settings save failed, setPrefs returned " + String(ret), true);
+  }
 }
 
 void handleSNS_READ_NOW() {
@@ -1460,12 +1506,12 @@ void handleInitialSetup() {
         </div>
         
         <div class="form-group">
-          <label for="dst_start_date">DST Start UnixTime (Month/Day)</label>
-          <input type="number" id="dst_start_date" style="width: 80px;">          
+          <label for="dst_start_date">DST Start</label>
+          <input type="text" id="dst_start_date" placeholder="mm/dd/yyyy hh:nn" maxlength="20" style="width: 100%;">          
         </div>
         <div class="form-group">
-          <label for="dst_end_date">DST End UnixTime (Month/Day)</label>
-          <input type="number" id="dst_end_date" style="width: 80px;">          
+          <label for="dst_end_date">DST End</label>
+          <input type="text" id="dst_end_date" placeholder="mm/dd/yyyy hh:nn" maxlength="20" style="width: 100%;">          
         </div>
         <div class="form-group">
           <label for="dst_offset">DST Offset (seconds)</label>
@@ -1730,6 +1776,11 @@ function skipLocation() {
   completeStep(2);
 }
 
+// Valid UTC offset: within +/-14h and not the unconfigured/failure sentinels (90000, 99999).
+function isValidTimezoneOffset(offset) {
+  return offset !== undefined && offset >= -50400 && offset <= 50400 && offset !== 90000;
+}
+
 // Auto-detect timezone
 async function autoDetectTimezone() {
   showStatus('timezone-status', 'Detecting timezone...', 'info');
@@ -1739,13 +1790,13 @@ async function autoDetectTimezone() {
     const response = await fetch('/api/timezone');
     const data = await response.json();
     
-    if (data.success || data.utc_offset !== 0) {
-      // Populate form
+    if (data.success === true && isValidTimezoneOffset(data.utc_offset)) {
+      // Populate form (dst_start/end are mm/dd/yyyy hh:nn strings from API)
       document.getElementById('utc_offset').value = data.utc_offset;
-      document.getElementById('dst_enabled').value = data.dst_enabled ;
-      document.getElementById('dst_start_date').value = data.dst_start_date;
-      document.getElementById('dst_end_date').value = data.dst_end_date;
-      document.getElementById('dst_offset').value = data.dst_offset;
+      document.getElementById('dst_enabled').value = data.dst_enabled;
+      document.getElementById('dst_start_date').value = data.dst_start_date || '';
+      document.getElementById('dst_end_date').value = data.dst_end_date || '';
+      document.getElementById('dst_offset').value = data.dst_offset !== undefined ? data.dst_offset : '';
       
       showStatus('timezone-status', 'Timezone detected. Please review and save.', 'success');
       document.getElementById('timezone-form').style.display = 'block';
@@ -1754,8 +1805,10 @@ async function autoDetectTimezone() {
       document.getElementById('timezone-form').style.display = 'block';
     }
   } catch (error) {
-    showStatus('timezone-status', 'Detection error. Using defaults.', 'info');
+    showStatus('timezone-status', 'Detection error. Please set manually.', 'info');
     document.getElementById('timezone-form').style.display = 'block';
+  } finally {
+    document.getElementById('detect-tz-btn').disabled = false;
   }
 }
 
@@ -2038,6 +2091,40 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "<br>";
   WEBHTML = WEBHTML + "<strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
   WEBHTML = WEBHTML + "Last WiFi event: " + WiFiEventtoString(I.WiFiLastEvent) + "<br>";
+  #ifdef _USENETWORKMONITOR
+  for (byte i = 0; i < 7; i++) {
+    WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTest[i] + ": ";
+    switch (i) {
+      case 0:
+        switch (NetworkMonitor.NetworkTestValue[i]) {
+          case 1:
+            WEBHTML = WEBHTML + "OK";
+            break;
+          case 0:
+            WEBHTML = WEBHTML + "Not Connected";
+            break;
+          case -1:
+            WEBHTML = WEBHTML + "Local network stack not initialized";
+            break;
+          case -2:
+            WEBHTML = WEBHTML + "Join failed";
+            break;
+        }
+        WEBHTML = WEBHTML + " @" + (String) (NetworkMonitor.lastPollTime[i] ? dateify(NetworkMonitor.lastPollTime[i],"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+        break;
+      case 1:
+        WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTestValue[i] + " dBm @" + (String) (NetworkMonitor.lastRSSILowTime ? dateify(NetworkMonitor.lastRSSILowTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+        break;
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+        WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTestValue[i] + " @" + (String) (NetworkMonitor.lastPollTime[i] ? dateify(NetworkMonitor.lastPollTime[i],"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+        break;
+    }
+  }
+  #endif
   WEBHTML = WEBHTML + "---------------------<br>";      
   #ifdef _USEUDP  
   //in this section we will show incoming and then outgoing UDP message traffic info  
@@ -2793,17 +2880,19 @@ void handleCONFIG() {
 
   //add DST value box where values are 0 (no DST) or 1 (DST is used) or 2 (DST is active)
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">DST is used in this locale (0 = no, 1 = yes but not active, 2 = active)</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" id=\"dst_enabled\" name=\"dst_enabled\" value=\"" + (String) I.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" id=\"dst_enabled\" name=\"dst_enabled\" value=\"" + (String) Prefs.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   //add DST start unixtime and end unixtime and DST offset
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Start</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateify(I.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateifyDstBoundary(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateify(I.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateifyDstBoundary(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset (sec)</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_offset\" name=\"dst_offset\" value=\"" + (String) I.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
-//add a button to autodetect DST
-WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Button</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"button\" id=\"detect-tz-btn\" value=\"Autodetect DST\" onclick=\"autodetectTimezone()\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_offset\" name=\"dst_offset\" value=\"" + (String) Prefs.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Autodetect</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + "<input type=\"button\" id=\"detect-tz-btn\" value=\"Autodetect Timezone\" onclick=\"autodetectTimezone()\" style=\"width: 100%; padding: 8px; margin-bottom: 8px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "<input type=\"button\" id=\"detect-dst-btn\" value=\"Autodetect Daylight Savings\" onclick=\"autodetectDST()\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</div>";
     
   // Device Name Configuration
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
@@ -2831,30 +2920,62 @@ WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST B
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "<script>";
   WEBHTML = WEBHTML + R"===(
-// Auto-detect timezone
+function isValidTimezoneOffset(offset) {
+  return offset !== undefined && offset >= -50400 && offset <= 50400 && offset !== 90000;
+}
+
+function fillDstFields(data) {
+  document.getElementById('dst_enabled').value = data.dst_enabled;
+  document.getElementById('dst_start_date').value = data.dst_start_date || '';
+  document.getElementById('dst_end_date').value = data.dst_end_date || '';
+  document.getElementById('dst_offset').value = data.dst_offset !== undefined ? data.dst_offset : '';
+}
+
+// Auto-detect standard UTC offset only
 async function autodetectTimezone() {
-const btn = document.getElementById('detect-tz-btn');
+  const btn = document.getElementById('detect-tz-btn');
   btn.disabled = true;
   btn.value = "Detecting...";
 
   try {
     const response = await fetch('/api/timezone');
     const data = await response.json();
-    
-    // Using IDs to fill the values
-    if (data.utc_offset !== undefined) {
+
+    if (data.success === true && isValidTimezoneOffset(data.utc_offset)) {
       document.getElementById('utc_offset').value = data.utc_offset;
-      document.getElementById('dst_enabled').value = data.dst_enabled;
-      document.getElementById('dst_start_date').value = data.dst_start_date || '';
-      document.getElementById('dst_end_date').value = data.dst_end_date || '';
-      document.getElementById('dst_offset').value = data.dst_offset || '3600';
-      alert('Timezone detected!');
+      alert('Timezone (UTC offset) detected!');
+    } else {
+      alert('Timezone detection failed. Please set manually.');
     }
   } catch (error) {
-    alert('Detection failed. Please set manually.');
+    alert('Timezone detection failed. Please set manually.');
   } finally {
     btn.disabled = false;
-    btn.value = "Autodetect DST";
+    btn.value = "Autodetect Timezone";
+  }
+}
+
+// Auto-detect DST rules only (start/end/offset/active flag)
+async function autodetectDST() {
+  const btn = document.getElementById('detect-dst-btn');
+  btn.disabled = true;
+  btn.value = "Detecting...";
+
+  try {
+    const response = await fetch('/api/timezone/dst');
+    const data = await response.json();
+
+    if (data.success === true) {
+      fillDstFields(data);
+      alert('Daylight saving time settings detected!');
+    } else {
+      alert('DST detection failed. Please set manually.');
+    }
+  } catch (error) {
+    alert('DST detection failed. Please set manually.');
+  } finally {
+    btn.disabled = false;
+    btn.value = "Autodetect Daylight Savings";
   }
 }
   </script>
@@ -3317,22 +3438,22 @@ void handleCONFIG_POST() {
 
   }
   if (server.hasArg("dst_enabled")) {
-    I.DST = server.arg("dst_enabled").toInt();
-    I.isUpToDate = false;
+    Prefs.DST = server.arg("dst_enabled").toInt();
+    Prefs.isUpToDate = false;
   }
   if (server.hasArg("dst_start_date")) {
      String tmp = server.arg("dst_start_date");
-     I.DSTStartUnixTime = convertStrTime(tmp);     
-    I.isUpToDate = false;
+     Prefs.DSTStartUnixTime = convertDstBoundaryStrTime(tmp);     
+    Prefs.isUpToDate = false;
   }
   if (server.hasArg("dst_end_date")) {
     String tmp = server.arg("dst_end_date");
-    I.DSTEndUnixTime = convertStrTime(tmp);     
-    I.isUpToDate = false;
+    Prefs.DSTEndUnixTime = convertDstBoundaryStrTime(tmp);     
+    Prefs.isUpToDate = false;
   }
   if (server.hasArg("dst_offset")) {
-    I.DSTOffset = server.arg("dst_offset").toInt();
-    I.isUpToDate = false;
+    Prefs.DSTOffset = server.arg("dst_offset").toInt();
+    Prefs.isUpToDate = false;
   }
   if (server.hasArg("utc_offset")) {
     Prefs.TimeZoneOffset = server.arg("utc_offset").toInt();
@@ -5158,6 +5279,7 @@ void setupServerRoutes() {
     server.on("/api/clear-wifi", HTTP_POST, apiClearWiFi);
     server.on("/api/location", HTTP_POST, apiLookupLocation);
     server.on("/api/timezone", HTTP_GET, apiDetectTimezone);
+    server.on("/api/timezone/dst", HTTP_GET, apiDetectDST);
     server.on("/api/timezone", HTTP_POST, apiSaveTimezone);
     server.on("/api/setup-status", HTTP_GET, apiGetSetupStatus);
     server.on("/InitialSetup", HTTP_GET, handleInitialSetup);

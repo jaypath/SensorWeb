@@ -18,6 +18,14 @@ extern STRUCT_SNSHISTORY SensorHistory;
 
 ERROR_STRUCT LASTERROR;
 
+// SD is mounted in initSDCard() after initSystem(); avoid SD writes (and recursion) before that.
+static bool sdCardReady() {
+  #ifdef _USESDCARD
+  return SD.cardType() != CARD_NONE;
+  #else
+  return false;
+  #endif
+}
 
 //setup functions
 void systemHousekeeping(bool fullHousekeeping) {
@@ -104,6 +112,7 @@ bool initSystem() {
   Serial.begin(_USESERIAL);
   Serial.println("Serial started");
   SerialPrint("SerialPrint started",true);
+  I.SerialPrintLevel = 0; //temporarily print all messages
   #endif
 
 
@@ -131,6 +140,7 @@ bool initSystem() {
   #endif
   #endif
 
+  SerialPrint("Check core data ...", true);
   BootSecure bootSecure;
   int8_t boot_status = bootSecure.setup();
   if (boot_status <= 0) {
@@ -141,9 +151,9 @@ bool initSystem() {
       #ifdef _USETFT
       tftPrint("Prefs failed to load with error code: " + String(boot_status), true, TFT_RED, 2, 1, false, -1, -1);
       #endif
-      SerialPrint("Prefs failed to load with error code: " + String(boot_status), true);
-      SerialPrint("Will redefine Prefs struct later...", true);
-  } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true);
+      SerialPrint("Prefs failed to load with error code: " + String(boot_status), true,5);
+      SerialPrint("Will redefine Prefs struct later...", true,5);
+  } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true,5);
 
 
 
@@ -162,6 +172,7 @@ bool initSystem() {
   }
 
 
+  SerialPrint("Check firmware version...", true,5);
   tftPrint("Cuurrent firmware version: " + String(PROJECT_VER), true);
   bool newfirmware = check_and_switch_to_newer_firmware(true,false);
   if (newfirmware && Prefs.AUTOSWITCHNEWERFIRMWARE) {
@@ -170,7 +181,7 @@ bool initSystem() {
   }
 
   tftPrint("Init Wifi... \n", true);
-  SerialPrint("Init Wifi... ",false);
+  SerialPrint("Init Wifi... ",true,5);
   setupServerRoutes();
   WiFi.onEvent(WiFiEvent); //register the WiFi event handler
 
@@ -179,19 +190,19 @@ bool initSystem() {
     if (CheckWifiStatus(true)!=1) {
       int16_t retries = connectWiFi(20);
       if (retries<0) {
-        SerialPrint("Failed to connect to Wifi",true);
+        SerialPrint("Failed to connect to Wifi",true,5);
         APStation_Mode();
       }
     }
   } else {
     tftPrint("No credentials, starting AP Station Mode", true);
-    SerialPrint("No credentials, starting AP Station Mode",true);
+    SerialPrint("No credentials, starting AP Station Mode",true,5);
     APStation_Mode();
   }
 
   #ifdef _USEUDP
   if (!connectUDP()) {
-    SerialPrint("Failed to connect to UDP",true);
+    SerialPrint("Failed to connect to UDP",true,5);
     storeError("Failed to connect to UDP");
   }
   #endif
@@ -200,12 +211,12 @@ bool initSystem() {
   #ifdef _USETFT
   displaySetupProgress( true);
   #endif
-  SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true);
+  SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true,5);
 
   // Only register device if WiFi is connected and we have a valid IP
   int8_t wifiStatus = CheckWifiStatus(false);
   if (wifiStatus!=1 ) {
-    SerialPrint("Cannot register device: WiFi not connected or no IP address. Wifi status is: " + String(wifiStatus), true);
+    SerialPrint("Cannot register device: WiFi not connected or no IP address. Wifi status is: " + String(wifiStatus), true,5);
     failedToRegister();
     return false;
   }
@@ -236,6 +247,13 @@ bool initSystem() {
   } else {
       tftPrint("FAILED with code " + String(errorCode) + ".", true, TFT_RED);
       storeError("ESPNow init error: " + String(errorCode));
+  }
+
+  // NTP + DST interval check for all builds (peripherals skip setupTime() in main)
+  if (CheckWifiStatus(false) == 1) {
+    if (!syncNtpAndApplyDST()) {
+      SerialPrint("Boot NTP/DST apply failed; will retry when time is valid", true, 5);
+    }
   }
 
   return true;
@@ -1083,7 +1101,7 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
   LASTERROR.errorTime = I.currentTime;
 
   #ifdef _USESDCARD
-  if (writeToSD) writeErrorToSD(LASTERROR);
+  if (writeToSD && sdCardReady()) writeErrorToSD(LASTERROR);
   #endif
 
   strncpy(I.lastError, LASTERROR.errorMessage, 75);

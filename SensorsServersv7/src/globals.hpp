@@ -185,8 +185,12 @@ typedef enum {
     bool HAVECREDENTIALS = false; // Whether WiFi credentials are available
 
     //time zone info
-    int32_t TimeZoneOffset= 90000; //offset from UTC in seconds, on standard time rather than daylight time
-
+    int32_t TimeZoneOffset= 90000; //offset from UTC in seconds, including DST offset. 90000 is a sentinel value for no offset set
+    uint8_t DST=0; //0 = no DST used here, 1 = DST used in this locale, but not active. 2 = DST is active
+    int16_t DSTOffset=0; //offset from UTC in seconds, 0 if not in DST
+    time_t DSTStartUnixTime=0; // UTC instant when DST starts
+    time_t DSTEndUnixTime=0;   // UTC instant when DST ends
+    
     double LATITUDE;
     double LONGITUDE;
     
@@ -222,10 +226,6 @@ typedef enum {
       uint8_t wifiFailCount;
       time_t wifiDownSince;
 
-      uint8_t DST; //0 = no DST used here, 1 = DST used in this locale, but not active. 2 = DST is active
-      time_t DSTStartUnixTime; 
-      time_t DSTEndUnixTime; 
-      int16_t DSTOffset; //offset from UTC in seconds, 0 if not in DST
 
       //timezone offset is in prefs
       
