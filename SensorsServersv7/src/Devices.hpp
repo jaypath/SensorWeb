@@ -55,8 +55,9 @@ struct ArborysSnsType {
     #ifdef _ISPERIPHERAL
     int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address or other special pin number where actual pin is snsPin-100, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
     int16_t powerPin;          // pin number for the power pin, if applicable. -9999 means no power pin If -9999 then there is no power pin, if -200 then it is a special case
-    double snsCalibMin;        // minimum value for calibration
-    double snsCalibMax;        // maximum value for calibration
+    // NOTE: calibration min/max are NOT stored here. Prefs.SNS_CALIB_MIN/MAX[] is the single source of truth (indexed by SensorHistory).
+    #else
+    uint8_t OverrideFlags; // Override flags for this sensor. If set, then the Flags will be overridden by the OverrideFlags.
     #endif
 };
 
@@ -97,6 +98,7 @@ public:
     int16_t nextServerIndex(int16_t startIndex=0, bool weatherServersOnly=false); // get the index of the next server
     bool isOutsideSensor(int16_t index);
     bool hasOutsideSensors(String parameter="all");
+    int16_t findOutsideSensorByType(String parameter="all");
     double getAverageOutsideParameterValue(String parameter, uint32_t MoreRecentThan=0);
 
     uint8_t countSensors(int16_t snsType=-1,int16_t devIndex=-1); // count the sensors of the given type, and if device index is provided, count the sensors of the given type for the given device. If snsType is -1, then count all sensors.
@@ -124,7 +126,7 @@ public:
     // Utility functions
     int16_t findOldestDevice();
     int16_t findOldestSensor();
-    int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0);
+    int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0, bool useOverrideFlags=true);
     int8_t countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags); 
     String getSensorTypeFlaggedString(byte snstypeindex);
 

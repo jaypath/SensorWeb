@@ -306,7 +306,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     spreadsheet.set("sheets/properties/sheetType", "GRID");
     spreadsheet.set("sheets/properties/sheetType", "GRID");
     spreadsheet.set("sheets/properties/gridProperties/rowCount", 200000);
-    spreadsheet.set("sheets/properties/gridProperties/columnCount", 10);
+    spreadsheet.set("sheets/properties/gridProperties/columnCount", 11);
   
     spreadsheet.set("sheets/developerMetadata/[0]/metadataValue", "Jaypath");
     spreadsheet.set("sheets/developerMetadata/[0]/metadataKey", "Creator");
@@ -417,7 +417,7 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
             return false;
         }
         SerialPrint("Gsheet_uploadSensorDataFunction: created new spreadsheet",true);
-        if (!file_createHeaders(GSheetInfo.GsheetID,"DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement")) {
+        if (!file_createHeaders(GSheetInfo.GsheetID,"DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flagged,expired,critical,Measurement value")) {
                     snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
                     snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorDataFunction");
                     storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_HEADERS,true);
@@ -437,15 +437,17 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
             ArborysDevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
             if (device && device->IsSet && sensor->timeLogged > sensor->lastCloudUploadTime && sensor->lastCloudUploadTime < I.currentTime-(GSheetInfo.uploadGsheetIntervalMinutes*60)) { //only upload if the last upload was more than the interval minutes ago and the last read time is greater than the last upload time
                 valueRange.add("majorDimension", "ROWS");
-                valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC); //DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flags,Measurement
+                valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC);
                 valueRange.set("values/[" + (String) rowInd + "]/[1]", device->IP.toString());
                 valueRange.set("values/[" + (String) rowInd + "]/[2]", (String) sensor->snsType + "." + (String) sensor->snsID); 
                 valueRange.set("values/[" + (String) rowInd + "]/[3]", (String) sensor->snsName);
-                valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) sensor->timeLogged);
-                valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) sensor->timeRead);
-                valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) dateify(sensor->timeLogged,"mm/dd/yy hh:nn:ss")); //use timelogged, since some sensors have no clock
-                valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) bitRead(sensor->Flags,0));
-                valueRange.set("values/[" + (String) rowInd + "]/[8]", (String) sensor->snsValue);
+                valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) (sensor->timeLogged ? (I.UTCTime - (I.currentTime - sensor->timeLogged)) : 0)); // UTC unix
+                valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) (sensor->timeRead ? (I.UTCTime - (I.currentTime - sensor->timeRead)) : 0)); // UTC unix
+                valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) dateify(sensor->timeLogged,"mm/dd/yy hh:nn:ss")); // local wall clock (pseudo-local)
+                valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) bitRead(sensor->Flags,0)); //Flagged
+                valueRange.set("values/[" + (String) rowInd + "]/[8]", (String) (sensor->expired ? 1 : 0)); //expired
+                valueRange.set("values/[" + (String) rowInd + "]/[9]", (String) bitRead(sensor->Flags,7)); //critical
+                valueRange.set("values/[" + (String) rowInd + "]/[10]", (String) sensor->snsValue); //Measurement value
                 sensor->lastCloudUploadTime = I.currentTime;
                 rowInd++;
             }

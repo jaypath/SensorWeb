@@ -128,6 +128,9 @@ int16_t force_switch_ota_slot(int slot_number=-1);
 
 int compare_versions(const char* v1, const char* v2);
 bool check_and_switch_to_newer_firmware(bool verbose=true,bool doswitch=false);
+
+uint8_t returnLiBatteryPercentage(double voltage);
+uint8_t returnPbBatteryPercentage(double voltage);
 #ifdef _USETFT
 void displaySetupProgress(bool success);
 void screenWiFiDown();

@@ -60,7 +60,7 @@ void fcnPrintTxtCenter(String msg, byte FNTSZ, int x, int y, uint16_t color1=FG_
 void fcnPrintTxtHeatingCooling(int X, int Y);
 void fcnPrintTxtColor2(int value1, int value2, byte FNTSZ, int x, int y, bool autocontrast);
 void fcnPrintTxtColor(int value, byte FNTSZ, int x, int y, bool autocontrast);
-byte fcnGetAlarms(int32_t whichSensors = -1, byte rows = 0, byte cols = 0);
+byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFlags,  byte rows, byte cols, bool useOverrideFlags = true);
 void fcnDrawSensors(int X, int Y, uint8_t rows = 0, uint8_t cols = 0);
 void fcnPressureTxt(char *tempPres, uint16_t *fg, uint16_t *bg);
 void fcnPredictionTxt(char *tempPred, uint16_t *fg, uint16_t *bg);

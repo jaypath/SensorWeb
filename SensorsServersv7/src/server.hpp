@@ -172,8 +172,11 @@ void handleReboot();
 void handleNotFound();
 
 void handleRoot(void);
+void handleSensorDetails(void);
 void handleALL(void);
 void handlerForRoot(bool allsensors=false);
+void appendStandardPageNav(bool includeWiFiConfig = false);
+void renderDeviceViewerPage();
 void handleREQUESTUPDATE();
 void handleCLEARSENSOR();
 void handleTIMEUPDATE();
@@ -196,10 +199,13 @@ void handleCONFIG();
 void handleCONFIG_POST();
 void handleCONFIG_DELETE();
 void handleREADONLYCOREFLAGS();
+#ifndef _ISPERIPHERAL
+void handleSENSOR_OVERRIDE_UPDATE();
+#endif
 #ifdef _ISPERIPHERAL
 void handleSENSOR_UPDATE_POST();
 void handleSENSOR_READ_SEND_NOW();
-void handleSNS_CALIBRATION_SOIL_CAPACITANCE();
+void handleSNS_CALIBRATION();
 void handleSensorSetup();
 #endif
 void handleGSHEET();

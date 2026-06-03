@@ -694,7 +694,7 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
 } 
 
 
-byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFlags,  byte rows, byte cols) {
+byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFlags,  byte rows, byte cols, bool useOverrideFlags) {
   //fill an array with next row*cols alarm entries
 //  byte alarms[rows*cols];
 //sensorflags uses the sensor flags to match sensors, for example 00000001 = flagged sensors
@@ -714,6 +714,7 @@ byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFl
   byte SensorIndex = GRAPHICS.alarmIndex;
 
 
+  
   byte alarmArrayInd = 0;
   uint16_t snsTypeBitmask = 1; //starting at bit 1 , which is "all"
 
@@ -727,7 +728,7 @@ byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFl
       while (alarmArrayInd < alarmsToDisplay) {
         if (Sensors.isSensorIndexInvalid(SensorIndex,false)==0) {
           //print the name of the sensor and flag mask of sensor being checked
-          if (Sensors.isSensorFlagged(SensorIndex, thisSensorType,checkTheseFlags, sensorFlags, 0, true, true) >0) {
+          if (Sensors.isSensorFlagged(SensorIndex, thisSensorType,checkTheseFlags, sensorFlags, 0, true, true,0,useOverrideFlags) >0) {
             if (inArrayBytes(alarms,alarmsToDisplay,SensorIndex,false) == -1) alarms[alarmArrayInd++] = SensorIndex;          //only include if not already in array
           } 
         }
@@ -1559,16 +1560,16 @@ void fcnDrawCurrentWeatherText(int16_t index) {
   String st = "";
   byte section_spacer = 3;
 
-  //see if we have local weather and battery
+  //see if we have local weather 
   if (I.haveOutsideTemperatureSensor==true) {
 
     st = "Local:" ;
-    //check for outside battery
 
+    //insert outside battery if we have one
     if (I.localBatteryIndex<255) {
       ArborysSnsType* sensor = Sensors.snsIndexToPointer(I.localBatteryIndex);
-      if (sensor && sensor->IsSet && sensor->timeLogged + 7200>I.currentTime) {        
-        st += " Bat" + (String) (Sensors.returnBatteryPercentage(sensor)) + "%";
+      if (sensor && sensor->IsSet && sensor->timeLogged + 3600>I.currentTime) {        
+        st += " Bat" + (String) (returnLiBatteryPercentage(sensor->snsValue)) + "%";
       }
     }
 
@@ -1672,6 +1673,7 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   uint8_t oldIconFlags = IconFlags;
   bool weatherAlerts = isBit(I.WeatherEventFlags, 0);
 
+  GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show alerts      
 
   if (isBit(IconFlags,0)) {
     if (GRAPHICS.alarmCount > 0) {
@@ -1690,21 +1692,18 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
     IconFlags = 1; //was showing alerts or there was an error, now showing flags
   }
 
-  if (IconFlags == oldIconFlags && skipcount <4 && IconFlags == 1) {
-    //do nothing, already showing what we need! maintain this for 20 seconds
-    skipcount++;
+  if (IconFlags == oldIconFlags && IconFlags == 1 && skipcount <4) {
+    // no update needed, already showing what we need! maintain this for 4 cycles
+    skipcount++;    
     GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
+    GRAPHICS.SCREEN_DATA[index].Local_Code = (int16_t) IconFlags | (skipcount<<8);
     return;
-  } else skipcount = 0;
+  }
 
+
+  if (IconFlags == 2)  { //show alerts
     //clear the icon area, it must be redrawn now
     GRAPHICS.clearScreenArea(index);
-
-  if (IconFlags == 1)     {
-    fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,Sprite180x180,false);   
-    GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show sensors
-  }
-  else if (IconFlags == 2)  { //show alerts
     uint8_t checkTheseFlags = 3; //bits 0 and 1 are set to 1
     uint16_t sensorTypes = 0xFFFF; //set all bits to 1
     clearBit(sensorTypes, 15); //do not exclude all sensor types
@@ -1721,17 +1720,13 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
     byte alarmcount = fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,3,3);
     if (alarmcount>0) {
       fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);            
-    }
-    GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show alerts      
+    }    
   }
-  else if (IconFlags == 4) {
+  else {
+    //whether to draw alerts or regular icon will be determined by the next function call
+    if (IconFlags != 4) IconFlags = 1; //was showing nothing, now showing icon
     fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,Sprite180x180,true);   
-    GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_ALERT; //set the screen next to show alerts
-  }
-  else  {
-    IconFlags = 1; //was showing nothing, now showing icon
-    fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,Sprite180x180,false);   
-    GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show sensors and reset the timer    
+    if (IconFlags == 4) GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_ALERT; //set the screen next to show alerts
   }
   
   //reset the timer. If either alert flags or event flags are present, then the reset is 5 seconds, otherwise 30 seconds.
@@ -1788,23 +1783,24 @@ bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool u
   }
 
 
-  //draw weather alert text if appropriate
-  if (WeatherData.NumWeatherEvents>0 ) {
-    WeatherData.loadNextWeatherAlert();
-    //there is an alert
-    WeatherEventFile wEF;
-    wEF.getEvent(WeatherData.alertInfo.eventnumber);
+  //skip this
+  // //draw weather alert text
+  // if (WeatherData.NumWeatherEvents>0 ) {
+  //   WeatherData.loadNextWeatherAlert();
+  //   //there is an alert
+  //   WeatherEventFile wEF;
+  //   wEF.getEvent(WeatherData.alertInfo.eventnumber);
 
-    String description  = (String) "#" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + ": " + (String) wEF.phenomenon + "\n";  
-    description += (String) "When: " + (String) dateify(WeatherData.alertInfo.time_start,"mm-dd@hh") + (String) "\n";
-    description += (String) "Severity/Certainty: " + wEF.severity + "/" + wEF.certainty + (String) "\n";
-    description += (String) wEF.event;
+  //   String description  = (String) "#" + (String) WeatherData.alertInfo.eventnumber + "/" + (String) WeatherData.NumWeatherEvents + ": " + (String) wEF.phenomenon + "\n";  
+  //   description += (String) "When: " + (String) dateify(WeatherData.alertInfo.time_start,"mm-dd@hh") + (String) "\n";
+  //   description += (String) "Severity/Certainty: " + wEF.severity + "/" + wEF.certainty + (String) "\n";
+  //   description += (String) wEF.event;
     
 
-    //draw text in hot orange on transparent background
-    sprite.setTextColor(sprite.color565(255,128,0));
-    sprite.drawString(description,5,Y+10);    
-  }
+  //   //draw text in hot orange on transparent background
+  //   sprite.setTextColor(sprite.color565(255,128,0));
+  //   sprite.drawString(description,5,Y+10);    
+  // }
 
   return refilled;
 }
@@ -2302,7 +2298,7 @@ void fcnDrawSensorSummarySubcreen(int16_t index) {
   clearBit(sensorTypes, 0); //no need to use 
   //now we will check all sensortypes, but in order!
 
-  fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,8,6); //8 rows, 6 columns
+  fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,8,6,false); //8 rows, 6 columns
 
 
   int16_t FH = setFont(2);
@@ -2528,8 +2524,8 @@ void fcnDrawStatusText(int16_t index) {
   else if (Prefs.DST==2) tft.printf("Active, offset %ld min\n",Prefs.DSTOffset/60);
   else tft.printf("Not used here\n");
   if (Prefs.DST>=0) {
-    tft.printf("DST Start: %s\n", dateifyDstBoundary(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
-    tft.printf("DST End: %s\n", dateifyDstBoundary(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("DST Start: %s\n", dateify(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
+    tft.printf("DST End: %s\n", dateify(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
   }
 
   tft.printf("-----------------------\n");

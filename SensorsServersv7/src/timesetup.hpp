@@ -21,6 +21,7 @@ bool getTimezoneInfo();
 bool updateTime();
 void DSTsetup(void);
 bool setupTime(void);
+bool syncNtpAndApplyDST(); // NTP sync + DSTsetup using Prefs rules (no TimeAPI call)
 
 String fcnDOW(time_t t, bool caps=false);
 char* dateify(time_t = 0, String = "mm/dd/yyyy hh:nn:ss");

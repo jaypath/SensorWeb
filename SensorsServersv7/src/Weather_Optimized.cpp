@@ -886,13 +886,13 @@ int16_t WeatherInfoOptimized::breakIconLink(String icon, TimeInterval ti) {
     }
     
     if (icon.indexOf("dust",0)>-1) return 761;
-    if (icon.indexOf("hot",0)>-1) return 800;
+    if (icon.indexOf("hot",0)>-1) return 702;
     if (icon.indexOf("cold",0)>-1) return 701;
     
     if (icon.indexOf("ovc",0)>-1) return 804;
     if (icon.indexOf("bkn",0)>-1) return 803;
     if (icon.indexOf("sct",0)>-1) return 801;
-    if (icon.indexOf("few",0)>-1) return 801;
+    if (icon.indexOf("few",0)>-1) return 802;
     if (icon.indexOf("skc",0)>-1) return 800;
     if (icon.indexOf("fog",0)>-1) return 741;
     
@@ -1102,54 +1102,11 @@ bool WeatherInfoOptimized::isCacheValid() {
 
 
 bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
-    /*
-    TO	Tornado	Immediate Shelter
-    SV	Severe Thunderstorm	High Winds / Large Hail
-    SQ	Snow Squall	Sudden Road Danger
-    HW	High Wind	Roof / Tree Damage
-    HU	Hurricane	Structural / Flood
-    TS	Tropical Storm	Evacuation / Shelter
-    HI	Inland Hurricane	Evacuation / Shelter
-    FF	Flash Flood	Basement / Road Flooding    
-    WS	Winter Storm	Heavy Snow / Travel
-    WW	Winter Weather	Heavy Snow / Travel
-    IS	Ice Storm	Power Outage Risk
-    BZ	Blizzard	Total Isolation
-    ZR	Freezing Rain	Road Hazard
-    EC	Extreme Cold	
-    WC 	Wind Chill	Evacuation / Shelter
-    EH	Excessive Heat	HVAC / Health Load
-    AS	Air Quality / Ashfall	Indoor Filtration
-    AF	Ashfall	Indoor Filtration    
-    HT  Heat Wave	
-    FZ	Freeze	
-    HZ	Hard Freeze	
-    */
-
-
-    if (strcmp(phenomenon, "TO") == 0) return true;
-    if (strcmp(phenomenon, "SV") == 0) return true;
-    if (strcmp(phenomenon, "SQ") == 0) return true;
-    if (strcmp(phenomenon, "HW") == 0) return true;
-    if (strcmp(phenomenon, "HU") == 0) return true;
-    if (strcmp(phenomenon, "TS") == 0) return true;
-    if (strcmp(phenomenon, "HI") == 0) return true;
-    if (strcmp(phenomenon, "FF") == 0) return true;
-    if (strcmp(phenomenon, "WS") == 0) return true;
-    if (strcmp(phenomenon, "WW") == 0) return true;
-    if (strcmp(phenomenon, "IS") == 0) return true;
-    if (strcmp(phenomenon, "BZ") == 0) return true;
-    if (strcmp(phenomenon, "ZR") == 0) return true;
-    if (strcmp(phenomenon, "EC") == 0) return true;
-    if (strcmp(phenomenon, "WC") == 0) return true;
-    if (strcmp(phenomenon, "EH") == 0) return true;
-    if (strcmp(phenomenon, "AS") == 0) return true;
-    if (strcmp(phenomenon, "AF") == 0) return true;
-    if (strcmp(phenomenon, "HT") == 0) return true;
-    if (strcmp(phenomenon, "FZ") == 0) return true;
-    if (strcmp(phenomenon, "HZ") == 0) return true;
-
-    return false;
+    // Accept any phenomenon we have a name for. getAlertName() is the single source of truth
+    // for the full NWS P-VTEC code set (land, winter, tropical, coastal, and marine), so the
+    // accept-list and the display names can never drift apart.
+    if (phenomenon == nullptr) return false;
+    return !getAlertName(phenomenon).equals("Unknown");
 }
 
 String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
@@ -1158,27 +1115,87 @@ String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
         phenomenon = this->alertInfo.phenomenon;
         if (phenomenon == nullptr) return "Unknown";
     }
+
+    // NWS P-VTEC phenomenon codes (https://www.weather.gov/vtec/). This map is the single
+    // source of truth for "known" alerts: filterAlerts() accepts anything named here.
+
+    // --- Convective / severe ---
     if (strcmp(phenomenon, "TO") == 0) return "Tornado";
     if (strcmp(phenomenon, "SV") == 0) return "Severe Thunderstorm";
+    if (strcmp(phenomenon, "EW") == 0) return "Extreme Wind";
     if (strcmp(phenomenon, "SQ") == 0) return "Snow Squall";
-    if (strcmp(phenomenon, "HW") == 0) return "High Wind";
-    if (strcmp(phenomenon, "HU") == 0) return "Hurricane";
-    if (strcmp(phenomenon, "TS") == 0) return "Tropical Storm";
-    if (strcmp(phenomenon, "HI") == 0) return "Inland Hurricane";
+    if (strcmp(phenomenon, "MA") == 0) return "Special Marine";
+
+    // --- Flooding ---
     if (strcmp(phenomenon, "FF") == 0) return "Flash Flood";
+    if (strcmp(phenomenon, "FA") == 0) return "Areal Flood";
+    if (strcmp(phenomenon, "FL") == 0) return "Flood";
+    if (strcmp(phenomenon, "HY") == 0) return "Hydrologic";
+    if (strcmp(phenomenon, "CF") == 0) return "Coastal Flood";
+    if (strcmp(phenomenon, "LS") == 0) return "Lakeshore Flood";
+    if (strcmp(phenomenon, "SS") == 0) return "Storm Surge";
+
+    // --- Tropical ---
+    if (strcmp(phenomenon, "HU") == 0) return "Hurricane";
+    if (strcmp(phenomenon, "TY") == 0) return "Typhoon";
+    if (strcmp(phenomenon, "TR") == 0) return "Tropical Storm";
+    if (strcmp(phenomenon, "HI") == 0) return "Inland Hurricane Wind";
+    if (strcmp(phenomenon, "TI") == 0) return "Inland Tropical Storm Wind";
+    if (strcmp(phenomenon, "HF") == 0) return "Hurricane Force Wind";
+    if (strcmp(phenomenon, "TS") == 0) return "Tsunami";
+
+    // --- Winter / cold ---
     if (strcmp(phenomenon, "WS") == 0) return "Winter Storm";
     if (strcmp(phenomenon, "WW") == 0) return "Winter Weather";
     if (strcmp(phenomenon, "IS") == 0) return "Ice Storm";
     if (strcmp(phenomenon, "BZ") == 0) return "Blizzard";
     if (strcmp(phenomenon, "ZR") == 0) return "Freezing Rain";
-    if (strcmp(phenomenon, "EC") == 0) return "Extreme Cold";
+    if (strcmp(phenomenon, "ZF") == 0) return "Freezing Fog";
+    if (strcmp(phenomenon, "LE") == 0) return "Lake Effect Snow";
     if (strcmp(phenomenon, "WC") == 0) return "Wind Chill";
-    if (strcmp(phenomenon, "EH") == 0) return "Excessive Heat";
-    if (strcmp(phenomenon, "AS") == 0) return "Air Quality";
-    if (strcmp(phenomenon, "AF") == 0) return "Ashfall";
-    if (strcmp(phenomenon, "HT") == 0) return "Heat Wave";
+    if (strcmp(phenomenon, "EC") == 0) return "Extreme Cold";
     if (strcmp(phenomenon, "FZ") == 0) return "Freeze";
+    if (strcmp(phenomenon, "FR") == 0) return "Frost";
     if (strcmp(phenomenon, "HZ") == 0) return "Hard Freeze";
+    if (strcmp(phenomenon, "UP") == 0) return "Heavy Freezing Spray";
+
+    // --- Heat ---
+    if (strcmp(phenomenon, "EH") == 0) return "Excessive Heat";
+    if (strcmp(phenomenon, "HT") == 0) return "Heat";
+
+    // --- Wind ---
+    if (strcmp(phenomenon, "HW") == 0) return "High Wind";
+    if (strcmp(phenomenon, "WI") == 0) return "Wind";
+    if (strcmp(phenomenon, "LW") == 0) return "Lake Wind";
+
+    // --- Visibility / air quality / fire ---
+    if (strcmp(phenomenon, "FG") == 0) return "Dense Fog";
+    if (strcmp(phenomenon, "SM") == 0) return "Dense Smoke";
+    if (strcmp(phenomenon, "DS") == 0) return "Dust Storm";
+    if (strcmp(phenomenon, "DU") == 0) return "Blowing Dust";
+    if (strcmp(phenomenon, "AS") == 0) return "Air Stagnation";
+    if (strcmp(phenomenon, "AQ") == 0) return "Air Quality";
+    if (strcmp(phenomenon, "AF") == 0) return "Ashfall";
+    if (strcmp(phenomenon, "FW") == 0) return "Fire Weather";
+
+    // --- Coastal / beach ---
+    if (strcmp(phenomenon, "SU") == 0) return "High Surf";
+    if (strcmp(phenomenon, "RP") == 0) return "Rip Current";
+    if (strcmp(phenomenon, "BH") == 0) return "Beach Hazard";
+
+    // --- Marine ---
+    if (strcmp(phenomenon, "GL") == 0) return "Gale";
+    if (strcmp(phenomenon, "SR") == 0) return "Storm";
+    if (strcmp(phenomenon, "SE") == 0) return "Hazardous Seas";
+    if (strcmp(phenomenon, "SC") == 0) return "Small Craft";
+    if (strcmp(phenomenon, "SW") == 0) return "Small Craft (Hazardous Seas)";
+    if (strcmp(phenomenon, "RB") == 0) return "Small Craft (Rough Bar)";
+    if (strcmp(phenomenon, "SI") == 0) return "Small Craft (Winds)";
+    if (strcmp(phenomenon, "BW") == 0) return "Brisk Wind";
+    if (strcmp(phenomenon, "LO") == 0) return "Low Water";
+    if (strcmp(phenomenon, "MF") == 0) return "Marine Dense Fog";
+    if (strcmp(phenomenon, "MS") == 0) return "Marine Dense Smoke";
+    if (strcmp(phenomenon, "MH") == 0) return "Marine Ashfall";
 
     return "Unknown";
 }

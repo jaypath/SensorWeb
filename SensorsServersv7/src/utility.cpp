@@ -1548,6 +1548,35 @@ bool check_and_switch_to_newer_firmware(bool verbose,bool doswitch) {
 }
 
 
+
+
+uint8_t returnLiBatteryPercentage(double voltage) {
+  static float Li_BAT_VOLT[22] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27,2};
+  static byte Li_BAT_PCNT[22] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1,0};
+
+  for (byte jj=0;jj<22;jj++) {
+    if (voltage> Li_BAT_VOLT[jj]) {
+      return Li_BAT_PCNT[jj];
+    } 
+  }
+
+  return 255;
+}
+
+uint8_t returnPbBatteryPercentage(double voltage) {
+  static float Pb_BAT_VOLT[11] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
+  static byte Pb_BAT_PCNT[11] = {100,90,80,70,60,50,40,30,20,10,0};
+
+  for (byte jj=0;jj<11;jj++) {
+    if (voltage>= Pb_BAT_VOLT[jj]) {
+      return Pb_BAT_PCNT[jj];
+    } 
+  }
+  
+  return 255;
+}
+
+
 #ifdef _USETFT
 void displaySetupProgress(bool success) {
   if (success) {
@@ -1595,6 +1624,7 @@ void displayWiFiStatus(byte retries, bool success) {
     tft.printf("Wifi FAILED %d attempts - reboot in 120s",retries);
   }
 }
+
 
 
 #endif

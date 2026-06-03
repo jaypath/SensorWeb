@@ -354,7 +354,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
         }
         #endif
         return existingIndex;
-    }
+    } 
     
     // Find empty slot
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
@@ -379,6 +379,8 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             #ifdef _ISPERIPHERAL
             sensors[i].snsPin = snsPin;
             sensors[i].powerPin = powerPin;
+            #else
+            sensors[i].OverrideFlags = 0;
             #endif            
             numSensors++;
             Sensors.lastUpdatedTime = I.currentTime;
@@ -479,41 +481,35 @@ bool Devices_Sensors::isOutsideSensor(int16_t index) {
     return false;
 }
 
+
 bool Devices_Sensors::hasOutsideSensors(String parameter) {
     //return true if there are any outside sensors of the given type, note that type can be "all"
+    return findOutsideSensorByType(parameter) >= 0;
+}
+
+
+int16_t Devices_Sensors::findOutsideSensorByType(String parameter) {
+    //return >=0 if there are any outside sensors of the given type, note that type can be "all" (value is the first index found)
+    //return -1 if no outside sensors found
     
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (isOutsideSensor(i) == false) continue;
         else {
-            if (parameter == "all") return true;
-            if (isSensorOfType(i,parameter) == true) return true;
+            if (parameter == "all") return i;
+            else if (isSensorOfType(i,parameter) == true) return i;
         }
     }
-    return false;
+    return -1;
 }
 
 
 uint8_t Devices_Sensors::returnBatteryPercentage(ArborysSnsType* P) {
 
     if (P->snsType == 60 || P->snsType == 62) {
-      float Li_BAT_VOLT[21] = {4.2,4.15,4.11,4.08,4.02,3.98,3.95,3.91,3.87,3.85,3.84,3.82,3.8,3.79,3.77,3.75,3.73,3.71,3.69,3.61,3.27};
-      byte Li_BAT_PCNT[21] = {100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,1};
-    
-      for (byte jj=0;jj<21;jj++) {
-        if (P->snsValue> Li_BAT_VOLT[jj]) {
-          return Li_BAT_PCNT[jj];
-        } 
-      }
+      return returnLiBatteryPercentage(P->snsValue);
     } else {
         if (P->snsType == 61 || P->snsType == 63) {
-            float Pb_BAT_VOLT[11] = {12.89,12.78,12.65,12.51,12.41,12.23,12.11,11.96,11.81,11.7,11.63};
-            byte Pb_BAT_PCNT[11] = {100,90,80,70,60,50,40,30,20,10,0};
-            
-            for (byte jj=0;jj<11;jj++) {
-                if (P->snsValue>= Pb_BAT_VOLT[jj]) {
-                return Pb_BAT_PCNT[jj];
-                } 
-            }
+            return returnPbBatteryPercentage(P->snsValue);
         }
     }
   
@@ -595,9 +591,10 @@ int16_t Devices_Sensors::findOldestSensor() {
     return oldestIndex;
 }
 
-int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType) { 
+int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType, bool useOverrideFlags) { 
 //checks if a sensor is flagged based on the criteria used by countFlagged
 //order of operations:
+//0. check if the sensor has OverrideFlags set, and if so, use the OverrideFlags instead of the sensor's Flags
 //1. check if the sensor is set
 //2. check if the sensor is of the specified type
 //3. check if the sensor is expired (either critical or any, depending on the criteria)
@@ -605,13 +602,20 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 //5. check if the sensor is within the flag settings
 //here snsIndex is the index of the sensor to check, and snsType is an explicit declaration of the sesnor type if optionalsnsflags is set to 14
 //optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, ..., 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
-    
 
-    if (!sensors[snsIndex].IsSet) return 0; //no sensor
+byte overrideFlags = 0;
+#ifdef _ISPERIPHERAL
+overrideFlags = 0; 
+useOverrideFlags = false;
+#else
+overrideFlags = sensors[snsIndex].OverrideFlags;
+#endif
+
+    if (!sensors[snsIndex].IsSet) return -100; //no sensor
 
     bool isgood=true;
 
-    if (isBit(optionalsnsflags, 14) == 1) { //using a specific sensory type, not that exclude still allowed
+    if (isBit(optionalsnsflags, 14) == 1) { //using a specific sensory type, note that exclude still allowed
         if (isBit(optionalsnsflags, 15) == 0) {
             if (sensors[snsIndex].snsType != snsType) return 0; //not the specified sensor
         } else {
@@ -650,18 +654,27 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 
     //now check the flags and expiration rules
     //is this expired?
-    if ((countCriticalExpired && bitRead(sensors[snsIndex].Flags,7) && sensors[snsIndex].expired)) return 2; //critical expired
+    if ((countCriticalExpired && bitRead(sensors[snsIndex].Flags,7) && sensors[snsIndex].expired)) {
+        if (useOverrideFlags && bitRead(overrideFlags,7) == 1) return -2; //critical expired but override flags set to not critical
+        else return 2; //critical expired and override flags set to critical
+    }
 
     //for regular expired, the sensor must be monitored 
-    if (countAnyExpired && sensors[snsIndex].expired && bitRead(sensors[snsIndex].Flags,1) == 1) return 3; //any expired
+    if (countAnyExpired && sensors[snsIndex].expired && bitRead(sensors[snsIndex].Flags,1) == 1) {
+        if (useOverrideFlags && bitRead(overrideFlags,1) == 1) return -3; //any expired but override flags set to not monitored
+        else return 3; //any expired and override flags set to monitored
+    }
 
     // Check time filter
-    if (MoreRecentThan > 0 && sensors[snsIndex].timeRead < MoreRecentThan) return -2; //not recent enough
+    if (MoreRecentThan > 0 && sensors[snsIndex].timeRead < MoreRecentThan) return -4; //not recent enough
 
-    if ((sensors[snsIndex].Flags & flagsthatmatter) == flagsettings) return 1; //flagged
+    if ((sensors[snsIndex].Flags & flagsthatmatter) == flagsettings) {
+        if (useOverrideFlags && (overrideFlags & flagsthatmatter) == flagsettings) return -1; //flagged but override flags set to not flagged
+        else return 1; //flagged and override flags set to flagged
+    }
 
 
-    return -1; //found the sensor, but it is not flagged according to the specified criteria
+    return -5; //found the sensor, but it is not flagged according to the specified criteria
 
 }
 

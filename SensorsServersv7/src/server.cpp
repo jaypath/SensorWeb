@@ -952,8 +952,8 @@ static void applyTimezoneToCurrentTime() {
 }
 
 static void sendTimezoneDetectJson(bool success) {
-  String dstStart = Prefs.DSTStartUnixTime ? dateifyDstBoundary(Prefs.DSTStartUnixTime, "mm/dd/yyyy hh:nn") : "";
-  String dstEnd = Prefs.DSTEndUnixTime ? dateifyDstBoundary(Prefs.DSTEndUnixTime, "mm/dd/yyyy hh:nn") : "";
+  String dstStart = Prefs.DSTStartUnixTime ? dateify(Prefs.DSTStartUnixTime, "mm/dd/yyyy hh:nn") : "";
+  String dstEnd = Prefs.DSTEndUnixTime ? dateify(Prefs.DSTEndUnixTime, "mm/dd/yyyy hh:nn") : "";
   String json = "{\"success\":" + String(success ? "true" : "false") +
                 ",\"utc_offset\":" + String(Prefs.TimeZoneOffset) +
                 ",\"dst_enabled\":" + String(Prefs.DST) +
@@ -988,7 +988,7 @@ void apiDetectTimezone() {
 void apiDetectDST() {
   registerHTTPMessage("API_DST");
 
-  bool success = getTimezoneInfo(0, 0, false);
+  bool success = getTimezoneInfo();
   if (success) {
     applyTimezoneToCurrentTime();
     Prefs.isUpToDate = false;
@@ -1007,10 +1007,10 @@ void apiSaveTimezone() {
   Prefs.TimeZoneOffset = utc_offset;
   Prefs.DST = dst_enabled; //note that 0=no DST here, 1=DST not active, 2=DST active
   if (server.hasArg("dst_start_date")) {
-    Prefs.DSTStartUnixTime = convertDstBoundaryStrTime(server.arg("dst_start_date"));
+    Prefs.DSTStartUnixTime = convertStrTime(server.arg("dst_start_date"), false);
   }
   if (server.hasArg("dst_end_date")) {
-    Prefs.DSTEndUnixTime = convertDstBoundaryStrTime(server.arg("dst_end_date"));
+    Prefs.DSTEndUnixTime = convertStrTime(server.arg("dst_end_date"), false);
   }
   Prefs.DSTOffset = dst_offset;
   Prefs.isUpToDate = false;
@@ -2038,14 +2038,7 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<body>";  
 
   // Navigation buttons
-  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-  WEBHTML = WEBHTML + "</div>";
+  appendStandardPageNav();
 
   #ifdef _USE8266
   WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "<br>";  
@@ -2211,34 +2204,42 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "---------------------<br>";      
 
 
-  // Device viewer link under server status section
+  // Sensor details link under server status section
   WEBHTML = WEBHTML + "<br><div style=\"text-align: center; padding: 10px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 10px; padding: 15px 25px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold;\">Device Viewer</a>";
+  WEBHTML = WEBHTML + "<a href=\"/SENSORDETAILS\" style=\"display: inline-block; margin: 10px; padding: 15px 25px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold;\">Sensor Details</a>";
   WEBHTML = WEBHTML + "</div>";
 
-  // Navigation links to other config pages
-  WEBHTML = WEBHTML + "<br><br><div style=\"text-align: center; padding: 20px;\">";
-  WEBHTML = WEBHTML + "<h3>Configuration Pages</h3>";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Configuration</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather Data</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" style=\"display: inline-block; margin: 10px; padding: 10px 20px; background-color: #795548; color: white; text-decoration: none; border-radius: 4px;\">Reboot Debug</a>";
-  WEBHTML = WEBHTML + "</div>";
-        
   serverTextClose(200);
 }
 
 
 void handleRoot(void) {
-//  registerHTTPMessage("MainPage");
-    handlerForRoot(false);
+  registerHTTPMessage("MainPage");
+  renderDeviceViewerPage();
+}
+
+void handleSensorDetails(void) {
+  registerHTTPMessage("SensorDetails");
+  handlerForRoot(false);
 }
 
 void handleALL(void) {
   handlerForRoot(true);
+}
+
+void appendStandardPageNav(bool includeWiFiConfig) {
+  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
+  if (includeWiFiConfig) {
+    WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
+  }
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/SENSORDETAILS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Sensor Details</a>";
+  WEBHTML = WEBHTML + "</div>";
 }
 
 
@@ -2264,142 +2265,154 @@ void serverTextClose(int htmlcode, bool asHTML) {
 }
 
 
-void rootTableFill(byte j) {
+static void appendSensorTablePlotCells(int16_t j, ArborysSnsType* sensor) {
+  WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";
+  WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+}
+
+static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
+  #ifdef _ISPERIPHERAL
+  if (Sensors.isMySensor(j)) {
+    int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(j);
+    if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
+      WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
+      WEBHTML = WEBHTML + "<details>";
+      WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Details and Config</summary>";
+      WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(sensor->snsType) + "\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Sensor Name:</label>";
+      WEBHTML = WEBHTML + "<input type=\"text\" name=\"sensorName\" maxlength=\"29\" value=\"" + String(sensor->snsName) + "\" style=\"width: 200px; padding: 4px;\">";
+      WEBHTML = WEBHTML + "</div>";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Max Limit:</label>";
+      WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMax\" value=\"" + String(Prefs.SNS_LIMIT_MAX[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+      WEBHTML = WEBHTML + "</div>";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Min Limit:</label>";
+      WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMin\" value=\"" + String(Prefs.SNS_LIMIT_MIN[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+      WEBHTML = WEBHTML + "</div>";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Poll Int (s):</label>";
+      WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalPoll\" value=\"" + String(Prefs.SNS_INTERVAL_POLL[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+      WEBHTML = WEBHTML + "</div>";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Send Int (s):</label>";
+      WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalSend\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+      WEBHTML = WEBHTML + "</div>";
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+      WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">Flags:</label>";
+      WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
+      uint16_t currentFlags = Prefs.SNS_FLAGS[prefsIndex];
+      const char* flagNames[] = {"Flagged", "Monitored", "LowPower", "Derived/Predictive", "Outside", "High/Low", "Changed", "Critical"};
+      bool readOnlyBits[] = {true, false, true, false, false, true, true, false};
+      for (int i = 0; i < 8; i++) {
+        WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
+        WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit" + String(i) + "\" value=\"1\"";
+        if (bitRead(currentFlags, i)) WEBHTML = WEBHTML + " checked";
+        if (readOnlyBits[i]) WEBHTML = WEBHTML + " disabled";
+        WEBHTML = WEBHTML + ">";
+        WEBHTML = WEBHTML + "<span style=\"font-size: 11px;";
+        if (readOnlyBits[i]) WEBHTML = WEBHTML + " color: #888;";
+        WEBHTML = WEBHTML + "\">" + String(i) + ":" + String(flagNames[i]);
+        if (readOnlyBits[i]) WEBHTML = WEBHTML + " (auto)";
+        WEBHTML = WEBHTML + "</span></label>";
+      }
+      WEBHTML = WEBHTML + "</div></div>";
+      WEBHTML = WEBHTML + "<div style=\"display: flex; gap: 8px; margin-top: 8px;\">";
+      WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update</button>";
+      WEBHTML = WEBHTML + "</form>";
+      WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_READ_SEND_NOW\" style=\"display: inline;\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(sensor->snsType) + "\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
+      WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">Read & Send</button>";
+      WEBHTML = WEBHTML + "</form>";
+      WEBHTML = WEBHTML + "<a href=\"/SENSOR_SETUP?snsType=" + String(sensor->snsType) + "&snsID=" + String(sensor->snsID) + "\" style=\"display: inline-block; padding: 6px 12px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none;\">Setup</a>";
+      WEBHTML = WEBHTML + "</div></details></td>";
+    } else {
+      WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
+    }
+  } else {
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Sensor " + String(j) + " is not my sensor" + "</td>";
+  }
+  #else
+  WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
+  WEBHTML = WEBHTML + "<details>";
+  WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Override Flags</summary>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_OVERRIDE_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsIndex\" value=\"" + String(j) + "\">";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">OverrideFlags:</label>";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
+  uint8_t currentOverrideFlags = sensor->OverrideFlags;
+  const char* overrideFlagNames[] = {"Flag Status", "Monitored", "Outside", "Derived/Calc", "Predictive", "High/Low", "Changed", "Critical"};
+  for (int i = 0; i < 8; i++) {
+    WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
+    WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"override_flag_bit" + String(i) + "\" value=\"1\"";
+    if (bitRead(currentOverrideFlags, i)) WEBHTML = WEBHTML + " checked";
+    WEBHTML = WEBHTML + ">";
+    WEBHTML = WEBHTML + "<span style=\"font-size: 11px;\">" + String(i) + ":" + String(overrideFlagNames[i]) + "</span>";
+    WEBHTML = WEBHTML + "</label>";
+  }
+  WEBHTML = WEBHTML + "</div></div>";
+  WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update Override</button>";
+  WEBHTML = WEBHTML + "</form></details></td>";
+  #endif
+}
+
+static void appendSensorTableFlagsCell(ArborysSnsType* sensor) {
+  #ifndef _ISPERIPHERAL
+  char flagsBuf[9];
+  char overrideFlagsBuf[9];
+  Byte2Bin(sensor->Flags, flagsBuf);
+  Byte2Bin(sensor->OverrideFlags, overrideFlagsBuf);
+  WEBHTML = WEBHTML + "<td>F:" + String(flagsBuf) + "<br>O:" + String(overrideFlagsBuf) + "</td>";
+  #endif
+}
+
+static void appendSensorTableFlaggedCell(ArborysSnsType* sensor) {
+  WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
+}
+
+static void appendSensorTableExpiredCell(ArborysSnsType* sensor) {
+  #ifdef _ISPERIPHERAL
+  WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
+  #else
+  WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
+  #endif
+}
+
+void rootTableFill(int16_t j, bool deviceViewerLayout) {
 //j is the snsindex
   ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);    
-  if (sensor) {
+  if (!sensor) return;
 
-    WEBHTML = WEBHTML + "<tr><td><a href=\"http://" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "</a></td>";
+  WEBHTML = WEBHTML + "<tr>";
+  if (deviceViewerLayout) {
+    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
+    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType + "</td>";
+    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsID + "</td>";
+    WEBHTML = WEBHTML + "<td>" + Sensors.sensorIsOfType(sensor) + "</td>";
+    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
+    WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
+    appendSensorTableFlagsCell(sensor);
+    appendSensorTableFlaggedCell(sensor);
+    appendSensorTableExpiredCell(sensor);
+  } else {
+    WEBHTML = WEBHTML + "<td><a href=\"http://" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "</a></td>";
     WEBHTML = WEBHTML + "<td>" + (String) MACToString(Sensors.getDeviceMACBySnsIndex(j)) + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
     WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType+"."+ (String) sensor->snsID + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
-    
-    #ifndef _ISPERIPHERAL
-    //print flags as a binary string
-    String flagsString = "";
-    for (int i = 0; i <8 ; i++) {
-      flagsString = flagsString + (String) bitRead(sensor->Flags, i);
-    }
-    WEBHTML = WEBHTML + "<td>" + flagsString + "</td>";    
-    #endif
+    appendSensorTableFlaggedCell(sensor);
+    appendSensorTableFlagsCell(sensor);
     WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
-    #ifdef _ISPERIPHERAL
-    WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
-    #else
-    WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
-    #endif
-    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";    
-    WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
-    
-    #ifdef _ISPERIPHERAL
-    // Add editable sensor configuration if this is my sensor
-    if (Sensors.isMySensor(j)) {
-    
-      int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(j);
-      
-      if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
-        // Add a configuration cell with expandable form
-        WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
-        WEBHTML = WEBHTML + "<details>";
-        WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Details and Config</summary>";
-        WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
-        WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(sensor->snsType) + "\">";
-        WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
-        
-        // Sensor Name
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Sensor Name:</label>";
-        WEBHTML = WEBHTML + "<input type=\"text\" name=\"sensorName\" maxlength=\"29\" value=\"" + String(sensor->snsName) + "\" style=\"width: 200px; padding: 4px;\">";
-        WEBHTML = WEBHTML + "</div>";
-        
-        // Limits
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Max Limit:</label>";
-        WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMax\" value=\"" + String(Prefs.SNS_LIMIT_MAX[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Min Limit:</label>";
-        WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMin\" value=\"" + String(Prefs.SNS_LIMIT_MIN[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
-        WEBHTML = WEBHTML + "</div>";
-        
-        // Intervals
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Poll Int (s):</label>";
-        WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalPoll\" value=\"" + String(Prefs.SNS_INTERVAL_POLL[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Send Int (s):</label>";
-        WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalSend\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
-        WEBHTML = WEBHTML + "</div>";
-        
-        // Flags (8 bits)
-        WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-        WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">Flags:</label>";
-        WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
-        
-        uint16_t currentFlags = Prefs.SNS_FLAGS[prefsIndex];
-        const char* flagNames[] = {"Flagged", "Monitored", "LowPower", "Derived/Predictive", "Outside", "High/Low", "Changed", "Critical"};
-        // Bits 0, 2, 5, 6 are read-only (system-managed)
-        bool readOnlyBits[] = {true, false, true, false, false, true, true, false};
-        
-        for (int i = 0; i < 8; i++) {
-          WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
-          WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"flag_bit" + String(i) + "\" value=\"1\"";
-          if (bitRead(currentFlags, i)) {
-            WEBHTML = WEBHTML + " checked";
-          }
-          if (readOnlyBits[i]) {
-            WEBHTML = WEBHTML + " disabled";
-          }
-          WEBHTML = WEBHTML + ">";
-          WEBHTML = WEBHTML + "<span style=\"font-size: 11px;";
-          if (readOnlyBits[i]) {
-            WEBHTML = WEBHTML + " color: #888;";  // Gray out read-only flags
-          }
-          WEBHTML = WEBHTML + "\">" + String(i) + ":" + String(flagNames[i]);
-          if (readOnlyBits[i]) {
-            WEBHTML = WEBHTML + " (auto)";  // Indicate it's automatically managed
-          }
-          WEBHTML = WEBHTML + "</span>";
-          WEBHTML = WEBHTML + "</label>";
-        }
-        
-        WEBHTML = WEBHTML + "</div></div>";
-        
-        // Submit buttons
-        WEBHTML = WEBHTML + "<div style=\"display: flex; gap: 8px; margin-top: 8px;\">";
-        WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update</button>";
-        WEBHTML = WEBHTML + "</form>";
-        
-        // Read & Send Now button (separate form)
-        WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_READ_SEND_NOW\" style=\"display: inline;\">";
-        WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(sensor->snsType) + "\">";
-        WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(sensor->snsID) + "\">";
-        WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer;\">Read & Send</button>";
-        WEBHTML = WEBHTML + "</form>";
-        // Calibrate button (links to calibration page)
-        WEBHTML = WEBHTML + "<a href=\"/SENSOR_SETUP?snsType=" + String(sensor->snsType) + "&snsID=" + String(sensor->snsID) + "\" style=\"display: inline-block; padding: 6px 12px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none;\">Setup</a>";
-        WEBHTML = WEBHTML + "</div>";
-        
-        WEBHTML = WEBHTML + "</details>";
-        WEBHTML = WEBHTML + "</td>";       
-    
-      } else {
-        WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
-      }
-          
-    } else {
-      WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Sensor " + String(j) + " is not my sensor" + "</td>";
-    }
-
-    #endif
-    
-    WEBHTML = WEBHTML + "</tr>";
+    appendSensorTableExpiredCell(sensor);
   }
+  appendSensorTablePlotCells(j, sensor);
+  appendSensorTableConfigCell(j, sensor);
+  WEBHTML = WEBHTML + "</tr>";
 }
 
 
@@ -2429,7 +2442,7 @@ void handlerForRoot(bool allsensors) {
   }
   
   // Normal root page for fully configured systems
-  serverTextHeader(allsensors ? "All Sensors" : "Main Page");
+  serverTextHeader(allsensors ? "All Sensors" : "Sensor Details");
   
   if (Prefs.HAVECREDENTIALS==true && wifistatus && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
 
@@ -2438,8 +2451,9 @@ void handlerForRoot(bool allsensors) {
   WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
   #endif
   WEBHTML = WEBHTML + "<body>";
+  appendStandardPageNav();
   
-  WEBHTML = WEBHTML + "---------------------<br>";      
+  WEBHTML = WEBHTML + "---------------------<br>";
     
   
     WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
@@ -2462,7 +2476,7 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "<tr>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device Type: " + (String) _MYTYPE + "</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Flagged sensors: " + (String) I.isFlagged + + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/InitialSetup\" style=\"color: #4CAF50; font-weight: bold;\">WiFi and Startup Settings</a></td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/READONLYCOREFLAGS\">Core Flags</a></td>";
     WEBHTML = WEBHTML + "</tr>";
     
     WEBHTML = WEBHTML + "<tr>";
@@ -2474,7 +2488,7 @@ void handlerForRoot(bool allsensors) {
     WEBHTML = WEBHTML + "<tr>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device MAC: " + (String) MACToString(Prefs.PROCID) + "</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Leak detected: " + (String) I.isLeak + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/DEVICEVIEWER\">Device Viewer</a></td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/\">Main</a></td>";
     WEBHTML = WEBHTML + "</tr>";
 
     WEBHTML = WEBHTML + "<tr>";
@@ -2518,7 +2532,7 @@ void handlerForRoot(bool allsensors) {
   #ifdef _ISPERIPHERAL
   WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:100px\">Last Send</th><th style=\"width:50px\">Critical</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:300px\">Config</th></tr>";
   #else
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th></tr>";
+  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:320px\">Override Config</th></tr>";
   #endif
   for (byte j=0;j<NUMSENSORS;j++)  {
     ArborysSnsType* sensor = Sensors.snsIndexToPointer(j);
@@ -2526,7 +2540,7 @@ void handlerForRoot(bool allsensors) {
       if (allsensors && bitRead(sensor->Flags,1)==0) continue;
       if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
         used[usedINDEX++] = j;
-        rootTableFill(j);
+        rootTableFill(j, false);
 
         for (byte jj=j+1;jj<NUMSENSORS;jj++) {
           ArborysSnsType* sensor2 = Sensors.snsIndexToPointer(jj);
@@ -2534,7 +2548,7 @@ void handlerForRoot(bool allsensors) {
             if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
             if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
                 used[usedINDEX++] = jj;
-                rootTableFill(jj);
+                rootTableFill(jj, false);
             }
           }
         }
@@ -2854,15 +2868,8 @@ void handleCONFIG() {
 
   WEBHTML = WEBHTML + "<body>";
 
-  // Navigation buttons
-  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-  WEBHTML = WEBHTML + "</div>";
+  // Navigation buttons (WiFi Config only on this page)
+  appendStandardPageNav(true);
 
   WEBHTML = WEBHTML + "<p>This page is used to configure editable system parameters.</p>";
   
@@ -2883,9 +2890,9 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"number\" id=\"dst_enabled\" name=\"dst_enabled\" value=\"" + (String) Prefs.DST + "\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   //add DST start unixtime and end unixtime and DST offset
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Start</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateifyDstBoundary(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateify(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateifyDstBoundary(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateify(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset (sec)</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_offset\" name=\"dst_offset\" value=\"" + (String) Prefs.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Autodetect</div>";
@@ -3162,14 +3169,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<body>";
 
   // Navigation buttons
-  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-  WEBHTML = WEBHTML + "</div>";
+  appendStandardPageNav();
 
   WEBHTML = WEBHTML + "<p>This page displays Google Sheets configuration and status.</p>";
   
@@ -3443,12 +3443,12 @@ void handleCONFIG_POST() {
   }
   if (server.hasArg("dst_start_date")) {
      String tmp = server.arg("dst_start_date");
-     Prefs.DSTStartUnixTime = convertDstBoundaryStrTime(tmp);     
+     Prefs.DSTStartUnixTime = convertStrTime(tmp, false);     
     Prefs.isUpToDate = false;
   }
   if (server.hasArg("dst_end_date")) {
     String tmp = server.arg("dst_end_date");
-    Prefs.DSTEndUnixTime = convertDstBoundaryStrTime(tmp);     
+    Prefs.DSTEndUnixTime = convertStrTime(tmp, false);     
     Prefs.isUpToDate = false;
   }
   if (server.hasArg("dst_offset")) {
@@ -3503,6 +3503,38 @@ void handleCONFIG_OTA_SWITCH() {
     server.send(200, "text/plain", "OTA slot could not be switched.");
   }
 }
+
+#ifndef _ISPERIPHERAL
+void handleSENSOR_OVERRIDE_UPDATE() {
+  registerHTTPMessage("SnsOvrd");
+
+  if (!server.hasArg("snsIndex")) {
+    server.send(400, "text/plain", "Missing sensor index");
+    return;
+  }
+
+  int16_t snsIndex = server.arg("snsIndex").toInt();
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!sensor || !sensor->IsSet) {
+    server.send(400, "text/plain", "Invalid sensor index");
+    return;
+  }
+
+  uint8_t overrideFlags = 0;
+  for (int i = 0; i < 8; i++) {
+    String flagName = "override_flag_bit" + String(i);
+    if (server.hasArg(flagName)) {
+      bitSet(overrideFlags, i);
+    }
+  }
+
+  sensor->OverrideFlags = overrideFlags;
+  I.isUpToDate = false;
+
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "Sensor override flags updated. Redirecting...");
+}
+#endif
 
 #ifdef _ISPERIPHERAL
 void handleSENSOR_UPDATE_POST() {
@@ -3658,48 +3690,66 @@ void handleSensorSetup() {
   WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<p><a href=\"/\">Back to Main</a></p>";
 
-  if (snsType == 33 || snsType == 3) {
-    // Soil capacitance / soil moisture (type 3 = soil moisture, type 33 = capacitive soil e.g. Den config)
-    WEBHTML = WEBHTML + "<p>Use the the live measurement below to take measurements in bone dry soil and fully saturated soil. Enter both of those values below. Alternatively (though less accurate), use air (dry) and water (wet) for measurements. If you enter the same value for both, the calibration will be ignored.</p>";
-    //need to take measurements from this sensor and display here every X seconds, until page exits or submit is clicked
+  // Calibration is available for every sensor. The values live in Prefs (the source of truth);
+  // if no live reading is available for this sensor it simply shows NaN and the user can still
+  // type the min/max manually.
+  int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+  if (prefsIndex < 0) {
+    WEBHTML = WEBHTML + "<p>Calibration unavailable: this sensor has no Prefs storage slot.</p>";
+  } else {
+    bool isSoil = (snsType == 33 || snsType == 3);
+    if (isSoil) {
+      WEBHTML = WEBHTML + "<p>Use the live measurement below to take measurements in bone dry soil and fully saturated soil. Enter both of those values below. Alternatively (though less accurate), use air (dry) and water (wet) for measurements. If you enter the same value for both, the calibration will be ignored.</p>";
+    } else {
+      WEBHTML = WEBHTML + "<p>Enter the calibration min and max for this sensor. If a live reading is unavailable the value will show NaN; you can still enter the limits manually. If you enter the same value for both, the calibration will be ignored.</p>";
+    }
+
+    //live readout (updates every second; shows NaN when no live value is available)
     WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">LIVE VALUE:</label>";
     WEBHTML = WEBHTML + "<div id=\"sensor_value\" style=\"font-size: 24px; font-weight: bold;\">Taking measurements...</div>";
     WEBHTML = WEBHTML + "<script>";
-    WEBHTML = WEBHTML + "setInterval(function() {";
+    WEBHTML = WEBHTML + "var currentLiveValue = NaN;"; //most recent valid live reading
+    WEBHTML = WEBHTML + "function pollSensor() {";
     WEBHTML = WEBHTML + "  fetch('/api/SNS_READ_NOW?snsType=" + String(snsType) + "&snsID=" + String(snsID) + "')";
     WEBHTML = WEBHTML + "    .then(response => response.json())";
     WEBHTML = WEBHTML + "    .then(data => {";
-    WEBHTML = WEBHTML + "      if (data.success) {";
-    WEBHTML = WEBHTML + "        var v = Number(data.value); document.getElementById('sensor_value').innerHTML = 'Value: ' + (isNaN(v) ? data.value : v.toPrecision(3));";
-    WEBHTML = WEBHTML + "      } else {";
-    WEBHTML = WEBHTML + "        document.getElementById('sensor_value').innerHTML = 'Error: ' + data.error;";
-    WEBHTML = WEBHTML + "      }";
-    WEBHTML = WEBHTML + "    });";
-    WEBHTML = WEBHTML + "}, 1000);";
+    WEBHTML = WEBHTML + "      var v = data.success ? Number(data.value) : NaN;";
+    WEBHTML = WEBHTML + "      currentLiveValue = v;";
+    WEBHTML = WEBHTML + "      document.getElementById('sensor_value').innerHTML = 'Value: ' + (isNaN(v) ? 'NaN' : v.toPrecision(3));";
+    WEBHTML = WEBHTML + "    })";
+    WEBHTML = WEBHTML + "    .catch(function() { currentLiveValue = NaN; document.getElementById('sensor_value').innerHTML = 'Value: NaN'; })";
+    WEBHTML = WEBHTML + "    .finally(function() { setTimeout(pollSensor, 500); });"; //schedule next read 500ms after this one finishes
+    WEBHTML = WEBHTML + "}";
+    WEBHTML = WEBHTML + "function useLive(fieldId) {";
+    WEBHTML = WEBHTML + "  if (isNaN(currentLiveValue)) { alert('No live value available yet.'); return; }";
+    WEBHTML = WEBHTML + "  document.getElementById(fieldId).value = currentLiveValue.toPrecision(4);";
+    WEBHTML = WEBHTML + "}";
+    WEBHTML = WEBHTML + "pollSensor();";
     WEBHTML = WEBHTML + "</script>";
 
+    String calibMinStr = isnan(Prefs.SNS_CALIB_MIN[prefsIndex]) ? "" : String(Prefs.SNS_CALIB_MIN[prefsIndex], 3);
+    String calibMaxStr = isnan(Prefs.SNS_CALIB_MAX[prefsIndex]) ? "" : String(Prefs.SNS_CALIB_MAX[prefsIndex], 3);
+    String minLabel = isSoil ? "Fully wet soil/mud:" : "Calibration min:";
+    String maxLabel = isSoil ? "Fully dry soil/sand:" : "Calibration max:";
 
-    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SNS_COILCAP_CALIBRATION\" style=\"max-width: 400px;\">";
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SNS_CALIBRATION\" style=\"max-width: 400px;\">";
     WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsType\" value=\"" + String(snsType) + "\">";
     WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsID\" value=\"" + String(snsID) + "\">";
-    //input the water value
-    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">Fully wet soil/mud:</label>";
-    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"minval\" required style=\"width: 120px; padding: 4px;\" value=\"" + String(sensor->snsCalibMin,3) + "\"></div>";
-    //input the air value
-    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 80px;\">Fully dry soil/sand:</label>";
-    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"maxval\" required style=\"width: 120px; padding: 4px;\" value=\"" + String(sensor->snsCalibMax,3) + "\"></div>";
-
+    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 130px;\">" + minLabel + "</label>";
+    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" id=\"minval\" name=\"minval\" required style=\"width: 120px; padding: 4px;\" value=\"" + calibMinStr + "\">";
+    WEBHTML = WEBHTML + "<button type=\"button\" onclick=\"useLive('minval')\" style=\"margin-left: 6px; padding: 4px 10px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">Use live</button></div>";
+    WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 130px;\">" + maxLabel + "</label>";
+    WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" id=\"maxval\" name=\"maxval\" required style=\"width: 120px; padding: 4px;\" value=\"" + calibMaxStr + "\">";
+    WEBHTML = WEBHTML + "<button type=\"button\" onclick=\"useLive('maxval')\" style=\"margin-left: 6px; padding: 4px 10px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">Use live</button></div>";
     WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Apply Calibration</button>";
     WEBHTML = WEBHTML + "</form>";
-  } else {
-    WEBHTML = WEBHTML + "<p>Calibration is not available for this sensor type (type " + String(snsType) + ").</p>";
   }
 
   WEBHTML = WEBHTML + "</body></html>";
   server.send(200, "text/html", WEBHTML.c_str());
 }
 
-void handleSNS_CALIBRATION_SOIL_CAPACITANCE() {
+void handleSNS_CALIBRATION() {
   if (!server.hasArg("snsType") || !server.hasArg("snsID") || !server.hasArg("minval") || !server.hasArg("maxval")) {
     server.send(400, "text/plain", "Missing snsType, snsID, minval, or maxval");
     return;
@@ -3716,14 +3766,17 @@ void handleSNS_CALIBRATION_SOIL_CAPACITANCE() {
     return;
   }
   int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+  if (prefsIndex < 0) {
+    server.send(400, "text/plain", "Sensor has no Prefs slot");
+    return;
+  }
 
-  if (sensor->snsCalibMin != minval) {
-    sensor->snsCalibMin = minval;
+  //calibration is stored only in Prefs (the single source of truth)
+  if (Prefs.SNS_CALIB_MIN[prefsIndex] != minval) {
     Prefs.SNS_CALIB_MIN[prefsIndex] = minval;
     Prefs.isUpToDate = false;
   }
-  if (sensor->snsCalibMax != maxval) {
-    sensor->snsCalibMax = maxval;
+  if (Prefs.SNS_CALIB_MAX[prefsIndex] != maxval) {
     Prefs.SNS_CALIB_MAX[prefsIndex] = maxval;
     Prefs.isUpToDate = false;
   }
@@ -3758,14 +3811,7 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<body>";
 
   // Navigation buttons
-  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-  WEBHTML = WEBHTML + "</div>";
+  appendStandardPageNav();
 
   #ifdef _USEWEATHER
   
@@ -4095,14 +4141,7 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "<body>";
 
   // Navigation buttons
-  WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Devices</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-  WEBHTML = WEBHTML + "</div>";
+  appendStandardPageNav();
   
   // SD Card Information
   WEBHTML = WEBHTML + "<h3>SD Card Information</h3>";
@@ -4916,24 +4955,27 @@ void handleREBOOT_DEBUG() {
 }
 
 
-// ==================== DEVICE VIEWER FUNCTIONS ====================
+// ==================== DEVICE VIEWER FUNCTIONS (root page) ====================
 
-void handleDeviceViewer() {
-    registerHTTPMessage("DeviceViewer");
+static void syncDeviceViewerNumberFromIndex() {
+  uint8_t n = 0;
+  for (int16_t i = 0; i < NUMDEVICES; i++) {
+    if (!Sensors.isDeviceInit(i)) continue;
+    if (i == CURRENT_DEVICEVIEWER_DEVINDEX) {
+      CURRENT_DEVICEVIEWER_DEVNUMBER = n;
+      return;
+    }
+    n++;
+  }
+}
+
+void renderDeviceViewerPage() {
     WEBHTML = "";
-    serverTextHeader("Device Viewer");
+    serverTextHeader("Main");
 
     WEBHTML = WEBHTML + "<body>";
 
-    // Navigation buttons to config pages
-    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-    WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a>";
-    WEBHTML = WEBHTML + "</div>";
+    appendStandardPageNav();
 
     // Device-specific navigation buttons
     WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 10px; background-color: #e8e8e8; margin-bottom: 20px;\">";
@@ -5002,6 +5044,14 @@ void handleDeviceViewer() {
         return;
     }
 
+    if (server.hasArg("devIndex")) {
+        int16_t idx = server.arg("devIndex").toInt();
+        if (idx >= 0 && idx < NUMDEVICES && Sensors.isDeviceInit(idx)) {
+            CURRENT_DEVICEVIEWER_DEVINDEX = idx;
+            syncDeviceViewerNumberFromIndex();
+        }
+    }
+
     uint16_t myDeviceIndex = Sensors.findMyDeviceIndex();
     if (myDeviceIndex == (uint16_t)-1) {
         WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
@@ -5035,8 +5085,31 @@ void handleDeviceViewer() {
 
     WEBHTML = WEBHTML + "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
     bool isThisDevice = (CURRENT_DEVICEVIEWER_DEVINDEX == myDeviceIndex);
-    WEBHTML = WEBHTML + "<h3>Device " + String(CURRENT_DEVICEVIEWER_DEVNUMBER + 1) + " of " + String(Sensors.getNumDevices()) + ((isThisDevice) ? " (this device)" : "") +"</h3>";
-    WEBHTML = WEBHTML + "Local Device Index: " + String(CURRENT_DEVICEVIEWER_DEVINDEX);
+    WEBHTML = WEBHTML + "<form method=\"GET\" action=\"/\" style=\"margin: 0;\">";
+    WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\">Device </span>";
+    WEBHTML = WEBHTML + "<select name=\"devIndex\" onchange=\"this.form.submit()\" style=\"font-size: 1em; padding: 4px 8px; margin: 0 4px; max-width: 70%;\">";
+    bool deviceFlagged[NUMDEVICES];
+    for (int16_t di = 0; di < NUMDEVICES; di++) deviceFlagged[di] = false;
+    for (int16_t si = 0; si < NUMSENSORS; si++) {
+      ArborysSnsType* sensor = Sensors.snsIndexToPointer(si);
+      if (sensor && sensor->IsSet && sensor->deviceIndex >= 0 && sensor->deviceIndex < NUMDEVICES && bitRead(sensor->Flags, 0)) {
+        deviceFlagged[sensor->deviceIndex] = true;
+      }
+    }
+    for (int16_t di = 0; di < NUMDEVICES; di++) {
+      if (!Sensors.isDeviceInit(di)) continue;
+      ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+      if (!d) continue;
+      String label = String(d->devName);
+      if (deviceFlagged[di]) label += "*";
+      WEBHTML = WEBHTML + "<option value=\"" + String(di) + "\"";
+      if (di == CURRENT_DEVICEVIEWER_DEVINDEX) WEBHTML = WEBHTML + " selected";
+      WEBHTML = WEBHTML + ">" + label + "</option>";
+    }
+    WEBHTML = WEBHTML + "</select>";
+    WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> of " + String(Sensors.getNumDevices()) + "</span>";
+    if (isThisDevice) WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> (this device)</span>";
+    WEBHTML = WEBHTML + "</form>";
     WEBHTML = WEBHTML + "</div>";
 
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
@@ -5060,7 +5133,8 @@ void handleDeviceViewer() {
     uint8_t sensorCount = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
         ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
-        if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
+        if (sensor && sensor->IsSet && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX
+            && sensor->snsID > 0 && sensor->snsType > 0) {
             sensorCount++;
         }
     }
@@ -5071,27 +5145,37 @@ void handleDeviceViewer() {
     if (sensorCount == 0) {
         WEBHTML = WEBHTML + "<p>No sensors found for this device.</p>";
     } else {
-        WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse; margin-top: 10px;\">";
+        WEBHTML = WEBHTML + "<table id=\"DeviceSensors\" style=\"width: 100%; border-collapse: collapse; margin-top: 10px;\">";
         WEBHTML = WEBHTML + "<tr style=\"background-color: #2196f3; color: white;\">";
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor Name</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">ID</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type Name</th>";
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor ID</th>";
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Value</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Value</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Logged</th>";
+        #ifndef _ISPERIPHERAL
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Flags</th>";
+        #endif
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Flagged</th>";
+        #ifdef _ISPERIPHERAL
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Critical</th>";
+        #else
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">EXP</th>";
+        #endif
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Avg</th>";
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Raw</th>";
+        #ifdef _ISPERIPHERAL
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Config</th>";
+        #else
+        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Override Config</th>";
+        #endif
         WEBHTML = WEBHTML + "</tr>";
 
         for (int16_t i = 0; i < NUMSENSORS; i++) {
             ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
-            if (sensor && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX) {
-                WEBHTML = WEBHTML + "<tr>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsName) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsType) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + Sensors.sensorIsOfType(sensor) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsID) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->snsValue, 2) + "</td>";
-                WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(sensor->timeLogged ? dateify(sensor->timeLogged, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td>";
-                WEBHTML = WEBHTML + "</tr>";
+            if (sensor && sensor->IsSet && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX
+                && sensor->snsID > 0 && sensor->snsType > 0) {
+                rootTableFill(i, true);
             }
         }
         WEBHTML = WEBHTML + "</table>";
@@ -5101,6 +5185,20 @@ void handleDeviceViewer() {
 
     WEBHTML = WEBHTML + "</body></html>";
     serverTextClose(200, true);
+}
+
+void handleDeviceViewer() {
+    registerHTTPMessage("DeviceViewer");
+    String loc = "/";
+    if (server.args() > 0) {
+        loc += "?";
+        for (uint8_t i = 0; i < server.args(); i++) {
+            if (i > 0) loc += "&";
+            loc += server.argName(i) + "=" + server.arg(i);
+        }
+    }
+    server.sendHeader("Location", loc);
+    server.send(302, "text/plain", "Redirecting to main page...");
 }
 
 void handleDeviceViewerNext() {
@@ -5123,7 +5221,7 @@ void handleDeviceViewerNext() {
         }
     }
 
-    server.sendHeader("Location", "/DEVICEVIEWER");
+    server.sendHeader("Location", "/");
     server.send(302, "text/plain", "Redirecting to next device...");
 }
 
@@ -5132,7 +5230,7 @@ void handleDeviceViewerPrev() {
 
     if (Sensors.getNumDevices() == 0) {
 
-      server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+      server.sendHeader("Location", "/?error=no_devices");
       server.send(302, "text/plain", "No devices available to view.");
     }
 
@@ -5153,7 +5251,7 @@ void handleDeviceViewerPrev() {
       }
     }
 
-    server.sendHeader("Location", "/DEVICEVIEWER");
+    server.sendHeader("Location", "/");
     server.send(302, "text/plain", "Redirecting to previous device...");
 }
 
@@ -5161,7 +5259,7 @@ void handleDeviceViewerPing() {
     registerHTTPMessage("DVPing");
 
     if (Sensors.getNumDevices() == 0) {
-        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.sendHeader("Location", "/?error=no_devices");
         server.send(302, "text/plain", "No devices available to ping.");
         return;
     }
@@ -5172,7 +5270,7 @@ void handleDeviceViewerPing() {
 
     ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
-        server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
+        server.sendHeader("Location", "/?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
         return;
     }
@@ -5180,10 +5278,10 @@ void handleDeviceViewerPing() {
     bool success = sendESPNowPingRequest(device, 3, true);
 
     if (success) {
-        server.sendHeader("Location", "/DEVICEVIEWER?ping=success");
+        server.sendHeader("Location", "/?ping=success");
         server.send(302, "text/plain", "Ping sent successfully.");
     } else {
-        server.sendHeader("Location", "/DEVICEVIEWER?ping=failed");
+        server.sendHeader("Location", "/?ping=failed");
         server.send(302, "text/plain", "Failed to send ping.");
     }
 }
@@ -5192,27 +5290,27 @@ void handleDeviceViewerDelete() {
     registerHTTPMessage("DVDelete");
 
     if (Sensors.getNumDevices() == 0) {
-        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.sendHeader("Location", "/?error=no_devices");
         server.send(302, "text/plain", "No devices available to delete.");
         return;
     }
 
     if (CURRENT_DEVICEVIEWER_DEVINDEX >= NUMDEVICES) {
         CURRENT_DEVICEVIEWER_DEVINDEX = 0;
-        server.sendHeader("Location", "/DEVICEVIEWER?error=no_devices");
+        server.sendHeader("Location", "/?error=no_devices");
         server.send(302, "text/plain", "Invalid device index.");
         return;
     }
 
     ArborysDevType* device = Sensors.getDeviceByDevIndex(CURRENT_DEVICEVIEWER_DEVINDEX);
     if (!device) {
-        server.sendHeader("Location", "/DEVICEVIEWER?error=device_not_found");
+        server.sendHeader("Location", "/?error=device_not_found");
         server.send(302, "text/plain", "Device not found.");
         return;
     }
 
     if (device->MAC == Sensors.getDeviceMACByDevIndex(Sensors.findMyDeviceIndex())) {
-      server.sendHeader("Location", "/DEVICEVIEWER?error=cannot_delete_myself");
+      server.sendHeader("Location", "/?error=cannot_delete_myself");
       server.send(302, "text/plain", "Cannot delete this device.");
       return;
     }
@@ -5225,10 +5323,10 @@ void handleDeviceViewerDelete() {
     }
 
     if (!device->IsSet) {
-        server.sendHeader("Location", "/DEVICEVIEWER?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
+        server.sendHeader("Location", "/?delete=success&device=" + deviceName + "&sensors=" + String(deletedSensors));
         server.send(302, "text/plain", "Device and sensors deleted successfully.");
     } else {
-        server.sendHeader("Location", "/DEVICEVIEWER?error=delete_failed");
+        server.sendHeader("Location", "/?error=delete_failed");
         server.send(302, "text/plain", "Failed to delete device.");
     }
 }
@@ -5236,6 +5334,7 @@ void handleDeviceViewerDelete() {
 void setupServerRoutes() {
     // Main routes
     server.on("/", handleRoot);
+    server.on("/SENSORDETAILS", handleSensorDetails);
     server.on("/ALLSENSORS", handleALL);
     server.on("/POST", handlePost);
     server.on("/REQUESTUPDATE", handleREQUESTUPDATE);
@@ -5254,13 +5353,16 @@ void setupServerRoutes() {
     server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
     server.on("/CONFIG_OTA_SWITCH", HTTP_POST, handleCONFIG_OTA_SWITCH);
     server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
+    #ifndef _ISPERIPHERAL
+    server.on("/SENSOR_OVERRIDE_UPDATE", HTTP_POST, handleSENSOR_OVERRIDE_UPDATE);
+    #endif
     
     #ifdef _ISPERIPHERAL
     // Sensor configuration routes for peripheral devices
     server.on("/SENSOR_UPDATE", HTTP_POST, handleSENSOR_UPDATE_POST);
     server.on("/SENSOR_READ_SEND_NOW", HTTP_POST, handleSENSOR_READ_SEND_NOW);
     server.on("/SENSOR_SETUP", HTTP_GET, handleSensorSetup);
-    server.on("/SNS_COILCAP_CALIBRATION", HTTP_POST, handleSNS_CALIBRATION_SOIL_CAPACITANCE);
+    server.on("/SNS_CALIBRATION", HTTP_POST, handleSNS_CALIBRATION);
     #endif
     
     // Google Sheets routes

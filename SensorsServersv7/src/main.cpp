@@ -473,7 +473,7 @@ void loop() {
         }
         
         int8_t currentInternetTemp = WeatherData.getTemperature(I.currentTime);
-        if (isTempValid(I.currentOutsideTemp)==false || I.haveOutsideTemperatureSensor==false) {
+        if (I.haveOutsideTemperatureSensor==false || isTempValid(I.currentOutsideTemp)==false) {
             I.currentOutsideTemp = currentInternetTemp;
             I.haveOutsideTemperatureSensor = false;
         } else {
@@ -486,26 +486,12 @@ void loop() {
         }
 
         //see if we have local battery        
-        int16_t batteryIndex = Sensors.findSnsOfType((const char*) "battery",false,-1);
-        bool haveLocalBattery = false;
-        ArborysSnsType* sensor = NULL;
-        while (batteryIndex != -1 && haveLocalBattery == false) {
-          sensor = Sensors.snsIndexToPointer(batteryIndex);
-          if (!sensor || sensor->IsSet == false) continue;
-          if (sensor && sensor->IsSet == true) {        
-            if (sensor->timeLogged + 7200>I.currentTime) {
-              haveLocalBattery = true;
-            }
-          }
-    
-          if (haveLocalBattery == false) batteryIndex = Sensors.findSnsOfType((const char*) "battery",false,batteryIndex+1);
-        }
-        if (haveLocalBattery == true) {
-          I.localBatteryIndex = batteryIndex;
-        } else {
-          I.localBatteryIndex = 255;
-        }
-    
+        I.localBatteryIndex = 255;
+        int16_t batteryIndex = Sensors.findOutsideSensorByType("battery_li");
+        if (batteryIndex >= 0 && batteryIndex < 255) {
+            ArborysSnsType* sensor = Sensors.snsIndexToPointer(batteryIndex);
+            if (sensor && sensor->IsSet && sensor->timeLogged + 3600>I.currentTime)             I.localBatteryIndex = batteryIndex;
+        }   
         #endif
 
         

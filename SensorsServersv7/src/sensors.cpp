@@ -141,11 +141,10 @@ analogSetAttenuation(_USEADCATTEN);
 #endif
 
 #ifdef _USEADCBITS
-  #if CONFIG_IDF_TARGET_ESP32
+  // Use analogReadResolution on every target: it guarantees analogRead() returns 0..(2^_USEADCBITS - 1),
+  // which is what readAnalogVoltage() divides by. (analogSetWidth is a no-op on S2/S3/C3, which would
+  // leave analogRead() at 12-bit and break the voltage scaling.)
   analogReadResolution(_USEADCBITS);  // e.g. 10, 11, or 12
-  #else
-  analogSetWidth(_USEADCBITS); //this sets the number of bits to 12
-  #endif
 #endif
 #endif
 
@@ -418,19 +417,36 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
 
           if (P->snsType==3) {
-            P->snsValue = readResistanceDivider(10000, 3.3, val);
-            if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
-          
+            double resistance = readResistanceDivider(10000, 3.3, val);
+            if (isSoilResistanceValid(resistance)==false) isInvalid=true;
+            if (uncalibrated) {
+              //live calibration readout: show the raw resistance the user enters as min/max
+              P->snsValue = resistance;
+            } else {
+              //calibration is sourced from Prefs (the persistent source of truth). If it was
+              //never set (NAN) or is degenerate (min==max), fall back to the raw resistance.
+              double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
+              double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
+              if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+                P->snsValue = resistance;
+              } else {
+                P->snsValue = mapfloat(resistance, calibMin, calibMax, 0, 100); //calibrated moisture range
+              }
+            }
           } 
           if (P->snsType==33) {
             if (uncalibrated) {
               P->snsValue = val;
             } else {
-              if (P->snsCalibMin==P->snsCalibMax) {
-                P->snsCalibMin = 0.15;
-                P->snsCalibMax = 1.75;
-              } 
-              P->snsValue = mapfloat(val, P->snsCalibMin, P->snsCalibMax, 0, 100); //this is the effective measurement range
+              //calibration is sourced from Prefs (the persistent source of truth). Fall back to
+              //sensible defaults if it was never set (NAN) or is degenerate (min==max).
+              double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
+              double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
+              if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+                calibMin = 0.15;
+                calibMax = 1.75;
+              }
+              P->snsValue = mapfloat(val, calibMin, calibMax, 0, 100); //this is the effective measurement range
               if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
             }
           } 
@@ -442,14 +458,37 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
             //now convert the voltage to the sensor value
             if (P->snsType==34) {
-              P->snsValue = readResistanceDivider(10000, 3.3, P->snsValue);
-              if (isSoilResistanceValid(P->snsValue)==false) isInvalid=true;
+              double resistance = readResistanceDivider(10000, 3.3, P->snsValue);
+              if (isSoilResistanceValid(resistance)==false) isInvalid=true;
+              if (uncalibrated) {
+                //live calibration readout: show the raw resistance the user enters as min/max
+                P->snsValue = resistance;
+              } else {
+                //calibration is sourced from Prefs (the persistent source of truth). If it was
+                //never set (NAN) or is degenerate (min==max), fall back to the raw resistance.
+                double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
+                double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
+                if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+                  P->snsValue = resistance;
+                } else {
+                  P->snsValue = mapfloat(resistance, calibMin, calibMax, 0, 100); //calibrated moisture range
+                }
+              }
             } 
             if (P->snsType==35) {
               if (uncalibrated) {
+                //live calibration readout: leave the raw reading the user enters as min/max
                 P->snsValue = P->snsValue;
               } else {
-                P->snsValue = mapfloat(P->snsValue, 0.15, 1.75, 0, 100); //this is the effective measurement range
+                //calibration is sourced from Prefs (the persistent source of truth). Fall back to
+                //sensible defaults if it was never set (NAN) or is degenerate (min==max).
+                double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
+                double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
+                if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+                  calibMin = 0.15;
+                  calibMax = 1.75;
+                }
+                P->snsValue = mapfloat(P->snsValue, calibMin, calibMax, 0, 100); //calibrated measurement range
                 if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
               }
             } 
@@ -1404,7 +1443,13 @@ float readAnalogVoltage(int16_t pin, byte nsamps) {
     val += (float) analogRead(pin); //analog pin. Note that not all ESP32 boards have the correct internal lookup for analogReadMilliVolts(), so we use analogRead() instead.
     if (ii<nsamps-1) delay(10);
   }
-  val = (val/nsamps)/4095; //note that analogRead always returns 12 bit values, regardless of the _USEADCBITS setting
+  //normalize by the actual full-scale count for the configured resolution. analogReadResolution(_USEADCBITS)
+  //makes analogRead() return 0..(2^_USEADCBITS - 1), so dividing by 4095 (12-bit) would compress the scale.
+  #ifdef _USEADCBITS
+  val = (val/nsamps) / (float)((1UL << _USEADCBITS) - 1);
+  #else
+  val = (val/nsamps)/4095.0;
+  #endif
   //output range depends on the attenuation settings. 
   if (_USEADCATTEN == ADC_6db) {
     val= val*1.75; 

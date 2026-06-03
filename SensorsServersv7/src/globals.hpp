@@ -188,8 +188,8 @@ typedef enum {
     int32_t TimeZoneOffset= 90000; //offset from UTC in seconds, including DST offset. 90000 is a sentinel value for no offset set
     uint8_t DST=0; //0 = no DST used here, 1 = DST used in this locale, but not active. 2 = DST is active
     int16_t DSTOffset=0; //offset from UTC in seconds, 0 if not in DST
-    time_t DSTStartUnixTime=0; // UTC instant when DST starts
-    time_t DSTEndUnixTime=0;   // UTC instant when DST ends
+    time_t DSTStartUnixTime=0; // DST start, stored in STANDARD local time (UTC + TimeZoneOffset, no DST). Compare with standardLocalNow().
+    time_t DSTEndUnixTime=0;   // DST end, stored in STANDARD local time (UTC + TimeZoneOffset, no DST). Compare with standardLocalNow().
     
     double LATITUDE;
     double LONGITUDE;
