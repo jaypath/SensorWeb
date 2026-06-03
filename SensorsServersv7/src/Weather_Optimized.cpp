@@ -1116,11 +1116,14 @@ bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
     IS	Ice Storm	Power Outage Risk
     BZ	Blizzard	Total Isolation
     ZR	Freezing Rain	Road Hazard
-    EC	Extreme Cold	Heat Pump / Pipe Safety
+    EC	Extreme Cold	
     WC 	Wind Chill	Evacuation / Shelter
     EH	Excessive Heat	HVAC / Health Load
     AS	Air Quality / Ashfall	Indoor Filtration
     AF	Ashfall	Indoor Filtration    
+    HT  Heat Wave	
+    FZ	Freeze	
+    HZ	Hard Freeze	
     */
 
 
@@ -1142,6 +1145,9 @@ bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
     if (strcmp(phenomenon, "EH") == 0) return true;
     if (strcmp(phenomenon, "AS") == 0) return true;
     if (strcmp(phenomenon, "AF") == 0) return true;
+    if (strcmp(phenomenon, "HT") == 0) return true;
+    if (strcmp(phenomenon, "FZ") == 0) return true;
+    if (strcmp(phenomenon, "HZ") == 0) return true;
 
     return false;
 }
@@ -1170,6 +1176,10 @@ String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
     if (strcmp(phenomenon, "EH") == 0) return "Excessive Heat";
     if (strcmp(phenomenon, "AS") == 0) return "Air Quality";
     if (strcmp(phenomenon, "AF") == 0) return "Ashfall";
+    if (strcmp(phenomenon, "HT") == 0) return "Heat Wave";
+    if (strcmp(phenomenon, "FZ") == 0) return "Freeze";
+    if (strcmp(phenomenon, "HZ") == 0) return "Hard Freeze";
+
     return "Unknown";
 }
 
@@ -1204,7 +1214,7 @@ bool WeatherInfoOptimized::parseVTEC(const char* vtec, char* office, char* pheno
     // 7. Parse Dates (Indices: Start at 22, End at 36)
     // Format: YYMMDDTHHMMZ
     *start = unixToLocal(vtecTimeToUnix(vtec + 22));
-    *end   = unixToLocal(vtecTimeToUnix(vtec + 36));
+    *end   = unixToLocal(vtecTimeToUnix(vtec + 35));
 
     return true;
 }
@@ -1280,13 +1290,13 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
 
             //cleanup
             this->NumWeatherEvents = 0;
-            deleteFiles("*", "/data/events");    
+            deleteFiles("*", "/Data/Events");    
             //clear bits 0,2,3
-            bitWrite(I.WeatherEventFlags, 0, 0); //bit 0 is for flagged alerts
-            bitWrite(I.WeatherEventFlags, 2, 0); //bit 2 is for severe alerts
-            bitWrite(I.WeatherEventFlags, 3, 0); //bit 3 is for imminent alerts
+            clearBit(I.WeatherEventFlags, 0); //bit 0 is for flagged alerts
+            //bit 1 is for last alert, no longer used
+            clearBit(I.WeatherEventFlags, 2); //bit 2 is for severe alerts
+            clearBit(I.WeatherEventFlags, 3); //bit 3 is for imminent alerts
 
-            this->NumWeatherEvents = 0;    
             this->alertInfo.initAlertInfo();
     
             JsonArray features = doc["features"].as<JsonArray>();
@@ -1297,7 +1307,7 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
             } else {
 
                 for (JsonObject feature : features) {
-                    this->NumWeatherEvents++;
+                    uint16_t currentEventNumber = this->NumWeatherEvents+1;
 
                     JsonObject props = feature["properties"];
                     const char* vtecRaw = props["parameters"]["VTEC"][0]; // VTEC is usually the first element
@@ -1311,14 +1321,22 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
                     if (!filterAlerts(phen)) continue;
 
                     //set event bit one, bit 0 is for flagged alerts are present                    
-                    bitWrite(I.WeatherEventFlags, 0, 1);
+                    setBit(I.WeatherEventFlags, 0);
 
                     WeatherEventFile fileData;
                     memset(&fileData, 0, sizeof(WeatherEventFile));
-                    strncpy(fileData.severity, props["severity"], 9);
-                    
-                    strncpy(fileData.certainty, props["certainty"], 9);
-                    strncpy(fileData.urgency, props["urgency"], 9);
+
+                    const char* severity = props["severity"].as<const char*>();
+                    strncpy(fileData.severity, severity ? severity : "", sizeof(fileData.severity) - 1);
+                    fileData.severity[sizeof(fileData.severity) - 1] = '\0';
+
+                    const char* certainty = props["certainty"].as<const char*>();
+                    strncpy(fileData.certainty, certainty ? certainty : "", sizeof(fileData.certainty) - 1);
+                    fileData.certainty[sizeof(fileData.certainty) - 1] = '\0';
+
+                    const char* urgency = props["urgency"].as<const char*>();
+                    strncpy(fileData.urgency, urgency ? urgency : "", sizeof(fileData.urgency) - 1);
+                    fileData.urgency[sizeof(fileData.urgency) - 1] = '\0';
 
                     fileData.time_start = tStart;
                     fileData.time_end = tEnd;
@@ -1326,13 +1344,22 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
                     strncpy(fileData.phenomenon, phen, 2);
                     strncpy(fileData.significance, sig, 1);                    
                     fileData.event_number = (uint16_t)atoi(etnStr);
-                    strncpy(fileData.event, props["event"] | "", 99);
-                    strncpy(fileData.headline, props["headline"] | "", 199);
-                    strncpy(fileData.description, props["description"] | "", 1199);
-                    // Generate Filename: expdate-office-phenomenon-ETN.txt
+
+                    const char* ev = props["event"].as<const char*>();
+                    strncpy(fileData.event, ev ? ev : "", sizeof(fileData.event) - 1);
+                    fileData.event[sizeof(fileData.event) - 1] = '\0';
+
+                    const char* hl = props["headline"].as<const char*>();
+                    strncpy(fileData.headline, hl ? hl : "", sizeof(fileData.headline) - 1);
+                    fileData.headline[sizeof(fileData.headline) - 1] = '\0';
+
+                    const char* desc = props["description"].as<const char*>();
+                    strncpy(fileData.description, desc ? desc : "", sizeof(fileData.description) - 1);
+                    fileData.description[sizeof(fileData.description) - 1] = '\0';
+
                     char filename[22];
                     snprintf(filename, 21, "/Data/Events/%d.txt", 
-                        this->NumWeatherEvents+1);
+                        currentEventNumber);
 
                     int16_t eseverity = parseSeverity(fileData.severity);
                     int16_t eurgency = parseUrgency(fileData.urgency);
@@ -1346,11 +1373,11 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
                         strncpy(this->alertInfo.phenomenon, phen, 2);
                         this->alertInfo.time_start = tStart;
                         this->alertInfo.time_end = tEnd;
-                        this->alertInfo.eventnumber = fileData.event_number;
+                        this->alertInfo.eventnumber = currentEventNumber;
                         strncpy(this->alertInfo.event, fileData.event, 32);
 
-                        if (eseverity == WeatherSeverity::EXTREME || eseverity == WeatherSeverity::SEVERE) bitWrite(I.WeatherEventFlags, 2,1); //set bit 2 to 1
-                        if (eurgency == WeatherUrgency::IMMINENT) bitWrite(I.WeatherEventFlags, 3,1); //set bit 3 to 1
+                        if (eseverity == WeatherSeverity::EXTREME || eseverity == WeatherSeverity::SEVERE) setBit(I.WeatherEventFlags, 2); //set bit 2 to 1
+                        if (eurgency == WeatherUrgency::IMMINENT) setBit(I.WeatherEventFlags, 3); //set bit 3 to 1
                     }
 
 
@@ -1360,6 +1387,7 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
                         continue;
                     }
 
+                    this->NumWeatherEvents = currentEventNumber;
                 }
             }
             SerialPrint("fetchWeatherAlerts: " + String(this->NumWeatherEvents) + " alerts fetched successfully", true);
@@ -1386,7 +1414,7 @@ bool WeatherInfoOptimized::loadNextWeatherAlert() {
     else this->alertInfo.eventnumber++;
 
     char filename [32] = "";
-    snprintf(filename, 31, "/data/events/%d.txt", 
+    snprintf(filename, 31, "/Data/Events/%d.txt", 
         this->alertInfo.eventnumber);
     
     WeatherEventFile fileData;
