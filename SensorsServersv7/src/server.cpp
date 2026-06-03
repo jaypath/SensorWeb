@@ -4130,6 +4130,156 @@ bool handlerForWeatherAddress(String street, String city, String state, String z
   
 }
 
+#ifdef _USESDCARD
+static String sanitizeSdBrowsePath(String path) {
+  if (path.length() == 0) return "/";
+  path.replace("\\", "/");
+  while (path.indexOf("//") >= 0) path.replace("//", "/");
+  if (!path.startsWith("/")) path = "/" + path;
+  if (path.indexOf("..") >= 0) return "/";
+  if (path.length() > 1 && path.endsWith("/")) path.remove(path.length() - 1);
+  return path;
+}
+
+static String joinSdPath(const String& base, const String& name) {
+  if (base == "/") return "/" + name;
+  if (base.endsWith("/")) return base + name;
+  return base + "/" + name;
+}
+
+static String getSdParentPath(const String& path) {
+  if (path == "/" || path.length() <= 1) return "";
+  int slash = path.lastIndexOf('/');
+  if (slash <= 0) return "/";
+  return path.substring(0, slash);
+}
+
+static String sdEntryBaseName(const String& entryName) {
+  int slash = entryName.lastIndexOf('/');
+  if (slash >= 0 && slash < (int)entryName.length() - 1) {
+    return entryName.substring(slash + 1);
+  }
+  return entryName;
+}
+
+static void sortStringArray(String* names, int count) {
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = i + 1; j < count; j++) {
+      if (names[i].compareTo(names[j]) > 0) {
+        String tmp = names[i];
+        names[i] = names[j];
+        names[j] = tmp;
+      }
+    }
+  }
+}
+
+static void appendSdCardDirectoryListing(const String& currentPath) {
+  const int MAX_ENTRIES = 64;
+  String dirNames[MAX_ENTRIES];
+  String fileNames[MAX_ENTRIES];
+  uint64_t fileSizes[MAX_ENTRIES];
+  int dirCount = 0;
+  int fileCount = 0;
+  bool truncated = false;
+
+  WEBHTML = WEBHTML + "<h3>File Browser</h3>";
+  WEBHTML = WEBHTML + "<p><strong>Current path:</strong> " + currentPath + "</p>";
+  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
+  WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Name</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Size</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Last Updated</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Type</th>";
+  WEBHTML = WEBHTML + "</tr>";
+
+  String parentPath = getSdParentPath(currentPath);
+  if (parentPath.length() > 0) {
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(parentPath) + "\">..</a>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
+  }
+
+  File dir = SD.open(currentPath.c_str());
+  if (!dir || !dir.isDirectory()) {
+    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #c00;\">Could not open directory</td></tr>";
+    WEBHTML = WEBHTML + "</table>";
+    if (dir) dir.close();
+    return;
+  }
+
+  File entry = dir.openNextFile();
+  while (entry) {
+    String baseName = sdEntryBaseName(entry.name());
+    if (baseName.length() == 0 || baseName == "." || baseName == "..") {
+      entry.close();
+      entry = dir.openNextFile();
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      if (dirCount < MAX_ENTRIES) {
+        dirNames[dirCount++] = baseName;
+      } else {
+        truncated = true;
+      }
+    } else if (fileCount < MAX_ENTRIES) {
+      fileNames[fileCount] = baseName;
+      fileSizes[fileCount] = entry.size();
+      fileCount++;
+    } else {
+      truncated = true;
+    }
+
+    entry.close();
+    entry = dir.openNextFile();
+  }
+  dir.close();
+
+  sortStringArray(dirNames, dirCount);
+  sortStringArray(fileNames, fileCount);
+
+  for (int i = 0; i < dirCount; i++) {
+    String childPath = joinSdPath(currentPath, dirNames[i]);
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(childPath) + "\">" + dirNames[i] + "/</a>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
+  }
+
+  for (int i = 0; i < fileCount; i++) {
+    String filePath = joinSdPath(currentPath, fileNames[i]);
+    String lastUpdated = "Unknown";
+    File f = SD.open(filePath.c_str(), FILE_READ);
+    if (f) {
+      time_t fileTime = f.getLastWrite();
+      if (fileTime > 0) lastUpdated = String(dateify(fileTime, "mm/dd/yyyy hh:nn:ss"));
+      f.close();
+    }
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">" + fileNames[i] + "</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(fileSizes[i]) + "</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + lastUpdated + "</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">File</td></tr>";
+  }
+
+  if (dirCount == 0 && fileCount == 0 && parentPath.length() == 0) {
+    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Directory is empty</td></tr>";
+  } else if (dirCount == 0 && fileCount == 0) {
+    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">No files in this directory</td></tr>";
+  }
+
+  if (truncated) {
+    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Listing truncated (64 entries max per type)</td></tr>";
+  }
+
+  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + "<p><strong>Directories:</strong> " + String(dirCount) + ", <strong>Files:</strong> " + String(fileCount) + "</p>";
+}
+#endif
+
 void handleSDCARD() {
   
   
@@ -4301,143 +4451,11 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "</table>";
   WEBHTML = WEBHTML + "</details>";
   
-  
-  
-  // Combined Files Table
-  WEBHTML = WEBHTML + "<h3>All Files on SD Card</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
-  WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Filename</th>";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Size (KB)</th>";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Last Updated</th>";
-  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Type</th>";
-  WEBHTML = WEBHTML + "</tr>";
-  
-  // List all files in a single pass
-  File root = SD.open("/Data");
-  int fileCount = 0;  // Moved declaration to correct scope
-  if (root && root.isDirectory()) {
-    File file = root.openNextFile();
-    
-    while (file && fileCount < 100) { // Increased limit to show more files
-      String filename = file.name();
-      
-      if (filename.endsWith(".dat") || filename.endsWith(".txt")) {
-        // Determine file type and category
-        String fileType = "Unknown";
-        String fileCategory = "Unknown";
-        
-        if (filename == "ScreenFlags.dat") {
-          fileType = "Screen Flags";
-          fileCategory = "Core Data";
-        } else if (filename == "SensorBackupv2.dat") {
-          fileType = "Sensor Backup";
-          fileCategory = "Core Data";
-        } else if (filename == "GsheetInfo.dat") {
-          fileType = "Google Sheets";
-          fileCategory = "Core Data";
-        } else if (filename == "WeatherData.dat") {
-          fileType = "Weather Data";
-          fileCategory = "Weather Data";
-        } else if (filename == "DevicesSensors.dat") {
-          fileType = "Devices & Sensors";
-          fileCategory = "Devices";
-        } else if (filename == "FileTimestamps.dat") {
-          fileType = "File Timestamps";
-          fileCategory = "Core Data";
-        } else if (filename == "ErrorLog.txt") {
-          fileType = "Error Log";
-          fileCategory = "Core Data";
-        } else {
-          // Individual sensor file (format: sns_MAC_TYPE_ID.dat)
-          fileCategory = "Individual Sensors";          
-          fileType = "Individual Sensor";
-        }
-        
-        // Calculate size in KB
-        uint32_t sizeBytes = file.size();
-        float sizeKB = sizeBytes / 1024.0;
-        
-        // Get file modification time (if available)
-        String lastUpdated = "Unknown";
-        time_t fileTime = file.getLastWrite();
-        
-        // For sensor data files, try to read the actual data timestamp
-        if (filename.endsWith(".dat") && filename.startsWith("sns_")) {
-            // This is a sensor data file, try to read the timestamp from content
-            if (sizeBytes >= sizeof(SensorDataPoint)) {
-                // Read the last data point to get the timestamp
-                file.seek(sizeBytes - sizeof(SensorDataPoint));
-                SensorDataPoint dataPoint;
-                if (file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint)) == sizeof(SensorDataPoint)) {
-                    // Debug: log what we read
-                    //SerialPrint("Read SensorDataPoint from " + filename + ": timestamp=" + String(dataPoint.fileWriteTimestamp) + ", size=" + String(sizeof(SensorDataPoint)), true);
-                    
-                    if (dataPoint.fileWriteTimestamp > 0) {
-                        // Use the timestamp from the file content
-                        struct tm *timeinfo = localtime((time_t*)&dataPoint.fileWriteTimestamp);
-                        if (timeinfo) {
-                            char timeStr[25];
-                            strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
-                            lastUpdated = String(timeStr) + " (Content)";
-                        } else {
-                            // Fallback to raw timestamp if localtime fails
-                            lastUpdated = String(dataPoint.fileWriteTimestamp) + " (Content Raw)";
-                        }
-                    } else {
-                        // Debug: log when timestamp is 0
-                        //SerialPrint("Sensor file " + filename + " has fileWriteTimestamp = 0", true);
-                    }
-                } else {
-                    // Debug: log when reading fails
-                    SerialPrint("Failed to read SensorDataPoint from " + filename + ", bytes read: " + String(file.read((uint8_t*)&dataPoint, sizeof(SensorDataPoint))), true);
-                }
-                // Reset file position for next operations
-                file.seek(0);
-            } else {
-                // Debug: log when file is too small
-                SerialPrint("Sensor file " + filename + " is too small: " + String(sizeBytes) + " bytes, need " + String(sizeof(SensorDataPoint)), true);
-            }
-        }
-        
-        // If we still don't have a timestamp, try file system timestamp
-        if (lastUpdated == "Unknown" && fileTime > 0) {
-            struct tm *timeinfo = localtime(&fileTime);
-            if (timeinfo) {
-                char timeStr[25];
-                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
-                lastUpdated = String(timeStr) + " (File)";
-            }
-        }
-        
-        // Add row to table
-        WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">" + filename + "</td>";
-        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(sizeKB, 1) + " KB</td>";
-        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + lastUpdated + "</td>";
-        WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + fileCategory + "</td></tr>";
-        
-        fileCount++;
-      }
-      file = root.openNextFile();
-    }
-    root.close();
-    
-    if (fileCount == 0) {
-      WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">No .dat files found</td></tr>";
-    } else if (fileCount >= 100) {
-      WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Showing first 100 files. More files may exist.</td></tr>";
-    }
+  String browsePath = "/";
+  if (server.hasArg("path")) {
+    browsePath = sanitizeSdBrowsePath(server.arg("path"));
   }
-  
-  WEBHTML = WEBHTML + "</table>";
-  
-  // File Summary
-  WEBHTML = WEBHTML + "<h3>File Summary</h3>";
-  WEBHTML = WEBHTML + "<p><strong>Total Files Listed:</strong> " + String(fileCount) + " .dat files</p>";
-  
-  // Individual Sensor Files Status
-  WEBHTML = WEBHTML + "<p><strong>Note:</strong> Individual sensor files are automatically created when new sensor data is received.</p>";
-  
+  appendSdCardDirectoryListing(browsePath);
 
   WEBHTML = WEBHTML + "</font>---------------------<br>";      
   // Error log button
