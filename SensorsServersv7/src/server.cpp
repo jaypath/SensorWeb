@@ -2054,6 +2054,7 @@ void handleSTATUS() {
 
   WEBHTML += "Number of devices/sensors: " + (String) Sensors.getNumDevices() + " / " + (String) Sensors.getNumSensors() + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
+  WEBHTML = WEBHTML + "Number of reboots today: " + (String) I.rebootsToday + "<br>";;
   WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
@@ -3075,8 +3076,8 @@ void handleREADONLYCOREFLAGS() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.resetInfo + "</div>";
   
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsSinceLast</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsSinceLast + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsToday</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsToday + "</div>";
 
   #if defined(_USETFT) && !defined(_ISPERIPHERAL)
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
@@ -4174,6 +4175,329 @@ static void sortStringArray(String* names, int count) {
   }
 }
 
+static String sanitizeUploadFileName(String name) {
+  name = sdEntryBaseName(name);
+  if (name.length() == 0 || name == "." || name == "..") return "";
+  if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return "";
+  if (name.length() > 96) name = name.substring(0, 96);
+  return name;
+}
+
+static bool ensureSdDirExists(const String& dirPath) {
+  String path = sanitizeSdBrowsePath(dirPath);
+  if (path == "/" || path.length() == 0) return true;
+  if (SD.exists(path.c_str())) return true;
+
+  String parent = getSdParentPath(path);
+  if (parent.length() > 0 && parent != path) {
+    if (!ensureSdDirExists(parent)) return false;
+  }
+  return SD.mkdir(path.c_str());
+}
+
+static String jsonEscape(const String& s) {
+  String out = "";
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if (c == '\\' || c == '"') out += '\\';
+    out += c;
+  }
+  return out;
+}
+
+static void appendSdCardUploadForm(const String& currentPath) {
+  String jsPath = currentPath;
+  jsPath.replace("\\", "\\\\");
+  jsPath.replace("\"", "\\\"");
+
+  WEBHTML = WEBHTML + "<h3>Upload File or Folder</h3>";
+  WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>20 files</strong> (uploaded one at a time).</p>";
+  WEBHTML = WEBHTML + "<form id=\"sd-upload-form\" method=\"POST\" action=\"/SDCARD_UPLOAD?path=" + urlEncode(currentPath) + "\" enctype=\"multipart/form-data\">";
+  WEBHTML = WEBHTML + "<div id=\"sd-drop-zone\" style=\"border: 2px dashed #999; padding: 24px; margin: 10px 0; text-align: center; cursor: pointer; background-color: #fafafa;\">";
+  WEBHTML = WEBHTML + "Drag and drop a file or folder here";
+  WEBHTML = WEBHTML + "<input type=\"file\" name=\"upload\" id=\"sd-file-input\" style=\"display:none;\">";
+  WEBHTML = WEBHTML + "<input type=\"file\" id=\"sd-folder-input\" webkitdirectory directory multiple style=\"display:none;\">";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<p id=\"sd-upload-name\" style=\"color:#555;\"></p>";
+  WEBHTML = WEBHTML + "<button type=\"button\" id=\"sd-choose-file\" style=\"padding: 8px 16px; margin-right: 8px; background-color: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer;\">Choose File</button>";
+  WEBHTML = WEBHTML + "<button type=\"button\" id=\"sd-choose-folder\" style=\"padding: 8px 16px; margin-right: 8px; background-color: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer;\">Choose Folder</button>";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload File to SD Card\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "</form>";
+  WEBHTML = WEBHTML + "<script>\n";
+  WEBHTML = WEBHTML + "const SD_BASE_PATH = \"" + jsPath + "\";\n";
+  WEBHTML = WEBHTML + "const SD_MAX_FOLDER_FILES = 30;\n";
+  WEBHTML = WEBHTML + R"===(
+(function(){
+  const zone = document.getElementById('sd-drop-zone');
+  const input = document.getElementById('sd-file-input');
+  const folderInput = document.getElementById('sd-folder-input');
+  const label = document.getElementById('sd-upload-name');
+  const chooseFile = document.getElementById('sd-choose-file');
+  const chooseFolder = document.getElementById('sd-choose-folder');
+  if (!zone || !input || !folderInput) return;
+
+  function joinPath(base, sub) {
+    if (!sub) return base;
+    if (base === '/') return '/' + sub.replace(/^\/+/, '');
+    return base.replace(/\/+$/, '') + '/' + sub.replace(/^\/+/, '');
+  }
+
+  function showSelected(text) {
+    if (label) label.textContent = text;
+  }
+
+  function readDirectoryEntries(dirEntry, prefix) {
+    return new Promise(function(resolve, reject) {
+      const reader = dirEntry.createReader();
+      const entries = [];
+      function readBatch() {
+        reader.readEntries(function(batch) {
+          if (!batch.length) {
+            resolve(entries);
+            return;
+          }
+          entries.push.apply(entries, batch);
+          readBatch();
+        }, reject);
+      }
+      readBatch();
+    }).then(function(allEntries) {
+      const files = [];
+      const pending = [];
+      for (const entry of allEntries) {
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
+        if (entry.isFile) {
+          pending.push(new Promise(function(res, rej) {
+            entry.file(function(file) {
+              files.push({ file: file, relativePath: rel });
+              res();
+            }, rej);
+          }));
+        } else if (entry.isDirectory) {
+          pending.push(readDirectoryEntries(entry, rel).then(function(nested) {
+            files.push.apply(files, nested);
+          }));
+        }
+      }
+      return Promise.all(pending).then(function() { return files; });
+    });
+  }
+
+  async function uploadOneFile(file, targetDir) {
+    const fd = new FormData();
+    fd.append('upload', file, file.name);
+    const url = '/SDCARD_UPLOAD?path=' + encodeURIComponent(targetDir) + '&ajax=1';
+    const resp = await fetch(url, { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.msg || 'Upload failed');
+    }
+    return data.file || file.name;
+  }
+
+  async function uploadFolderFiles(fileEntries) {
+    if (!fileEntries.length) {
+      showSelected('No files found in folder.');
+      return;
+    }
+    if (fileEntries.length > SD_MAX_FOLDER_FILES) {
+      showSelected('Too many files (' + fileEntries.length + '). Maximum is ' + SD_MAX_FOLDER_FILES + '.');
+      return;
+    }
+
+    let ok = 0;
+    let fail = 0;
+    let lastError = '';
+    for (let i = 0; i < fileEntries.length; i++) {
+      const rel = (fileEntries[i].relativePath || fileEntries[i].file.name).replace(/\\/g, '/');
+      const parts = rel.split('/');
+      const fileName = parts.pop();
+      const subDir = parts.join('/');
+      const targetDir = joinPath(SD_BASE_PATH, subDir);
+      showSelected('Uploading ' + (i + 1) + '/' + fileEntries.length + ': ' + rel);
+      try {
+        const uploadFile = fileEntries[i].file;
+        await uploadOneFile(uploadFile, targetDir);
+        ok++;
+      } catch (err) {
+        fail++;
+        lastError = err.message || 'Upload failed';
+      }
+    }
+
+    let redirect = '/SDCARD?path=' + encodeURIComponent(SD_BASE_PATH);
+    if (fail === 0) {
+      redirect += '&upload=ok&msg=' + encodeURIComponent('Folder upload complete: ' + ok + ' file(s)');
+    } else {
+      redirect += '&upload=fail&msg=' + encodeURIComponent('Folder upload: ' + ok + ' ok, ' + fail + ' failed. ' + lastError);
+    }
+    window.location.href = redirect;
+  }
+
+  chooseFile.addEventListener('click', function(e) {
+    e.preventDefault();
+    input.click();
+  });
+  chooseFolder.addEventListener('click', function(e) {
+    e.preventDefault();
+    folderInput.click();
+  });
+  zone.addEventListener('click', function() { input.click(); });
+
+  zone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    zone.style.backgroundColor = '#eef6ff';
+  });
+  zone.addEventListener('dragleave', function() {
+    zone.style.backgroundColor = '#fafafa';
+  });
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    zone.style.backgroundColor = '#fafafa';
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+      const entry = items[0].webkitGetAsEntry();
+      if (entry && entry.isDirectory) {
+        showSelected('Reading folder: ' + entry.name + '...');
+        readDirectoryEntries(entry, entry.name).then(uploadFolderFiles).catch(function(err) {
+          showSelected('Folder read failed: ' + err.message);
+        });
+        return;
+      }
+    }
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      input.files = e.dataTransfer.files;
+      showSelected('Selected file: ' + e.dataTransfer.files[0].name);
+    }
+  });
+
+  input.addEventListener('change', function() {
+    if (input.files && input.files.length > 0) {
+      showSelected('Selected file: ' + input.files[0].name);
+    }
+  });
+
+  folderInput.addEventListener('change', function() {
+    if (!folderInput.files || folderInput.files.length === 0) return;
+    const entries = Array.from(folderInput.files).map(function(f) {
+      return { file: f, relativePath: f.webkitRelativePath || f.name };
+    });
+    uploadFolderFiles(entries);
+  });
+})();
+</script>)==="
+  ;
+}
+
+static File sdcardUploadFile;
+static String sdcardUploadTargetPath;
+static String sdcardUploadError;
+static size_t sdcardUploadBytesWritten = 0;
+static const size_t SDCARD_UPLOAD_MAX_BYTES = 8UL * 1024UL * 1024UL;
+
+void handleSDCARD_UPLOAD() {
+  registerHTTPMessage("SDUp");
+  String dir = "/";
+  if (server.hasArg("path")) dir = sanitizeSdBrowsePath(server.arg("path"));
+
+  bool ajax = server.hasArg("ajax");
+  String uploadError = sdcardUploadError;
+  size_t bytesWritten = sdcardUploadBytesWritten;
+  String targetPath = sdcardUploadTargetPath;
+
+  sdcardUploadError = "";
+  sdcardUploadBytesWritten = 0;
+  sdcardUploadTargetPath = "";
+
+  if (ajax) {
+    if (uploadError.length() > 0) {
+      server.send(500, "application/json", "{\"ok\":false,\"msg\":\"" + jsonEscape(uploadError) + "\"}");
+    } else if (bytesWritten > 0) {
+      server.send(200, "application/json", "{\"ok\":true,\"file\":\"" + jsonEscape(sdEntryBaseName(targetPath)) + "\"}");
+    } else {
+      server.send(500, "application/json", "{\"ok\":false,\"msg\":\"No file received\"}");
+    }
+    return;
+  }
+
+  String redirect = "/SDCARD?path=" + urlEncode(dir);
+  if (uploadError.length() > 0) {
+    redirect += "&upload=fail&msg=" + urlEncode(uploadError);
+  } else if (bytesWritten > 0) {
+    redirect += "&upload=ok&file=" + urlEncode(sdEntryBaseName(targetPath));
+  } else {
+    redirect += "&upload=fail&msg=" + urlEncode("No file received");
+  }
+
+  server.sendHeader("Location", redirect);
+  server.send(303, "text/plain", "");
+}
+
+void handleSDCARD_UPLOADFile() {
+  HTTPUpload& upload = server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    sdcardUploadError = "";
+    sdcardUploadBytesWritten = 0;
+    sdcardUploadTargetPath = "";
+    if (sdcardUploadFile) {
+      sdcardUploadFile.close();
+      sdcardUploadFile = File();
+    }
+
+    String dir = server.hasArg("path") ? sanitizeSdBrowsePath(server.arg("path")) : "/";
+    String fileName = sanitizeUploadFileName(upload.filename);
+    if (fileName.length() == 0) {
+      sdcardUploadError = "Invalid file name";
+      return;
+    }
+
+    sdcardUploadTargetPath = joinSdPath(dir, fileName);
+    if (!ensureSdDirExists(dir)) {
+      sdcardUploadError = "Could not create directory on SD card";
+      return;
+    }
+    SD.remove(sdcardUploadTargetPath.c_str());
+    sdcardUploadFile = SD.open(sdcardUploadTargetPath.c_str(), FILE_WRITE);
+    if (!sdcardUploadFile) {
+      sdcardUploadError = "Could not create file on SD card";
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (sdcardUploadError.length() > 0) return;
+    if (!sdcardUploadFile) {
+      sdcardUploadError = "File not open for writing";
+      return;
+    }
+    if (sdcardUploadBytesWritten + upload.currentSize > SDCARD_UPLOAD_MAX_BYTES) {
+      sdcardUploadError = "File exceeds 8 MB limit";
+      sdcardUploadFile.close();
+      sdcardUploadFile = File();
+      SD.remove(sdcardUploadTargetPath.c_str());
+      return;
+    }
+    size_t written = sdcardUploadFile.write(upload.buf, upload.currentSize);
+    sdcardUploadBytesWritten += written;
+    if (written != upload.currentSize) {
+      sdcardUploadError = "SD write failed";
+      sdcardUploadFile.close();
+      sdcardUploadFile = File();
+      SD.remove(sdcardUploadTargetPath.c_str());
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (sdcardUploadFile) {
+      sdcardUploadFile.close();
+      sdcardUploadFile = File();
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    if (sdcardUploadFile) {
+      sdcardUploadFile.close();
+      sdcardUploadFile = File();
+    }
+    if (sdcardUploadTargetPath.length() > 0) SD.remove(sdcardUploadTargetPath.c_str());
+    sdcardUploadError = "Upload aborted";
+  }
+}
+
 static void appendSdCardDirectoryListing(const String& currentPath) {
   const int MAX_ENTRIES = 64;
   String dirNames[MAX_ENTRIES];
@@ -4197,8 +4521,8 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
   if (parentPath.length() > 0) {
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(parentPath) + "\">..</a>";
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
   }
 
@@ -4207,6 +4531,7 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
     WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #c00;\">Could not open directory</td></tr>";
     WEBHTML = WEBHTML + "</table>";
     if (dir) dir.close();
+    appendSdCardUploadForm(currentPath);
     return;
   }
 
@@ -4245,8 +4570,8 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
     String childPath = joinSdPath(currentPath, dirNames[i]);
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(childPath) + "\">" + dirNames[i] + "/</a>";
-    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">—</td>";
+    WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
   }
 
@@ -4277,6 +4602,7 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
 
   WEBHTML = WEBHTML + "</table>";
   WEBHTML = WEBHTML + "<p><strong>Directories:</strong> " + String(dirCount) + ", <strong>Files:</strong> " + String(fileCount) + "</p>";
+  appendSdCardUploadForm(currentPath);
 }
 #endif
 
@@ -4454,6 +4780,17 @@ void handleSDCARD() {
   String browsePath = "/";
   if (server.hasArg("path")) {
     browsePath = sanitizeSdBrowsePath(server.arg("path"));
+  }
+  if (server.hasArg("upload")) {
+    if (server.arg("upload") == "ok") {
+      if (server.hasArg("msg")) {
+        WEBHTML = WEBHTML + "<p style=\"color: #2e7d32; font-weight: bold;\">" + server.arg("msg") + "</p>";
+      } else {
+        WEBHTML = WEBHTML + "<p style=\"color: #2e7d32; font-weight: bold;\">Upload successful: " + server.arg("file") + "</p>";
+      }
+    } else if (server.hasArg("msg")) {
+      WEBHTML = WEBHTML + "<p style=\"color: #c62828; font-weight: bold;\">Upload failed: " + server.arg("msg") + "</p>";
+    }
   }
   appendSdCardDirectoryListing(browsePath);
 
@@ -5416,6 +5753,7 @@ void setupServerRoutes() {
     
     // SD Card routes
     server.on("/SDCARD", HTTP_GET, handleSDCARD);
+    server.on("/SDCARD_UPLOAD", HTTP_POST, handleSDCARD_UPLOAD, handleSDCARD_UPLOADFile);
     server.on("/SDCARD_DELETE_DEVICES", HTTP_POST, handleSDCARD_DELETE_DEVICES);
     server.on("/SDCARD_DELETE_SENSORS", HTTP_POST, handleSDCARD_DELETE_SENSORS);
     server.on("/SDCARD_STORE_DEVICES", HTTP_POST, handleSDCARD_STORE_DEVICES);

@@ -921,6 +921,7 @@ bool WeatherInfoOptimized::nameWeatherIcon(uint16_t icon, char* weathername) {
         case 603: strcpy(weathername, "Blizzard"); return true;
         case 611: strcpy(weathername, "Freezing Rain"); return true;
         case 701: strcpy(weathername, "Cold"); return true;
+        case 702: strcpy(weathername, "Hot"); return true;
         case 741: strcpy(weathername, "Fog"); return true;
         case 761: strcpy(weathername, "Dust"); return true;
         case 800: strcpy(weathername, "Clear"); return true;

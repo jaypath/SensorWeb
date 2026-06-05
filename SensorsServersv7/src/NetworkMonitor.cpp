@@ -18,6 +18,15 @@ IPAddress MULTICAST_TARGET_GROUP = IPAddress(_USEUDP_MULTICAST);
 
 NetworkMonitor_type NetworkMonitor;
 
+//network monitor elements:
+//0 - IGMP membership
+//1 - Low RSSI
+//2 - BSSID changes
+//3 - Local IP changes
+//4 - DNS resolution time
+//5 - Tx failures
+//6 - Gateway latency
+
 void NetworkMonitor_type::init() {
     oldIP = WiFi.localIP();
     oldBSSID = 0;

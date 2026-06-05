@@ -228,6 +228,8 @@ void handleREBOOT_DEBUG();
 void handleSDCARD_DELETE_ERRORLOG();
 void handleSDCARD_DELETE_TIMESTAMPS();
 void handleSDCARD_DELETE_GSHEET();
+void handleSDCARD_UPLOAD();
+void handleSDCARD_UPLOADFile();
 void handleDeviceViewer();
 void handleDeviceViewerNext();
 void handleDeviceViewerPrev();

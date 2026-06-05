@@ -81,10 +81,20 @@ void fcnDrawHeaderInfo(int16_t index);
 void fcnDrawClock(int16_t index);
 void fcnDrawCurrentWeatherText(int16_t index);
 void fcnDrawCurrentWeatherIconOrAlert(int16_t index);
-bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool useAlerts);
-bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts);
+bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool useAlerts = false, uint8_t daysfromnow = 0);
+bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts = false, uint8_t daysfromnow = 0);
+void fcnDrawValuePlot(int16_t plotX, int16_t plotY, int16_t plotW, int16_t plotH,
+  const int8_t *values, uint8_t count, int16_t yMin, int16_t yMax,
+  uint16_t lineColor, bool colorDotsByValue, uint8_t lineWidth = 1);
+void fcnTouchWeatherForecast(int16_t index);
+void fcnTouchDailyDetailNav(int16_t index);
 void fcnDrawHourlyWeather(int16_t index);
 void fcnDrawDailyWeather(int16_t index);
+void fcnDrawDailyDetailScreen(int16_t index);
+void fcnDrawDailyDetailIcon(int16_t index);
+void fcnDrawDailyDetailText(int16_t index);
+void fcnDrawDailyDetailPlots(int16_t index);
+void fcnDrawDailyDetailNavBar(int16_t index);
 void fcnDrawSensorScreen(int16_t index);
 void fcnConvertTouchToSensorSubscreen(int16_t index);
 void fcnDrawSensorDelSnsConfirm(int16_t index);
@@ -320,6 +330,10 @@ extern LGFX tft;
 
     void initRemainingScreenElements(byte elementStart) {
       for (int i=elementStart; i<MAXSCREENELEMENTS; i++) SCREEN_DATA[i].initScreenElement();      
+    }
+
+    void zeroChildTimers() {
+      for (int i = 1; i < 10; i++) GRAPHICS_TIMERS.Timers[i] = 0;
     }
    
   };

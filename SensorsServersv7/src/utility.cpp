@@ -32,6 +32,12 @@ void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
 
+  static bool rebootCountedThisBoot = false;
+  if (!rebootCountedThisBoot) {
+    if (I.rebootsToday < 255) I.rebootsToday++;
+    rebootCountedThisBoot = true;
+  }
+
   if (fullHousekeeping) {
     I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
 
@@ -43,14 +49,14 @@ void systemHousekeeping(bool fullHousekeeping) {
       SerialPrint("CRITICAL: Low memory detected, restarting system", true);
       storeError("CRITICAL: Low memory detected, restarting system", ERROR_HARDWARE_MEMORY,true);
       delay(1000);
-      ESP.restart();
+      controlledReboot("Low memory detected, restarting system", RESET_MEMORY_LOW, true);
     }
     
     // If minimum free heap is very low, log warning
     if (minFreeHeap < 5000) { // Less than 5KB minimum
       SerialPrint("WARNING: Memory fragmentation detected", true);
       storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
-      ESP.restart();
+      controlledReboot("Memory fragmentation detected, restarting system", RESET_MEMORY_FRAGMENTED, true);
     }
 
 
@@ -626,7 +632,7 @@ void handleStoreCoreData() {
 
 void initScreenFlags(bool completeInit) {
   if (completeInit) {
-      I.rebootsSinceLast=0;
+      I.rebootsToday=0;
       I.wifiFailCount=0;
       I.currentTime=0;
 
@@ -1150,8 +1156,6 @@ void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   storeError(E);
   I.resetInfo = R;
   I.lastResetTime = I.currentTime;
-  I.rebootsSinceLast++;
-
 
   storeCoreData();
   

@@ -55,7 +55,9 @@ typedef enum {
   RESET_WIFI, //no wifi so reset
   RESET_TIME, //time based reset 
   RESET_UNKNOWN, //unexpected reboot/crash detected
-  RESET_NEWWIFI //new wifi credentials
+  RESET_NEWWIFI, //new wifi credentials
+  RESET_MEMORY_LOW, //memory low
+  RESET_MEMORY_FRAGMENTED, //memory fragmented
   } RESETCAUSE;
 
   
@@ -221,7 +223,7 @@ typedef enum {
       bool isUpToDate;  // Core has been saved to memory
       RESETCAUSE resetInfo;
       time_t lastResetTime;
-      byte rebootsSinceLast=0;
+      byte rebootsToday=0;
       time_t ALIVESINCE;
       uint8_t wifiFailCount;
       time_t wifiDownSince;

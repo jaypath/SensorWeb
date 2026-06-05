@@ -256,8 +256,13 @@ void setup() {
         tftPrint("Current UTC time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
         tftPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
         SerialPrint("Current UTC time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
-    SerialPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")),true);
+        SerialPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")),true);
         I.ALIVESINCE = I.currentTime;
+        // Align day/hour/minute trackers so the first loop() pass does not run a false midnight rollover reset
+        OldTime[3] = weekday();
+        OldTime[2] = hour();
+        OldTime[1] = minute();
+        OldTime[0] = I.currentSecond;
     }
     
     // Check for unexpected reboot by comparing previous ALIVESINCE with current time
@@ -580,10 +585,12 @@ void loop() {
         I.UDP_OUTGOING_ERRORS = 0;
         I.HTTP_INCOMING_ERRORS = 0;
         I.HTTP_OUTGOING_ERRORS = 0;
+        I.rebootsToday = 0;
 
         #ifdef _REBOOTDAILY
         SerialPrint("Rebooting daily...",true);
-        ESP.restart();
+        //ESP.restart();
+        controlledReboot("Daily reboot", RESET_DEFAULT);
         #endif
 
         #ifdef _ISPERIPHERAL
