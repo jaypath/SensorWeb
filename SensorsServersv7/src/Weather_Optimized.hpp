@@ -16,10 +16,65 @@
 #endif
 
 
-#define NUMWTHRDAYS 5
+#define NUMWTHRDAYS 6
+#define NUM_HOURLY (NUMWTHRDAYS * 24)
+#define NUM_PERIODS (NUMWTHRDAYS * 2)
 #define WEATHER_CACHE_SIZE 3
 #define MAX_RETRY_ATTEMPTS 3
+#define WEATHER_HTTP_TIMEOUT_MS 60000
+#define WEATHER_HTTP_TIMEOUT_SHORT_MS 30000
+#define WEATHER_STORE_VERSION 3
+#define WEATHER_INVALID_TEMP -120
+#define WEATHER_UNKNOWN_ID 999
 //#define PARALLEL_REQUESTS_ENABLED 1
+
+struct HourlySlot {
+    int8_t temperature = WEATHER_INVALID_TEMP;
+    int8_t humidity = 0;
+    int8_t PoP = 0;
+    int8_t dewPoint = WEATHER_INVALID_TEMP;
+    int16_t weatherID = WEATHER_UNKNOWN_ID;
+    int16_t windSpeed = WEATHER_INVALID_TEMP;
+    int8_t wetBulb = WEATHER_INVALID_TEMP;
+    int16_t rainMm = WEATHER_INVALID_TEMP;
+    int16_t iceMm = WEATHER_INVALID_TEMP;
+    int16_t snowMm = WEATHER_INVALID_TEMP;
+
+    void invalidate() {
+        temperature = WEATHER_INVALID_TEMP;
+        humidity = 0;
+        PoP = 0;
+        dewPoint = WEATHER_INVALID_TEMP;
+        weatherID = WEATHER_UNKNOWN_ID;
+        windSpeed = WEATHER_INVALID_TEMP;
+        wetBulb = WEATHER_INVALID_TEMP;
+        rainMm = WEATHER_INVALID_TEMP;
+        iceMm = WEATHER_INVALID_TEMP;
+        snowMm = WEATHER_INVALID_TEMP;
+    }
+
+    bool isValid() const { return temperature != WEATHER_INVALID_TEMP; }
+};
+
+struct DailyPeriodSlot {
+    uint32_t start = 0;
+    uint32_t end = 0;
+    int8_t temp = WEATHER_INVALID_TEMP;
+    int16_t weatherID = WEATHER_UNKNOWN_ID;
+    uint8_t PoP = 0;
+    bool isDaytime = false;
+
+    void invalidate() {
+        start = 0;
+        end = 0;
+        temp = WEATHER_INVALID_TEMP;
+        weatherID = WEATHER_UNKNOWN_ID;
+        PoP = 0;
+        isDaytime = false;
+    }
+
+    bool isValid() const { return start != 0; }
+};
 
 
 /*
@@ -205,29 +260,18 @@ struct WeatherEventFile {
 // Optimized WeatherInfo class - maintains same interface as original
 class WeatherInfoOptimized {
 private:
-    // Core data arrays (same as original WeatherInfo)
-    uint32_t dT[NUMWTHRDAYS*24] = {0};
-    int8_t temperature[NUMWTHRDAYS*24] = {0};
-    int8_t humidity[NUMWTHRDAYS*24] = {0};
-    int16_t weatherID[NUMWTHRDAYS*24] = {0};
-    int8_t PoP[NUMWTHRDAYS*24] = {0};
-    int8_t dewPoint[NUMWTHRDAYS*24] = {0};
-    int16_t windspeed[NUMWTHRDAYS*24] = {0};
-    int8_t wetBulbTemperature[NUMWTHRDAYS*24] = {0};
-    int16_t rainmm[NUMWTHRDAYS*24] = {0};
-    int16_t icemm[NUMWTHRDAYS*24] = {0};
-    int16_t snowmm[NUMWTHRDAYS*24] = {0};
+    uint32_t hourBase = 0;
+    HourlySlot hourly[NUM_HOURLY];
 
-    uint32_t daily_dT[14] = {0};
-    int8_t daily_tempMax[14] = {0};
-    int8_t daily_tempMin[14] = {0};
-    int16_t daily_weatherID[14] = {0};
-    uint8_t daily_PoP[14] = {0};
+    uint32_t periodBaseStart = 0;
+    int32_t periodAnchorDayOffset = 0;
+    bool periodBaseIsDaytime = true;
+    uint8_t firstFilledPeriod = 0;
+    DailyPeriodSlot periods[NUM_PERIODS];
+
     char Grid_id[10] = "";
     int16_t Grid_x = 0;
     int16_t Grid_y = 0;
-    uint8_t tomorrowPeriodNumber = 0; //in a noaa forecast, this is the "period" or "number" for tomorrow daytime (it is 2 if we checked weather at night, because 1 is "tonight" and 2 is "tomorrow day", it is 3 if this weather report was checked during the day (1 is "today day", 2 is "today night", 3 is "tomorrow day", 4 is "tomorrow night", etc,))
-    bool isDaytime = false; //is it currently a day period or night period? This can be used to determine offset to future periods.
 
     // Optimization features
     //WeatherResult weatherResult; //memory storage for json trees
@@ -244,9 +288,23 @@ private:
     uint32_t failed_api_calls;
     uint32_t average_response_time;
     
+    // Per-domain init (full reset via initWeather() only)
+    void initHourlyForecastData();
+    void initHourlyGridData();
+    void initDailyPeriodData();
+    void initSunTimes();
+
     // Helper methods
     void initAlertInfo();
-    int16_t getIndex(time_t dT = 0);
+    static uint32_t localMidnightToday();
+    static int32_t nwsDayOffsetFromMidnight(time_t t);
+    static time_t floorToHour(time_t t);
+    void ensureHourBaseFromTimestamp(time_t t);
+    bool isHourlyValid() const { return hourBase != 0; }
+    int16_t hourSlot(time_t targetTime) const;
+    time_t hourTime(int16_t slot) const;
+    int16_t periodSlotForDayDiff(int32_t dayDiff, bool wantDaytime) const;
+    void setupPeriodAnchor(time_t firstPeriodStart, bool firstIsDaytime);
     bool fetchGridCoordinates();
     bool fetchGridCoordinatesHelper();
     bool fetchHourlyForecast();
@@ -266,8 +324,9 @@ private:
     bool processHourlyData(JsonObject& properties);
     bool processGridData(JsonObject& properties);
     bool processDailyData(JsonObject& properties);
-    void processPrecipitationData(JsonObject& properties, const char* field_name, 
-                                 int16_t* data_array, bool& flag);
+    enum class PrecipField : uint8_t { Rain, Ice, Snow };
+    void processPrecipitationData(JsonObject& properties, const char* field_name,
+                                 PrecipField field, bool& flag);
     
     // Error handling and recovery
     bool handleApiError(const String& operation, int httpCode);
@@ -292,6 +351,7 @@ public:
     uint32_t lastUpdateT = 0;
     uint32_t lastUpdateAttempt = 0;
     uint32_t lastUpdateError = 0;
+    uint32_t fetchedAt = 0;
     uint32_t sunrise;
     uint32_t sunset;
     bool flag_rain;
@@ -317,9 +377,12 @@ public:
     int8_t getDewPoint(uint32_t dt);
     int16_t getWindSpeed(uint32_t dt);
 
-    int16_t getDailyWeatherID(uint8_t intsfromnow, bool indays=false);
+    int16_t getHourSlot(time_t t) const { return hourSlot(t); }
+    int16_t getPeriodSlotForDaysFromToday(uint8_t daysfromnow, bool wantDaytime) const;
+
+    int16_t getDailyWeatherID(uint8_t daysfromnow, bool indays=false);
     void getDailyTemp(uint8_t daysfromnow, int8_t* temp);
-    uint8_t getDailyPoP(uint8_t intsfromnow, bool indays=false);
+    uint8_t getDailyPoP(uint8_t daysfromnow, bool indays=false);
     uint16_t getDailyRain(uint8_t daysfromnow);
     uint16_t getDailyRain(uint32_t starttime, uint32_t endtime);
     uint16_t getDailySnow(uint8_t daysfromnow);
@@ -336,7 +399,7 @@ public:
     bool initWeather();
     
     // New optimization methods
-    byte updateWeatherOptimized(uint16_t synctime = 3600);
+    byte updateWeatherOptimized(uint16_t synctime = 3600, bool setupProgress = false);
     void getPerformanceStats(uint32_t& total_calls, uint32_t& failed_calls, uint32_t& avg_response_time);
     bool clearCache();
     bool isCacheValid();

@@ -5,7 +5,7 @@
 #include "LEDGraphics.hpp"
 #include "Devices.hpp"
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 

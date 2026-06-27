@@ -9,134 +9,6 @@
 #include "Devices.hpp"
 #include "GsheetUpload.hpp"
 
-// ESP32 VFS timestamp functions
-#ifdef ESP32
-#include <sys/stat.h>
-#include <sys/time.h>
-#endif
-
-
-
-// Function to maintain a timestamp index file
-void updateTimestampIndex(const char* filename) {
-    String indexFilename = "/Data/FileTimestamps.dat";
-    String newEntry = String(filename) + "," + String(I.currentTime) + "\n";
-    
-    // First, check if the file already exists in the index
-    File indexFile = SD.open(indexFilename, FILE_READ);
-    if (indexFile) {
-        String content = "";
-        while (indexFile.available()) {
-            content += indexFile.readString();
-        }
-        indexFile.close();
-        
-        // Check if filename already exists in the index
-        bool fileExists = false;
-        String newContent = "";
-        int lineStart = 0;
-        int lineEnd = content.indexOf('\n');
-        
-        while (lineEnd >= 0) {
-            String line = content.substring(lineStart, lineEnd);
-            line.trim();
-            
-            if (line.length() > 0) {
-                int commaPos = line.indexOf(',');
-                if (commaPos > 0) {
-                    String fileInIndex = line.substring(0, commaPos);
-                    if (fileInIndex == String(filename)) {
-                        // File exists, update the timestamp
-                        newContent += newEntry;
-                        fileExists = true;
-                    } else {
-                        // Keep the existing line unchanged
-                        newContent += line + "\n";
-                    }
-                }
-            }
-            
-            lineStart = lineEnd + 1;
-            lineEnd = content.indexOf('\n', lineStart);
-        }
-        
-        // If file wasn't found, add it as a new entry
-        if (!fileExists) {
-            newContent += newEntry;
-        }
-        
-        // Write the updated content back to the index file
-        File newIndexFile = SD.open(indexFilename, FILE_WRITE);
-        if (newIndexFile) {
-            newIndexFile.print(newContent);
-            newIndexFile.close();
-            SerialPrint("Updated timestamp index for: " + String(filename) + " at " + dateify(I.currentTime), true);
-        } else {
-            SerialPrint("Failed to update timestamp index for: " + String(filename), true);
-        }
-    } else {
-        // Index file doesn't exist, create it with the new entry
-        File newIndexFile = SD.open(indexFilename, FILE_WRITE);
-        if (newIndexFile) {
-            newIndexFile.print(newEntry);
-            newIndexFile.close();
-            SerialPrint("Created timestamp index with: " + String(filename) + " at " + dateify(I.currentTime), true);
-        } else {
-            SerialPrint("Failed to create timestamp index for: " + String(filename), true);
-        }
-    }
-}
-
-// Function to remove a file from the timestamp index
-void removeFromTimestampIndex(const char* filename) {
-    String indexFilename = "/Data/FileTimestamps.dat";
-    
-    // Read the current index file
-    File indexFile = SD.open(indexFilename, FILE_READ);
-    if (!indexFile) {
-        // Index file doesn't exist, nothing to remove
-        return;
-    }
-    
-    String content = "";
-    while (indexFile.available()) {
-        content += indexFile.readString();
-    }
-    indexFile.close();
-    
-    // Parse and filter out the deleted file
-    String newContent = "";
-    int lineStart = 0;
-    int lineEnd = content.indexOf('\n');
-    
-    while (lineEnd >= 0) {
-        String line = content.substring(lineStart, lineEnd);
-        line.trim();
-        
-        if (line.length() > 0) {
-            int commaPos = line.indexOf(',');
-            if (commaPos > 0) {
-                String fileInIndex = line.substring(0, commaPos);
-                // Only keep lines that don't match the deleted filename
-                if (fileInIndex != String(filename)) {
-                    newContent += line + "\n";
-                }
-            }
-        }
-        
-        lineStart = lineEnd + 1;
-        lineEnd = content.indexOf('\n', lineStart);
-    }
-    
-    // Write the filtered content back to the index file
-    File newIndexFile = SD.open(indexFilename, FILE_WRITE);
-    if (newIndexFile) {
-        newIndexFile.print(newContent);
-        newIndexFile.close();
-        SerialPrint("Removed from timestamp index: " + String(filename), true);
-    }
-}
-
 #ifdef _USEWEATHER
 #include "Weather_Optimized.hpp"
 
@@ -151,11 +23,12 @@ bool storeWeatherDataSD() {
     return false;
   }
 
+  uint32_t version = WEATHER_STORE_VERSION;
+  uint32_t payloadSize = sizeof(WeatherData);
+  f.write((uint8_t*)&version, sizeof(version));
+  f.write((uint8_t*)&payloadSize, sizeof(payloadSize));
   f.write((uint8_t*)&WeatherData, sizeof(WeatherData));
   f.close();
-  
-  // Update the timestamp index file
-  updateTimestampIndex(filename.c_str());
   
   return true;
 }
@@ -168,13 +41,27 @@ bool readWeatherDataSD() {
     storeError("readWeatherDataSD: Could not open /Data/WeatherData.dat",ERROR_SD_WEATHERDATAREAD);
     return false;
   }
-  if (f.size() != sizeof(WeatherData)) {
+
+  uint32_t version = 0;
+  uint32_t payloadSize = 0;
+  if (f.size() < (int)(sizeof(version) + sizeof(payloadSize) + sizeof(WeatherData))) {
     storeError("readWeatherDataSD: File size mismatch",ERROR_SD_WEATHERDATASIZE);
     f.close();
     SerialPrint("readWeatherDataSD: File size mismatch, deleting file: " + filename,true);
     deleteFiles("WeatherData.dat","/Data");
     return false;
   }
+
+  f.read((uint8_t*)&version, sizeof(version));
+  f.read((uint8_t*)&payloadSize, sizeof(payloadSize));
+  if (version != WEATHER_STORE_VERSION || payloadSize != sizeof(WeatherData)) {
+    storeError("readWeatherDataSD: File version mismatch",ERROR_SD_WEATHERDATASIZE);
+    f.close();
+    SerialPrint("readWeatherDataSD: File version mismatch, deleting file: " + filename,true);
+    deleteFiles("WeatherData.dat","/Data");
+    return false;
+  }
+
   f.read((uint8_t*)&WeatherData, sizeof(WeatherData));
   f.close();
   return true;
@@ -460,9 +347,6 @@ bool storeDevicesSensorsSD() {
     f.close();
     
     
-    // Update the timestamp index file
-    updateTimestampIndex(filename.c_str());
-    
     return true;
 }
 
@@ -485,8 +369,14 @@ bool readDevicesSensorsSD() {
     }
 
     // Read the entire Devices_Sensors object
-    f.read((uint8_t*)&Sensors, sizeof(Devices_Sensors));
+    size_t bytesRead = f.read((uint8_t*)&Sensors, sizeof(Devices_Sensors));
     f.close();
+    if (bytesRead != sizeof(Devices_Sensors)) {
+        storeError("readDevicesSensorsSD: Incomplete read", ERROR_SD_DEVICESENSORSOPEN);
+        SerialPrint("readDevicesSensorsSD: Incomplete read (" + String(bytesRead) + " of " + String(sizeof(Devices_Sensors)) + " bytes)", true);
+        return false;
+    }
+    SerialPrint("readDevicesSensorsSD: loaded " + String(Sensors.getNumDevices()) + " devices, " + String(Sensors.getNumSensors()) + " sensors", true);
     return true;
 }
 
@@ -553,9 +443,6 @@ bool storeScreenInfoSD() {
 
     f.close();
     
-    
-    // Update the timestamp index file
-    updateTimestampIndex(filename.c_str());
     
     return true;
     
@@ -677,9 +564,6 @@ bool storeSensorDataSD(int16_t sensorIndex) {
     
     file.close();
     
-    
-    // Update the timestamp index file
-    updateTimestampIndex(filename.c_str());
     
     //SerialPrint((String) "StoreSensorDataSD: Stored sensor data from " + (String) sensor->snsName + " with sensor index " + (String) sensorIndex + " and associated device MAC " + (String) Sensors.getDeviceMACBySnsIndex(sensorIndex) + " to " +  filename + " with time " + (String) sensor->timeLogged,true);
     return true;
@@ -856,8 +740,6 @@ uint16_t deleteFiles(const char* pattern,const char* directory) {
         SerialPrint("Error deleting: " + filename + "\n");
         storeError(((String) "Error deleting: " + filename).c_str(), ERROR_SD_FILEDEL);
       } else {
-        // Remove the deleted file from the timestamp index
-        removeFromTimestampIndex(filename.c_str());
         nDeleted++;
       }
     } 
@@ -880,9 +762,8 @@ uint16_t deleteSensorDataSD() {
       File file = root.openNextFile();
       while (file) {
         String filename = file.name();
-        if (filename.endsWith(".dat") && filename != "ScreenFlags.dat" && filename != "SensorBackupv2.dat" && filename != "GsheetInfo.dat" && filename != "FileTimestamps.dat" && filename != "WeatherData.dat" && filename != "DevicesSensors.dat") {
+        if (filename.endsWith(".dat") && filename != "ScreenFlags.dat" && filename != "SensorBackupv2.dat" && filename != "GsheetInfo.dat" && filename != "WeatherData.dat" && filename != "DevicesSensors.dat") {
           if (SD.remove("/Data/" + filename)) {
-            removeFromTimestampIndex(filename.c_str());
             deletedCount++;
           }
         }
@@ -1020,6 +901,76 @@ bool FileOrDirectoryExists(const char* filename) {
   return SD.exists(filename);
 }
 
+static String sdJoinPath(const String& base, const String& name) {
+  if (base == "/") return "/" + name;
+  if (base.endsWith("/")) return base + name;
+  return base + "/" + name;
+}
+
+static String sdEntryBaseName(const String& entryName) {
+  int slash = entryName.lastIndexOf('/');
+  if (slash >= 0 && slash < (int)entryName.length() - 1) return entryName.substring(slash + 1);
+  return entryName;
+}
+
+bool sdDirectoryIsProtected(const char* path) {
+  if (path == nullptr || path[0] != '/') return true;
+  String p = String(path);
+  p.toLowerCase();
+  if (p.length() > 1 && p.endsWith("/")) p.remove(p.length() - 1);
+  if (p == "/") return true;
+  // /Firmware root only — files and subfolders inside may be uploaded/deleted via the SD browser
+  if (p == "/firmware") return true;
+  static const char* roots[] = {"/icons", "/data", "/system volume information"};
+  for (unsigned int i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+    String root = roots[i];
+    if (p == root || p.startsWith(root + "/")) return true;
+  }
+  return false;
+}
+
+bool sdDeleteFile(const char* path) {
+  if (path == nullptr || path[0] != '/') return false;
+  if (!SD.exists(path)) return false;
+  File f = SD.open(path);
+  if (!f) return false;
+  if (f.isDirectory()) {
+    f.close();
+    return false;
+  }
+  f.close();
+  if (!SD.remove(path)) return false;
+  return true;
+}
+
+bool sdRemoveDirectoryRecursive(const char* path) {
+  if (path == nullptr || sdDirectoryIsProtected(path)) return false;
+
+  File entry = SD.open(path);
+  if (!entry) return false;
+
+  if (!entry.isDirectory()) {
+    entry.close();
+    if (!SD.remove(path)) return false;
+    return true;
+  }
+
+  String dirPath = path;
+  while (true) {
+    File child = entry.openNextFile();
+    if (!child) break;
+    String childPath = sdJoinPath(dirPath, sdEntryBaseName(child.name()));
+    child.close();
+    if (!sdRemoveDirectoryRecursive(childPath.c_str())) {
+      entry.close();
+      return false;
+    }
+    esp_task_wdt_reset();
+  }
+  entry.close();
+  return SD.rmdir(path);
+}
+
 
 #ifdef _USEGSHEET
 extern STRUCT_GOOGLESHEET GSheetInfo;
@@ -1037,9 +988,6 @@ bool storeGsheetInfoSD() {
     f.write((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
     f.close();
     
-    
-    // Update the timestamp index file
-    updateTimestampIndex(filename.c_str());
     
     return true;
 }

@@ -53,6 +53,7 @@
 
 
 #include "globals.hpp"
+#include "firmwareUpdate.hpp"
 #include <esp_task_wdt.h>
 
 #ifdef _USELOWPOWER
@@ -60,14 +61,16 @@
 #endif
 
 #ifdef _USENETWORKMONITOR
+#if _USENETWORKMONITOR > 0
 #include "NetworkMonitor.hpp"
+#endif
 #endif
 
 #ifdef _USETFT
 extern LGFX tft;
 #endif
 
-#if defined(_ISPERIPHERAL) && !defined(_USELOWPOWER)
+#if _HAS_LOCAL_SENSORS && !defined(_USELOWPOWER)
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
@@ -111,9 +114,10 @@ void initOTA() {
     tftPrint("Connecting ArduinoOTA... ", false);
     ArduinoOTA.setHostname("WeatherStation");
     ArduinoOTA.setPassword("12345678");
-    #ifdef _USETFT
     ArduinoOTA.onStart([]() { 
+        #ifdef _USETFT
         displayOTAProgress(0, 100); 
+        #endif
         #ifdef _USELED
         // Set all LEDs to green to indicate OTA start
         for (byte j = 0; j < _USELED_SIZE; j++) {
@@ -126,8 +130,10 @@ void initOTA() {
     });
 
     ArduinoOTA.onEnd([]() {     
+        #ifdef _USETFT
         tft.setTextSize(1); 
         displayOTAProgress(100, 100);
+        #endif
         tftPrint("OTA End.\nRebooting.", true, TFT_GREEN, 4, 1, false, 0, 200);
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
@@ -142,7 +148,7 @@ void initOTA() {
         #ifdef _USESSD1306
           if ((int)(progress) % 10 == 0) oled.print(".");   
         #endif
-        #ifdef _DONNOTUSE
+        #ifdef _USELED
           // Show OTA progress on LEDs as a filling bar
           if (progress%10==0) {
             for (byte j = 0; j < _USELED_SIZE; j++) {
@@ -158,7 +164,10 @@ void initOTA() {
   
     
     
+    #ifdef _USETFT
     ArduinoOTA.onError([](ota_error_t error) { displayOTAError(error); });
+    #else
+    ArduinoOTA.onError([](ota_error_t error) { SerialPrint("OTA error: " + String((int)error), true); });
     #endif
     ArduinoOTA.begin();
 
@@ -203,14 +212,14 @@ void setup() {
     esp_task_wdt_add(NULL);
 
 
-    #ifdef _ISPERIPHERAL
+    #if _HAS_LOCAL_SENSORS
     // Peripherals have no TFT and minimal HTTP; avoid reserving 20KB to reduce heap pressure and fragmentation
     WEBHTML.reserve(2048);
     #else
     WEBHTML.reserve(20000);
     #endif
 
-    initSystem(); //among other things, loads the Prefs struct
+    if (!initSystem()) return;
 
     initSensor(-256); //clear all sensors
 
@@ -221,29 +230,24 @@ void setup() {
     tftPrint("Serial disabled.", true);
     #endif
 
-
     #ifdef _USESDCARD
-    int8_t sdResult = initSDCard();
-    if (sdResult==0) return;
-    if (sdResult==-1) {
-        tftPrint("SD Card not supported", true, TFT_RED, 2, 1, true, 0, 0);
-    } else {
-        loadScreenFlags(); //load the screen flags from the SD card
-        loadSensorData(); //load the sensor data from the SD card
-    }
+    loadScreenFlags(); //load the screen flags from the SD card
+    // Devices/sensors are loaded in initSystem() immediately after SD mount, before registration/IP sync can overwrite DevicesSensors.dat
     #endif //_USESDCARD
 
 
     tftPrint("Set up time... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-    #ifdef _USETFT
     if (setupTime()) {
         displaySetupProgress( true);
     } else {
         displaySetupProgress( false);
     }
-    #endif
-    delay(100);
     
+    #ifdef _USESDCARD
+    //do this after time has been set
+    if (I.rebootsToday < 255) I.rebootsToday++;
+    logSystemEvent("System Booted", EVENT_BOOT_COMPLETE);
+    #endif
 
     initOTA();
 
@@ -289,7 +293,7 @@ void setup() {
         // This is likely the first boot, set initial values
         I.resetInfo = RESET_DEFAULT;
         I.lastResetTime = I.currentTime;
-        #ifndef _ISPERIPHERAL
+        #if _IS_SERVER_HUB
         SerialPrint("First boot detected, setting initial reset info", true);
         #endif
     }
@@ -297,8 +301,12 @@ void setup() {
     
 
 
-    #ifdef _ISPERIPHERAL
+    #if _HAS_LOCAL_SENSORS
     initHardwareSensors(); //initialize the hardware sensors
+    #endif
+
+    #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
+    NetworkMonitor.init(); // hub-only; hybrid/local-sensor path calls init() from setupSensors()
     #endif
     
     #ifdef _USELED
@@ -310,27 +318,41 @@ void setup() {
     setupTFLuna();
     #endif
 
+    #if defined(_USESDCARD) && !defined(_USELOWPOWER)
+    checkAndApplySDFirmwareOnBoot();
+    #endif
 
     #ifdef _USEWEATHER
+    tft.clear();
+    tft.setCursor(0,0);
+
         tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
+        esp_task_wdt_reset();
     //load weather data from SD card
         if (readWeatherDataSD()) {
         
-            if (WeatherData.updateWeatherOptimized(3600)>0) {
+            if (WeatherData.updateWeatherOptimized(3600, true)>0) {
                 SerialPrint("Weather data loaded from SD card",true);
                 tftPrint("Weather data on SD card ok.", true, TFT_GREEN);
             } else {
-                SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);
+                SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);                
+                tftPrint("Expired.", true, TFT_YELLOW);                
                 tftPrint("Weather data on SD card stale.", true, TFT_YELLOW);
                 tftPrint("Weather data updating from NOAA.", true, TFT_YELLOW);
-                WeatherData.updateWeatherOptimized(3600);    
+                tftPrint("This may take several minutes.", true, TFT_YELLOW);
+                esp_task_wdt_reset();
+                WeatherData.updateWeatherOptimized(3600, true);    
             }
 
         } else {
             SerialPrint("Weather data not found on SD card, updating from NOAA.",true);
+            tftPrint("No weather data on SD card.", true, TFT_YELLOW);                
             tftPrint("Weather data not on SD. Updating from NOAA.", true, TFT_YELLOW);
-            WeatherData.updateWeatherOptimized(3600);
+            tftPrint("This may take several minutes.", true, TFT_YELLOW);
+            esp_task_wdt_reset();
+            WeatherData.updateWeatherOptimized(3600, true);
         }
+        esp_task_wdt_reset();
 
         #ifdef _USEGSHEET
         startGsheet();
@@ -362,13 +384,21 @@ void setup() {
     #endif
     #endif
 
-    #ifndef _ISPERIPHERAL
+    #if _IS_SERVER_HUB
     tftPrint("Please wait for SD card cleanup and Google Sheet updates.", true, TFT_GREEN);
     #endif
 
 
 #endif //_USELOWPOWER/else
-SerialPrint("Setup complete", true);
+{
+  FirmwareVersion fw;
+  getLocalFirmware(fw);
+  char verBuf[16];
+  fw.toChar(verBuf, sizeof(verBuf));
+  String setupMsg = String(verBuf) + " setup complete";
+  SerialPrint(setupMsg, true);
+  logSystemEvent(setupMsg, EVENT_BOOT_COMPLETE);
+}
     
 }
 
@@ -396,7 +426,7 @@ void loop() {
     #endif
 
 
-    #if defined(_USETFT) && !defined(_ISPERIPHERAL)
+    #if defined(_USETFT) && _IS_SERVER_HUB
     updateGraphics();
     #endif
 
@@ -424,8 +454,8 @@ void loop() {
         
         if (Sensors.getNumDevices() ==1) I.makeBroadcast = true; //if there is only one device (including  me), broadcast my presence
         
-        #ifdef _ISPERIPHERAL
-        //check if there are any new servers (that I have not sent data to yet), and if so reset the timelogged for all my sensors
+        #if _HAS_LOCAL_SENSORS
+        // Push local sensor data to servers that have not received it recently
         for (int16_t i=0; i<NUMDEVICES ; i++) {
           ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
           if (!d || !d->IsSet || d->devType < 100) continue;
@@ -452,15 +482,12 @@ void loop() {
             SerialPrint("Weather update: error code " + (String) weatherResult,true);
         }
 
-        if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 3600 && I.currentTime - I.ALIVESINCE > 10800) {
-            tftPrint("Weather failed for 60 minutes.", true, TFT_RED, 2, 1, true, 0, 0);
-            tftPrint("Rebooting in 3 seconds...", false, TFT_WHITE, 2, 1, false, -1, -1);
-            SerialPrint("Weather failed for 60 minutes. Rebooting in 3 seconds...",true);
-            delay(3000);
-            I.resetInfo = RESET_WEATHER;
-            I.lastResetTime = I.currentTime;
-            storeError("Weather failed too many times");
-            controlledReboot("Weather failed too many times", RESET_WEATHER);
+        static uint32_t lastWeatherTimeoutErrorT = 0;
+        if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 3600
+            && I.currentTime - I.ALIVESINCE > 10800
+            && I.currentTime - lastWeatherTimeoutErrorT > 3600) {
+            storeError("Weather failed >60 minutes", ERROR_WEATHER_TIMEOUT, true);
+            lastWeatherTimeoutErrorT = I.currentTime;
         }
 
 
@@ -490,17 +517,20 @@ void loop() {
             }
         }
 
-        //see if we have local battery        
+        #ifdef _MONITOROUTDOORBATTERYSENSORS
         I.localBatteryIndex = 255;
         int16_t batteryIndex = Sensors.findOutsideSensorByType("battery_li");
         if (batteryIndex >= 0 && batteryIndex < 255) {
             ArborysSnsType* sensor = Sensors.snsIndexToPointer(batteryIndex);
-            if (sensor && sensor->IsSet && sensor->timeLogged + 3600>I.currentTime)             I.localBatteryIndex = batteryIndex;
-        }   
+            if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > I.currentTime) {
+                I.localBatteryIndex = batteryIndex;
+            }
+        }
+        #endif
         #endif
 
         
-        #ifndef _ISPERIPHERAL
+        #if _IS_SERVER_HUB
             #ifdef _ISHVACSERVER
                 checkHVAC();
             #endif
@@ -511,14 +541,11 @@ void loop() {
         I.isHot = 0;
         I.isCold = 0;
         I.isLeak = 0;
-        I.isExpired = 0;
         I.isFlagged = countFlagged(0, 0b00000111, 0b00000011, 0); //only count flagged sensors if they are monitored (bit 1 is set)
         I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
         I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        
-        I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true,3,true); //this is where sensors are checked for expiration. Returns number of expired sensors. true means only check critical sensors
 
         if (I.currentTime % 300 == 0) Sensors.checkDeviceFlags(); //check the device flags every 5 minutes
 
@@ -539,36 +566,40 @@ void loop() {
         
         //check if my IP address has changed
         ArborysDevType* myDevice = Sensors.getDeviceByDevIndex(I.MY_DEVICE_INDEX);
-        bool storeToSD = false;
+        if (myDevice) {
+            bool storeToSD = false;
 
-        if (WiFi.localIP() != myDevice->IP) {
-            myDevice->IP = WiFi.localIP();
-            storeToSD = true;
+            if (WiFi.localIP() != myDevice->IP) {
+                myDevice->IP = WiFi.localIP();
+                storeToSD = true;
+            }
+
+            //check if the device name has changed
+            if (strcmp(Prefs.DEVICENAME, myDevice->devName) != 0) {
+                //copy the devicename in mydevice to prefs
+                strncpy(Prefs.DEVICENAME, myDevice->devName, sizeof(Prefs.DEVICENAME) - 1);
+                Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
+                Prefs.isUpToDate = false;
+                //store prefs
+                handleStoreCoreData();
+                storeToSD = true;
+            }
+
+            //store the device to SD card
+            #ifdef _USESDCARD
+            if (storeToSD) storeDevicesSensorsSD();
+            #endif
         }
-
-        //check if the device name has changed
-        if (strcmp(Prefs.DEVICENAME, myDevice->devName) != 0) {
-            //copy the devicename in mydevice to prefs            
-            strncpy(Prefs.DEVICENAME, myDevice->devName, sizeof(Prefs.DEVICENAME) - 1);
-            Prefs.DEVICENAME[sizeof(Prefs.DEVICENAME) - 1] = '\0';
-            Prefs.isUpToDate = false;
-            //store prefs
-            handleStoreCoreData();
-            storeToSD = true;
-        }
-
-        //store the device to SD card
-        #ifdef _USESDCARD
-        if (storeToSD) storeDevicesSensorsSD();
-        #endif
         
  
 
+        #ifdef _REBOOTWEEKLY
         if (OldTime[2] == 3) {
-            //check if the day is Wednesday
+            //check if the day is Tue
             if (weekday() == 3) controlledReboot("Weekly scheduled reboot", RESET_DEFAULT);
             
         }
+        #endif
     }
     if (OldTime[3] != weekday()) {
         OldTime[3] = weekday();
@@ -593,7 +624,7 @@ void loop() {
         controlledReboot("Daily reboot", RESET_DEFAULT);
         #endif
 
-        #ifdef _ISPERIPHERAL
+        #if _HAS_LOCAL_SENSORS
             #if defined(_CHECKHEAT) || defined(_CHECKAIRCON) 
 
                 #ifdef _USESERIAL
@@ -616,55 +647,60 @@ void loop() {
             SerialPrint((String) "New time is: " + dateify(I.currentTime),true);
         }
 
+        updateRSSI();
 
-        #if defined(_USENETWORKMONITOR) && !defined(_ISPERIPHERAL)
-        NetworkMonitor.update();
-        #endif
-    
-
-
-        #ifdef _ISPERIPHERAL
-            //run through all my sensors and try and update them
-
-
+        #if _HAS_LOCAL_SENSORS
             readAllSensors(false);
-            if (I.MyRandomSecond == second())             sendAllSensors(false, -1, true);
-
-        #else
-            if (I.MyRandomSecond == second())   {
-
-                //at a random point every minute, check for expired devices/sensors, and determine how to communicate with them
-                //check for expired devices by determining if ANY sensors are expired
-                Sensors.checkExpirationAllSensors(I.currentTime, true,1,true); //parameter 2 is true for  only critical sensors, parameter 3 is the multiplier, parameter 4 is to expire the device if any sensors are expired
-
-                //now march through devices and send a ping to each if they are labeled as expired
-                int16_t startIndex = -1;
-                while (startIndex < NUMDEVICES) {
-                    ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
-                    if (!device) break;
-                    if (device->devType >= 100) continue; //don't send a ping to servers
-                    if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
-                    if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
-                    SerialPrint("Sensor expired: Sending sensor data request to " + String(device->devName),true);
-                    
-                    //now decide how to communicate with the device. The tiers are: no data within 5 minutes, no data within 10 minutes, and no data beyond 10 minutes
-                    if (device->dataReceived < I.currentTime - 600) sendMSG_DataRequest(device, -1, true);
-                    else if (device->dataReceived < I.currentTime - 120) {
-                        sendMSG_DataRequest(device, -1, false);
-                    } else {
-                        sendESPNowSensorDataRequest(device, 1);
-                    }
-                    device->dataSent = I.currentTime;
-                    delayWithNetwork(10,50);                    
-                }
-                //at a random point every 10 minutes, broadcast my presence (but it will only happen once every 10 minutes)
-                if (I.makeBroadcast) {        //broadcast every 10 minutes, at some random second within the 10th minute        
-                    broadcastServerPresence(true, 2);
-                }
-                
-            }          
-            
         #endif
+
+        if (I.MyRandomSecond == second()) {
+            // once per minute at a random second: check critical sensor expiry (timeLogged + 1.25 × SendingInt)
+            I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true, 0, true);
+
+            #if _HAS_LOCAL_SENSORS
+            sendAllSensors(false, -1, true);
+            #endif
+            #if _IS_SERVER_HUB
+            // Hub: ping expired peripheral devices
+            int16_t startIndex = -1;
+            while (startIndex < NUMDEVICES) {
+                ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
+                if (!device) break;
+                if (device->devType >= 100) continue; //don't send a ping to servers
+                if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
+                if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
+                SerialPrint("Sensor expired: Sending sensor data request to " + String(device->devName),true);
+
+                // Escalate by how long sensors have been expired (threshold: timeLogged + 1.25 × SendingInt)
+                uint32_t secondsExpired = 0;
+                int16_t devIdx = Sensors.findDevice(device->MAC);
+                for (int16_t si = 0; si < NUMSENSORS; ++si) {
+                    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+                    if (!S || !S->IsSet || S->deviceIndex != devIdx || !S->expired || S->SendingInt == 0) continue;
+                    uint32_t expiredAt = sensorExpirationTime(S->timeLogged, S->SendingInt);
+                    if (I.currentTime > expiredAt) {
+                        uint32_t sec = I.currentTime - expiredAt;
+                        if (sec > secondsExpired) secondsExpired = sec;
+                    }
+                }
+
+                if (secondsExpired <= 120) {
+                    sendMSG_DataRequest(device, -1, false); // UDP JSON data request
+                } else if (secondsExpired <= 240) {
+                    sendMSG_DataRequest(device, -1, true); // HTTP data request
+                }
+                else {
+                    sendLANSensorDataRequest(device, 3); // ESP-NOW + UDP LAN types 7/107
+                }
+
+                device->dataSent = I.currentTime;
+                delayWithNetwork(10,25);
+            }
+            if (I.makeBroadcast) { //broadcast every 10 minutes, at some random second within the 10th minute
+                broadcastServerPresence(true, 2);
+            }
+            #endif
+        }
     }
 
 }

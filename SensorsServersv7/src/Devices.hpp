@@ -18,6 +18,13 @@ struct STRUCT_CORE;
 102 - support analysis server with persistent storage
 */
 
+// Expiration: timeLogged + 1.25 × SendingInt (integer math: SendingInt + SendingInt/4)
+inline uint32_t sensorExpiryGraceSec(uint32_t sendingInt) {
+    return sendingInt + sendingInt / 4;
+}
+inline uint32_t sensorExpirationTime(uint32_t timeLogged, uint32_t sendingInt) {
+    return timeLogged + sensorExpiryGraceSec(sendingInt);
+}
 
 
 // Device structure
@@ -29,6 +36,7 @@ struct ArborysDevType {
     uint32_t dataSent;      // Last time device received from device
     uint8_t IsSet;          // Whether this device is initialized
     char devName[30];       // Device name
+    FirmwareVersion firmware; //firmware version
     uint8_t Flags;          // Device flags
     uint32_t SendingInt;    // Sending interval
     bool expired;           // Whether device has expired
@@ -52,13 +60,9 @@ struct ArborysSnsType {
     #ifdef _USESDCARD
     uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
     #endif
-    #ifdef _ISPERIPHERAL
-    int16_t snsPin;            // pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address or other special pin number where actual pin is snsPin-100, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. 
-    int16_t powerPin;          // pin number for the power pin, if applicable. -9999 means no power pin If -9999 then there is no power pin, if -200 then it is a special case
-    // NOTE: calibration min/max are NOT stored here. Prefs.SNS_CALIB_MIN/MAX[] is the single source of truth (indexed by SensorHistory).
-    #else
-    uint8_t OverrideFlags; // Override flags for this sensor. If set, then the Flags will be overridden by the OverrideFlags.
-    #endif
+    int16_t snsPin = -9999;    // local sensor pin; -9999 = none / remote sensor
+    int16_t powerPin = -9999;
+    uint8_t OverrideFlags = 0; // hub override for remote sensor flags
 };
 
 // Devices_Sensors class
@@ -78,7 +82,7 @@ public:
     
     // Device management
     bool updateDeviceName(int16_t index, String newDeviceName);
-    int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 86400, uint8_t flags = 0, uint8_t devType = 0);
+    int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 86400, uint8_t flags = 0, uint8_t devType = 0, const FirmwareVersion* firmware = nullptr);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);
     ArborysDevType* getDeviceByDevIndex(int16_t devindex);
@@ -145,6 +149,7 @@ public:
     int16_t findSnsOfType(uint8_t snstype, bool newest = false, int16_t startIndex = -1);
     int16_t findSnsOfType(const char* snstype, bool newest = false, int16_t startIndex = -1);
     int16_t findMyDeviceIndex();
+    void updateMyDeviceVersion();
 
 
     //peripheral specific functions

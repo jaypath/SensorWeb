@@ -22,13 +22,6 @@ struct STRUCT_GOOGLESHEET;
 extern STRUCT_CORE I;
 
 
-// Function to maintain a timestamp index file
-void updateTimestampIndex(const char* filename);
-
-// Function to remove a file from the timestamp index
-void removeFromTimestampIndex(const char* filename);
-
-
 // Common data structure for sensor data points
 struct SensorDataPoint {
     uint64_t deviceMAC;
@@ -91,6 +84,9 @@ bool matchPattern(const char* filename, const char* pattern);
 uint16_t deleteFiles(const char* pattern,const char* directory);
 uint16_t deleteSensorDataSD();
 bool FileOrDirectoryExists(const char* filename);
+bool sdDirectoryIsProtected(const char* path);
+bool sdRemoveDirectoryRecursive(const char* path);
+bool sdDeleteFile(const char* path);
 
 uint16_t read16(fs::File &f);
 uint32_t read32(fs::File &f);

@@ -32,7 +32,10 @@ void initGsheetInfo();
 bool initGsheet();
 String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase=0);
 bool file_deleteSpreadsheetByID(const char* fileID);
-uint8_t file_createSpreadsheet(const char* sheetname, bool checkfile, char* fileID);
+int8_t file_createSpreadsheet(String sheetname, bool checkFile, char* fileID);
+bool file_getSpreadsheetNameByID(const char* fileID, char* nameOut, size_t nameOutLen);
+// -4 no WiFi, -6 invalid time, -5 list files failed, 0 create failed, 1 ID valid/name match, 2 ID resolved (created or found by name)
+int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders);
 bool file_createHeaders(char* fileID, String Headers);
 void tokenStatusCallback(TokenInfo info);
 bool file_deleteSpreadsheetByName(const char* filename);
@@ -42,7 +45,6 @@ bool Gsheet_uploadSensorDataFunction(void);
 String GsheetUploadErrorString();
 void file_grantPermissions();
 void file_deleteAllSheets();
-bool file_sheetExists(String fileID);
 bool file_createUserPermission(String fileID, bool notify, const char* message);
 
 

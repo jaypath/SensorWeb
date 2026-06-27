@@ -52,6 +52,10 @@ extern Devices_Sensors Sensors;
 
   
 bool initGsheet() {
+    if (!wifiReadyForNetwork()) {
+        return false; //no Wifi
+    }
+
     // Set the callback for Google API access token generation status (for debug only)
     GSheet.setTokenCallback(tokenStatusCallback);
     // Set the seconds to refresh the auth token before expire (60 to 3540, default is 300 seconds)
@@ -90,7 +94,7 @@ void startGsheet() {
         }
 
       // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
-        if (CheckWifiStatus(false)==1 && I.currentTime > 1000) {
+        if (wifiReadyForNetwork() && I.currentTime > 1000) {
             initGsheet();
         } else {
             tftPrint("GSHEET NOT READY - WiFi not connected or time not set", true, TFT_RED);
@@ -125,6 +129,10 @@ void initGsheetInfo() {
 
 //gsheet functions
 bool file_deleteSpreadsheetByID(const char* fileID) {
+    if (!wifiReadyForNetwork()) {
+        return false; //no Wifi
+    }
+    
     SerialPrint("file_deleteSpreadsheetByID ");
     FirebaseJson response;
     
@@ -147,17 +155,26 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
   }
   
   bool file_deleteSpreadsheetByName(const char* filename){
+    if (!wifiReadyForNetwork()) {
+        return false; //no Wifi
+    }
+
     SerialPrint("file_deleteSpreadsheetByName");
     char fileID[64];
     bool success = false;
     int deleteCount = 0;
     const int MAX_DELETE_ATTEMPTS = 100; // Prevent infinite loop
     
-    snprintf(fileID,64,"%s",file_findSpreadsheetIDByName(filename).c_str());
-    while (fileID[0]!='\0' && deleteCount < MAX_DELETE_ATTEMPTS) {
+    String foundFileID = file_findSpreadsheetIDByName(filename);
+    snprintf(fileID,64,"%s",foundFileID.c_str());
+    while (fileID[0]!='\0' && foundFileID.startsWith("ERROR")==false && deleteCount < MAX_DELETE_ATTEMPTS) {
         success = file_deleteSpreadsheetByID(fileID);
-        deleteCount++;
-        snprintf(fileID,64,"%s",file_findSpreadsheetIDByName(filename).c_str());
+        if (success)         deleteCount++;
+        foundFileID = file_findSpreadsheetIDByName(filename);
+        if (foundFileID.startsWith("ERROR")) {
+            return false;
+        }
+        snprintf(fileID,64,"%s",foundFileID.c_str());
     }
     
     if (deleteCount >= MAX_DELETE_ATTEMPTS) {
@@ -180,7 +197,9 @@ void file_grantPermissions() {
 } 
 
 String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) {
-
+    if (!wifiReadyForNetwork()) {
+        return "ERROR: No WiFi"; //no Wifi
+    }
     // Searches all files for the matching filename and returns the file ID if found
     // Returns empty string if not found
     SerialPrint("SearchForIDByFilename: " + String(sheetname) + " ");
@@ -191,8 +210,8 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     bool success = GSheet.listFiles(&result /* returned list of all files */,20,"name");     //first page 
     if (!success) {
         result.clear(); // Clean up FirebaseJson
-        SerialPrint("ERROR: Failed to list files (GSheet error).", true);
-        return "";
+        SerialPrint("ERROR: Failed to list files (GSheet error).", true);        
+        return "ERROR: Failed to list files (GSheet error)";
     }
 
     bool morePages = true;
@@ -283,13 +302,163 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     SerialPrint("file_findSpreadsheetIDByName: did not find " + String(sheetname),true);
     return "";
 }
+
+bool file_getSpreadsheetNameByID(const char* fileID, char* nameOut, size_t nameOutLen) {
+    if (!fileID || fileID[0] == '\0' || !nameOut || nameOutLen == 0) return false;
+    if (!wifiReadyForNetwork()) return false;
+    if (!GSheet.ready()) return false;
+
+    nameOut[0] = '\0';
+    char url[160];
+    snprintf(url, sizeof(url),
+        "https://www.googleapis.com/drive/v3/files/%s?fields=id,name", fileID);
+
+    String extraHeaders = "Authorization: Bearer " + GSheet.accessToken() + "\nContent-Type: application/json";
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.setCacert("");
+    M.timeout = 10000;
+    M.setExtraHeaders(extraHeaders.c_str());
+    if (!M.initPayload(512)) return false;
+
+    if (!SendHTTPMessage(M) || M.httpCode != 200) {
+        SerialPrint("file_getSpreadsheetNameByID: lookup failed for " + String(fileID)
+            + " http=" + String(M.httpCode), true);
+        return false;
+    }
+    if (!M.payload) return false;
+
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, M.payload.get())) return false;
+    if (!doc["name"].is<const char*>()) return false;
+
+    const char* name = doc["name"];
+    if (!name || name[0] == '\0') return false;
+    strncpy(nameOut, name, nameOutLen - 1);
+    nameOut[nameOutLen - 1] = '\0';
+    return true;
+}
+
+static const char GSheet_COLUMN_HEADERS[] =
+    "DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flagged,expired,critical,Measurement value";
+
+static bool file_sheetHasHeaders(const char* fileID) {
+    if (!fileID || fileID[0] == '\0' || !GSheet.ready()) return false;
+
+    FirebaseJson response;
+    if (!GSheet.values.get(&response, fileID, "Sheet1!A1:A1")) return false;
+
+    FirebaseJsonData data;
+    if (response.get(data, "values/[0]/[0]") && data.success) {
+        return data.to<String>() == "DEVID";
+    }
+    return false;
+}
+
+int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
+    if (needsHeaders) *needsHeaders = false;
+
+    if (!wifiReadyForNetwork()) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
+        snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_ensureMonthlySpreadsheet");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return -4;
+    }
+
+    if (!isTimeValid(I.currentTime)) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: invalid time");
+        snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_ensureMonthlySpreadsheet");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        storeError("Gsheet: invalid time for monthly spreadsheet name", ERROR_GSHEET_CREATE, true);
+        return -6;
+    }
+
+    char expectedName[24];
+    String expectedGsheetName = "ArduinoLog" + String(dateify(I.currentTime, "yyyy-mm"));
+    strncpy(expectedName, expectedGsheetName.c_str(), sizeof(expectedName) - 1);
+    expectedName[sizeof(expectedName) - 1] = '\0';
+
+    char existingName[96];
+    existingName[0] = '\0';
+    bool idExists = false;
+    if (GSheetInfo.GsheetID[0] != '\0') {
+        idExists = file_getSpreadsheetNameByID(GSheetInfo.GsheetID, existingName, sizeof(existingName));
+    }
+
+    if (idExists && strcmp(existingName, expectedName) == 0) {
+        strncpy(GSheetInfo.GsheetName, expectedName, sizeof(GSheetInfo.GsheetName) - 1);
+        GSheetInfo.GsheetName[sizeof(GSheetInfo.GsheetName) - 1] = '\0';
+        SerialPrint("Gsheet: validated spreadsheet " + String(GSheetInfo.GsheetID)
+            + " (" + String(expectedName) + ")", true);
+        return 1;
+    }
+
+    if (idExists) {
+        SerialPrint("Gsheet: file ID name mismatch (" + String(existingName) + " expected "
+            + String(expectedName) + "), resolving", true);
+    } else if (GSheetInfo.GsheetID[0] != '\0') {
+        SerialPrint("Gsheet: stored file ID not found (" + String(GSheetInfo.GsheetID)
+            + "), resolving " + String(expectedName), true);
+    } else {
+        SerialPrint("Gsheet: no file ID stored, resolving " + String(expectedName), true);
+    }
+
+    memset(GSheetInfo.GsheetID, 0, sizeof(GSheetInfo.GsheetID));
+    strncpy(GSheetInfo.GsheetName, expectedName, sizeof(GSheetInfo.GsheetName) - 1);
+    GSheetInfo.GsheetName[sizeof(GSheetInfo.GsheetName) - 1] = '\0';
+
+    int8_t rc = file_createSpreadsheet(String(expectedName), true, GSheetInfo.GsheetID);
+    if (rc == -4) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "GSHEET ERROR: no Wifi");
+        storeError("Gsheet: no Wifi", ERROR_GSHEET_CREATE, true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return -4;
+    }
+    if (rc == -5) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "GSHEET ERROR: failed to list files");
+        storeError("Gsheet: failed to list files", ERROR_GSHEET_CREATE, true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return -5;
+    }
+    if (rc == 0 || GSheetInfo.GsheetID[0] == '\0' || strncmp(GSheetInfo.GsheetID, "ERROR", 5) == 0) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR:%s", GSheetInfo.GsheetID);
+        snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "file_createSpreadsheet");
+        storeError("Gsheet: failed to create spreadsheet", ERROR_GSHEET_CREATE, true);
+        GSheetInfo.lastErrorTime = I.currentTime;
+        return 0;
+    }
+
+    if (needsHeaders) {
+        if (rc == 1) {
+            *needsHeaders = true;
+        } else if (rc == 2) {
+            *needsHeaders = !file_sheetHasHeaders(GSheetInfo.GsheetID);
+        }
+    }
+    SerialPrint("Gsheet: using spreadsheet ID " + String(GSheetInfo.GsheetID)
+        + " (" + String(GSheetInfo.GsheetName) + ")"
+        + (needsHeaders && *needsHeaders ? " (headers needed)" : ""), true);
+    return 2;
+}
   
-  uint8_t file_createSpreadsheet(String sheetname, bool checkFile, char* fileID) {
-    //returns 0 for fail, 1 for success, 2 for file already exists
+  int8_t file_createSpreadsheet(String sheetname, bool checkFile, char* fileID) {
+    //returns -1 for no Wifi, 0 for fail, 1 for success, 2 for file already exists
+
+    if (!wifiReadyForNetwork()) {
+        return -4; //no Wifi
+    }
+
     String outcome = "";
     memset(fileID, 0, 64);
     if (checkFile) {
         String foundFileID = file_findSpreadsheetIDByName(sheetname.c_str());
+        if (foundFileID.startsWith("ERROR: No WiFi")) {
+            return -4; //no Wifi
+        }
+        if (foundFileID.startsWith("ERROR: Failed to list files")) {
+            return -5; //failed to list files
+        }
         if (foundFileID.length() > 0) {
             strcpy(fileID, foundFileID.c_str());
             return 2; //file already exists
@@ -346,6 +515,14 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
   
   bool file_createHeaders(char* fileID, String Headers) {
     SerialPrint("file_createHeaders... ");
+    if (!wifiReadyForNetwork()) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
+        snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "file_createHeaders");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        storeError("Gsheet: no Wifi", ERROR_GSHEET_CREATE, true);
+        SerialPrint(" ERROR: no WiFi", true);
+        return false;
+    }
     if (strncmp(fileID, "ERROR", 5) == 0 || strlen(fileID) == 0) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: no valid file ID");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
@@ -380,7 +557,6 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     // Clean up FirebaseJson objects
     valueRange.clear();
     response.clear();
-    SerialPrint(" OK",true);
     if (!success) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
@@ -389,41 +565,47 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
         SerialPrint(" ERROR: failed to create headers",true);
         return false;
     }
+    SerialPrint(" OK",true);
     return true;
-}
+  }
     
   
   bool Gsheet_uploadSensorDataFunction(void) {
+    if (!wifiReadyForNetwork()) {
+        snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
+        snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_uploadSensorDataFunction");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadSuccess = -4;
+        return false;
+    }
+
     SerialPrint("Gsheet_uploadSensorDataFunction... ");
     FirebaseJson valueRange;
     FirebaseJson response;
-  
-    //time_t t = now(); now a global!
-  
-    String expectedGsheetName = "ArduinoLog" + (String) dateify(I.currentTime,"yyyy-mm");
-    if (strlen(GSheetInfo.GsheetID)==0 ||  strcmp(GSheetInfo.GsheetName,expectedGsheetName.c_str())!=0) {
-        SerialPrint("Gsheet_uploadSensorDataFunction: need to create new spreadsheet",true);
-        //need to create new spreadsheet
-        memset(GSheetInfo.GsheetID,0,64);
-        strncpy(GSheetInfo.GsheetName, expectedGsheetName.c_str(), 23);
-        GSheetInfo.GsheetName[23] = '\0'; // Ensure null termination
-        uint8_t success = file_createSpreadsheet(String(GSheetInfo.GsheetName),true,GSheetInfo.GsheetID);
-        if (success==0 || strlen(GSheetInfo.GsheetID)==0 || strncmp(GSheetInfo.GsheetID,"ERROR",5)==0) {
-            snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR:%s",GSheetInfo.GsheetID);
-            snprintf(GSheetInfo.lastGsheetFunction,30,"file_createSpreadsheet");
-            storeError("Gsheet: failed to create spreadsheet",ERROR_GSHEET_CREATE,true);
+
+    bool needsHeaders = false;
+    int8_t ensureRc = Gsheet_ensureMonthlySpreadsheet(&needsHeaders);
+    if (ensureRc < 0) {
+        GSheetInfo.lastGsheetUploadSuccess = ensureRc;
+        return false;
+    }
+    if (ensureRc == 0) {
+        GSheetInfo.lastGsheetUploadSuccess = -2;
+        return false;
+    }
+    if (ensureRc == 2) {
+        storeGsheetInfoSD();
+    }
+
+    if (needsHeaders) {
+        if (!file_createHeaders(GSheetInfo.GsheetID, GSheet_COLUMN_HEADERS)) {
+            snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: failed to create headers");
+            snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_uploadSensorDataFunction");
+            storeError(GSheetInfo.lastGsheetResponse, ERROR_GSHEET_HEADERS, true);
             GSheetInfo.lastErrorTime = I.currentTime;
-            SerialPrint("ERROR: failed to create spreadsheet",true);
+            GSheetInfo.lastGsheetUploadSuccess = -2;
+            SerialPrint(" ERROR: failed to create headers", true);
             return false;
-        }
-        SerialPrint("Gsheet_uploadSensorDataFunction: created new spreadsheet",true);
-        if (!file_createHeaders(GSheetInfo.GsheetID,"DEVID,IPAddress,snsID,SnsName,Time Logged,Time Read,HumanTime,Flagged,expired,critical,Measurement value")) {
-                    snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
-                    snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorDataFunction");
-                    storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_HEADERS,true);
-                    GSheetInfo.lastErrorTime = I.currentTime;
-                    SerialPrint(" ERROR: failed to create headers",true);
-                    return false;
         }
     }
     
@@ -466,15 +648,16 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
         SerialPrint("Uploaded " + (String) rowInd + " rows",true);
         GSheetInfo.lastGsheetUploadTime = I.currentTime; 
     } else {
-        snprintf(GSheetInfo.lastGsheetResponse,100,"UPDATE ERROR: %s",GSheetInfo.GsheetID);
+        snprintf(GSheetInfo.lastGsheetResponse,100,"GSHEET UPDATE: %s",GSheetInfo.GsheetID);
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorData");
         storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_UPLOAD,true);
         GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadSuccess = -2;
         SerialPrint(" ERROR: failed to upload data",true);
 
         //remove the spreadsheet info stored
-        GSheetInfo.GsheetID[0] = '\0';
-        GSheetInfo.GsheetName[0] = '\0';
+//        GSheetInfo.GsheetID[0] = '\0';
+  //      GSheetInfo.GsheetName[0] = '\0';
         return false;
     }
 
@@ -484,10 +667,19 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
   
   int8_t Gsheet_uploadData() {
     //wrapper function to check upload status here.
+    if (!wifiReadyForNetwork()) {
+        SerialPrint("ERROR: GSheet not ready - no Wifi",true);
+        snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet not ready - no Wifi");
+        snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadSuccess = -4;    
+        return -4; //no Wifi
+    }
+
     SerialPrint("Gsheet_uploadData... ");
     if (GSheetInfo.useGsheet == false ) {
         SerialPrint("Gsheet is not enabled",true);
-        return 0; //everything is ok, just not time to upload!
+        return 0; //everything is ok, just not using Gsheet!
     }
     if ((GSheetInfo.lastGsheetUploadSuccess>0 && GSheetInfo.lastGsheetUploadTime>0 && I.currentTime-GSheetInfo.lastGsheetUploadTime<(GSheetInfo.uploadGsheetIntervalMinutes*60))) {
         SerialPrint("Not time to upload",true);
@@ -555,6 +747,16 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
     if (GSheetInfo.lastGsheetUploadSuccess==-3) {
         tmp = "ERROR: Gsheet upload failed for an unknown reason";
     }
+    if (GSheetInfo.lastGsheetUploadSuccess==-4) {
+        tmp = "ERROR: Gsheet not connected to WiFi";        
+    }
+    if (GSheetInfo.lastGsheetUploadSuccess==-5) {
+        tmp = "ERROR: Gsheet failed to list files";
+    }
+    if (GSheetInfo.lastGsheetUploadSuccess==-6) {
+        tmp = "ERROR: Gsheet invalid time";
+    }
+
     SerialPrint(" status: " + tmp,true);
     return tmp;
   }
@@ -564,31 +766,6 @@ String file_findSpreadsheetIDByName(const char* sheetname, uint8_t specialcase) 
   
 //-----------------HTTPS functions to directly interact with Google sheets API, because some functions are not available in the ESP_Google_Sheet_Client library
 
-
-
-// GET file metadata (200 -> exists)
-bool file_sheetExists(String fileID) {
-    char url[150];
-    snprintf(url, 149, "https://www.googleapis.com/drive/v3/files/%s?fields=id,name,createdTime", fileID.c_str());
-    String extraHeaders = "Authorization: Bearer " + GSheet.accessToken() + "\nContent-Type: application/json";
-
-
-    HTTPMessage M;
-    M.setUrl(url);
-    M.setMethod("GET");
-    M.setCacert("");
-    M.timeout = 5000;
-    M.setExtraHeaders(extraHeaders.c_str());
-
-    if (SendHTTPMessage(M)) {
-        return M.httpCode == 200 || M.httpCode == 201 || M.httpCode == 409;
-    } else {
-        SerialPrint(" ERROR: file_sheetExists failed",true);
-        storeError("Gsheet: file_sheetExists failed",ERROR_GSHEET_CREATE,true);
-        GSheetInfo.lastErrorTime = I.currentTime;
-        return false;
-    }
-}
 
 
 // Create permission

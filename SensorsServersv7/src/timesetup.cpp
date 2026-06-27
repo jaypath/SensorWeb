@@ -1,10 +1,19 @@
 //#define _DEBUG
 #include "globals.hpp"
 #include "timesetup.hpp"
+#include "AddESPNOW.hpp"
 #include <TimeLib.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <server.hpp>
+#include <esp_task_wdt.h>
+#ifdef ESP32
+#include <sys/time.h>
+#endif
+
+#ifdef _USETFT
+extern LGFX tft;
+#endif
 
 #define TIMEUPDATEINT 10800000
 
@@ -21,6 +30,21 @@ static time_t standardLocalNow() {
   return now() + Prefs.TimeZoneOffset;
 }
 
+// FAT/VFS file stamps use POSIX gettimeofday(), not TimeLib — keep them in sync after every UTC set.
+static void syncPosixClockUtc(time_t utc) {
+#ifdef ESP32
+  if (utc < TIMEZERO) return;
+  timeval tv = {};
+  tv.tv_sec = utc;
+  settimeofday(&tv, nullptr);
+#endif
+}
+
+static void setTimeAndSyncPosix(time_t utc) {
+  setTime(utc);
+  syncPosixClockUtc(utc);
+}
+
 // Apply Prefs timezone + DST state to I.currentTime (requires valid TimeLib UTC via now()).
 static void applyLocalTimeFromPrefs() {
   I.UTCTime = now();
@@ -30,9 +54,9 @@ static void applyLocalTimeFromPrefs() {
 }
 
 // NTP sync + DSTsetup using cached Prefs rules (no TimeAPI/getTimezoneInfo network call).
-// Used at boot by all builds; peripherals rely on this instead of the heavier setupTime().
+// Used at boot from initSystem when WiFi is up; setupTime() may call this again if UTC is still invalid.
 bool syncNtpAndApplyDST() {
-  if (CheckWifiStatus(false) != 1) return false;
+  if (!wifiReadyForNetwork()) return false;
 
   timeClient.begin();
   timeClient.setTimeOffset(0);
@@ -44,7 +68,7 @@ bool syncNtpAndApplyDST() {
   }
   if (i >= 250) return false;
 
-  setTime(timeClient.getEpochTime());
+  setTimeAndSyncPosix(timeClient.getEpochTime());
   applyLocalTimeFromPrefs();
 
   SerialPrint("DST at boot: " + String(Prefs.DST == 0 ? "Not used" : (Prefs.DST == 1 ? "Inactive" : "Active")) +
@@ -52,15 +76,144 @@ bool syncNtpAndApplyDST() {
   return (I.UTCTime >= TIMEZERO);
 }
 
-bool setupTime(void) {
-  //call this at startup
-  if (!syncNtpAndApplyDST()) return false;
+static void applyTimeFromServerPing(uint32_t serverLocalTime) {
+  time_t utc = serverLocalTime;
+  if (timezonePrefsValid()) {
+    utc -= Prefs.TimeZoneOffset;
+    if (Prefs.DST > 0) utc -= (Prefs.DST - 1) * Prefs.DSTOffset;
+  }
+  setTimeAndSyncPosix(utc);
+  I.UTCTime = now();
+  I.currentTime = serverLocalTime;
+  I.currentSecond = second();
+  if (Prefs.DST > 0) DSTsetup();
+}
 
-  getTimezoneInfo(); //refresh timezone + DST rules from TimeAPI
-  applyLocalTimeFromPrefs(); //re-apply local time with the refreshed rules
+static constexpr uint32_t ESPNOW_TIME_SYNC_INTERVAL_MS = 600000; // 10 minutes between ESP-NOW sync sessions
+static uint32_t s_lastEspNowTimeSyncAttemptMs = 0;
+
+static bool espNowTimeSyncSessionAllowed() {
+  if (s_lastEspNowTimeSyncAttemptMs == 0) return true;
+  const uint32_t elapsed = millis() - s_lastEspNowTimeSyncAttemptMs;
+  return elapsed >= ESPNOW_TIME_SYNC_INTERVAL_MS;
+}
+
+static void markEspNowTimeSyncSessionStarted() {
+  s_lastEspNowTimeSyncAttemptMs = millis();
+}
+
+static bool setupTimeFromEspNowServerPing() {
+  constexpr uint8_t kMaxAttempts = 3;
+  constexpr uint32_t kWaitPerAttemptMs = 500; // 3 attempts x 0.5s = 1.5s max blocking
+
+  if (!ensureESPNOW()) {
+    SerialPrint("setupTime: ESP-NOW not available for time sync", true, 5);
+    return false;
+  }
+
+  beginServerPingTimeSync();
+
+  for (uint8_t attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    if (!broadcastServerPing(1)) {
+      delay(100);
+      esp_task_wdt_reset();
+      continue;
+    }
+
+    const uint32_t startMs = millis();
+    while (millis() - startMs < kWaitPerAttemptMs) {
+      delay(50);
+      esp_task_wdt_reset();
+
+      uint32_t serverLocalTime = 0;
+      if (takeServerPingTimeSync(serverLocalTime)) {
+        endServerPingTimeSync();
+        applyTimeFromServerPing(serverLocalTime);
+        SerialPrint("setupTime: time set from ESP-NOW server ping: " + String(serverLocalTime), true);
+        return (I.currentTime >= TIMEZERO);
+      }
+    }
+  }
+
+  endServerPingTimeSync();
+  SerialPrint("setupTime: ESP-NOW server ping time sync failed after " + String(kMaxAttempts) + " attempts", true, 5);
+  return false;
+}
+
+bool timezonePrefsValid() {
+  if (Prefs.TimeZoneOffset > 50400) return false; // includes sentinel 90000 = unset
+  if (Prefs.DST == 0) return true;
+  return (Prefs.DSTStartUnixTime != 0 && Prefs.DSTEndUnixTime != 0 && Prefs.DSTOffset != 0);
+}
+
+bool refreshTimezoneFromNetwork(uint16_t timeoutMs) {
+  if (!wifiReadyForNetwork()) return false;
+  if (!getTimezoneInfo(timeoutMs)) return false;
+  applyLocalTimeFromPrefs();
+  I.lastTimezoneRefresh = I.currentTime;
+  return true;
+}
+
+bool setupTime(void) {
+  if (!wifiReadyForNetwork()) {
+    if (!espNowTimeSyncSessionAllowed()) {
+      return false;
+    }
+    markEspNowTimeSyncSessionStarted();
+
+    if (!setupTimeFromEspNowServerPing()) {
+      return false;
+    }
+    if (timezonePrefsValid()) {
+      DSTsetup();
+    }
+    if (I.lastTimezoneRefresh == 0 && I.currentTime >= TIMEZERO) {
+      I.lastTimezoneRefresh = I.currentTime;
+    }
+    I.isUpToDate = false;
+    return (I.currentTime >= TIMEZERO);
+  }
+
+  bool ntpOk = true;
+
+  #ifdef _USETFT
+  if (I.UTCTime >= TIMEZERO) {
+    tftPrint("NTP: already synced.", true, TFT_WHITE, 2, 1, false, -1, -1);
+  } else {
+    tftPrint("NTP sync... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  }
+  #endif
+
+  if (I.UTCTime < TIMEZERO) {
+    ntpOk = syncNtpAndApplyDST();
+    #ifdef _USETFT
+    tftPrint(ntpOk ? " OK." : " FAIL.", true, ntpOk ? TFT_GREEN : TFT_RED);
+    #endif
+  }
+
+  #ifdef _USETFT
+  if (timezonePrefsValid()) {
+    tftPrint("Timezone: using cached prefs.", true, TFT_WHITE, 2, 1, false, -1, -1);
+  } else {
+    tftPrint("Timezone lookup... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  }
+  #endif
+
+  if (timezonePrefsValid()) {
+    DSTsetup();
+    applyLocalTimeFromPrefs();
+    if (I.lastTimezoneRefresh == 0) I.lastTimezoneRefresh = I.currentTime;
+  } else {
+    bool tzOk = getTimezoneInfo(TIMEZONE_BOOT_HTTP_TIMEOUT_MS);
+    applyLocalTimeFromPrefs();
+    if (tzOk) I.lastTimezoneRefresh = I.currentTime;
+    #ifdef _USETFT
+    tftPrint(tzOk ? " OK." : " FAIL.", true, tzOk ? TFT_GREEN : TFT_RED);
+    #endif
+  }
 
   I.isUpToDate = false;
-  return true;
+  return ntpOk && (I.UTCTime >= TIMEZERO);
 }
 
 
@@ -75,7 +228,7 @@ bool updateTime() {
   bool isgood = false;
 
   if ( timeClient.update()) {  //returns false if not time to update
-    setTime(timeClient.getEpochTime());
+    setTimeAndSyncPosix(timeClient.getEpochTime());
     I.UTCTime = now();
     isgood = true;
   }
@@ -92,15 +245,12 @@ bool updateTime() {
   return isgood;
 }
 
-bool getTimezoneInfo() {
+bool getTimezoneInfo(uint16_t timeoutMs) {
   //this needs to run at startup and at DST changes
-  //String myIP = getPublicIP();
-  //if (myIP == "") return false;
-
   char tzURL[150];
 // Query TimeAPI.io (Secure/HTTPS using Bundle)
 if (Prefs.LATITUDE==0 || Prefs.LONGITUDE==0) { //use IP address to get timezone
-  String myIP = getPublicIP();
+  String myIP = getPublicIP(timeoutMs);
   if (myIP == "") return false;
   snprintf(tzURL, 99, "https://timeapi.io/api/timezone/ip?ipAddress=%s", myIP.c_str());
 } else {
@@ -116,7 +266,7 @@ M.setUrl(tzURL);
 M.setMethod("GET");
 M.setContentType("application/json");
 M.setCacert("bundle");
-M.timeout = 10000; // 5 second timeout for geocoding
+M.timeout = timeoutMs;
 M.usePSRAM = false;
 M.responseDoc = &doc;
 
@@ -194,8 +344,9 @@ void DSTsetup(void) {
 
   if (DST_old != Prefs.DST) {
     SerialPrint("DST changed from " + String(DST_old) + " to " + String(Prefs.DST), true);
-    //update dst
-    getTimezoneInfo();
+    if (getTimezoneInfo()) {
+      I.lastTimezoneRefresh = I.currentTime;
+    }
     Prefs.isUpToDate = false;
   }
 }

@@ -1,4 +1,4 @@
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 #ifdef _USELEDMATRIX
 #include "LEDMATRIX.hpp"
 #include "globals.hpp"

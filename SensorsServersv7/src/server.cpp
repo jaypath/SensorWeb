@@ -3,7 +3,9 @@
 #include "Devices.hpp"
 #include "SDCard.hpp"
 #ifdef _USENETWORKMONITOR
+#if _USENETWORKMONITOR > 0
 #include "NetworkMonitor.hpp"
+#endif
 #endif
 #ifdef _USETFT
   #ifdef _ISCLOCK480X480
@@ -20,24 +22,120 @@
 #endif
 
 #include "BootSecure.hpp"
+#include "AddESPNOW.hpp"
+#include "firmwareUpdate.hpp"
 
 #include <ssl_client.h> // Ensure this is at the top of server.cpp
 
 
 #include <string.h> // For memset
+#include <esp_task_wdt.h>
+#include <esp_ota_ops.h>
 
 
 #ifdef _USEUDP
 #include <lwip/sockets.h> // Essential for low-level IGMP control
-
+#include <lwip/igmp.h>
+#include <lwip/netif.h>
+#include <lwip/tcpip.h>
 
 extern WiFiUDP LAN_UDP;
+
+namespace {
+  constexpr uint32_t IGMP_REFRESH_INTERVAL_SEC = 300;
+  constexpr uint32_t IGMP_STALE_UDP_SEC = 120;
+  time_t s_lastIgmpRefreshTime = 0;
+}
+
+/**
+ * @brief Refresh IGMP membership for the UDP multicast group.
+ * Sends IGMPv2 Membership Reports so IGMP-snooping routers/APs keep forwarding 239.x traffic.
+ */
+void refreshIGMPMembership() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  struct netif *netif = netif_default;
+  if (netif == NULL) {
+    SerialPrint("IGMP: No default netif for membership report", true);
+    return;
+  }
+
+  IPAddress multicastIP(_USEUDP_MULTICAST);
+  ip4_addr_t groupaddr;
+  IP4_ADDR(&groupaddr,
+           multicastIP[0],
+           multicastIP[1],
+           multicastIP[2],
+           multicastIP[3]);
+
+  LOCK_TCPIP_CORE();
+
+  if (isTimeValid(I.currentTime) && isTimeValid(I.UDP_LAST_INCOMINGMSG_TIME)
+      && I.currentTime - I.UDP_LAST_INCOMINGMSG_TIME > IGMP_STALE_UDP_SEC) {
+    igmp_leavegroup_netif(netif, &groupaddr);
+    igmp_joingroup_netif(netif, &groupaddr);
+    UNLOCK_TCPIP_CORE();
+    SerialPrint("IGMP: Leave/rejoin recovery for " + multicastIP.toString(), true);
+    return;
+  }
+
+  if (igmp_lookfor_group(netif, &groupaddr) == NULL) {
+    err_t err = igmp_joingroup_netif(netif, &groupaddr);
+    UNLOCK_TCPIP_CORE();
+    if (err != ERR_OK) {
+      SerialPrint("IGMP: joingroup failed, err=" + String((int)err), true);
+      return;
+    }
+    SerialPrint("IGMP: Joined multicast group " + multicastIP.toString(), true);
+    return;
+  }
+
+  igmp_report_groups(netif);
+  UNLOCK_TCPIP_CORE();
+}
+
+void maybeRefreshIGMPMembership() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  if (!isTimeValid(I.currentTime)) {
+    return;
+  }
+  if (s_lastIgmpRefreshTime != 0
+      && I.currentTime - s_lastIgmpRefreshTime < IGMP_REFRESH_INTERVAL_SEC) {
+    return;
+  }
+  s_lastIgmpRefreshTime = I.currentTime;
+  refreshIGMPMembership();
+}
 #endif
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
+void maybeExitAPStationMode();
+
+static bool isRssiValid(int32_t rssi) {
+  return rssi < 0 && rssi > -150 && rssi > -999;
+}
+
+static const char* rssiHtmlColor(int32_t rssi) {
+  if (!isRssiValid(rssi)) return nullptr;
+  if (rssi > -60) return "#28a745";
+  if (rssi > -70) return "#d4a017";
+  return "#dc3545";
+}
+
+static String formatRssiHtml(int32_t rssi, const char* suffix = " dBm") {
+  if (!isRssiValid(rssi)) return "n/a";
+  const char* color = rssiHtmlColor(rssi);
+  String val = String(rssi) + suffix;
+  if (!color) return val;
+  return String("<span style=\"color:") + color + ";font-weight:bold;\">" + val + "</span>";
+}
 
 //wifi event registration 
 void WiFiEvent(WiFiEvent_t event) {
@@ -45,6 +143,39 @@ void WiFiEvent(WiFiEvent_t event) {
   String s = WiFiEventtoString(event);
   SerialPrint("WiFiEvent: " + s, true);
 
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      updateWifiChannel();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
+      String msg = "STA got IP " + WiFi.localIP().toString();
+      logSystemEvent(msg, EVENT_WIFI_CONNECTED);
+      updateWifiChannel();
+      syncDeviceIPFromWifi();
+      I.wifiDownSince = 0;
+      I.wifiFailCount = 0;
+      maybeExitAPStationMode();
+      break;
+    }
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      logSystemEvent("STA disconnected from AP", EVENT_WIFI_DISCONNECTED);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_START:
+      logSystemEvent("WiFi AP started", EVENT_WIFI_AP_STARTED);
+      updateWifiChannel();
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STOP:
+      logSystemEvent("WiFi AP stopped", EVENT_WIFI_AP_STOPPED);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+      logSystemEvent("AP client connected", EVENT_WIFI_AP_CLIENT_CONNECTED);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      logSystemEvent("AP client disconnected", EVENT_WIFI_AP_CLIENT_DISCONNECTED);
+      break;
+    default:
+      break;
+  }
 }
 
 String WiFiEventtoString(WiFiEvent_t event) {
@@ -97,43 +228,6 @@ String WiFiEventtoString(WiFiEvent_t event) {
 }
 
 
-// Base64 decoding functions
-int base64_dec_len(const char* input, int length) {
-  int i = 0;
-  int numEq = 0;
-  for (i = length - 1; input[i] == '='; i--) {
-    numEq++;
-  }
-  return ((6 * length) / 8) - numEq;
-}
-
-void base64_decode(const char* input, uint8_t* output) {
-  static const char PROGMEM b64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  int i = 0, j = 0;
-  int v;
-  
-  while (i < strlen(input)) {
-    v = 0;
-    for (int k = 0; k < 4; k++) {
-      v <<= 6;
-      if (input[i] == '=') {
-        v |= 0;
-      } else {
-        for (int l = 0; l < 64; l++) {
-          if (pgm_read_byte(&b64_alphabet[l]) == input[i]) {
-            v |= l;
-            break;
-          }
-        }
-      }
-      i++;
-    }
-    output[j++] = (v >> 16) & 0xFF;
-    if (input[i-2] != '=') output[j++] = (v >> 8) & 0xFF;
-    if (input[i-1] != '=') output[j++] = v & 0xFF;
-  }
-}
-
 //this server
 #ifdef _USE8266
 
@@ -156,24 +250,6 @@ extern STRUCT_PrefsH Prefs;
 //extern bool requestWiFiPassword(const uint8_t* serverMAC);
 
 
-String getCert(String filename) 
-{
-  //certificate should be in the SD card
-  
-
-  File f = SD.open(filename, FILE_READ);
-  String s="";
-  if (f) {  
-     if (f.available() > 0) {
-        s = f.readString(); 
-     }
-     f.close();
-    }    
-
-    
-    return s;
-}
-
 // Helper function to format bytes into human-readable format
 String formatBytes(uint64_t bytes) {
   if (bytes >= (1024ULL * 1024ULL * 1024ULL)) {
@@ -192,6 +268,182 @@ String formatBytes(uint64_t bytes) {
 extern "C" {
     extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
     extern const uint8_t x509_crt_imported_bundle_bin_end[]   asm("_binary_x509_crt_bundle_end");
+}
+#endif
+
+static constexpr size_t HTTP_JSON_INTERNAL_PARSE_MARGIN = 49152;
+static constexpr uint32_t HTTP_JSON_STREAM_TIMEOUT_MS = 60000;
+
+static size_t httpJsonInternalParseBudget() {
+  size_t freeHeap = esp_get_free_heap_size();
+  if (freeHeap <= HTTP_JSON_INTERNAL_PARSE_MARGIN) return 0;
+  size_t budget = freeHeap - HTTP_JSON_INTERNAL_PARSE_MARGIN;
+  return (budget > 400000) ? 400000 : budget;
+}
+
+static String httpJsonDocSummary(const JsonDocument& doc) {
+  if (doc.isNull()) return "empty";
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  if (!root.isNull()) {
+    return "object keys=" + String(root.size()) + " json=" + String(measureJson(doc)) + "B";
+  }
+  JsonArrayConst arr = doc.as<JsonArrayConst>();
+  if (!arr.isNull()) {
+    return "array len=" + String(arr.size()) + " json=" + String(measureJson(doc)) + "B";
+  }
+  return "parsed";
+}
+
+static bool httpJsonDocLooksParsed(const JsonDocument& doc, DeserializationError err) {
+  if (err || doc.overflowed() || doc.isNull()) return false;
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  if (!root.isNull() && root.size() > 0) return true;
+  JsonArrayConst arr = doc.as<JsonArrayConst>();
+  return !arr.isNull() && arr.size() > 0;
+}
+
+#ifdef _USESDCARD
+static bool writeRawToSD(const char* path, const uint8_t* data, size_t len) {
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return false;
+  size_t written = f.write(data, len);
+  f.flush();
+  f.close();
+  return written == len;
+}
+
+static bool readSdFileBytes(File& rf, char* dest, size_t len) {
+  size_t pos = 0;
+  while (pos < len) {
+    size_t chunk = (len - pos > 4096) ? 4096 : (len - pos);
+    int n = rf.read((uint8_t*)dest + pos, chunk);
+    if (n <= 0) return false;
+    pos += (size_t)n;
+    if ((pos % 16384) < (size_t)n) esp_task_wdt_reset();
+  }
+  dest[len] = '\0';
+  return true;
+}
+#endif
+
+static DeserializationError deserializeHttpJsonPayload(
+    JsonDocument& doc, const char* payload, size_t len,
+    const JsonDocument* filter, const char* urlForLog) {
+
+  if (!payload || len == 0) return DeserializationError::EmptyInput;
+
+  auto tryParseBuffer = [&](const char* src, size_t srcLen) -> DeserializationError {
+    doc.clear();
+    if (filter) {
+      return deserializeJson(doc, src, srcLen, DeserializationOption::Filter(*filter));
+    }
+    return deserializeJson(doc, src, srcLen);
+  };
+
+  const size_t internalBudget = httpJsonInternalParseBudget();
+  if (len <= internalBudget) {
+    char* internalCopy = (char*)heap_caps_malloc(len + 1, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (!internalCopy) internalCopy = (char*)malloc(len + 1);
+    if (internalCopy) {
+      memcpy(internalCopy, payload, len);
+      internalCopy[len] = '\0';
+      esp_task_wdt_reset();
+      DeserializationError err = tryParseBuffer(internalCopy, len);
+      free(internalCopy);
+      if (httpJsonDocLooksParsed(doc, err)) return DeserializationError::Ok;
+      if (err && err != DeserializationError::NoMemory) {
+        SerialPrint(("SendHTTPMessage: internal RAM parse failed for " + String(urlForLog) + ": " + String(err.c_str())).c_str(), true);
+        return err;
+      }
+      SerialPrint(("SendHTTPMessage: internal RAM parse incomplete for " + String(urlForLog) + " err=" + String(err.c_str()) + " " + httpJsonDocSummary(doc)).c_str(), true);
+    } else {
+      SerialPrint(("SendHTTPMessage: internal alloc failed for " + String(len) + " bytes (" + String(urlForLog) + ")").c_str(), true);
+    }
+  } else {
+    SerialPrint(("SendHTTPMessage: payload " + String(len) + " exceeds internal budget " + String(internalBudget) + " (" + String(urlForLog) + ")").c_str(), true);
+  }
+
+#ifdef _USESDCARD
+  const char* tmpPath = "/Data/HttpJsonParse.tmp";
+  if (writeRawToSD(tmpPath, (const uint8_t*)payload, len)) {
+    File rf = SD.open(tmpPath, FILE_READ);
+    if (rf) {
+      const size_t fileLen = rf.size();
+      if (fileLen > 0 && fileLen == len) {
+        if (fileLen <= internalBudget) {
+          char* sdCopy = (char*)heap_caps_malloc(fileLen + 1, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+          if (!sdCopy) sdCopy = (char*)malloc(fileLen + 1);
+          if (sdCopy && readSdFileBytes(rf, sdCopy, fileLen)) {
+            esp_task_wdt_reset();
+            DeserializationError err = tryParseBuffer(sdCopy, fileLen);
+            free(sdCopy);
+            if (httpJsonDocLooksParsed(doc, err)) {
+              rf.close();
+              SD.remove(tmpPath);
+              return DeserializationError::Ok;
+            }
+            if (err && err != DeserializationError::NoMemory) {
+              rf.close();
+              SD.remove(tmpPath);
+              SerialPrint(("SendHTTPMessage: SD buffer parse failed for " + String(urlForLog) + ": " + String(err.c_str())).c_str(), true);
+              return err;
+            }
+          } else if (sdCopy) {
+            free(sdCopy);
+          }
+        }
+
+        rf.seek(0);
+        rf.setTimeout(HTTP_JSON_STREAM_TIMEOUT_MS);
+        esp_task_wdt_reset();
+        doc.clear();
+        DeserializationError err = filter
+            ? deserializeJson(doc, rf, DeserializationOption::Filter(*filter))
+            : deserializeJson(doc, rf);
+        rf.close();
+        SD.remove(tmpPath);
+        if (httpJsonDocLooksParsed(doc, err)) return DeserializationError::Ok;
+        if (err) {
+          SerialPrint(("SendHTTPMessage: SD stream parse failed for " + String(urlForLog) + ": " + String(err.c_str())).c_str(), true);
+          return err;
+        }
+        SerialPrint(("SendHTTPMessage: SD stream parse incomplete for " + String(urlForLog) + " " + httpJsonDocSummary(doc)).c_str(), true);
+      } else {
+        rf.close();
+        SD.remove(tmpPath);
+        SerialPrint(("SendHTTPMessage: SD temp file size mismatch for " + String(urlForLog) + " (file=" + String(fileLen) + " payload=" + String(len) + ")").c_str(), true);
+      }
+    } else {
+      SerialPrint(("SendHTTPMessage: could not open SD temp file for " + String(urlForLog)).c_str(), true);
+    }
+  } else {
+    SerialPrint(("SendHTTPMessage: could not write SD temp file for " + String(urlForLog)).c_str(), true);
+  }
+#endif
+
+  esp_task_wdt_reset();
+  doc.clear();
+  DeserializationError err = tryParseBuffer(payload, len);
+  if (httpJsonDocLooksParsed(doc, err)) return DeserializationError::Ok;
+  if (!err) {
+    SerialPrint(("SendHTTPMessage: parse returned Ok but empty doc for " + String(urlForLog) + " (" + httpJsonDocSummary(doc) + ")").c_str(), true);
+    return DeserializationError::NoMemory;
+  }
+  SerialPrint(("SendHTTPMessage: direct parse failed for " + String(urlForLog) + ": " + String(err.c_str())).c_str(), true);
+  return err;
+}
+
+#ifdef _USESDCARD
+static void dumpHttpPayloadForDebug(const char* payload, size_t len, const char* url) {
+  if (!payload || len == 0) return;
+  if (writeRawToSD("/Data/HttpDebug_last.json", (const uint8_t*)payload, len)) {
+    SerialPrint("SendHTTPMessage: Wrote /Data/HttpDebug_last.json for inspection", true);
+  }
+  char preview[81];
+  size_t n = (len < 80) ? len : 80;
+  memcpy(preview, payload, n);
+  preview[n] = '\0';
+  SerialPrint(("SendHTTPMessage: Payload preview: " + String(preview)).c_str(), true);
 }
 #endif
 
@@ -225,9 +477,42 @@ class PayloadWrapper : public Stream { // Change Print to Stream
           memcpy(&msg->payload.get()[written], buffer, size);
           written += size;
           msg->payload.get()[written] = '\0';
+          if ((written % 16384) < size) {
+              esp_task_wdt_reset();
+          }
           return size;
       }
   };
+
+// Collects binary HTTP response bodies (e.g. encrypted POST_ENC replies).
+class EncResponseCollector : public Stream {
+public:
+    uint8_t* buf = nullptr;
+    size_t maxLen = 0;
+    size_t written = 0;
+
+    EncResponseCollector(uint8_t* out, size_t outMax) : buf(out), maxLen(outMax) {}
+
+    int available() override { return 0; }
+    int read() override { return -1; }
+    int peek() override { return -1; }
+    void flush() override {}
+
+    size_t write(uint8_t c) override {
+        return write(&c, 1);
+    }
+
+    size_t write(const uint8_t* buffer, size_t size) override {
+        if (!buf || size == 0) return 0;
+        size_t room = (written < maxLen) ? (maxLen - written) : 0;
+        if (size > room) size = room;
+        if (size == 0) return 0;
+        memcpy(buf + written, buffer, size);
+        written += size;
+        if ((written % 16384) < size) esp_task_wdt_reset();
+        return size;
+    }
+};
 
 
 bool SendHTTPMessage(HTTPMessage& M) {
@@ -236,19 +521,24 @@ bool SendHTTPMessage(HTTPMessage& M) {
       return false;
   }
 
-  if (CheckWifiStatus(false) != 1) return false;
+  if (!wifiReadyForNetwork()) {
+    M.success = false;
+    M.httpCode = 0;
+    return false;
+  }
 
   WiFiClient wfclient;
   WiFiClientSecure wfsclient;
   HTTPClient http;
 
 
+  const uint32_t clientTimeoutMs = (M.timeout > 0) ? M.timeout : 20000;
+  const uint32_t handshakeTimeoutMs = (clientTimeoutMs > 35000) ? 35000 : clientTimeoutMs;
+
   bool isSecure = String(M.url.get()).startsWith("https");
   if (!isSecure) {
-
-  
+    wfclient.setTimeout(clientTimeoutMs);
     http.begin(wfclient,M.url.get());
-    //
   } else {
 
     //Setup Security
@@ -270,6 +560,8 @@ bool SendHTTPMessage(HTTPMessage& M) {
         SerialPrint("SendHTTPMessage: WARNING - insecure connection for " + String(M.url.get()), true);
         wfsclient.setInsecure();
     }
+    wfsclient.setTimeout(clientTimeoutMs);
+    wfsclient.setHandshakeTimeout(handshakeTimeoutMs);
       // 2. Initialize Connection
     if (!http.begin(wfsclient, M.url.get())) {
       M.success = false;
@@ -281,7 +573,7 @@ bool SendHTTPMessage(HTTPMessage& M) {
   }
 
 //  http.useHTTP10(true); //always prefer HTTP/1.0 for no chunked encoding
-  if (M.timeout > 0) http.setTimeout(M.timeout); // 15 second timeout for geocoding
+  http.setTimeout(clientTimeoutMs);
 
   // 3. Headers & Method execution
   if (M.contentType) http.addHeader("Content-Type", M.contentType.get());
@@ -303,17 +595,29 @@ bool SendHTTPMessage(HTTPMessage& M) {
   }
 
   const char* method = M.method ? M.method.get() : "GET";
+  esp_task_wdt_reset();
   M.httpCode = http.sendRequest(method, (uint8_t*)M.body.get(), M.body ? strlen(M.body.get()) : 0);
+  esp_task_wdt_reset();
 
 
   if (M.httpCode < 200 || M.httpCode >= 400) {
     SerialPrint("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), true);
     SerialPrint("SendHTTPMessage: Error: " + String(http.errorToString(M.httpCode).c_str()), true);
-    storeError("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), ERROR_HTTP_RESPONSE,true);
+    ERRORCODES errType = ERROR_HTTP_RESPONSE;
+    if (M.httpCode == HTTPC_ERROR_READ_TIMEOUT || M.httpCode == HTTPC_ERROR_CONNECTION_LOST) {
+      errType = ERROR_HTTP_TIMEOUT;
+    }
+    storeError("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), errType, true);
     M.success = false;
     http.end();
 
     return false;
+  }
+
+  if (M.httpCode == 304) {
+    M.success = true;
+    http.end();
+    return true;
   }
 
   // 4. Handle Response
@@ -321,9 +625,12 @@ bool SendHTTPMessage(HTTPMessage& M) {
 
   if (serverSize == 0) {
     SerialPrint("SendHTTPMessage: FYI: No payload from " + String(M.url.get()), true);
-    M.success = true; //no payload
+    M.success = (M.responseDoc == nullptr);
+    if (!M.success) {
+      storeError("SendHTTPMessage: Empty body for " + String(M.url.get()), ERROR_JSON_PARSE, true);
+    }
     http.end();
-    return true;
+    return M.success;
   }
     
   if (serverSize == -1) {
@@ -381,89 +688,203 @@ bool SendHTTPMessage(HTTPMessage& M) {
 
   //now stream the response to the payload
   PayloadWrapper wrapper(&M);
-  http.writeToStream(&wrapper); 
+  http.writeToStream(&wrapper);
+  esp_task_wdt_reset();
   M.success = true;
 
-  M.success = true;
-// 5. Optional JSON Deserialization
-if (M.success && M.responseDoc) {
-  DeserializationError error;
-  if (M.filter) {
-    SerialPrint("SendHTTPMessage: Deserializing JSON with filter for " + String(M.url.get()), true);
-    error = deserializeJson(*M.responseDoc, M.payload.get(), DeserializationOption::Filter(*M.filter));
-  } else {
-    error = deserializeJson(*M.responseDoc, M.payload.get());
+  size_t payloadLen = (M.payload && M.payload.get()) ? strlen(M.payload.get()) : 0;
+  if (payloadLen > 0) {
+    SerialPrint(("SendHTTPMessage: Downloaded " + String(payloadLen) + " bytes from " + String(M.url.get())).c_str(), true);
   }
-  if (error) {
+
+  if (M.success && M.responseDoc && M.payload) {
+    esp_task_wdt_reset();
+    DeserializationError error = deserializeHttpJsonPayload(
+        *M.responseDoc, M.payload.get(), payloadLen, M.filter, M.url.get());
+    esp_task_wdt_reset();
+
+    if (!error && M.responseDoc->overflowed()) {
+      error = DeserializationError::NoMemory;
+    }
+    if (error) {
       M.success = false;
       SerialPrint("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), true);
-      storeError("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), ERROR_JSON_PARSE,true);
+      storeError("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), ERROR_JSON_PARSE, true);
+#ifdef _USESDCARD
+      dumpHttpPayloadForDebug(M.payload.get(), payloadLen, M.url.get());
+#endif
+    } else {
+      SerialPrint(("SendHTTPMessage: Parsed " + httpJsonDocSummary(*M.responseDoc) + " for " + String(M.url.get())).c_str(), true);
+    }
   }
-}
-
-
 
   http.end();
   return M.success;
 }
 
 
-int8_t CheckWifiStatus(bool trytoconnect) {  
-  // First check if we have a valid IP address (most reliable indicator)
+int8_t measureWifiLinkStatus() {
   //2 - connected by all measures, but wifi.status() != WL_CONNECTED
-  //1 - valid status
-  //0 - unknown status (no SSID, no gateway, no IP address, no RSSI range)
+  //1 - valid status (WL_CONNECTED)
+  //0 - unknown status
   //-1 - no valid IP address
-  //-2 - no valid RSSI range (will accept anything between 0 and -150 dBm)
+  //-2 - no valid RSSI range
   //-3 - no valid SSID
   //-4 - no valid gateway
-  //-5 - WiFi station is starting
-
 
   int32_t rssi = WiFi.RSSI();
 
-  //first just check if the status lists as accurate...
-  if (WiFi.status() == WL_CONNECTED) {    
-    SerialPrint("WifiStatus: Connected with wifi.status() == WL_CONNECTED", true);
-
+  if (WiFi.status() == WL_CONNECTED) {
     I.WiFiStatus = 1;
-    return 1; //done!
-  } else {
-    I.WiFiStatus = 0;
+    return 1;
   }
+  I.WiFiStatus = 0;
 
   if (WiFi.SSID().length() <= 0) {
-    SerialPrint("WifiStatus: SSID is not set", true); 
-    I.WiFiStatus = -3;  // no valid SSID
-  }
-
-  else if  (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
-      SerialPrint("WifiStatus: Gateway is not set", true);
-      I.WiFiStatus = -4;  // no valid gateway
-  }  
-  
-  else if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
-    SerialPrint("WifiStatus: Does not have valid IP address", true);
+    I.WiFiStatus = -3;
+  } else if (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
+    I.WiFiStatus = -4;
+  } else if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
     I.WiFiStatus = -1;
+  } else if (!(rssi < 0 && rssi > -150)) {
+    I.WiFiStatus = -2;
+  } else {
+    I.WiFiStatus = 2;
+  }
+  return I.WiFiStatus;
+}
+
+void updateRSSI(bool forceUpdate) {
+  constexpr time_t RSSI_POLL_INTERVAL_SEC = 5;
+  if (!forceUpdate && I.lastRSSItime != 0 && I.currentTime - I.lastRSSItime < RSSI_POLL_INTERVAL_SEC) {
+    return;
   }
 
-  else if (!(rssi < 0 && rssi > -150)) {
-      SerialPrint("WifiStatus: RSSI " + String(rssi) + " is not in valid range", true);
-      I.WiFiStatus = -2;  // no valid RSSI range
+  if (WiFi.status() != WL_CONNECTED) {
+    I.RSSIcurrent = -999;
+    I.lastRSSItime = I.currentTime;
+    return;
   }
-  
-  else { //all good
-    if (I.WiFiStatus != 1) I.WiFiStatus = 2; //wifi.status() != WL_CONNECTED from above
-    else I.WiFiStatus = 1;
-  } 
 
-  if (trytoconnect && I.WiFiStatus < 1) {
-    tryWifi(5000, true);
-    CheckWifiStatus(false);
+  int16_t rssi = WiFi.RSSI();
+  if (rssi == 0) {
+    I.RSSIcurrent = -999;
+  } else {
+    I.RSSIcurrent = rssi;
+    if (I.RSSIlow == -999 || rssi < I.RSSIlow) {
+      I.RSSIlow = rssi;
+    }
+    if (I.RSSIhigh == -999 || rssi > I.RSSIhigh) {
+      I.RSSIhigh = rssi;
+    }
   }
-  
-  return I.WiFiStatus;  
-  
+  I.lastRSSItime = I.currentTime;
+}
+
+void syncDeviceIPFromWifi() {
+  int16_t devIndex = Sensors.findMyDeviceIndex();
+  if (devIndex < 0) return;
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
+  if (!device || !device->IsSet) return;
+
+  const bool connected = (measureWifiLinkStatus() >= 1);
+  IPAddress newIP = connected ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
+  if (device->IP == newIP) return;
+
+  IPAddress oldIP = device->IP;
+  device->IP = newIP;
+  SerialPrint("syncDeviceIPFromWifi: " + oldIP.toString() + " -> " + newIP.toString(), true);
+  #ifdef _USESDCARD
+  storeDevicesSensorsSD();
+  #endif
+}
+
+static void syncWifiDownFlags(bool connected) {
+  if (connected) {
+    I.wifiDownSince = 0;
+    I.wifiFailCount = 0;
+    return;
+  }
+  if (I.wifiDownSince == 0 && isTimeValid(I.currentTime)) {
+    I.wifiDownSince = I.currentTime;
+  }
+}
+
+static bool haveWifiCredentials() {
+  return Prefs.HAVECREDENTIALS && Prefs.WIFISSID[0] != 0;
+}
+
+static bool initialSetupRequirementsMet() {
+  if (!haveWifiCredentials()) return false;
+  if (Prefs.TimeZoneOffset > 50400) return false;
+  #ifdef _USEWEATHER
+  if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) return false;
+  #endif
+  return true;
+}
+
+void syncInitialSetupState() {
+  if (initialSetupRequirementsMet()) {
+    I.initialSetupFinalized = true;
+    I.initialSetupExitPending = false;
+  }
+}
+
+int8_t CheckWifiStatus(WifiCheckMode mode) {
+  const int8_t linkStatus = measureWifiLinkStatus();
+  const bool connected = (linkStatus >= 1);
+
+  syncWifiDownFlags(connected);
+  syncDeviceIPFromWifi();
+
+  if (connected) {
+    maybeExitAPStationMode();
+    return linkStatus;
+  }
+
+  if (mode == WIFI_CHECK_BOOT) {
+    if (!haveWifiCredentials()) {
+      enterAPStationMode();
+      return linkStatus;
+    }
+    for (uint8_t attempt = 1; attempt <= WIFI_BOOT_RETRY_LIMIT; ++attempt) {
+      #ifdef _USETFT
+      tftPrint("WiFi attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT) + ", please wait",
+          true, TFT_WHITE, 2, 1, false, -1, -1);
+      #endif
+      SerialPrint("Boot WiFi attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT), true);
+      if (tryWifi(WIFI_BOOT_TRY_MS, true) == 1) {
+        syncWifiDownFlags(true);
+        syncDeviceIPFromWifi();
+        return measureWifiLinkStatus();
+      }
+    }
+    SerialPrint("Boot WiFi failed after " + String(WIFI_BOOT_RETRY_LIMIT) + " attempts; entering AP mode", true);
+    enterAPStationMode();
+    return linkStatus;
+  }
+
+  // Runtime: no forced reconnect — autoreconnect handles recovery.
+  if (!haveWifiCredentials()) {
+    if (!I.apModeActive) {
+      enterAPStationMode();
+    }
+    return linkStatus;
+  }
+
+  if (I.wifiDownSince && isTimeValid(I.currentTime)
+      && (I.currentTime - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
+    if (!I.apModeActive) {
+      SerialPrint("WiFi down > " + String(WIFI_DOWN_AP_THRESHOLD_SEC) + "s; entering AP mode", true);
+      enterAPStationMode();
+    }
+  }
+
+  return linkStatus;
+}
+
+bool wifiReadyForNetwork() {
+  return measureWifiLinkStatus() == 1;
 }
 
 int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
@@ -503,7 +924,7 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
   uint32_t firstTryTimeout = delayms; 
     
     // First check for connection
-    while (CheckWifiStatus(false) <1 && (millis() - startTime) < firstTryTimeout) {
+    while (measureWifiLinkStatus() < 1 && (millis() - startTime) < firstTryTimeout) {
       SerialPrint("Waiting for connection... " + String(millis() - startTime) + " of " + String(firstTryTimeout) + " milliseconds", true);
       delay(100);
     }
@@ -516,7 +937,6 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
       return 1; 
 
     } else {
-      I.wifiFailCount++;
       tftPrint("Failed WiFi", true);
 
       return -1; 
@@ -524,47 +944,34 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
 
 }
 
-int16_t connectWiFi(uint8_t retryLimit) {
-
+int16_t connectWiFi(uint8_t retryLimit, uint16_t tryTimeoutMs) {
+  // Blocking connect for setup wizard after user saves credentials.
   uint8_t retries = 0;
-  while (CheckWifiStatus(true)!=1 && retries<retryLimit) {
+  while (measureWifiLinkStatus() != 1 && retries < retryLimit) {
+    tryWifi(tryTimeoutMs, true);
     retries++;
-    SerialPrint("Failed WiFi, retry #" + String(retries), true);    
+    SerialPrint("connectWiFi: attempt #" + String(retries), true);
   }
 
-  if (CheckWifiStatus(false)==1) {
+  if (measureWifiLinkStatus() == 1) {
     SerialPrint("connectWiFi: WiFi connected", true);
-    
-    int16_t devIndex = Sensors.findMyDeviceIndex();
-    if (devIndex != -1) {
-      ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
-      if (device != nullptr) {
-        IPAddress oldIP = device->IP;
-
-        device->IP = WiFi.localIP();
-
-        if (oldIP != device->IP) {
-          SerialPrint("connectWiFi: Updated device IP from " + oldIP.toString() + " to " + device->IP, true);
-          #ifdef _USESDCARD
-          storeDevicesSensorsSD();
-          #endif
-        }
-      }
-    } else {
-      // Device not found, register it
-      int16_t newIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
-      if (newIndex >= 0) {
-        SerialPrint("connectWiFi: Registered device with IP: " + WiFi.localIP().toString(), true);
-      } else {
-        SerialPrint("connectWiFi: Failed to register device", true);
-      }
-    }
-
-  
+    syncDeviceIPFromWifi();
+    updateWifiChannel();
     return retries;
   }
 
-  return -1000; //failed to connect
+  return -1000;
+}
+
+void startWifiConnectAsync() {
+  if (!haveWifiCredentials()) return;
+  #ifdef _USE32
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  #endif
+  WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD);
+  WiFi.setSleep(WIFI_PS_NONE);
+  SerialPrint("startWifiConnectAsync: non-blocking STA reconnect started", true);
 }
 
 bool connectUDP() {
@@ -589,6 +996,7 @@ bool connectUDP() {
         SerialPrint("Joined Multicast Group: " + multicastIP.toString(), true);
     }
 
+    refreshIGMPMembership();
     
     return true;
 
@@ -598,122 +1006,243 @@ bool connectUDP() {
 return false;
 }
 
-void APStation_Mode() {
+namespace {
+  uint32_t s_apEnterMillis = 0;
+  uint32_t s_apLastChannelScanMillis = 0;
+  volatile bool s_apChannelScanListen = false;
+  volatile bool s_apChannelScanGotResponse = false;
+
+  bool apEspNowStaleFor(uint32_t seconds) {
+    if (!isTimeValid(I.ESPNOW_LAST_INCOMINGMSG_TIME)) return true;
+    if (!isTimeValid(I.currentTime)) {
+      return (millis() - s_apEnterMillis) >= (seconds * 1000UL);
+    }
+    return (I.currentTime - I.ESPNOW_LAST_INCOMINGMSG_TIME) >= seconds;
+  }
+
+  bool apClientIdleFor(uint32_t seconds) {
+    if (isTimeValid(I.apLastClientActivity) && isTimeValid(I.currentTime)) {
+      return (I.currentTime - I.apLastClientActivity) >= seconds;
+    }
+    if (isTimeValid(I.apModeEnteredTime) && isTimeValid(I.currentTime)) {
+      return (I.currentTime - I.apModeEnteredTime) >= seconds;
+    }
+    return (millis() - s_apEnterMillis) >= (seconds * 1000UL);
+  }
+
+  void maybeSendApModeEntryServerPing() {
+    if (!apEspNowStaleFor(AP_ESP_NOW_STALE_PING_SEC)) return;
+    if (!ensureESPNOW()) return;
+    SerialPrint("AP mode: sending broadcast server ping (type 13)", true);
+    broadcastServerPing(1);
+  }
+
+  bool runApModeChannelScan() {
+    if (!ensureESPNOW()) return false;
+
+    SerialPrint("AP mode: starting ESP-NOW channel scan", true);
+    s_apChannelScanListen = true;
+    s_apChannelScanGotResponse = false;
+
+    bool found = false;
+    for (uint8_t ch = AP_WIFI_CHANNEL_MIN; ch <= AP_WIFI_CHANNEL_MAX; ++ch) {
+      if (!setWifiRfChannel(ch)) continue;
+
+      broadcastServerPing(1);
+
+      const uint32_t stepStart = millis();
+      while (millis() - stepStart < AP_CHANNEL_SCAN_STEP_MS) {
+        delay(10);
+        esp_task_wdt_reset();
+        server.handleClient();
+        if (s_apChannelScanGotResponse) {
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+
+    s_apChannelScanListen = false;
+
+    if (!found && _MYTYPE >= 100) {
+      SerialPrint("AP mode: channel scan failed, server defaulting to channel 1", true);
+      setWifiRfChannel(1);
+    }
+
+    s_apLastChannelScanMillis = millis();
+    if (isTimeValid(I.currentTime)) {
+      I.apLastChannelScanTime = I.currentTime;
+    }
+
+    SerialPrint(String("AP mode: channel scan ") + (found ? "found server" : "no server"), true);
+    return found;
+  }
+
+  bool shouldRunApChannelScan() {
+    if (wifiReadyForNetwork()) return false;
+    if (!apEspNowStaleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
+    if (!apClientIdleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
+
+    if (_MYTYPE >= 100) {
+      return s_apLastChannelScanMillis == 0;
+    }
+
+    if (s_apLastChannelScanMillis == 0) return true;
+    if (isTimeValid(I.apLastChannelScanTime) && isTimeValid(I.currentTime)) {
+      return (I.currentTime - I.apLastChannelScanTime) >= AP_CHANNEL_SCAN_IDLE_SEC;
+    }
+    return (millis() - s_apLastChannelScanMillis) >= (AP_CHANNEL_SCAN_IDLE_SEC * 1000UL);
+  }
+}
+
+bool setWifiRfChannel(uint8_t channel) {
+  if (channel < AP_WIFI_CHANNEL_MIN || channel > AP_WIFI_CHANNEL_MAX) return false;
+  #ifdef _USE32
+  if (esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+    SerialPrint("setWifiRfChannel: failed to set channel " + String(channel), true);
+    return false;
+  }
+  I.WifiChannel = channel;
+  return true;
+  #else
+  (void)channel;
+  return false;
+  #endif
+}
+
+void noteApModeServerPingResponse(uint8_t wifiChannel) {
+  if (!s_apChannelScanListen) return;
+  if (wifiChannel < AP_WIFI_CHANNEL_MIN || wifiChannel > AP_WIFI_CHANNEL_MAX) return;
+  s_apChannelScanGotResponse = true;
+}
+
+void enterAPStationMode() {
+  if (I.apModeActive) return;
+
   registerHTTPMessage("APStation");
-  
-  //wifi ID and pwd will be set in connectsoftap
   String wifiPWD;
   String wifiID;
   IPAddress apIP;
-  
 
-  SerialPrint("Init AP Station Mode... Please wait... ",false);
+  SerialPrint("Init non-blocking AP Station Mode... ", false);
 
   #ifdef _USELEDMATRIX
   Matrix_Init();
   Matrix_Draw(false, "WiFi?");
-
   #endif
-  // Add delay to ensure system is ready
-  delay(500);
-  
-  connectSoftAP(&wifiID,&wifiPWD,&apIP);
 
-  delay(500);
+  connectSoftAP(&wifiID, &wifiPWD, &apIP);
 
+  if (initESPNOW() == 1) {
+    SerialPrint("ESPNow initialized in AP mode", true);
+  } else {
+    SerialPrint("ESPNow init failed in AP mode", true);
+  }
 
-  SerialPrint("AP Station ID started.",false);
-  
-  
-  // Add delay before starting server
-  delay(500);
-  server.begin(); //start server
+  server.begin();
 
+  I.apModeActive = true;
+  I.apLastReconnectCheckTime = 0;
+  I.apLastClientActivity = 0;
+  I.apLastChannelScanTime = 0;
+  s_apLastChannelScanMillis = 0;
+  s_apEnterMillis = millis();
+  if (isTimeValid(I.currentTime)) {
+    I.apModeEnteredTime = I.currentTime;
+  } else {
+    I.apModeEnteredTime = 0;
+  }
 
-  SerialPrint("AP Station ID: ",false);
-  SerialPrint(wifiID,true);
-  SerialPrint("AP Station Password: ",false);
-  SerialPrint(wifiPWD,true);
-  SerialPrint("AP Station IP: ",false);
-  SerialPrint(apIP.toString(),true);
+  SerialPrint("AP Station ID: ", false);
+  SerialPrint(wifiID, true);
+  SerialPrint("AP Station Password: ", false);
+  SerialPrint(wifiPWD, true);
+  SerialPrint("AP Station IP: ", false);
+  SerialPrint(apIP.toString(), true);
 
-    #ifdef _USETFT
-    tft.clear();
-    tft.setCursor(0, 0);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextFont(2);
-    tft.setTextSize(1);
-    if (Prefs.HAVECREDENTIALS) tft.printf("Failed to connect to %s.\nWiFi may be down. I will try again after reboot.\nOr ", Prefs.WIFISSID);
-    else tft.printf("No stored credentials.\nYou must ");
-    tft.printf("join\n\nWiFi: %s\npwd: %s\n\nand go to website:\n\n%s\n\n", 
-               wifiID.c_str(), wifiPWD.c_str(), apIP.toString().c_str());
-    
-    #endif
+  maybeSendApModeEntryServerPing();
 
-    uint32_t m=millis();
-    uint32_t startTime = m;
-    const uint32_t timeoutMs = 600000; // 10 minute timeout
-    uint32_t last60Seconds = m;
-    uint32_t lastServerStatusUpdate = I.HTTP_LAST_INCOMINGMSG_TIME;
-    
-    do {
-      //reset the watchdog timer
-      esp_task_wdt_reset();
-      m=millis();
-      //draw the timeout left at the botton right of the screen
-      
-      if (m - last60Seconds > 1000) {
-        last60Seconds = m;
-        I.currentTime = m/1000; //arbitrary time measure, just to keep track of clock
-
-        #ifdef _USETFT
-        //clear the bottom left of the screen
-        tft.fillRect(0, tft.height()-40, tft.width(), 100, TFT_BLACK);
-        tft.setCursor(0, tft.height()-40);
-        tft.setTextColor(TFT_WHITE);
-        tft.setTextFont(2);
-        tft.setTextSize(1);
-        tft.printf("Seconds before reboot: %ds\n", ((timeoutMs - (m - startTime))/1000));
-        tft.printf("WiFi: %s, Location: %s, Time: %s",
-          (Prefs.HAVECREDENTIALS)?"Y":"N",
-          (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0)?"Y":"N",
-          (Prefs.TimeZoneOffset <= 50400)?"Y":"N");
-        #endif
-
-      }
-
-      //reset the start time if the server status has been updated
-      if (I.HTTP_LAST_INCOMINGMSG_TIME != lastServerStatusUpdate) {
-        lastServerStatusUpdate = I.HTTP_LAST_INCOMINGMSG_TIME;
-        startTime = m;
-      }
-      
-      server.handleClient(); //check if user has set up WiFi
-            
-      // Check for timeout
-      if ( m - startTime > timeoutMs) {
-
-        //if credentials are stored, but havecredentials was false, then try rebooting with those credentials on next boot
-        if (Prefs.WIFISSID[0] != 0 && Prefs.WIFIPWD[0] != 0) {
-          Prefs.HAVECREDENTIALS = true;
-          Prefs.isUpToDate = false;
-        }
-        #ifdef _USETFT
-        tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
-        tft.setCursor(0, tft.height()-200);
-        tft.setTextColor(TFT_WHITE);
-        tft.setTextFont(2);
-        tft.setTextSize(1);
-        tft.println("Timeout waiting for credentials. Rebooting...");        
-        #endif
-        delay(5000);
-        controlledReboot("WiFi credentials timeout", RESET_WIFI, true);
-        break;
-      }
-    }     while (true); //just keep looping until time runs out, or setup completed
-
+  #ifdef _USETFT
+//  tftPrint("AP mode: join " + wifiID + " / " + wifiPWD + " -> http://" + apIP.toString(), true, TFT_YELLOW);
+  #endif
 }
 
+void maybeExitAPStationMode() {
+  if (!I.apModeActive) return;
+  if (!I.initialSetupFinalized) return;
+  if (!initialSetupRequirementsMet()) return;
+
+  if (I.initialSetupExitPending) {
+    if (WiFi.softAPgetStationNum() > 0) return;
+    if (!apClientIdleFor(3)) return;
+    I.initialSetupExitPending = false;
+  }
+
+  exitAPStationMode();
+}
+
+void exitAPStationMode() {
+  if (!I.apModeActive) return;
+
+  WiFi.softAPdisconnect(true);
+  I.apModeActive = false;
+  I.apLastReconnectCheckTime = 0;
+  I.apLastClientActivity = 0;
+  I.apModeEnteredTime = 0;
+  I.apLastChannelScanTime = 0;
+  s_apLastChannelScanMillis = 0;
+  s_apChannelScanListen = false;
+  s_apChannelScanGotResponse = false;
+  SerialPrint("exitAPStationMode: soft AP stopped, STA active", true);
+
+  updateWifiChannel();
+
+  #ifdef _USEUDP
+  if (wifiReadyForNetwork()) {
+    connectUDP();
+  }
+  #endif
+}
+
+void serviceAPStationMode() {
+  if (!I.apModeActive) return;
+
+  maybeExitAPStationMode();
+  if (!I.apModeActive) return;
+
+  static uint32_t lastHttpActivitySeen = 0;
+  if (I.HTTP_LAST_INCOMINGMSG_TIME != lastHttpActivitySeen) {
+    lastHttpActivitySeen = I.HTTP_LAST_INCOMINGMSG_TIME;
+    if (isTimeValid(I.currentTime)) {
+      I.apLastClientActivity = I.currentTime;
+    }
+  }
+
+  if (shouldRunApChannelScan()) {
+    runApModeChannelScan();
+  }
+
+  if (!haveWifiCredentials()) return;
+
+  const bool firstCheck = (I.apLastReconnectCheckTime == 0);
+  const bool due = firstCheck
+      || (isTimeValid(I.currentTime)
+          && I.currentTime - I.apLastReconnectCheckTime >= WIFI_DOWN_AP_THRESHOLD_SEC);
+  if (!due) return;
+
+  const bool clientActiveSinceLastCheck = !firstCheck
+      && isTimeValid(I.apLastClientActivity)
+      && I.apLastClientActivity >= I.apLastReconnectCheckTime;
+
+  if (isTimeValid(I.currentTime)) {
+    I.apLastReconnectCheckTime = I.currentTime;
+  }
+
+  if (!clientActiveSinceLastCheck) {
+    startWifiConnectAsync();
+  }
+}
 
 // Helper function to URL encode strings
 String urlEncode(const String& str) {
@@ -800,9 +1329,9 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   // Attempt WiFi connection
   SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
-  connectWiFi(); //try to connect to WiFi, and if it fails, will start AP mode
+  connectWiFi(WIFI_BOOT_RETRY_LIMIT, WIFI_BOOT_TRY_MS);
   
-  if (CheckWifiStatus(false)==1) {
+  if (wifiReadyForNetwork()) {
     SerialPrint("WiFi connected! IP: " + WiFi.localIP().toString(), true);
 
     //store prefs and core now  
@@ -835,7 +1364,7 @@ bool lookupLocationFromAddress(const String& street, const String& city, const S
   }
   
   // Check WiFi status
-  if (CheckWifiStatus(false)!=1) {
+  if (!wifiReadyForNetwork()) {
     SerialPrint("lookupLocationFromAddress: WiFi not connected", true);
     return false;
   }
@@ -1033,7 +1562,7 @@ void apiSaveTimezone() {
 }
 
 void handleSNS_READ_NOW() {
-  #ifdef _ISPERIPHERAL
+  #if _HAS_LOCAL_SENSORS
   registerHTTPMessage("API_SNS_READ_NOW");
   int16_t snsType = server.hasArg("snsType") ? server.arg("snsType").toInt() : 0;
   int16_t snsID = server.hasArg("snsID") ? server.arg("snsID").toInt() : 0;
@@ -1062,15 +1591,11 @@ void handleSNS_READ_NOW() {
 void apiGetSetupStatus() {
   registerHTTPMessage("API_Setup");
 
-  bool wifistatus = (CheckWifiStatus(false)==1);
-  bool wifi_configured = Prefs.HAVECREDENTIALS && (wifistatus);
+  bool wifistatus = wifiReadyForNetwork();
+  bool wifi_configured = haveWifiCredentials();
   bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
   bool timezone_configured = (Prefs.TimeZoneOffset <= 50400);
-  #ifdef _USEWEATHER
-  bool setup_complete = wifi_configured && timezone_configured && location_configured;
-  #else
-  bool setup_complete = wifi_configured && timezone_configured;
-  #endif
+  bool setup_complete = initialSetupRequirementsMet() && I.initialSetupFinalized;
   
   String json = "{\"wifi_configured\":" + String(wifi_configured ? "true" : "false") +
                 ",\"wifi_connected\":" + String(wifistatus ? "true" : "false") +
@@ -1096,23 +1621,21 @@ void apiGetSetupStatus() {
 void handleApiCompleteSetup() {
   registerHTTPMessage("API_OK");
 
-  if (CheckWifiStatus(false)!=1) {
-    #ifdef _USETFT
-    tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
-    tft.setCursor(0, tft.height()-200);
-    tft.setTextColor(TFT_RED);
-    tft.setTextFont(2);
-    tft.setTextSize(1);
-    tft.println("Connection failed...");
-    tft.setTextColor(TFT_WHITE);
+  if (!initialSetupRequirementsMet()) {
+    String missing = "";
+    if (!haveWifiCredentials()) missing += "WiFi credentials; ";
+    #ifdef _USEWEATHER
+    if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) missing += "location; ";
     #endif
-  
-    server.send(200, "application/json", "{\"success\":false,\"error\":\"Failed to connect to WiFi\"}");
+    if (Prefs.TimeZoneOffset > 50400) missing += "timezone; ";
+    server.send(400, "application/json",
+      "{\"success\":false,\"error\":\"Setup incomplete: " + missing + "required before finishing\"}");
     return;
   }
 
+  I.initialSetupFinalized = true;
+  I.initialSetupExitPending = true;
   storeCoreData(true);
-
 
   #ifdef _USETFT
   tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
@@ -1120,13 +1643,14 @@ void handleApiCompleteSetup() {
   tft.setTextColor(TFT_WHITE);
   tft.setTextFont(2);
   tft.setTextSize(1);
-  tft.println("Rebooting with updated credentials...");
+  tft.println("Setup complete. Rebooting...");
   #endif
-  //reboot the device
-  server.send(200, "application/json", "{\"success\":true,\"message\":\"Setup complete - rejoin regular wifi network\"}");
 
-  controlledReboot("WIFI CREDENTIALS RESET",RESET_NEWWIFI,true);
-  
+  server.send(200, "application/json",
+    "{\"success\":true,\"message\":\"Setup is complete. The device will reboot now to refresh weather data and the display.\"}");
+
+  delay(250);
+  controlledReboot("Initial setup complete", RESET_NEWWIFI, true);
 }
 
 /**
@@ -1288,6 +1812,8 @@ void apiClearWiFi() {
   memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
   Prefs.HAVECREDENTIALS = false;
   Prefs.isUpToDate = false;
+  I.initialSetupFinalized = false;
+  I.initialSetupExitPending = false;
   
   // Save preferences
   BootSecure bootSecure;
@@ -1353,7 +1879,7 @@ void handleInitialSetup() {
   //possible choices include no wifi, no timezone, no location (if using weather), or user reset
 
   //is there no wifi?
-  CheckWifiStatus(false);
+  CheckWifiStatus(WIFI_CHECK_NORMAL);
   WEBHTML += "<p>";
   WEBHTML += "Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>";    
   WEBHTML += "WiFi connection status: "; 
@@ -1378,7 +1904,7 @@ void handleInitialSetup() {
   if (I.WiFiStatus >= 1) {
     WEBHTML += "Currently connected to WiFi network: " + WiFi.SSID() + "<br>";
     WEBHTML += "Current IP address: " + WiFi.localIP().toString() + "<br>";
-    WEBHTML += "Current RSSI: " + String(WiFi.RSSI()) + "<br>";
+    WEBHTML += "Current RSSI: " + formatRssiHtml(WiFi.RSSI()) + "<br>";
   } else {
     WEBHTML += "Not connected to WiFi<br>";
   }
@@ -1426,6 +1952,7 @@ void handleInitialSetup() {
         <button class="btn btn-secondary" onclick="scanWiFiNetworks()" id="scan-btn" style="margin-top: 5px; padding: 8px 16px; font-size: 14px;">
           Scan for Networks
         </button>
+        <div id="wifi-scan-results" style="margin-top:8px;font-size:13px;"></div>
       </div>
       
       <div class="form-group">
@@ -1525,6 +2052,7 @@ void handleInitialSetup() {
   
   <!-- Complete Setup -->
   <div style="text-align: center; margin: 30px 0;">
+    <div id="complete-status" class="status-message"></div>
     <button class="btn btn-primary" id="complete-btn" onclick="completeSetup()" disabled style="font-size: 18px; padding: 15px 30px;">
       Complete Setup
     </button>
@@ -1571,7 +2099,7 @@ function completeStep(stepNum) {
 
 // Check if setup is complete
 function checkSetupComplete() {
-  if (setupState.wifiConfigured && setupState.timezoneConfigured) {
+  if (setupState.wifiConfigured && setupState.locationConfigured && setupState.timezoneConfigured) {
     document.getElementById('complete-btn').disabled = false;
   }
 }
@@ -1624,6 +2152,12 @@ async function clearWiFiCredentials() {
   }
 }
 
+function rssiColor(rssi) {
+  if (rssi > -60) return '#28a745';
+  if (rssi > -70) return '#d4a017';
+  return '#dc3545';
+}
+
 // Scan for WiFi networks
 async function scanWiFiNetworks() {
   showStatus('wifi-status', 'Scanning for networks...', 'info');
@@ -1645,12 +2179,15 @@ async function scanWiFiNetworks() {
     if (data && data.success !== undefined) {
       if (data.success && Array.isArray(data.networks)) {
         const datalist = document.getElementById('ssid-list');
-        datalist.innerHTML = ''; // Clear existing options
+        const resultsDiv = document.getElementById('wifi-scan-results');
+        datalist.innerHTML = '';
+        if (resultsDiv) resultsDiv.innerHTML = '';
         
         if (data.networks.length > 0) {
           // Sort networks by signal strength (RSSI)
           data.networks.sort((a, b) => b.rssi - a.rssi);
           
+          let resultsHtml = '';
           // Add each network to the datalist
           data.networks.forEach(network => {
             const option = document.createElement('option');
@@ -1660,7 +2197,9 @@ async function scanWiFiNetworks() {
             const lock = network.encryption > 0 ? '[enc] ' : '[open]';
             option.textContent = lock + network.ssid + ' ' + bars;
             datalist.appendChild(option);
+            resultsHtml += '<div>' + lock + network.ssid + ' <span style="color:' + rssiColor(network.rssi) + ';font-weight:bold;">' + network.rssi + ' dBm</span></div>';
           });
+          if (resultsDiv) resultsDiv.innerHTML = resultsHtml;
           
           showStatus('wifi-status', 'Found ' + data.networks.length + ' networks. Select from the dropdown.', 'success');
         } else {
@@ -1843,10 +2382,26 @@ async function saveTimezone() {
   }
 }
 
-// Complete setup
-function completeSetup() {
-  if (confirm('Setup complete!  Continue?')) {
-    window.location.href = '/api/complete-setup';
+// Complete setup (device reboots to refresh weather and display)
+async function completeSetup() {
+  if (!confirm('Finish setup? The device will reboot to apply settings and refresh the screen.')) {
+    return;
+  }
+  const completeBtn = document.getElementById('complete-btn');
+  completeBtn.disabled = true;
+  showStatus('complete-status', 'Saving configuration...', 'info');
+  try {
+    const response = await fetch('/api/complete-setup', { method: 'POST' });
+    const data = await response.json();
+    if (data.success) {
+      showStatus('complete-status', data.message, 'success');
+    } else {
+      showStatus('complete-status', data.error || 'Setup could not be completed', 'error');
+      completeBtn.disabled = false;
+    }
+  } catch (error) {
+    showStatus('complete-status', 'Error: ' + error.message, 'error');
+    completeBtn.disabled = false;
   }
 }
 
@@ -1965,7 +2520,7 @@ void handleREQUESTWEATHER() {
 
   WEBHTML = "";
   if (server.args()==0) {
-        WEBHTML += (String) WeatherData.getTemperature(0,false,true) + ";"; //current temp
+        WEBHTML += (String) WeatherData.getTemperature(I.currentTime) + ";"; //current temp
         WeatherData.getDailyTemp(0,dailyT);
         WEBHTML += (String) dailyT[0] + ";"; //dailymax
         WEBHTML += (String) dailyT[1] + ";"; //dailymin
@@ -2055,11 +2610,16 @@ void handleSTATUS() {
   WEBHTML += "Number of devices/sensors: " + (String) Sensors.getNumDevices() + " / " + (String) Sensors.getNumSensors() + "<br>";
   WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
   WEBHTML = WEBHTML + "Number of reboots today: " + (String) I.rebootsToday + "<br>";;
-  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???");
+  #ifdef _USESDCARD
+  WEBHTML = WEBHTML + " <a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Error Log</a>";
+  WEBHTML = WEBHTML + " <a href=\"/SDCARD_SYSTEMLOG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">System Log</a>";
+  #endif
+  WEBHTML = WEBHTML + "<br>";
   WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
   WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
   WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + ((CheckWifiStatus(false)==1) ? "Connected" : "Disconnected") + "<br>";
+  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (wifiReadyForNetwork() ? "Connected" : "Disconnected") + "<br>";
   WEBHTML += "<strong>WiFi Self Report Status:</strong> " + String(((WiFi.status() != WL_CONNECTED) ? "Not Connected" : "Connected")) + "<br>";
   WEBHTML = WEBHTML + "<strong>WiFi Mode:</strong> " + getWiFiModeString() + "<br>";
 
@@ -2069,12 +2629,12 @@ void handleSTATUS() {
     WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
     WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "<br>";
     WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
-    WEBHTML = WEBHTML + "<strong>Router Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm<br>";
+    WEBHTML = WEBHTML + "<strong>Router Signal Strength:</strong> " + formatRssiHtml(WiFi.RSSI()) + "<br>";
     
   } else if (t == WIFI_MODE_STA) {
     WEBHTML = WEBHTML + "<strong>Station IP:</strong> " + WiFi.localIP().toString() + "<br>";
     WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
-    WEBHTML = WEBHTML + "<strong>Signal Strength:</strong> " + (String) WiFi.RSSI() + " dBm<br>";
+    WEBHTML = WEBHTML + "<strong>Signal Strength:</strong> " + formatRssiHtml(WiFi.RSSI()) + "<br>";
   
   } else if (t == WIFI_MODE_AP) {
     WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + "<br>";
@@ -2084,41 +2644,70 @@ void handleSTATUS() {
 
   WEBHTML = WEBHTML + "<strong>Stored/Preferred SSID:</strong> " + String((char*)Prefs.WIFISSID) + "<br>";
   WEBHTML = WEBHTML + "<strong>Stored Security Key:</strong> " + String((char*)Prefs.KEYS.ESPNOW_KEY) + "</p>";
-  WEBHTML = WEBHTML + "Last WiFi event: " + WiFiEventtoString(I.WiFiLastEvent) + "<br>";
-  #ifdef _USENETWORKMONITOR
-  for (byte i = 0; i < 7; i++) {
-    WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTest[i] + ": ";
-    switch (i) {
-      case 0:
-        switch (NetworkMonitor.NetworkTestValue[i]) {
-          case 1:
-            WEBHTML = WEBHTML + "OK";
-            break;
-          case 0:
-            WEBHTML = WEBHTML + "Not Connected";
-            break;
-          case -1:
-            WEBHTML = WEBHTML + "Local network stack not initialized";
-            break;
-          case -2:
-            WEBHTML = WEBHTML + "Join failed";
-            break;
-        }
-        WEBHTML = WEBHTML + " @" + (String) (NetworkMonitor.lastPollTime[i] ? dateify(NetworkMonitor.lastPollTime[i],"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-        break;
-      case 1:
-        WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTestValue[i] + " dBm @" + (String) (NetworkMonitor.lastRSSILowTime ? dateify(NetworkMonitor.lastRSSILowTime,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-        break;
-      case 2:
-      case 3:
-      case 4:
-      case 5:
-      case 6:
-        WEBHTML = WEBHTML + (String) NetworkMonitor.NetworkTestValue[i] + " @" + (String) (NetworkMonitor.lastPollTime[i] ? dateify(NetworkMonitor.lastPollTime[i],"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-        break;
-    }
+  #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+  auto nmTime = [](time_t t) -> String {
+    return t ? dateify(t, "mm/dd/yyyy hh:nn:ss") : String("???");
+  };
+  WEBHTML = WEBHTML + "<strong>RSSI:</strong> current " + formatRssiHtml(I.RSSIcurrent)
+      + " @" + (String) (I.lastRSSItime ? dateify(I.lastRSSItime,"mm/dd/yyyy hh:nn:ss") : "???")
+      + ", best " + formatRssiHtml(I.RSSIhigh) + ", worst " + formatRssiHtml(I.RSSIlow) + "<br>";
+  WEBHTML = WEBHTML + "AP switches: " + String(NetworkMonitor.bssid.changeCount)
+      + " @" + nmTime(NetworkMonitor.bssid.lastAttemptTime) + "<br>";
+  WEBHTML = WEBHTML + "LocalIP switches: " + String(NetworkMonitor.localIp.changeCount)
+      + " @" + nmTime(NetworkMonitor.localIp.lastAttemptTime) + "<br>";
+  WEBHTML = WEBHTML + "DNS Resolution Time: " + String(NetworkMonitor.dns.resolutionMs) + " ms"
+      + " @" + nmTime(NetworkMonitor.dns.lastAttemptTime) + "<br>";
+  WEBHTML = WEBHTML + "Tx Failures: " + String(NetworkMonitor.txFailures.failureCount)
+      + " @" + nmTime(NetworkMonitor.txFailures.lastAttemptTime) + "<br>";
+  WEBHTML = WEBHTML + "Gateway Latency: " + String(NetworkMonitor.gatewayLatency.ping.avgRttMs) + " ms avg, "
+      + String(NetworkMonitor.gatewayLatency.ping.packetsLost) + "/" + String(NetworkMonitor.gatewayLatency.ping.packetsSent) + " lost, jitter "
+      + String(NetworkMonitor.gatewayLatency.ping.jitterMs) + " ms @"
+      + nmTime(NetworkMonitor.gatewayLatency.lastAttemptTime) + "<br>";
+  WEBHTML = WEBHTML + "External Ping: " + String(NetworkMonitor.externalPing.wan.avgRttMs) + " ms avg, "
+      + String(NetworkMonitor.externalPing.wan.packetsLost) + "/" + String(NetworkMonitor.externalPing.wan.packetsSent) + " lost, jitter "
+      + String(NetworkMonitor.externalPing.wan.jitterMs) + " ms (WAN)";
+  if (NetworkMonitor.externalPing.gatewayChecked) {
+    WEBHTML = WEBHTML + "; gateway " + String(NetworkMonitor.externalPing.gateway.avgRttMs) + " ms avg, "
+        + String(NetworkMonitor.externalPing.gateway.packetsLost) + "/" + String(NetworkMonitor.externalPing.gateway.packetsSent) + " lost, jitter "
+        + String(NetworkMonitor.externalPing.gateway.jitterMs) + " ms (LAN)";
   }
+  WEBHTML = WEBHTML + " @" + nmTime(NetworkMonitor.externalPing.lastAttemptTime) + "<br>";
+  {
+    double speedMbps = -1;
+    NetworkMonitor.readSensorValue(89, speedMbps);
+    WEBHTML = WEBHTML + "Speedtest: ";
+    if (speedMbps < 0) {
+      WEBHTML = WEBHTML + "failed";
+    } else {
+      WEBHTML = WEBHTML + String(speedMbps, 2) + " Mbps (" + String(NetworkMonitor.download.durationMs) + " ms, "
+          + String(NetworkMonitor.download.downloadBytes) + " bytes)";
+    }
+    WEBHTML = WEBHTML + " from " + NetworkMonitor.download.sourceIP.toString() + " @"
+        + nmTime(NetworkMonitor.download.lastRunTime) + "<br>";
+  }
+  #else
+  WEBHTML = WEBHTML + "<strong>RSSI:</strong> current " + formatRssiHtml(I.RSSIcurrent)
+      + " @" + (String) (I.lastRSSItime ? dateify(I.lastRSSItime,"mm/dd/yyyy hh:nn:ss") : "???")
+      + ", best " + formatRssiHtml(I.RSSIhigh) + ", worst " + formatRssiHtml(I.RSSIlow) + "<br>";
   #endif
+
+  WEBHTML = WEBHTML + "---------------------<br>";
+  WEBHTML = WEBHTML + "<h3>HTTP Incoming</h3>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME > 0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Receives:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_RECEIVES + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Incoming From IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
+  WEBHTML = WEBHTML + "</table>";
+  WEBHTML = WEBHTML + R"===(
+    <form action="/REQUEST_BROADCAST" method="post" style="margin: 15px 0;">
+      <button type="submit" style="padding:10px 20px; background-color:#2196F3; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">
+        Broadcast Now
+      </button>
+    </form>
+  )===";
+
+  #ifdef _USEDETAILEDSTATUSWEBHTML
   WEBHTML = WEBHTML + "---------------------<br>";      
   #ifdef _USEUDP  
   //in this section we will show incoming and then outgoing UDP message traffic info  
@@ -2169,15 +2758,8 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNOW Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_INCOMING_ERRORS + "</td></tr>";
   WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_RECEIVES + "</td></tr>";
   WEBHTML = WEBHTML + "</table>";
-  //add a button here to trigger a broadcast (I'm alive) message
-  // Button to trigger a broadcast ("I'm alive") message
-  WEBHTML = WEBHTML + R"===(
-    <form action="/REQUEST_BROADCAST" method="post" style="margin-bottom:15px;">
-      <button type="submit" style="padding:10px 20px; background-color:#2196F3; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">
-        Broadcast Now
-      </button>
-    </form>
-  )===";
+
+  #endif
   #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -2205,44 +2787,75 @@ void handleSTATUS() {
   WEBHTML = WEBHTML + "---------------------<br>";      
 
 
-  // Sensor details link under server status section
-  WEBHTML = WEBHTML + "<br><div style=\"text-align: center; padding: 10px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/SENSORDETAILS\" style=\"display: inline-block; margin: 10px; padding: 15px 25px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold;\">Sensor Details</a>";
-  WEBHTML = WEBHTML + "</div>";
-
   serverTextClose(200);
 }
 
 
 void handleRoot(void) {
   registerHTTPMessage("MainPage");
+  if (!haveWifiCredentials()) {
+    SerialPrint("No stored WiFi credentials, redirecting root to InitialSetup", true);
+    server.sendHeader("Location", "/InitialSetup");
+    server.send(302, "text/plain", "Redirecting to setup...");
+    return;
+  }
   renderDeviceViewerPage();
-}
-
-void handleSensorDetails(void) {
-  registerHTTPMessage("SensorDetails");
-  handlerForRoot(false);
-}
-
-void handleALL(void) {
-  handlerForRoot(true);
 }
 
 void appendStandardPageNav(bool includeWiFiConfig) {
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a> ";
-  if (includeWiFiConfig) {
-    WEBHTML = WEBHTML + "<a href=\"/InitialSetup\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a> ";
-  }
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
   WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a> ";
-  WEBHTML = WEBHTML + "<a href=\"/SENSORDETAILS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Sensor Details</a>";
+  WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  #ifdef _USESDCARD
+  WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
+  #endif
+  #ifdef _USEWEATHER
+  WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
+  #endif
+  #ifdef _USEGSHEET
+  WEBHTML = WEBHTML + "<a href=\"/GSHEET\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #E91E63; color: white; text-decoration: none; border-radius: 4px;\">GSheets</a> ";
+  #endif
+  WEBHTML = WEBHTML + "<a href=\"/CONFIG\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">System Config</a>";
+  if (includeWiFiConfig) {
+    WEBHTML = WEBHTML + " <a href=\"/InitialSetup\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a>";
+  }
   WEBHTML = WEBHTML + "</div>";
 }
 
+static String formatArborysDeviceFirmware(const ArborysDevType* device) {
+  if (!device) return "0.0.0";
+  char buf[16];
+  device->firmware.toChar(buf, sizeof(buf));
+  return String(buf);
+}
+
+static void appendDeviceFirmwareInfoRow(const ArborysDevType* device) {
+  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Firmware Version:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(device) + "</td></tr>";
+}
+
+static void appendAllDevicesFirmwareTable() {
+  WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
+  WEBHTML = WEBHTML + "<h4>Registered Devices</h4>";
+  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML = WEBHTML + "<tr style=\"background-color: #e9ecef;\">";
+  WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Device Name</th>";
+  WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">IP Address</th>";
+  WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type</th>";
+  WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Firmware</th>";
+  WEBHTML = WEBHTML + "</tr>";
+  for (int16_t di = 0; di < NUMDEVICES; di++) {
+    if (!Sensors.isDeviceInit(di)) continue;
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d) continue;
+    WEBHTML = WEBHTML + "<tr>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"/?devIndex=" + String(di) + "\">" + String(d->devName) + "</a></td>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + d->IP.toString() + "\" target=\"_blank\">" + d->IP.toString() + "</a></td>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(d->devType) + "</td>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(d) + "</td>";
+    WEBHTML = WEBHTML + "</tr>";
+  }
+  WEBHTML = WEBHTML + "</table></div>";
+}
 
 void serverTextHeader(String pagename) {
   WEBHTML = "<!DOCTYPE html><html><head><title>" + (String) Prefs.DEVICENAME + "</title>";
@@ -2252,7 +2865,10 @@ void serverTextHeader(String pagename) {
   )===";
   WEBHTML += "<h1>" + (String) Prefs.DEVICENAME + " - " + pagename + "</h1>";
   WEBHTML += "<h2>Current Time: " + (String) dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2>";
-  WEBHTML += "<h3>Current version: " + (String) PROJECT_VER + "</h3>";
+  ArborysDevType* myDev = nullptr;
+  uint16_t myDeviceIndex = Sensors.findMyDeviceIndex();
+  if (myDeviceIndex != (uint16_t)-1) myDev = Sensors.getDeviceByDevIndex(myDeviceIndex);
+  WEBHTML += "<h3>Current version: " + formatArborysDeviceFirmware(myDev) + "</h3>";
   WEBHTML += "<h3>Device IP: " + (String) WiFi.localIP().toString() + "</h3>";  
 }
 
@@ -2265,14 +2881,81 @@ void serverTextClose(int htmlcode, bool asHTML) {
   else server.send(htmlcode, "text/plain", WEBHTML.c_str());   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
 
-
 static void appendSensorTablePlotCells(int16_t j, ArborysSnsType* sensor) {
   WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";
   WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
 }
 
+#if _HAS_LOCAL_SENSORS
+static bool sensorHistoryUsesLocalMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID) {
+  int16_t snsIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
+  return snsIndex >= 0 && Sensors.isMySensor(snsIndex);
+}
+#endif
+
+static bool retrieveSensorDataForWebPlot(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N,
+    uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder) {
+#if _HAS_LOCAL_SENSORS
+  if (sensorHistoryUsesLocalMemory(deviceMAC, snsType, snsID)) {
+    return retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, N, t, v, f, starttime, endtime, forwardOrder);
+  }
+#endif
+#ifdef _USESDCARD
+  return retrieveSensorDataFromSD(deviceMAC, snsType, snsID, N, t, v, f, starttime, endtime, forwardOrder);
+#else
+  (void)deviceMAC; (void)snsType; (void)snsID; (void)N; (void)t; (void)v; (void)f;
+  (void)starttime; (void)endtime; (void)forwardOrder;
+  return false;
+#endif
+}
+
+static bool retrieveMovingAverageForWebPlot(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID,
+    uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX,
+    double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder) {
+#if _HAS_LOCAL_SENSORS
+  if (sensorHistoryUsesLocalMemory(deviceMAC, snsType, snsID)) {
+    return retrieveMovingAverageSensorDataFromMemory(deviceMAC, snsType, snsID, starttime, endtime,
+        windowSize, numPointsX, averagedValues, averagedTimes, averagedFlags, forwardOrder);
+  }
+#endif
+#ifdef _USESDCARD
+  return retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime,
+      windowSize, numPointsX, averagedValues, averagedTimes, averagedFlags, forwardOrder);
+#else
+  (void)deviceMAC; (void)snsType; (void)snsID; (void)starttime; (void)endtime; (void)windowSize;
+  (void)numPointsX; (void)averagedValues; (void)averagedTimes; (void)averagedFlags; (void)forwardOrder;
+  return false;
+#endif
+}
+
+#if _IS_SERVER_HUB
+static void appendSensorTableOverrideConfigCell(int16_t j, ArborysSnsType* sensor) {
+  WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
+  WEBHTML = WEBHTML + "<details>";
+  WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Override Flags</summary>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_OVERRIDE_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsIndex\" value=\"" + String(j) + "\">";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">OverrideFlags:</label>";
+  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
+  uint8_t currentOverrideFlags = sensor->OverrideFlags;
+  const char* overrideFlagNames[] = {"Flag Status", "Monitored", "Outside", "Derived/Calc", "Predictive", "High/Low", "Changed", "Critical"};
+  for (int i = 0; i < 8; i++) {
+    WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
+    WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"override_flag_bit" + String(i) + "\" value=\"1\"";
+    if (bitRead(currentOverrideFlags, i)) WEBHTML = WEBHTML + " checked";
+    WEBHTML = WEBHTML + ">";
+    WEBHTML = WEBHTML + "<span style=\"font-size: 11px;\">" + String(i) + ":" + String(overrideFlagNames[i]) + "</span>";
+    WEBHTML = WEBHTML + "</label>";
+  }
+  WEBHTML = WEBHTML + "</div></div>";
+  WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update Override</button>";
+  WEBHTML = WEBHTML + "</form></details></td>";
+}
+#endif
+
 static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
-  #ifdef _ISPERIPHERAL
+  #if _HAS_LOCAL_SENSORS
   if (Sensors.isMySensor(j)) {
     int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(j);
     if (prefsIndex >= 0 && prefsIndex < _SENSORNUM) {
@@ -2334,36 +3017,16 @@ static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
     } else {
       WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
     }
-  } else {
-    WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Sensor " + String(j) + " is not my sensor" + "</td>";
+    return;
   }
-  #else
-  WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
-  WEBHTML = WEBHTML + "<details>";
-  WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Override Flags</summary>";
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_OVERRIDE_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
-  WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsIndex\" value=\"" + String(j) + "\">";
-  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-  WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">OverrideFlags:</label>";
-  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
-  uint8_t currentOverrideFlags = sensor->OverrideFlags;
-  const char* overrideFlagNames[] = {"Flag Status", "Monitored", "Outside", "Derived/Calc", "Predictive", "High/Low", "Changed", "Critical"};
-  for (int i = 0; i < 8; i++) {
-    WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
-    WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"override_flag_bit" + String(i) + "\" value=\"1\"";
-    if (bitRead(currentOverrideFlags, i)) WEBHTML = WEBHTML + " checked";
-    WEBHTML = WEBHTML + ">";
-    WEBHTML = WEBHTML + "<span style=\"font-size: 11px;\">" + String(i) + ":" + String(overrideFlagNames[i]) + "</span>";
-    WEBHTML = WEBHTML + "</label>";
-  }
-  WEBHTML = WEBHTML + "</div></div>";
-  WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update Override</button>";
-  WEBHTML = WEBHTML + "</form></details></td>";
+  #endif
+  #if _IS_SERVER_HUB
+  appendSensorTableOverrideConfigCell(j, sensor);
   #endif
 }
 
 static void appendSensorTableFlagsCell(ArborysSnsType* sensor) {
-  #ifndef _ISPERIPHERAL
+  #if _IS_SERVER_HUB
   char flagsBuf[9];
   char overrideFlagsBuf[9];
   Byte2Bin(sensor->Flags, flagsBuf);
@@ -2376,256 +3039,38 @@ static void appendSensorTableFlaggedCell(ArborysSnsType* sensor) {
   WEBHTML = WEBHTML + "<td>" + (String) bitRead(sensor->Flags,0) + (String) (bitRead(sensor->Flags,6) ? "*" : "" ) + "</td>";
 }
 
-static void appendSensorTableExpiredCell(ArborysSnsType* sensor) {
-  #ifdef _ISPERIPHERAL
-  WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
-  #else
+static void appendSensorTableExpiredCell(int16_t j, ArborysSnsType* sensor) {
+  #if _HAS_LOCAL_SENSORS
+  if (Sensors.isMySensor(j)) {
+    WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
+    return;
+  }
+  #endif
+  #if _IS_SERVER_HUB
   WEBHTML = WEBHTML + "<td>" + (String) ((sensor->expired==0)?((bitRead(sensor->Flags,7))?"N*":"n"):((bitRead(sensor->Flags,7))?"<font color=\"#EE4B2B\">Y*</font>":"<font color=\"#EE4B2B\">y</font>")) + "</td>";
+  #else
+  WEBHTML = WEBHTML + "<td>" + (String) ((bitRead(sensor->Flags,7))?"Y":"N") + "</td>";
   #endif
 }
 
-void rootTableFill(int16_t j, bool deviceViewerLayout) {
-//j is the snsindex
-  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);    
+void rootTableFill(int16_t j) {
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(j);
   if (!sensor) return;
 
   WEBHTML = WEBHTML + "<tr>";
-  if (deviceViewerLayout) {
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsID + "</td>";
-    WEBHTML = WEBHTML + "<td>" + Sensors.sensorIsOfType(sensor) + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
-    appendSensorTableFlagsCell(sensor);
-    appendSensorTableFlaggedCell(sensor);
-    appendSensorTableExpiredCell(sensor);
-  } else {
-    WEBHTML = WEBHTML + "<td><a href=\"http://" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + (String) Sensors.getDeviceIPBySnsIndex(j).toString() + "</a></td>";
-    WEBHTML = WEBHTML + "<td>" + (String) MACToString(Sensors.getDeviceMACBySnsIndex(j)) + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
-    WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType+"."+ (String) sensor->snsID + "</td>";
-    appendSensorTableFlaggedCell(sensor);
-    appendSensorTableFlagsCell(sensor);
-    WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
-    appendSensorTableExpiredCell(sensor);
-  }
+  WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) sensor->snsID + "</td>";
+  WEBHTML = WEBHTML + "<td>" + Sensors.sensorIsOfType(sensor) + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
+  appendSensorTableFlagsCell(sensor);
+  appendSensorTableFlaggedCell(sensor);
+  appendSensorTableExpiredCell(j, sensor);
   appendSensorTablePlotCells(j, sensor);
   appendSensorTableConfigCell(j, sensor);
   WEBHTML = WEBHTML + "</tr>";
 }
-
-
-
-void handlerForRoot(bool allsensors) {
-  WEBHTML.clear();
-  WEBHTML = "";
-  
-  // Check if initial setup is complete
-  bool wifistatus = (CheckWifiStatus(false)==1);
-  bool wifi_configured = Prefs.HAVECREDENTIALS && wifistatus;
-  bool timezone_configured = (Prefs.TimeZoneOffset <= 50400);
-  
-  #ifdef _USEWEATHER
-  bool location_configured = (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0);
-  bool setup_complete = wifi_configured && timezone_configured && location_configured;
-  #else
-  bool setup_complete = wifi_configured && timezone_configured;
-  #endif
-  
-  // Redirect to Initial Setup Wizard if not configured
-  if (!setup_complete) {
-    SerialPrint("Setup incomplete [WiFiStatus is " + String(CheckWifiStatus(false)) + ",  timezone is " + String(timezone_configured?"true":"false")  + "], redirecting to Initial Setup Wizard", true);
-    server.sendHeader("Location", "/InitialSetup");
-    server.send(302, "text/plain", "Setup incomplete. Redirecting to setup wizard...");
-    return;
-  }
-  
-  // Normal root page for fully configured systems
-  serverTextHeader(allsensors ? "All Sensors" : "Sensor Details");
-  
-  if (Prefs.HAVECREDENTIALS==true && wifistatus && Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) { //note that lat and lon could be any number, but likelihood of both being 0 is very low, and not in the US
-
-
-  #ifdef _USEROOTCHART
-  WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
-  #endif
-  WEBHTML = WEBHTML + "<body>";
-  appendStandardPageNav();
-  
-  WEBHTML = WEBHTML + "---------------------<br>";
-    
-  
-    WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
-    WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
-    WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left; color: #EE4B2B;\">System Status</th>";
-    #ifndef _ISPERIPHERAL
-    WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left; color: #EE4B2B;\">Sensor Status</th>";
-    #else
-    WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left; color: #EE4B2B;\">Local Sensor Status</th>";
-    #endif
-    WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left; color: #EE4B2B;\">Device Settings</th>";
-    WEBHTML = WEBHTML + "</tr>";
-    
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device Name: " + (String) Prefs.DEVICENAME + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Critical sensors expired: " + (String) I.isExpired + + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/STATUS\">Status</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-    
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device Type: " + (String) _MYTYPE + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Flagged sensors: " + (String) I.isFlagged + + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/READONLYCOREFLAGS\">Core Flags</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-    
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device IP: " + (String) WiFi.localIP().toString() + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Soil dry: " + (String) I.isSoilDry + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/CONFIG\">System Configuration</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-    
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device MAC: " + (String) MACToString(Prefs.PROCID) + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Leak detected: " + (String) I.isLeak + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/\">Main</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device WiFi: " + (String) WiFi.SSID() + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Temp high: " + (String) I.isHot + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/SDCARD\">SD Card Config</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-
-    WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Device WiFi Signal: " + (String) WiFi.RSSI() + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Temp low: " + (String) I.isCold + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/GSHEET\">GSheets Config</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-
-    WEBHTML = WEBHTML + "<tr>";
-    #ifndef _ISPERIPHERAL
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Connected Devices/Sensors: " + (String) Sensors.getNumDevices()  + "/" + (String) Sensors.getNumSensors() + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Heat: " + (I.isHeat ? "on" : "off") + ", AC: " + (I.isAC ? "on" : "off") + ", Fan: " + (I.isFan ? "on" : "off") + "</td>";
-    #else
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Local Devices/Sensors: " + (String) Sensors.getNumDevices()  + "/" + (String) Sensors.getNumSensors() + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"></td>";
-    #endif
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"><a href=\"/WEATHER\">Weather Data</a></td>";
-    WEBHTML = WEBHTML + "</tr>";
-    
-    
-    WEBHTML = WEBHTML + "</table>";
-  
-  
-  WEBHTML = WEBHTML + "---------------------<br>";
-
-    byte used[NUMSENSORS];
-    for (byte j=0;j<NUMSENSORS;j++)  {
-      used[j] = 255;
-    }
-
-    byte usedINDEX = 0;
-
-
-  WEBHTML = WEBHTML + "<p><table id=\"Logs\" style=\"width:100%\">";
-  #ifdef _ISPERIPHERAL
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:100px\">Last Send</th><th style=\"width:50px\">Critical</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:300px\">Config</th></tr>";
-  #else
-  WEBHTML = WEBHTML + "<tr><th style=\"width:100px\"><button onclick=\"sortTable(0)\">IP Address</button></th><th style=\"width:50px\">ArdID</th><th style=\"width:100px\">Sensor</th><th style=\"width:100px\">Value</th><th style=\"width:75px\"><button onclick=\"sortTable(4)\">Sns Type</button></th><th style=\"width:75px\"><button onclick=\"sortTable(5)\">Flagged</button></th><th style=\"width:75px\">Flags</button></th><th style=\"width:150px\">Last Recvd</th><th style=\"width:50px\">EXP</th><th style=\"width:75px\">Plot Avg</th><th style=\"width:75px\">Plot Raw</th><th style=\"width:320px\">Override Config</th></tr>";
-  #endif
-  for (byte j=0;j<NUMSENSORS;j++)  {
-    ArborysSnsType* sensor = Sensors.snsIndexToPointer(j);
-    if (sensor && sensor->IsSet) {
-      if (allsensors && bitRead(sensor->Flags,1)==0) continue;
-      if (sensor->snsID>0 && sensor->snsType>0 && inIndex(j,used,NUMSENSORS) == false)  {
-        used[usedINDEX++] = j;
-        rootTableFill(j, false);
-
-        for (byte jj=j+1;jj<NUMSENSORS;jj++) {
-          ArborysSnsType* sensor2 = Sensors.snsIndexToPointer(jj);
-          if (sensor2 && sensor2->IsSet) {
-            if (allsensors && bitRead(sensor2->Flags,1)==0) continue;
-            if (sensor2->snsID>0 && sensor2->snsType>0 && inIndex(jj,used,NUMSENSORS) == false && sensor2->deviceIndex==sensor->deviceIndex) {
-                used[usedINDEX++] = jj;
-                rootTableFill(jj, false);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  WEBHTML += "</table>";
-
-#ifdef _USEROOTCHART
-  //add chart
-  WEBHTML += "<br>-----------------------<br>\n";
-  WEBHTML += "<div id=\"myChart\" style=\"width:100%; max-width:800px; height:200px;\"></div>\n";
-  WEBHTML += "<br>-----------------------<br>\n";
-#endif
-
-  WEBHTML += "</p>";
-
-
-  WEBHTML =WEBHTML  + "<script>";
-#ifdef _USEROOTCHART
-  
-  //chart functions
-    WEBHTML =WEBHTML  + "google.charts.load('current',{packages:['corechart']});\n";
-    WEBHTML =WEBHTML  + "google.charts.setOnLoadCallback(drawChart);\n";
-    
-    WEBHTML += "function drawChart() {\n";
-
-    WEBHTML += "const data = google.visualization.arrayToDataTable([\n";
-    WEBHTML += "['t','val'],\n";
-
-    for (int jj = 48-1;jj>=0;jj--) {
-      WEBHTML += "[" + (String) ((int) ((double) ((LAST_BAT_READ - 60*60*jj)-t)/60)) + "," + (String) batteryArray[jj] + "]";
-      if (jj>0) WEBHTML += ",";
-      WEBHTML += "\n";
-    }
-    WEBHTML += "]);\n\n";
-
-    
-    // Set Options
-    WEBHTML += "const options = {\n";
-    WEBHTML += "hAxis: {title: 'min from now'}, \n";
-    WEBHTML += "vAxis: {title: 'Battery%'},\n";
-    WEBHTML += "legend: 'none'\n};\n";
-
-    WEBHTML += "const chart = new google.visualization.LineChart(document.getElementById('myChart'));\n";
-    WEBHTML += "chart.draw(data, options);\n"; 
-    WEBHTML += "}\n";
-  #endif
-
-  WEBHTML += "function sortTable(col) {  var table, rows, switching, i, x, y, shouldSwitch;table = document.getElementById(\"Logs\");switching = true;while (switching) {switching = false;rows = table.rows;for (i = 1; i < (rows.length - 1); i++) {shouldSwitch = false;x = rows[i].getElementsByTagName(\"TD\")[col];y = rows[i + 1].getElementsByTagName(\"TD\")[col];if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {shouldSwitch = true;break;}}if (shouldSwitch) {rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);switching = true;}}}";
-  WEBHTML += "</script> \n";
-
-} else {
-  bool wifistatus = (CheckWifiStatus(false)==1);
-  if (!Prefs.HAVECREDENTIALS || !wifistatus) {
-    SerialPrint("Prefs.HAVECREDENTIALS not set or Wifi not connected, redirecting to InitialSetup");
-    //redirect to WiFi config page
-    server.sendHeader("Location", "/InitialSetup");
-    serverTextClose(302,false);
-    return;
-  } else {
-    SerialPrint("Prefs.HAVECREDENTIALS==true, redirecting to WEATHER");
-    //redirect to weather config page
-    server.sendHeader("Location", "/WEATHER");  
-    serverTextClose(302,false);
-    return;
-  }
-}
-
-serverTextClose(200);
-
-}
-
-
-
 
 void handleNotFound(){
   registerHTTPMessage("404");
@@ -2683,22 +3128,9 @@ void handleRETRIEVEDATA() {
   
   bool success=false;
   if (starttime>0) {
-    #ifdef _ISPERIPHERAL
-    success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
-    
-    #else
-    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime,true);
-    
-    #endif
-  
-  } else    {
-    #ifdef _ISPERIPHERAL
-    success = retrieveSensorDataFromMemory(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true);
-    
-    #else
-    success = retrieveSensorDataFromSD(deviceMAC, snsType, snsID, &N, t, v, f, 0,endtime,true); //this fills from tn backwards to N*delta samples
-    
-    #endif
+    success = retrieveSensorDataForWebPlot(deviceMAC, snsType, snsID, &N, t, v, f, starttime, endtime, true);
+  } else {
+    success = retrieveSensorDataForWebPlot(deviceMAC, snsType, snsID, &N, t, v, f, 0, endtime, true);
   }
   if (success == false)  {
     WEBHTML= "Failed to read associated file.";
@@ -2765,11 +3197,8 @@ void handleRETRIEVEDATA_MOVINGAVERAGE() {
   uint8_t f[100]={0};
   bool success=false;
 
-  #ifdef _ISPERIPHERAL
-  success = retrieveMovingAverageSensorDataFromMemory(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t, f,true);
-  #else
-  success = retrieveMovingAverageSensorDataFromSD(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN, &numPointsX, v, t, f,true);
-  #endif
+  success = retrieveMovingAverageForWebPlot(deviceMAC, snsType, snsID, starttime, endtime, windowSizeN,
+      &numPointsX, v, t, f, true);
   
   if (success == false)  {
     WEBHTML= "handleRETRIEVEDATA_MOVINGAVERAGE: Failed to read associated file.";
@@ -2914,11 +3343,26 @@ void handleCONFIG() {
   // Submit button
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
-  
+  WEBHTML = WEBHTML + "<br><a href=\"/REBOOT\" style=\"display: inline-block; margin-top: 8px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">Reboot</a>";
+
   //make another form that changes the ota slot
-  WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_OTA_SWITCH\" style=\"display: inline;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Switch OTA Slot\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
+  {
+    String otaSwitchLabel = "Switch to OTA slot ?: ver ?";
+    const esp_partition_t* targetPart = esp_ota_get_next_update_partition(NULL);
+    const int8_t targetSlot = otaPartitionSlotNumber(targetPart);
+    String nextVer = "?";
+    FirmwareVersion nextFw;
+    if (getOtaPartitionFirmwareVersion(targetPart, nextFw)) {
+      char verBuf[16];
+      nextFw.toChar(verBuf, sizeof(verBuf));
+      nextVer = verBuf;
+    }
+    const String slotStr = (targetSlot >= 0) ? String(targetSlot) : "?";
+    otaSwitchLabel = "Switch to OTA slot " + slotStr + ": ver " + nextVer;
+    WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_OTA_SWITCH\" style=\"display: inline;\">";
+    WEBHTML = WEBHTML + "<input type=\"submit\" value=\"" + otaSwitchLabel + "\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+    WEBHTML = WEBHTML + "</form>";
+  }
 
   // Reset button
   WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
@@ -2991,169 +3435,6 @@ async function autodetectDST() {
 
 
   WEBHTML = WEBHTML + "</html>";
-
-  serverTextClose(200, true);
-}
-
-void handleREADONLYCOREFLAGS() {
-  registerHTTPMessage("CoreFlags");
-
-  WEBHTML.clear();
-  WEBHTML = "";
-  serverTextHeader("Read-Only Core Flags");
-
-  WEBHTML = WEBHTML + "<body>";
-  WEBHTML = WEBHTML + "<p>This page displays non-editable system parameters.</p>";
-  
-  // Start the grid container
-  WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0;\">";
-  
-  // Header row
-  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Field Name</div>";
-  WEBHTML = WEBHTML + "<div style=\"background-color: #f0f0f0; padding: 12px; font-weight: bold; border: 1px solid #ddd;\">Value</div>";
-
-  // Non-editable fields from STRUCT_CORE I in specified order
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.currentTime ? dateify(I.currentTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">ALIVESINCE</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.ALIVESINCE ?  dateify(I.ALIVESINCE) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastResetTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastResetTime ?  dateify(I.lastResetTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wifiFailCount</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wifiFailCount + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastError</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastError) + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.lastErrorTime ?  dateify(I.lastErrorTime) : "???") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorCode</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastErrorCode + "</div>";
-  
-
-  //HTTP message traffic
-  WEBHTML = WEBHTML + "<h3>HTTP Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.HTTP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-
-  //LAN message traffic
-  WEBHTML = WEBHTML + "<h3>LAN Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME>0 ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message from MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message To MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last LAN Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_OUTGOING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-
-  //UDP message traffic
-  WEBHTML = WEBHTML + "<h3>UDP Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.UDP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.UDP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_OUTGOING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-
-
-  // Remaining non-editable fields from I in order of appearance
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">resetInfo</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.resetInfo + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">rebootsToday</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.rebootsToday + "</div>";
-
-  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">IntervalHourlyWeather</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) GRAPHICS.IntervalHourlyWeatherDisplay + "</div>";
-  
-  #endif
-
-  #ifdef _USEWEATHER
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">currentOutsideTemp</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.currentOutsideTemp + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmax</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmax + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">Tmin</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.Tmin + "</div>";
-  
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastCurrentOutsideTemp</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.lastCurrentOutsideTemp + "</div>";
-  #endif
-
-  #ifdef _USEBATTERY
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">localBatteryIndex</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.localBatteryIndex + "</div>";
-  
-  #endif
-
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isExpired</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.isExpired ? "true" : "false") + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isFlagged</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isFlagged + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasFlagged</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) (I.wasFlagged ? "true" : "false") + "</div>";
-
-  #ifndef _ISPERIPHERAL
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isHeat</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isHeat + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isAC</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isAC + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isFan</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isFan + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasHeat</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasHeat + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasAC</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasAC + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">wasFan</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.wasFan + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isHot</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isHot + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isCold</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isCold + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isSoilDry</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isSoilDry + "</div>";
-  
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">isLeak</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) I.isLeak + "</div>";
-  #endif
-
-  WEBHTML = WEBHTML + "</div>";
-  
-  // Navigation links
-  WEBHTML = WEBHTML + "<br><br><a href=\"/CONFIG\">Edit Configuration</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/GSHEET\">View Google Sheets Configuration</a> | ";
-  WEBHTML = WEBHTML + "<a href=\"/\">Back to Main Page</a>";
-  WEBHTML = WEBHTML + "</body></html>";
 
   serverTextClose(200, true);
 }
@@ -3374,7 +3655,7 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
 
   *wifiID = generateAPSSID();
   *apIP = IPAddress(192, 168, 4, 1);
-  *wifiPWD = "S3nsor.N3t!";
+  *wifiPWD = AP_STATION_PASSWORD;
   
 
   SerialPrint("Setting config for soft AP", true);
@@ -3390,8 +3671,7 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
     return;
   }
   SerialPrint("AP starting (please wait)", true);
-
-  
+  updateWifiChannel();
 }
 
 void handleCONFIG_POST() {
@@ -3493,7 +3773,8 @@ void handleCONFIG_DELETE() {
 
 void handleCONFIG_OTA_SWITCH() {
   registerHTTPMessage("ConfigOtaSwitch");
-  int16_t result = force_switch_ota_slot();
+  String failureDetail;
+  int16_t result = force_switch_ota_slot(-1, &failureDetail);
   if (result == 1) {
     server.send(302, "text/plain", "OTA slot switched. Restarting in 3 seconds...");
     delay(3000);
@@ -3501,11 +3782,15 @@ void handleCONFIG_OTA_SWITCH() {
   } else if (result == 0) {
     server.send(200, "text/plain", "OTA slot already active. No restart needed. Redirecting to status page...");
   } else {
-    server.send(200, "text/plain", "OTA slot could not be switched.");
+    String msg = "OTA slot could not be switched.";
+    if (failureDetail.length() > 0) {
+      msg += " " + failureDetail;
+    }
+    server.send(200, "text/plain", msg);
   }
 }
 
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
 void handleSENSOR_OVERRIDE_UPDATE() {
   registerHTTPMessage("SnsOvrd");
 
@@ -3537,7 +3822,7 @@ void handleSENSOR_OVERRIDE_UPDATE() {
 }
 #endif
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 void handleSENSOR_UPDATE_POST() {
   registerHTTPMessage("SnsUpd");
   
@@ -3789,11 +4074,11 @@ void handleSNS_CALIBRATION() {
 
 
 // Helper to get external IP
-String getPublicIP() {
+String getPublicIP(uint16_t timeoutMs) {
   HTTPMessage M;
   M.allowInsecure = true;
   M.usePSRAM = false;
-  M.timeout = 10000;  
+  M.timeout = timeoutMs;
   M.setUrl("http://api.ipify.org");
   M.setMethod("GET");
 
@@ -3816,6 +4101,7 @@ void handleWeather() {
 
   #ifdef _USEWEATHER
   
+  #ifdef _USEDETAILEDWEATHERWEBHTML
   // Display current weather data
   if (Prefs.LATITUDE!=0 && Prefs.LONGITUDE!=0) {
     WEBHTML = WEBHTML + "<h3>Current Weather Information</h3>";
@@ -3898,7 +4184,8 @@ void handleWeather() {
   }
   
   WEBHTML = WEBHTML + "</table>";
-  
+  #endif
+
   // Configuration form for lat/lon
   WEBHTML = WEBHTML + "<h3>Update Location</h3>";
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/WEATHER\">";
@@ -4079,7 +4366,7 @@ void handleWeatherAddress() {
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode) {
   
   //assume data is valid   
-  if (CheckWifiStatus(false)==1) {
+  if (wifiReadyForNetwork()) {
     // Lookup coordinates from complete address
     #ifdef _USETFT
     tft.fillRect(0, tft.height()-200, tft.width(), 100, TFT_BLACK);
@@ -4176,6 +4463,7 @@ static void sortStringArray(String* names, int count) {
 }
 
 static String sanitizeUploadFileName(String name) {
+  name.trim();
   name = sdEntryBaseName(name);
   if (name.length() == 0 || name == "." || name == "..") return "";
   if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return "";
@@ -4195,6 +4483,41 @@ static bool ensureSdDirExists(const String& dirPath) {
   return SD.mkdir(path.c_str());
 }
 
+static void redirectSdDirResult(const String& browsePath, bool ok, const String& msg) {
+  server.sendHeader("Location", "/SDCARD?path=" + urlEncode(browsePath) + "&dir=" + (ok ? "ok" : "fail") + "&msg=" + urlEncode(msg));
+  server.send(302, "text/plain", msg);
+}
+
+static bool sdIsFirmwareRoot(const String& path) {
+  String p = sanitizeSdBrowsePath(path);
+  p.toLowerCase();
+  return p == "/firmware";
+}
+
+static void appendSdCardDirectoryManageForms(const String& currentPath) {
+  String ep = "/SDCARD?path=" + urlEncode(currentPath);
+  const bool firmwareDir = sdIsFirmwareRoot(currentPath);
+
+  WEBHTML = WEBHTML + "<h3>Directory Management</h3>";
+  if (firmwareDir) {
+    WEBHTML = WEBHTML + "<p><strong>/Firmware</strong> accepts firmware uploads and file deletes. "
+      "Use <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (version after the last hyphen). "
+      "Delete legacy subfolders below if migrating from the old per-device layout.</p>";
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\" onsubmit=\"return confirm('Delete this directory and ALL contents?');\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"rmdir\">";
+    WEBHTML = WEBHTML + "Delete subdirectory: <input name=\"dirname\" maxlength=\"64\" required> <input type=\"submit\" value=\"Delete Directory\"></form>";
+  } else {
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\"><input type=\"hidden\" name=\"action\" value=\"mkdir\">";
+    WEBHTML = WEBHTML + "New directory: <input name=\"dirname\" maxlength=\"64\" required> <input type=\"submit\" value=\"Create Directory\"></form>";
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\" onsubmit=\"return confirm('Delete this directory and ALL contents?');\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"rmdir\">";
+    WEBHTML = WEBHTML + "Delete directory: <input name=\"dirname\" maxlength=\"64\" required> <input type=\"submit\" value=\"Delete Directory\"></form>";
+    WEBHTML = WEBHTML + "<p>Protected (folder delete blocked): /Icons, /Data, /System Volume Information, and /Firmware root only. "
+      "Individual files in those folders can still be deleted from the list above. "
+      "<a href=\"/SDCARD?path=%2FFirmware\">Browse /Firmware</a> to upload or delete OTA binaries.</p>";
+  }
+}
+
 static String jsonEscape(const String& s) {
   String out = "";
   for (unsigned int i = 0; i < s.length(); i++) {
@@ -4211,7 +4534,10 @@ static void appendSdCardUploadForm(const String& currentPath) {
   jsPath.replace("\"", "\\\"");
 
   WEBHTML = WEBHTML + "<h3>Upload File or Folder</h3>";
-  WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>20 files</strong> (uploaded one at a time).</p>";
+  WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>50 files</strong> (uploaded one at a time).</p>";
+  if (currentPath.equalsIgnoreCase("/Firmware")) {
+    WEBHTML = WEBHTML + "<p>Firmware files: name each binary <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (e.g. <code>PleasantB-9.0.0.bin</code>). The version is the segment after the <strong>last</strong> hyphen.</p>";
+  }
   WEBHTML = WEBHTML + "<form id=\"sd-upload-form\" method=\"POST\" action=\"/SDCARD_UPLOAD?path=" + urlEncode(currentPath) + "\" enctype=\"multipart/form-data\">";
   WEBHTML = WEBHTML + "<div id=\"sd-drop-zone\" style=\"border: 2px dashed #999; padding: 24px; margin: 10px 0; text-align: center; cursor: pointer; background-color: #fafafa;\">";
   WEBHTML = WEBHTML + "Drag and drop a file or folder here";
@@ -4225,7 +4551,7 @@ static void appendSdCardUploadForm(const String& currentPath) {
   WEBHTML = WEBHTML + "</form>";
   WEBHTML = WEBHTML + "<script>\n";
   WEBHTML = WEBHTML + "const SD_BASE_PATH = \"" + jsPath + "\";\n";
-  WEBHTML = WEBHTML + "const SD_MAX_FOLDER_FILES = 30;\n";
+  WEBHTML = WEBHTML + "const SD_MAX_FOLDER_FILES = 50;\n";
   WEBHTML = WEBHTML + R"===(
 (function(){
   const zone = document.getElementById('sd-drop-zone');
@@ -4395,6 +4721,14 @@ static String sdcardUploadError;
 static size_t sdcardUploadBytesWritten = 0;
 static const size_t SDCARD_UPLOAD_MAX_BYTES = 8UL * 1024UL * 1024UL;
 
+static void logSdUploadError(const String& targetPath, const String& message) {
+  if (message == "Upload aborted") return;
+  String errMsg = "SD upload failed";
+  if (targetPath.length() > 0) errMsg += " (" + targetPath + ")";
+  errMsg += ": " + message;
+  storeError(errMsg, ERROR_SD_FILEWRITE, true);
+}
+
 void handleSDCARD_UPLOAD() {
   registerHTTPMessage("SDUp");
   String dir = "/";
@@ -4408,6 +4742,12 @@ void handleSDCARD_UPLOAD() {
   sdcardUploadError = "";
   sdcardUploadBytesWritten = 0;
   sdcardUploadTargetPath = "";
+
+  if (uploadError.length() > 0) {
+    logSdUploadError(targetPath, uploadError);
+  } else if (bytesWritten == 0) {
+    storeError("SD upload failed: No file received", ERROR_SD_FILEWRITE, true);
+  }
 
   if (ajax) {
     if (uploadError.length() > 0) {
@@ -4515,22 +4855,26 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
   WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Size</th>";
   WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Last Updated</th>";
   WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Type</th>";
+  WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Actions</th>";
   WEBHTML = WEBHTML + "</tr>";
 
   String parentPath = getSdParentPath(currentPath);
+  String browseEp = "/SDCARD?path=" + urlEncode(currentPath);
   if (parentPath.length() > 0) {
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
     WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(parentPath) + "\">..</a>";
     WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\"></td></tr>";
   }
 
   File dir = SD.open(currentPath.c_str());
   if (!dir || !dir.isDirectory()) {
-    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #c00;\">Could not open directory</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td colspan=\"5\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #c00;\">Could not open directory</td></tr>";
     WEBHTML = WEBHTML + "</table>";
     if (dir) dir.close();
+    appendSdCardDirectoryManageForms(currentPath);
     appendSdCardUploadForm(currentPath);
     return;
   }
@@ -4572,7 +4916,16 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
     WEBHTML = WEBHTML + "<a href=\"/SDCARD?path=" + urlEncode(childPath) + "\">" + dirNames[i] + "/</a>";
     WEBHTML = WEBHTML + "</td><td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">N/A</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td></tr>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">Directory</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">";
+    if (!sdDirectoryIsProtected(childPath.c_str())) {
+      WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + browseEp + "\" style=\"display:inline\" onsubmit=\"return confirm('Delete directory " + dirNames[i] + " and ALL contents?');\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"rmdir\">";
+      WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"dirname\" value=\"" + dirNames[i] + "\">";
+      WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete\" style=\"padding: 4px 8px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+      WEBHTML = WEBHTML + "</form>";
+    }
+    WEBHTML = WEBHTML + "</td></tr>";
   }
 
   for (int i = 0; i < fileCount; i++) {
@@ -4584,27 +4937,168 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
       if (fileTime > 0) lastUpdated = String(dateify(fileTime, "mm/dd/yyyy hh:nn:ss"));
       f.close();
     }
-    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">" + fileNames[i] + "</td>";
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD_DOWNLOAD?path=" + urlEncode(filePath) + "\">" + fileNames[i] + "</a>";
+    WEBHTML = WEBHTML + "</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + formatBytes(fileSizes[i]) + "</td>";
     WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + lastUpdated + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">File</td></tr>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">File</td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">";
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + browseEp + "\" style=\"display:inline\" onsubmit=\"return confirm('Delete file " + fileNames[i] + "?');\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"unlink\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"filename\" value=\"" + fileNames[i] + "\">";
+    WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete\" style=\"padding: 4px 8px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+    WEBHTML = WEBHTML + "</form></td></tr>";
   }
 
   if (dirCount == 0 && fileCount == 0 && parentPath.length() == 0) {
-    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Directory is empty</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td colspan=\"5\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Directory is empty</td></tr>";
   } else if (dirCount == 0 && fileCount == 0) {
-    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">No files in this directory</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td colspan=\"5\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">No files in this directory</td></tr>";
   }
 
   if (truncated) {
-    WEBHTML = WEBHTML + "<tr><td colspan=\"4\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Listing truncated (64 entries max per type)</td></tr>";
+    WEBHTML = WEBHTML + "<tr><td colspan=\"5\" style=\"border: 1px solid #ddd; padding: 8px; text-align: center; color: #666;\">Listing truncated (64 entries max per type)</td></tr>";
   }
 
   WEBHTML = WEBHTML + "</table>";
   WEBHTML = WEBHTML + "<p><strong>Directories:</strong> " + String(dirCount) + ", <strong>Files:</strong> " + String(fileCount) + "</p>";
+  appendSdCardDirectoryManageForms(currentPath);
   appendSdCardUploadForm(currentPath);
 }
 #endif
+
+void handleSDCARD_DIR() {
+#ifdef _USESDCARD
+  registerHTTPMessage("SDDir");
+
+  String parentPath = server.hasArg("path") ? sanitizeSdBrowsePath(server.arg("path")) : "/";
+
+  if (!server.hasArg("action")) {
+    redirectSdDirResult(parentPath, false, "Missing action");
+    return;
+  }
+
+  String action = server.arg("action");
+
+  if (action == "unlink") {
+    if (!server.hasArg("filename")) {
+      redirectSdDirResult(parentPath, false, "Missing file name");
+      return;
+    }
+    String fileName = sanitizeUploadFileName(server.arg("filename"));
+    if (fileName.length() == 0) {
+      redirectSdDirResult(parentPath, false, "Invalid file name");
+      return;
+    }
+    String targetPath = joinSdPath(parentPath, fileName);
+    bool ok = sdDeleteFile(targetPath.c_str());
+    if (!ok) {
+      storeError("SD file delete failed (" + targetPath + ")", ERROR_SD_FILEDEL, true);
+    }
+    redirectSdDirResult(parentPath, ok, ok ? ("Deleted " + fileName) : "Delete failed");
+    return;
+  }
+
+  if (!server.hasArg("dirname")) {
+    redirectSdDirResult(parentPath, false, "Missing directory name");
+    return;
+  }
+
+  String dirName = sanitizeUploadFileName(server.arg("dirname"));
+  if (dirName.length() == 0) {
+    redirectSdDirResult(parentPath, false, "Invalid directory name");
+    return;
+  }
+
+  String targetPath = joinSdPath(parentPath, dirName);
+
+  if (action == "mkdir") {
+    if (SD.exists(targetPath.c_str())) {
+      redirectSdDirResult(parentPath, false, "Already exists");
+      return;
+    }
+    bool ok = ensureSdDirExists(targetPath);
+    redirectSdDirResult(parentPath, ok, ok ? "Created" : "Create failed");
+    return;
+  }
+
+  if (!SD.exists(targetPath.c_str())) {
+    redirectSdDirResult(parentPath, false, "Not found");
+    return;
+  }
+  File dir = SD.open(targetPath.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    redirectSdDirResult(parentPath, false, "Not a directory");
+    return;
+  }
+  dir.close();
+  if (sdDirectoryIsProtected(targetPath.c_str())) {
+    redirectSdDirResult(parentPath, false, "Protected directory");
+    return;
+  }
+  if (action != "rmdir") {
+    redirectSdDirResult(parentPath, false, "Unknown action");
+    return;
+  }
+
+  bool ok = sdRemoveDirectoryRecursive(targetPath.c_str());
+  redirectSdDirResult(parentPath, ok, ok ? "Deleted" : "Delete failed");
+#else
+  server.sendHeader("Location", "/SDCARD");
+  server.send(302, "text/plain", "SD card not enabled");
+#endif
+}
+
+void handleSDCARD_DOWNLOAD() {
+  registerHTTPMessage("SDDownload");
+
+#ifdef _USESDCARD
+  if (!server.hasArg("path")) {
+    server.send(400, "text/plain", "Missing path parameter");
+    return;
+  }
+
+  String filePath = sanitizeSdBrowsePath(server.arg("path"));
+  if (filePath.length() <= 1) {
+    server.send(400, "text/plain", "Invalid file path");
+    return;
+  }
+
+  if (!SD.exists(filePath.c_str())) {
+    server.send(404, "text/plain", "File not found");
+    return;
+  }
+
+  File f = SD.open(filePath.c_str(), FILE_READ);
+  if (!f || f.isDirectory()) {
+    if (f) f.close();
+    server.send(404, "text/plain", "Not a file");
+    return;
+  }
+
+  String fileName = sdEntryBaseName(filePath);
+  String contentType = "application/octet-stream";
+  if (fileName.endsWith(".json")) {
+    contentType = "application/json";
+  } else if (fileName.endsWith(".txt") || fileName.endsWith(".dat") || fileName.endsWith(".log")) {
+    contentType = "text/plain";
+  } else if (fileName.endsWith(".html") || fileName.endsWith(".htm")) {
+    contentType = "text/html";
+  } else if (fileName.endsWith(".csv")) {
+    contentType = "text/csv";
+  }
+
+  server.sendHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
+  server.sendHeader("Cache-Control", "no-store");
+  esp_task_wdt_reset();
+  server.streamFile(f, contentType);
+  f.close();
+#else
+  server.send(404, "text/plain", "SD card not enabled");
+#endif
+}
 
 void handleSDCARD() {
   
@@ -4626,9 +5120,12 @@ void handleSDCARD() {
     WEBHTML = WEBHTML + "There is no SD card installed or it is not enabled.<br>"; 
       
   #else
-  
+
+  ensureSdDirExists("/Firmware");
+
   // Error log button
-    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
+    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD_SYSTEMLOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View System Log</a><br><br>";
 
     WEBHTML = WEBHTML + "</font>---------------------<br>";      
   
@@ -4792,42 +5289,24 @@ void handleSDCARD() {
       WEBHTML = WEBHTML + "<p style=\"color: #c62828; font-weight: bold;\">Upload failed: " + server.arg("msg") + "</p>";
     }
   }
+  if (server.hasArg("dir") && server.hasArg("msg")) {
+    if (server.arg("dir") == "ok") {
+      WEBHTML = WEBHTML + "<p style=\"color: #2e7d32; font-weight: bold;\">" + server.arg("msg") + "</p>";
+    } else if (server.arg("dir") == "fail") {
+      WEBHTML = WEBHTML + "<p style=\"color: #c62828; font-weight: bold;\">" + server.arg("msg") + "</p>";
+    }
+  }
   appendSdCardDirectoryListing(browsePath);
 
   WEBHTML = WEBHTML + "</font>---------------------<br>";      
   // Error log button
-    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a><br><br>";
+    WEBHTML = WEBHTML + "<a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View Error Log</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/SDCARD_SYSTEMLOG\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">View System Log</a><br><br>";
   
   // Action Buttons
   WEBHTML = WEBHTML + "<h3>SD Card Actions</h3>";
-  
-  // Delete buttons
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_SCREENFLAGS\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete ScreenFlags.dat\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_WEATHERDATA\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete WeatherData.dat\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_DEVICES\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete DevicesSensors Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_SENSORS\" style=\"display: inline; margin-right: 10px;\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete All Sensor History Files\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_ERRORLOG\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete Error Log\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_TIMESTAMPS\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete Timestamps Log\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
-  WEBHTML = WEBHTML + "</form>";
-  
-  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SDCARD_DELETE_GSHEET\" style=\"display: inline; margin-right: 10px;\">";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete GSheet Data\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
   // Save buttons
@@ -4844,9 +5323,6 @@ void handleSDCARD() {
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Store DevicesSensors Data Now\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   
-  // View timestamps button
-  WEBHTML = WEBHTML + "<br><br>";
-  WEBHTML = WEBHTML + "<a href=\"/SDCARD_TIMESTAMPS\" target=\"_blank\" style=\"display: inline-block; padding: 10px 20px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">List File Timestamps</a>";
   #endif
   
   WEBHTML = WEBHTML + "</body></html>";
@@ -4855,32 +5331,6 @@ void handleSDCARD() {
 
   return;
 
-}
-
-void handleSDCARD_DELETE_DEVICES() {
-  #ifdef _USESDCARD
-
-  
-  registerHTTPMessage("SDDelDev");
-  
-  // Delete the sensors data file
-  uint32_t nDeleted = deleteDataFiles(false, false, false, true);
-  if (nDeleted > 0) {
-    SerialPrint("Devices data deleted", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Devices data deleted successfully.");
-  } else {
-    SerialPrint("Failed to delete Devices data", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to delete Devices data.");
-  }
-  return;
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/SDCARD");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
-  #endif
 }
 
 void handleSDCARD_DELETE_SENSORS() {
@@ -4918,59 +5368,6 @@ void handleSDCARD_STORE_DEVICES() {
     SerialPrint("Failed to store DevicesSensors data to SD card", true);
     server.send(302, "text/plain", "Failed to store DevicesSensors data to SD card.");
   }
-  #endif
-}
-
-void handleSDCARD_DELETE_SCREENFLAGS() {
-  #ifdef _USESDCARD
-  registerHTTPMessage("SDDelScr");
-
-  
-  // Delete the ScreenFlags.dat file
-  uint32_t nDeleted = deleteCoreStruct();
-  if (nDeleted == UINT32_MAX) {
-    SerialPrint("No SD card found", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Core data structure reset.");
-    return;
-  }
-
-  if (nDeleted > 0) {
-    SerialPrint("Core data deleted", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Core data struct reset and files deleted successfully.");
-  } else {
-    SerialPrint("Failed to delete ScreenFlags.dat", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Core data reset, but files were not deleted..");
-  } 
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
-  #endif
-}
-
-void handleSDCARD_DELETE_WEATHERDATA() {
-  registerHTTPMessage("SDDelWthr");
-  #ifdef _USESDCARD
-  // Delete the WeatherData.dat file
-  uint32_t nDeleted = deleteDataFiles(false, true, false, false);
-  if (nDeleted > 0) {
-    SerialPrint("Weather data deleted", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Weather data deleted successfully.");
-  } else {
-    SerialPrint("Failed to delete WeatherData.dat", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Failed to delete Weather data.");
-  }
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
   #endif
 }
 
@@ -5022,107 +5419,107 @@ void handleSDCARD_SAVE_WEATHERDATA() {
   #endif
 }
 
-void handleSDCARD_TIMESTAMPS() {
-  registerHTTPMessage("SDTmStmp");
+static String htmlEscapeText(const String& input) {
+  String output;
+  output.reserve(input.length() + 8);
+  for (unsigned int i = 0; i < input.length(); ++i) {
+    const char c = input.charAt(i);
+    if (c == '&') output += "&amp;";
+    else if (c == '<') output += "&lt;";
+    else if (c == '>') output += "&gt;";
+    else output += c;
+  }
+  return output;
+}
+
+void handleSDCARD_SYSTEMLOG() {
+  registerHTTPMessage("SDSysLog");
 
   #ifdef _USESDCARD
-  // Open and read the FileTimestamps.dat file
-  String filename = "/Data/FileTimestamps.dat";
-  File file = SD.open(filename, FILE_READ);
-  
-  if (!file) {
-    // File doesn't exist or can't be opened
-    server.send(200, "text/html", 
-      "<html><head><title>File Timestamps</title></head><body>"
-      "<h1>File Timestamps</h1>"
-      "<p>The FileTimestamps.dat file does not exist or cannot be opened.</p>"
-      "<p>This file is created automatically when files are written to the SD card.</p>"
-      "<br><a href=\"/SDCARD\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to SD Card</a>"
-      "</body></html>");
-    return;
-  }
-  
-  // Read the file content
-  String content = "";
-  while (file.available()) {
-    content += file.readString();
-  }
-  file.close();
-  
-  if (content.length() == 0) {
-    // File is empty
-    server.send(200, "text/html", 
-      "<html><head><title>File Timestamps</title></head><body>"
-      "<h1>File Timestamps</h1>"
-      "<p>The FileTimestamps.dat file is empty.</p>"
-      "<p>This file will be populated as files are written to the SD card.</p>"
-      "<br><a href=\"/SDCARD\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Back to SD Card</a>"
-      "</body></html>");
-    return;
-  }
-  
-  // Format the content for display
-  String htmlContent = "<html><head><title>File Timestamps</title>";
+  const char* filename = "/Data/systemlog.txt";
+  String htmlContent = "<html><head><title>System Log</title>";
   htmlContent += "<style>";
   htmlContent += "body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }";
-  htmlContent += "h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }";
-  htmlContent += ".timestamp-entry { background-color: white; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #4CAF50; }";
-  htmlContent += ".filename { font-weight: bold; color: #2196F3; }";
-  htmlContent += ".timestamp { color: #666; font-family: monospace; }";
+  htmlContent += "h1 { color: #333; border-bottom: 2px solid #3F51B5; padding-bottom: 10px; }";
+  htmlContent += ".log-entry { background-color: white; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #3F51B5; font-family: monospace; font-size: 13px; }";
   htmlContent += ".back-button { padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; display: inline-block; margin-top: 20px; }";
   htmlContent += "</style></head><body>";
-  htmlContent += "<h1>File Timestamps</h1>";
-  htmlContent += "<p>This shows when files were last written to the SD card:</p>";
-  
-  // Parse and format each line
+  htmlContent += "<h1>System Log</h1>";
+  htmlContent += "<p>Last 25 entries from /Data/systemlog.txt (newest at bottom):</p>";
+
+  if (!SD.exists(filename)) {
+    htmlContent += "<p>System log file does not exist yet.</p>";
+    htmlContent += "<a href=\"/SDCARD\" class=\"back-button\">Back to SD Card</a>";
+    htmlContent += "</body></html>";
+    server.send(200, "text/html", htmlContent);
+    return;
+  }
+
+  File file = SD.open(filename, FILE_READ);
+  if (!file) {
+    htmlContent += "<p>Could not open system log file.</p>";
+    htmlContent += "<a href=\"/SDCARD\" class=\"back-button\">Back to SD Card</a>";
+    htmlContent += "</body></html>";
+    server.send(200, "text/html", htmlContent);
+    return;
+  }
+
+  const size_t tailBytes = 4096;
+  const size_t fileSize = file.size();
+  const size_t startPos = (fileSize > tailBytes) ? (fileSize - tailBytes) : 0;
+  file.seek(startPos);
+
+  String chunk;
+  chunk.reserve((fileSize > tailBytes) ? tailBytes : fileSize);
+  while (file.available()) {
+    chunk += (char)file.read();
+  }
+  file.close();
+
+  if (startPos > 0) {
+    const int firstNewline = chunk.indexOf('\n');
+    if (firstNewline >= 0) {
+      chunk = chunk.substring(firstNewline + 1);
+    }
+  }
+
+  String lines[25];
+  uint8_t lineCount = 0;
   int lineStart = 0;
-  int lineEnd = content.indexOf('\n');
-  int entryCount = 0;
-  
-  while (lineEnd >= 0 && entryCount < 1000) { // Limit to 1000 entries to prevent memory issues
-    String line = content.substring(lineStart, lineEnd);
+  while (lineStart < (int)chunk.length()) {
+    int lineEnd = chunk.indexOf('\n', lineStart);
+    if (lineEnd < 0) lineEnd = chunk.length();
+    String line = chunk.substring(lineStart, lineEnd);
     line.trim();
-    
     if (line.length() > 0) {
-      int commaPos = line.indexOf(',');
-      if (commaPos > 0) {
-        String filename = line.substring(0, commaPos);
-        String timestamp = line.substring(commaPos + 1);
-        
-        // Convert timestamp to readable format
-        uint32_t timestampValue = timestamp.toInt();
-        String readableTime = "Unknown";
-        if (timestampValue > 0) {
-          readableTime = dateify(timestampValue);
+      if (lineCount < 25) {
+        lines[lineCount++] = line;
+      } else {
+        for (uint8_t i = 0; i < 24; ++i) {
+          lines[i] = lines[i + 1];
         }
-        
-        htmlContent += "<div class=\"timestamp-entry\">";
-        htmlContent += "<span class=\"filename\">" + filename + "</span><br>";
-        htmlContent += "<span class=\"timestamp\">Written: " + readableTime + " (" + timestamp + ")</span>";
-        htmlContent += "</div>";
-        
-        entryCount++;
+        lines[24] = line;
       }
     }
-    
     lineStart = lineEnd + 1;
-    lineEnd = content.indexOf('\n', lineStart);
   }
-  
-  if (entryCount == 0) {
-    htmlContent += "<p>No timestamp entries found in the file.</p>";
+
+  if (lineCount == 0) {
+    htmlContent += "<p>System log file is empty.</p>";
   } else {
-    htmlContent += "<p><strong>Total entries: " + String(entryCount) + "</strong></p>";
+    for (uint8_t i = 0; i < lineCount; ++i) {
+      htmlContent += "<div class=\"log-entry\">" + htmlEscapeText(lines[i]) + "</div>";
+    }
+    htmlContent += "<p><strong>Entries shown: " + String(lineCount) + "</strong></p>";
   }
-  
+
   htmlContent += "<a href=\"/SDCARD\" class=\"back-button\">Back to SD Card</a>";
   htmlContent += "</body></html>";
-  
   server.send(200, "text/html", htmlContent);
   return;
   #else
   SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
+  server.sendHeader("Location", "/SDCARD");
   server.send(302, "text/plain", "No SD card found.");
   return;
   #endif
@@ -5184,103 +5581,6 @@ void handleERROR_LOG() {
   #endif
 }
 
-void handleSDCARD_DELETE_ERRORLOG() {
-  registerHTTPMessage("DelErrLg");
-  #ifdef _USESDCARD
-  
-  // Delete the DeviceErrors.txt file
-  String filename = "/Data/DeviceErrors.txt";
-  if (SD.exists(filename)) {
-    if (SD.remove(filename)) {
-      // Remove the error log file from the timestamp index
-      removeFromTimestampIndex(filename.c_str());
-      SerialPrint("Error log file deleted successfully", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "Error log file deleted successfully.");
-    } else {
-      SerialPrint("Failed to delete error log file", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "Failed to delete error log file.");
-    }
-  } else {
-    SerialPrint("Error log file does not exist", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "Error log file does not exist.");
-  }
-  
-  return;
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
-  #endif
-}
-
-void handleSDCARD_DELETE_TIMESTAMPS() {
-  registerHTTPMessage("DelTmStmp");
-  #ifdef _USESDCARD
-  
-  // Delete the FileTimestamps.dat file
-  String filename = "/Data/FileTimestamps.dat";
-  if (SD.exists(filename)) {
-    if (SD.remove(filename)) {
-      SerialPrint("File timestamps log deleted successfully", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "File timestamps log deleted successfully.");
-    } else {
-      SerialPrint("Failed to delete file timestamps log", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "Failed to delete file timestamps log.");
-    }
-  } else {
-    SerialPrint("File timestamps log does not exist", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "File timestamps log does not exist.");
-  }
-  return;
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
-  #endif
-}
-
-void handleSDCARD_DELETE_GSHEET() {
-  registerHTTPMessage("DelGsheet");
-  #ifdef _USESDCARD
-  
-  // Delete the GsheetInfo.dat file
-  String filename = "/Data/GsheetInfo.dat";
-  if (SD.exists(filename)) {
-    if (SD.remove(filename)) {
-      // Remove the GSheet info file from the timestamp index
-      removeFromTimestampIndex(filename.c_str());
-      SerialPrint("GSheet info file deleted successfully", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "GSheet info file deleted successfully.");
-    } else {
-      SerialPrint("Failed to delete GSheet info file", true);
-      server.sendHeader("Location", "/SDCARD");
-      server.send(302, "text/plain", "Failed to delete GSheet info file.");
-    }
-  } else {
-    SerialPrint("GSheet info file does not exist", true);
-    server.sendHeader("Location", "/SDCARD");
-    server.send(302, "text/plain", "GSheet info file does not exist.");
-  }
-  return;
-  #else
-  SerialPrint("No SD card found", true);
-  server.sendHeader("Location", "/");
-  server.send(302, "text/plain", "No SD card found.");
-  return;
-  #endif
-}
-
-
-
 void handleREBOOT_DEBUG() {
   registerHTTPMessage("RebootDebug");
   WEBHTML.clear();
@@ -5324,6 +5624,360 @@ static void syncDeviceViewerNumberFromIndex() {
   }
 }
 
+static constexpr uint16_t LMK_HTTP_MAX_PLAINTEXT = 8192;
+static constexpr uint16_t LMK_HTTP_MAX_FRAMED = LMK_HTTP_MAX_PLAINTEXT + 2;
+static constexpr uint16_t LMK_HTTP_MAX_PADDED = ((LMK_HTTP_MAX_FRAMED + 15) / 16) * 16;
+static constexpr uint16_t LMK_HTTP_MAX_CIPHER = LMK_HTTP_MAX_PADDED + 16;
+// Ping JSON + framing fits in ~512 bytes; keep cipher buffers off the main task stack.
+static constexpr uint16_t LMK_HTTP_PING_MAX_CIPHER = 640;
+
+static constexpr uint16_t DEVICE_VIEWER_PING_TIMEOUT_MS = 5000;
+
+enum JsonPingReplyVia : uint8_t {
+  JSON_PING_REPLY_NONE = 0,
+  JSON_PING_REPLY_HTTP_INLINE = 1,
+  JSON_PING_REPLY_UDP = 2,
+  JSON_PING_REPLY_HTTPS_INLINE = 3,
+};
+
+static uint8_t s_jsonPingReplyVia = JSON_PING_REPLY_NONE;
+static IPAddress s_jsonPingReplyUdpIp;
+static uint8_t s_jsonPingReplyViaDepth = 0;
+static uint8_t s_jsonPingReplyViaStack[4];
+static IPAddress s_jsonPingReplyUdpIpStack[4];
+static String s_lastIncomingHttpMsgType;
+
+static void pushJsonPingReplyContext(uint8_t via, IPAddress udpReplyIp = IPAddress(0, 0, 0, 0)) {
+  if (s_jsonPingReplyViaDepth < (uint8_t)(sizeof(s_jsonPingReplyViaStack) / sizeof(s_jsonPingReplyViaStack[0]))) {
+    s_jsonPingReplyViaStack[s_jsonPingReplyViaDepth] = via;
+    s_jsonPingReplyUdpIpStack[s_jsonPingReplyViaDepth] = udpReplyIp;
+    s_jsonPingReplyViaDepth++;
+  }
+  s_jsonPingReplyVia = via;
+  s_jsonPingReplyUdpIp = udpReplyIp;
+}
+
+static void popJsonPingReplyContext() {
+  if (s_jsonPingReplyViaDepth == 0) {
+    s_jsonPingReplyVia = JSON_PING_REPLY_NONE;
+    return;
+  }
+  s_jsonPingReplyViaDepth--;
+  if (s_jsonPingReplyViaDepth == 0) {
+    s_jsonPingReplyVia = JSON_PING_REPLY_NONE;
+    return;
+  }
+  uint8_t prev = s_jsonPingReplyViaDepth - 1;
+  s_jsonPingReplyVia = s_jsonPingReplyViaStack[prev];
+  s_jsonPingReplyUdpIp = s_jsonPingReplyUdpIpStack[prev];
+}
+
+static void registerHttpMsgTypeFromJson(const String& postData) {
+  StaticJsonDocument<384> doc;
+  if (deserializeJson(doc, postData) != DeserializationError::Ok) {
+    registerHTTPMessage("JSON?");
+    return;
+  }
+  String msgType = doc["msgType"] | "snsData";
+  if (msgType.length() == 0) msgType = "snsData";
+  if (msgType.length() > 9) msgType = msgType.substring(0, 9);
+  registerHTTPMessage(msgType.c_str());
+}
+
+static bool jsonPingAckMatches(const String& jsonBody, uint64_t expectedMac) {
+  if (jsonBody.length() == 0) return false;
+  StaticJsonDocument<512> doc;
+  if (deserializeJson(doc, jsonBody) != DeserializationError::Ok) return false;
+  if (String(doc["msgType"] | "") != "ackPing") return false;
+  if (!doc["senderDevice"]["mac"].is<const char*>()) return false;
+  uint64_t mac = 0;
+  if (!stringToUInt64(doc["senderDevice"]["mac"].as<const char*>(), &mac, true)) return false;
+  return mac == expectedMac;
+}
+
+static volatile bool s_jsonPingActive = false;
+static volatile bool s_jsonPingGotAck = false;
+static uint64_t s_jsonPingExpectedMAC = 0;
+
+static void noteJsonPingAck(uint64_t fromMAC) {
+  if (!s_jsonPingActive) return;
+  if (fromMAC != s_jsonPingExpectedMAC) return;
+  s_jsonPingGotAck = true;
+}
+
+static bool sendHTTPPingWithInlineAck(ArborysDevType* device) {
+  if (!device) return false;
+  if (!wifiReadyForNetwork()) return false;
+
+  char jsonBuffer[512];
+  JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), true, false);
+  if (jsonBuffer[0] == '\0') return false;
+
+  static char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", device->IP.toString().c_str());
+
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(jsonBuffer);
+  if (!M.initPayload(512)) return false;
+
+  if (!SendHTTPMessage(M)) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return false;
+  }
+  registerHTTPSend(device->IP, "pingMsg");
+
+  if (!M.payload || !M.payload.get()) return false;
+  return jsonPingAckMatches(String(M.payload.get()), device->MAC);
+}
+
+static bool decryptHttpCipherToPlain(const uint8_t* encBuf, uint16_t encLen, String& plainOut) {
+  plainOut = "";
+  if (!isValidLMKKey()) return false;
+  if (encLen < 32 || encLen > LMK_HTTP_MAX_CIPHER || (encLen % 16) != 0) return false;
+
+  uint16_t plainMax = encLen - 16;
+  uint8_t* plain = (uint8_t*)malloc(plainMax);
+  if (!plain) return false;
+
+  if (BootSecure::decrypt((uint8_t*)encBuf, (char*)Prefs.KEYS.ESPNOW_KEY, plain, encLen, 16) != 1) {
+    free(plain);
+    return false;
+  }
+
+  uint16_t payloadLen = (uint16_t)plain[0] | ((uint16_t)plain[1] << 8);
+  if (payloadLen == 0 || payloadLen + 2 > plainMax) {
+    free(plain);
+    return false;
+  }
+
+  plainOut.reserve(payloadLen + 1);
+  for (uint16_t i = 0; i < payloadLen; i++) {
+    plainOut += (char)plain[i + 2];
+  }
+  free(plain);
+  return true;
+}
+
+static size_t readHttpEncResponseBody(HTTPClient& http, uint8_t* out, size_t outMax, uint32_t timeoutMs) {
+  if (!out || outMax < 32) return 0;
+
+  EncResponseCollector collector(out, outMax);
+  esp_task_wdt_reset();
+  int streamed = http.writeToStream(&collector);
+  esp_task_wdt_reset();
+  if (streamed > 0 && collector.written > 0) {
+    return collector.written;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  if (!stream) return 0;
+
+  int respLen = http.getSize();
+  if (respLen > 0 && (size_t)respLen <= outMax) {
+    size_t got = 0;
+    uint32_t start = millis();
+    while (got < (size_t)respLen && (millis() - start) < timeoutMs) {
+      if (stream->available()) {
+        int n = stream->read(out + got, respLen - (int)got);
+        if (n > 0) got += (size_t)n;
+      } else if (!stream->connected()) {
+        break;
+      } else {
+        delay(1);
+      }
+    }
+    return got;
+  }
+
+  size_t got = 0;
+  uint32_t idleStart = millis();
+  uint32_t start = millis();
+  while (got < outMax && (millis() - start) < timeoutMs) {
+    if (stream->available()) {
+      int n = stream->read(out + got, outMax - got);
+      if (n > 0) {
+        got += (size_t)n;
+        idleStart = millis();
+      }
+    } else if (!stream->connected()) {
+      break;
+    } else if (got > 0 && (millis() - idleStart) > 200) {
+      break;
+    } else {
+      delay(1);
+    }
+  }
+  if (got >= 32 && (got % 16) == 0) return got;
+  return 0;
+}
+
+static bool sendHTTPSPingWithInlineAck(ArborysDevType* device) {
+  if (!device || !isValidLMKKey()) return false;
+  if (!wifiReadyForNetwork()) return false;
+
+  char jsonBuffer[512];
+  JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), false, false);
+  if (jsonBuffer[0] == '\0') return false;
+
+  uint16_t payloadLen = (uint16_t)strlen(jsonBuffer);
+  const uint16_t framedLen = payloadLen + 2;
+  uint8_t* framed = (uint8_t*)malloc(framedLen);
+  if (!framed) return false;
+  framed[0] = payloadLen & 0xFF;
+  framed[1] = (payloadLen >> 8) & 0xFF;
+  memcpy(framed + 2, jsonBuffer, payloadLen);
+
+  uint8_t* encBuf = (uint8_t*)malloc(LMK_HTTP_PING_MAX_CIPHER);
+  if (!encBuf) {
+    free(framed);
+    return false;
+  }
+  uint16_t encLen = 0;
+  if (BootSecure::encrypt(framed, framedLen, (char*)Prefs.KEYS.ESPNOW_KEY, encBuf, &encLen, 16) != 1) {
+    free(framed);
+    free(encBuf);
+    return false;
+  }
+  free(framed);
+
+  static char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST_ENC", device->IP.toString().c_str());
+
+  WiFiClient client;
+  HTTPClient http;
+  client.setTimeout(20000);
+  http.begin(client, urlBuffer);
+  http.setTimeout(20000);
+  http.addHeader("Content-Type", "application/octet-stream");
+  esp_task_wdt_reset();
+  int httpCode = http.sendRequest("POST", encBuf, encLen);
+  esp_task_wdt_reset();
+  free(encBuf);
+
+  bool ok = false;
+  if (httpCode >= 200 && httpCode < 400) {
+    registerHTTPSend(device->IP, "pingMsg");
+    uint8_t* respEnc = (uint8_t*)malloc(LMK_HTTP_PING_MAX_CIPHER);
+    if (respEnc) {
+      size_t respLen = readHttpEncResponseBody(http, respEnc, LMK_HTTP_PING_MAX_CIPHER, DEVICE_VIEWER_PING_TIMEOUT_MS);
+      if (respLen >= 32) {
+        String plain;
+        if (decryptHttpCipherToPlain(respEnc, (uint16_t)respLen, plain)) {
+          ok = jsonPingAckMatches(plain, device->MAC);
+        }
+      }
+      free(respEnc);
+    }
+  } else {
+    I.HTTP_OUTGOING_ERRORS++;
+  }
+
+  http.end();
+  return ok;
+}
+
+static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaHTTPS, uint16_t blockMs) {
+  if (!device || !device->IsSet) return false;
+  if (s_jsonPingActive) return false;
+  if (blockMs == 0) blockMs = DEVICE_VIEWER_PING_TIMEOUT_MS;
+
+  if (viaHTTPS) {
+    if (!isValidLMKKey()) {
+      storeError("Device viewer ping: LMK not configured for HTTPS");
+      return false;
+    }
+    return sendHTTPSPingWithInlineAck(device);
+  }
+
+  if (viaHTTP) {
+    return sendHTTPPingWithInlineAck(device);
+  }
+
+  s_jsonPingActive = true;
+  s_jsonPingGotAck = false;
+  s_jsonPingExpectedMAC = device->MAC;
+
+  IPAddress ip = device->IP;
+  int16_t sendResult = sendMSG_ping(ip, false);
+  if (sendResult <= 0) {
+    s_jsonPingActive = false;
+    return false;
+  }
+
+  const uint32_t start = millis();
+  while ((millis() - start) < blockMs) {
+    esp_task_wdt_reset();
+    if (s_jsonPingGotAck) {
+      s_jsonPingActive = false;
+      SerialPrint("JSON ping ack from " + MACToString(device->MAC) +
+          " in " + String(millis() - start) + " ms", true);
+      return true;
+    }
+    #ifdef _USEUDP
+    delayWithNetwork(1, 1);
+    #else
+    delay(1);
+    #endif
+  }
+
+  s_jsonPingActive = false;
+  SerialPrint("JSON ping timeout to " + MACToString(device->MAC) +
+      " after " + String(blockMs) + " ms", true);
+  return false;
+}
+
+static bool performDeviceViewerPing(ArborysDevType* device, const String& protocol, String& protocolLabel) {
+  if (!device) return false;
+
+  String proto = protocol;
+  proto.toLowerCase();
+
+  if (proto == "esplan") {
+    protocolLabel = "ESPLAN";
+    return sendLANBlockingPing(device, 1, DEVICE_VIEWER_PING_TIMEOUT_MS);
+  }
+  if (proto == "udplan") {
+    protocolLabel = "UDPLAN";
+    return sendLANBlockingPing(device, 2, DEVICE_VIEWER_PING_TIMEOUT_MS);
+  }
+  if (proto == "udp") {
+    protocolLabel = "UDP";
+    return sendBlockingJsonPing(device, false, false, DEVICE_VIEWER_PING_TIMEOUT_MS);
+  }
+  if (proto == "http") {
+    protocolLabel = "HTTP";
+    return sendBlockingJsonPing(device, true, false, DEVICE_VIEWER_PING_TIMEOUT_MS);
+  }
+  if (proto == "https") {
+    protocolLabel = "HTTPS";
+    return sendBlockingJsonPing(device, false, true, DEVICE_VIEWER_PING_TIMEOUT_MS);
+  }
+
+  protocolLabel = protocol;
+  return false;
+}
+
+static void appendDeviceViewerPingStatus() {
+  if (!server.hasArg("ping")) return;
+
+  String pingStatus = server.arg("ping");
+  String protocol = server.hasArg("pingproto") ? server.arg("pingproto") : "Unknown";
+  String deviceName = server.hasArg("pingdevice") ? server.arg("pingdevice") : "device";
+
+  if (pingStatus == "success") {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<strong>Success:</strong> Ping sent and Ack received from " + deviceName + " over " + protocol + ".";
+    WEBHTML = WEBHTML + "</div>";
+  } else if (pingStatus == "failed") {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "Ping failed over " + protocol + ".";
+    WEBHTML = WEBHTML + "</div>";
+  }
+}
+
 void renderDeviceViewerPage() {
     WEBHTML = "";
     serverTextHeader("Main");
@@ -5331,29 +5985,6 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<body>";
 
     appendStandardPageNav();
-
-    // Device-specific navigation buttons
-    WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 10px; background-color: #e8e8e8; margin-bottom: 20px;\">";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px;\">Previous</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Next</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">Ping</a> ";
-    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 5px; padding: 8px 16px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete</a>";
-    WEBHTML = WEBHTML + "</div>";
-
-
-    // Check for status messages from ping operations
-    if (server.hasArg("ping")) {
-        String pingStatus = server.arg("ping");
-        if (pingStatus == "success") {
-            WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
-            WEBHTML = WEBHTML + "<strong>Success:</strong> Ping request sent successfully to the device.";
-            WEBHTML = WEBHTML + "</div>";
-        } else if (pingStatus == "failed") {
-            WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
-            WEBHTML = WEBHTML + "<strong>Error:</strong> Failed to send ping request to the device.";
-            WEBHTML = WEBHTML + "</div>";
-        }
-    }
 
     // Check for status messages from delete operations
     if (server.hasArg("delete")) {
@@ -5386,6 +6017,10 @@ void renderDeviceViewerPage() {
             WEBHTML = WEBHTML + "<strong>Error:</strong> Cannot delete this device.";
             WEBHTML = WEBHTML + "</div>";
         }
+    }
+
+    if (Sensors.getNumDevices() > 0) {
+        appendAllDevicesFirmwareTable();
     }
 
     // Reset to first device if no devices exist
@@ -5455,7 +6090,7 @@ void renderDeviceViewerPage() {
       if (!Sensors.isDeviceInit(di)) continue;
       ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
       if (!d) continue;
-      String label = String(d->devName);
+      String label = String(d->devName) + " v" + formatArborysDeviceFirmware(d);
       if (deviceFlagged[di]) label += "*";
       WEBHTML = WEBHTML + "<option value=\"" + String(di) + "\"";
       if (di == CURRENT_DEVICEVIEWER_DEVINDEX) WEBHTML = WEBHTML + " selected";
@@ -5465,7 +6100,21 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> of " + String(Sensors.getNumDevices()) + "</span>";
     if (isThisDevice) WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> (this device)</span>";
     WEBHTML = WEBHTML + "</form>";
+    WEBHTML = WEBHTML + "<div style=\"margin-top: 10px; text-align: center;\">";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">Prev</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">Next</a> ";
+    WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete</a> ";
+    if (!isThisDevice) {
+      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=esplan\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">ESPLAN</a> ";
+      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udplan\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDPLAN</a> ";
+      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udp\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDP</a> ";
+      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=http\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTP</a> ";
+      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=https\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #009688; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTPS</a>";
+    }
     WEBHTML = WEBHTML + "</div>";
+    WEBHTML = WEBHTML + "</div>";
+
+    appendDeviceViewerPingStatus();
 
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
     WEBHTML = WEBHTML + "<h4>Device Information</h4>";
@@ -5474,6 +6123,7 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
+    appendDeviceFirmwareInfoRow(device);
     if (isThisDevice) {
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(I.ALIVESINCE ? dateify(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
     } else {
@@ -5508,21 +6158,39 @@ void renderDeviceViewerPage() {
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type Name</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Value</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Logged</th>";
-        #ifndef _ISPERIPHERAL
+        #if _IS_SERVER_HUB
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Flags</th>";
         #endif
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Flagged</th>";
-        #ifdef _ISPERIPHERAL
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Critical</th>";
-        #else
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">EXP</th>";
+        #if _HAS_LOCAL_SENSORS
+        if (isThisDevice) {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Critical</th>";
+        } else
+        #endif
+        #if _IS_SERVER_HUB
+        {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">EXP</th>";
+        }
+        #elif _HAS_LOCAL_SENSORS
+        {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Critical</th>";
+        }
         #endif
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Avg</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Raw</th>";
-        #ifdef _ISPERIPHERAL
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Config</th>";
-        #else
-        WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Override Config</th>";
+        #if _HAS_LOCAL_SENSORS
+        if (isThisDevice) {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Config</th>";
+        } else
+        #endif
+        #if _IS_SERVER_HUB
+        {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Override Config</th>";
+        }
+        #elif _HAS_LOCAL_SENSORS
+        {
+          WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Config</th>";
+        }
         #endif
         WEBHTML = WEBHTML + "</tr>";
 
@@ -5530,7 +6198,7 @@ void renderDeviceViewerPage() {
             ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
             if (sensor && sensor->IsSet && sensor->deviceIndex == CURRENT_DEVICEVIEWER_DEVINDEX
                 && sensor->snsID > 0 && sensor->snsType > 0) {
-                rootTableFill(i, true);
+                rootTableFill(i);
             }
         }
         WEBHTML = WEBHTML + "</table>";
@@ -5630,15 +6298,24 @@ void handleDeviceViewerPing() {
         return;
     }
 
-    bool success = sendESPNowPingRequest(device, 3, true);
-
-    if (success) {
-        server.sendHeader("Location", "/?ping=success");
-        server.send(302, "text/plain", "Ping sent successfully.");
-    } else {
-        server.sendHeader("Location", "/?ping=failed");
-        server.send(302, "text/plain", "Failed to send ping.");
+    int16_t myDeviceIndex = Sensors.findMyDeviceIndex();
+    if (myDeviceIndex >= 0 && CURRENT_DEVICEVIEWER_DEVINDEX == (uint16_t)myDeviceIndex) {
+        server.sendHeader("Location", "/");
+        server.send(302, "text/plain", "Cannot ping this device.");
+        return;
     }
+
+    String protocol = server.hasArg("protocol") ? server.arg("protocol") : "esplan";
+    String protocolLabel;
+    bool success = performDeviceViewerPing(device, protocol, protocolLabel);
+    if (protocolLabel.length() == 0) protocolLabel = protocol;
+
+    String loc = "/?ping=" + String(success ? "success" : "failed")
+        + "&pingproto=" + urlEncode(protocolLabel)
+        + "&pingdevice=" + urlEncode(String(device->devName));
+
+    server.sendHeader("Location", loc);
+    server.send(302, "text/plain", success ? "Ping succeeded." : "Ping failed.");
 }
 
 void handleDeviceViewerDelete() {
@@ -5689,9 +6366,16 @@ void handleDeviceViewerDelete() {
 void setupServerRoutes() {
     // Main routes
     server.on("/", handleRoot);
-    server.on("/SENSORDETAILS", handleSensorDetails);
-    server.on("/ALLSENSORS", handleALL);
     server.on("/POST", handlePost);
+#ifdef _USE32
+    server.on("/POST_ENC", HTTP_POST, handlePostEnc, handlePostEncRaw);
+    server.on("/FIRMWARE_ENC", HTTP_POST, handleFirmwareEnc, handleFirmwareEncRaw);
+    server.on("/FIRMWARE_BLOCK", HTTP_POST, handleFirmwareBlock);
+#else
+    server.on("/POST_ENC", HTTP_POST, handlePostEnc);
+    server.on("/FIRMWARE_ENC", HTTP_POST, handleFirmwareEnc);
+    server.on("/FIRMWARE_BLOCK", HTTP_POST, handleFirmwareBlock);
+#endif
     server.on("/REQUESTUPDATE", handleREQUESTUPDATE);
     server.on("/CLEARSENSOR", handleCLEARSENSOR);
     server.on("/TIMEUPDATE", handleTIMEUPDATE);
@@ -5707,12 +6391,11 @@ void setupServerRoutes() {
     server.on("/CONFIG", HTTP_POST, handleCONFIG_POST);
     server.on("/CONFIG_DELETE", HTTP_POST, handleCONFIG_DELETE);
     server.on("/CONFIG_OTA_SWITCH", HTTP_POST, handleCONFIG_OTA_SWITCH);
-    server.on("/READONLYCOREFLAGS", HTTP_GET, handleREADONLYCOREFLAGS);
-    #ifndef _ISPERIPHERAL
+    #if _IS_SERVER_HUB
     server.on("/SENSOR_OVERRIDE_UPDATE", HTTP_POST, handleSENSOR_OVERRIDE_UPDATE);
     #endif
     
-    #ifdef _ISPERIPHERAL
+    #if _HAS_LOCAL_SENSORS
     // Sensor configuration routes for peripheral devices
     server.on("/SENSOR_UPDATE", HTTP_POST, handleSENSOR_UPDATE_POST);
     server.on("/SENSOR_READ_SEND_NOW", HTTP_POST, handleSENSOR_READ_SEND_NOW);
@@ -5753,20 +6436,18 @@ void setupServerRoutes() {
     
     // SD Card routes
     server.on("/SDCARD", HTTP_GET, handleSDCARD);
+    server.on("/SDCARD", HTTP_POST, handleSDCARD_DIR);
+    server.on("/SDCARD_DOWNLOAD", HTTP_GET, handleSDCARD_DOWNLOAD);
+    #ifdef _USESDCARD
     server.on("/SDCARD_UPLOAD", HTTP_POST, handleSDCARD_UPLOAD, handleSDCARD_UPLOADFile);
-    server.on("/SDCARD_DELETE_DEVICES", HTTP_POST, handleSDCARD_DELETE_DEVICES);
+    #endif
     server.on("/SDCARD_DELETE_SENSORS", HTTP_POST, handleSDCARD_DELETE_SENSORS);
     server.on("/SDCARD_STORE_DEVICES", HTTP_POST, handleSDCARD_STORE_DEVICES);
-    server.on("/SDCARD_DELETE_SCREENFLAGS", HTTP_POST, handleSDCARD_DELETE_SCREENFLAGS);
-    server.on("/SDCARD_DELETE_WEATHERDATA", HTTP_POST, handleSDCARD_DELETE_WEATHERDATA);
     server.on("/SDCARD_SAVE_SCREENFLAGS", HTTP_POST, handleSDCARD_SAVE_SCREENFLAGS);
     server.on("/SDCARD_SAVE_WEATHERDATA", HTTP_POST, handleSDCARD_SAVE_WEATHERDATA);
-    server.on("/SDCARD_TIMESTAMPS", HTTP_GET, handleSDCARD_TIMESTAMPS);
+    server.on("/SDCARD_SYSTEMLOG", HTTP_GET, handleSDCARD_SYSTEMLOG);
     server.on("/ERROR_LOG", HTTP_GET, handleERROR_LOG);
     server.on("/REBOOT_DEBUG", HTTP_GET, handleREBOOT_DEBUG);
-    server.on("/SDCARD_DELETE_ERRORLOG", HTTP_POST, handleSDCARD_DELETE_ERRORLOG);
-    server.on("/SDCARD_DELETE_TIMESTAMPS", HTTP_POST, handleSDCARD_DELETE_TIMESTAMPS);
-    server.on("/SDCARD_DELETE_GSHEET", HTTP_POST, handleSDCARD_DELETE_GSHEET);
     
     // Device viewer routes
     server.on("/DEVICEVIEWER", HTTP_GET, handleDeviceViewer);
@@ -5790,6 +6471,8 @@ String JSONbuilder_device(ArborysDevType* device) {
   deviceJSON += String(device->devName);
   deviceJSON += "\",\"devType\":";
   deviceJSON += device->devType;
+  deviceJSON += ",\"firmware\":";
+  deviceJSON += firmwareJsonArray(device->firmware);
   deviceJSON += "}";
   return deviceJSON;
 }
@@ -5835,6 +6518,69 @@ void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBuf
    snprintf(jsonBuffer, jsonBufferSize, "%s", tempJSON.c_str());
 
    return;
+}
+
+static String JSONbuildSensorMSGString(const int16_t* snsIndices, uint8_t count, bool forHTTP) {
+  if (!snsIndices || count == 0) {
+    return "";
+  }
+
+  int16_t mydeviceIndex = Sensors.findMyDeviceIndex();
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(mydeviceIndex);
+  if (!device) {
+    return "";
+  }
+
+  String tempJSON;
+  if (count == 1) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[0]);
+    if (!S) {
+      return "";
+    }
+    tempJSON = "{\"msgType\":\"snsData\"," + JSONbuilder_device(device) + "," + JSONbuilder_sensorData(S) + "}";
+  } else {
+    tempJSON.reserve(256 + (size_t)count * 96u);
+    tempJSON = "{\"msgType\":\"snsData\"," + JSONbuilder_device(device) + ",\"sensors\":[";
+    bool first = true;
+    for (uint8_t i = 0; i < count; ++i) {
+      ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
+      if (!S) {
+        continue;
+      }
+      if (!first) {
+        tempJSON += ",";
+      }
+      tempJSON += JSONbuilder_sensorObject(S);
+      first = false;
+    }
+    tempJSON += "]}";
+  }
+
+  if (forHTTP) {
+    JSONbuilder_encodeHTTP(tempJSON);
+  }
+  return tempJSON;
+}
+
+static bool sensorMSGFitsBuffer(const int16_t* snsIndices, uint8_t count, uint16_t jsonBufferSize, bool forHTTP) {
+  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP);
+  return tempJSON.length() > 0 && tempJSON.length() < jsonBufferSize;
+}
+
+bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
+  if (!snsIndices || count == 0 || !jsonBuffer || jsonBufferSize == 0) {
+    return false;
+  }
+
+  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP);
+  if (tempJSON.isEmpty() || tempJSON.length() >= jsonBufferSize) {
+    SerialPrint("JSONbuilder_sensorMSG_list: Buffer too small for JSON payload", true);
+    storeError("JSONbuilder_sensorMSG_list: Buffer too small", ERROR_JSON_PARSE, true);
+    return false;
+  }
+
+  snprintf(jsonBuffer, jsonBufferSize, "%s", tempJSON.c_str());
+  return true;
 }
 
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
@@ -5953,6 +6699,7 @@ void processJSONMessage(String& postData, String& responseMsg) {
   } else {
       msgType = doc["msgType"].as<String>();
   }
+  s_lastIncomingHttpMsgType = msgType;
   JsonObject root = doc.as<JsonObject>();   
 
   if (msgType == "snsData") {
@@ -5963,17 +6710,21 @@ void processJSONMessage(String& postData, String& responseMsg) {
     //we have received a request to send a single sensor
     processJSONMessage_DataRequest(root, responseMsg);
   }
-  else if (msgType == "helloPing") {
-    //we have received a hello ping
-    processJSONMessage_ping(root, responseMsg, true);
-  }
-  else if (msgType == "ackPing") {
-    //we have received a ping ack
-    processJSONMessage_ping(root, responseMsg, false);
+  else if (msgType == "helloPing" || msgType == "ackPing") {
+    processJSONMessage_ping(root, responseMsg);
   }
   else if (msgType == "setFlagsReq") {
     //we have received a sensor request
     processJSONMessage_setFlagsReq(root, responseMsg);
+  }
+  else if (msgType == "FirmwareRequest") {
+    processJSONMessage_FirmwareRequest(root, responseMsg);
+  }
+  else if (msgType == "FirmwareAvailable") {
+    processJSONMessage_FirmwareAvailable(root, responseMsg);
+  }
+  else if (msgType == "FirmwareUnavailable") {
+    processJSONMessage_FirmwareUnavailable(root, responseMsg);
   }
   else {
     SerialPrint("Unknown message type: " + msgType,true);
@@ -5989,6 +6740,7 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
   IPAddress devIP = IPAddress(0,0,0,0);
   uint64_t devMAC = 0;
   String devName = "Unknown";
+  FirmwareVersion devFirmware;
   uint8_t devType = 0;
 
   int16_t senderIndex = -1;
@@ -6013,8 +6765,11 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
     }
     if (senderDevice["name"].is<JsonVariantConst>())    devName = senderDevice["name"].as<String>();
     if (senderDevice["devType"].is<JsonVariantConst>())    devType = senderDevice["devType"];
+    if (senderDevice["firmware"].is<JsonVariantConst>()) {
+      parseFirmwareFromJson(senderDevice["firmware"], devFirmware);
+    }
     //register the device sending me the request
-    senderIndex = Sensors.addDevice(devMAC, devIP, devName.c_str(), 0, 0, devType);
+    senderIndex = Sensors.addDevice(devMAC, devIP, devName.c_str(), 0, 0, devType, &devFirmware);
   } else {
     SerialPrint("Missing senderDevice in JSON message", true);
     responseMsg = "Missing senderDevice in JSON message";
@@ -6033,28 +6788,60 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
 }
 
 
-void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck) {
+void processJSONMessage_ping(JsonObject root, String& responseMsg) {
   responseMsg = "OK";
 
+  String msgType = root["msgType"] | "";
   int16_t senderIndex = processJSONMessage_addDevice(root, responseMsg);
 
   if (senderIndex == -1) {
     return;
   }
 
-  if (!isAck) {
-    //not the ack, respond with a ping ack
+  if (msgType == "ackPing") {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(senderIndex);
+    if (d) noteJsonPingAck(d->MAC);
+    return;
+  }
+
+  if (msgType == "helloPing") {
     char jsonBuffer[512];
-    JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), true, true);
-    if (sendHTTPJSON(senderIndex, jsonBuffer, "pingAck")==false) {      
-      responseMsg = "Failed to return HTTP ping";
-      storeError("Failed to return HTTP ping", ERROR_JSON_PARSE, true);
+    JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), false, true);
+    if (jsonBuffer[0] == '\0') {
+      responseMsg = "Failed to build ping ack";
+      storeError("Failed to build ping ack", ERROR_JSON_PARSE, true);
+      return;
+    }
+
+    if (s_jsonPingReplyVia == JSON_PING_REPLY_HTTP_INLINE || s_jsonPingReplyVia == JSON_PING_REPLY_HTTPS_INLINE) {
+      responseMsg = jsonBuffer;
+      return;
+    }
+
+    if (s_jsonPingReplyVia == JSON_PING_REPLY_UDP) {
+      if (!sendUDPMessage((uint8_t*)jsonBuffer, s_jsonPingReplyUdpIp, strlen(jsonBuffer), "pingAck")) {
+        responseMsg = "Failed to return UDP ping";
+        storeError("Failed to return UDP ping", ERROR_JSON_PARSE, true);
+      }
       return;
     }
   }
   return;
 }
 
+
+struct PendingDataRequest {
+  bool pending = false;
+  int16_t senderIndex = -1;
+  int16_t snsIndex = -1;
+};
+static PendingDataRequest s_pendingDataRequest;
+
+static void queueDeferredDataRequest(int16_t senderIndex, int16_t snsIndex) {
+  s_pendingDataRequest.senderIndex = senderIndex;
+  s_pendingDataRequest.snsIndex = snsIndex;
+  s_pendingDataRequest.pending = true;
+}
 
 void processJSONMessage_DataRequest(JsonObject root, String& responseMsg) {
   responseMsg = "OK";
@@ -6070,10 +6857,9 @@ void processJSONMessage_DataRequest(JsonObject root, String& responseMsg) {
 
 
   if (snsType >= 0 && snsID >= 0) {
-    //now send the sensor data to the sender
     int16_t sensorIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
     if (sensorIndex >= 0) {
-      SendData(sensorIndex, true, senderIndex, false); //force send data to sensorindex using http
+      queueDeferredDataRequest(senderIndex, sensorIndex);
     } else {
       SerialPrint("Sensor not found",true);
       responseMsg = "Sensor not found";
@@ -6081,8 +6867,7 @@ void processJSONMessage_DataRequest(JsonObject root, String& responseMsg) {
       return;
     }
   } else {
-    //now send all sensors to the sender
-    sendAllSensors(true, senderIndex, false);
+    queueDeferredDataRequest(senderIndex, -1);
   }
   return;
 }
@@ -6090,6 +6875,11 @@ void processJSONMessage_DataRequest(JsonObject root, String& responseMsg) {
 
 
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
+#if !_IS_SERVER_HUB
+  processJSONMessage_addDevice(root, responseMsg);
+  responseMsg = "OK";
+  return;
+#endif
 
   int16_t deviceIndex = processJSONMessage_addDevice(root, responseMsg);
   if (deviceIndex < 0) {
@@ -6130,7 +6920,7 @@ void processJSONMessage_sensorData(JsonObject root, String& responseMsg) {
 }
 
 void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg) {
-  #ifdef _ISPERIPHERAL
+  #if _HAS_LOCAL_SENSORS
   //attempt to register the sender device, not an error if it fails
   int16_t deviceIndex = processJSONMessage_addDevice(root, responseMsg);
 
@@ -6242,7 +7032,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
    uint8_t ret = 0;
    bool addToSD = false;
    int16_t sensorIndex = -1;
-   if (deviceMAC!=0 && deviceIP!=IPAddress(0,0,0,0) && snsType!=0 ) {
+   if (deviceMAC!=0 && snsType!=0 ) {
      if (devName.length() == 0) devName = "Unknown";
  
      //is this sensor already in the database?
@@ -6303,18 +7093,21 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
  void handlePost() {
     String responseMsg = "OK";
 
-    registerHTTPMessage("snsData");
-    // Check if this is JSON data (new format)
     if (server.hasArg("JSON")) {
         String postData = server.arg("JSON");
-        processJSONMessage(postData, responseMsg); 
+        registerHttpMsgTypeFromJson(postData);
+        pushJsonPingReplyContext(JSON_PING_REPLY_HTTP_INLINE);
+        processJSONMessage(postData, responseMsg);
+        popJsonPingReplyContext();
     } else {
+      registerHTTPMessage("POST");
       SerialPrint("No JSON data received",true);
       responseMsg = "No JSON data received";
     }
 
-
-    if (responseMsg == "OK") {
+    if (responseMsg.startsWith("{")) {
+      server.send(200, "application/json", responseMsg);
+    } else if (responseMsg == "OK") {
       server.send(200, "text/plain", responseMsg);
     } else {
       SerialPrint("Failed to add sensor with response message: " + responseMsg + "\n");
@@ -6323,6 +7116,237 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
     return;
  
  }
+
+static bool decryptAndProcessHttpPayload(uint8_t* encBuf, uint16_t encLen, String& responseMsg) {
+  if (!isValidLMKKey()) {
+    responseMsg = "LMK not configured";
+    return false;
+  }
+  if (encLen < 32 || encLen > LMK_HTTP_MAX_CIPHER || (encLen % 16) != 0) {
+    responseMsg = "Invalid cipher length";
+    return false;
+  }
+
+  uint16_t plainMax = encLen - 16;
+  uint8_t* plain = (uint8_t*)malloc(plainMax);
+  if (!plain) {
+    responseMsg = "Out of memory";
+    return false;
+  }
+
+  if (BootSecure::decrypt(encBuf, (char*)Prefs.KEYS.ESPNOW_KEY, plain, encLen, 16) != 1) {
+    free(plain);
+    responseMsg = "Decrypt failed";
+    return false;
+  }
+
+  uint16_t payloadLen = (uint16_t)plain[0] | ((uint16_t)plain[1] << 8);
+  if (payloadLen == 0 || payloadLen + 2 > plainMax) {
+    free(plain);
+    responseMsg = "Invalid payload length";
+    return false;
+  }
+
+  uint8_t* payload = plain + 2;
+  if (payload[0] == '{' || payload[0] == '[') {
+    String json;
+    json.reserve(payloadLen + 1);
+    for (uint16_t i = 0; i < payloadLen; i++) {
+      json += (char)payload[i];
+    }
+    registerHttpMsgTypeFromJson(json);
+    processJSONMessage(json, responseMsg);
+  } else {
+    SerialPrint("Encrypted HTTP binary payload received: " + String(payloadLen) + " bytes", true);
+    responseMsg = "OK";
+  }
+
+  free(plain);
+  return true;
+}
+
+static bool serverSendEncryptedPlaintext(const String& plaintext) {
+  if (!isValidLMKKey()) return false;
+  uint16_t payloadLen = (uint16_t)plaintext.length();
+  if (payloadLen == 0 || payloadLen > LMK_HTTP_MAX_PLAINTEXT) return false;
+
+  const uint16_t framedLen = payloadLen + 2;
+  uint8_t* framed = (uint8_t*)malloc(framedLen);
+  if (!framed) return false;
+  framed[0] = payloadLen & 0xFF;
+  framed[1] = (payloadLen >> 8) & 0xFF;
+  memcpy(framed + 2, plaintext.c_str(), payloadLen);
+
+  uint8_t* encBuf = (uint8_t*)malloc(LMK_HTTP_MAX_CIPHER);
+  if (!encBuf) {
+    free(framed);
+    return false;
+  }
+
+  uint16_t encLen = 0;
+  if (BootSecure::encrypt(framed, framedLen, (char*)Prefs.KEYS.ESPNOW_KEY, encBuf, &encLen, 16) != 1) {
+    free(framed);
+    free(encBuf);
+    return false;
+  }
+  free(framed);
+
+  server.setContentLength(encLen);
+  server.send(200, "application/octet-stream", "");
+  server.sendContent((const char*)encBuf, encLen);
+  server.client().flush();
+  free(encBuf);
+  return true;
+}
+
+#ifdef _USE32
+struct BinaryPostRawBody {
+  uint8_t* data = nullptr;
+  size_t len = 0;
+  size_t cap = 0;
+};
+
+static BinaryPostRawBody s_binaryPostRawBody;
+
+static void resetBinaryPostRawBody(BinaryPostRawBody& body) {
+  if (body.data) free(body.data);
+  body.data = nullptr;
+  body.len = 0;
+  body.cap = 0;
+}
+
+void absorbBinaryPostRaw(size_t maxLen) {
+  HTTPRaw& raw = server.raw();
+  if (raw.status == RAW_START) {
+    resetBinaryPostRawBody(s_binaryPostRawBody);
+    int cl = server.clientContentLength();
+    if (cl < 1 || (size_t)cl > maxLen) return;
+    s_binaryPostRawBody.cap = (size_t)cl;
+    s_binaryPostRawBody.data = (uint8_t*)malloc(s_binaryPostRawBody.cap);
+    if (!s_binaryPostRawBody.data) s_binaryPostRawBody.cap = 0;
+    return;
+  }
+  if (raw.status == RAW_WRITE) {
+    if (!s_binaryPostRawBody.data || s_binaryPostRawBody.len + raw.currentSize > s_binaryPostRawBody.cap) return;
+    memcpy(s_binaryPostRawBody.data + s_binaryPostRawBody.len, raw.buf, raw.currentSize);
+    s_binaryPostRawBody.len += raw.currentSize;
+    return;
+  }
+  if (raw.status == RAW_ABORTED) {
+    resetBinaryPostRawBody(s_binaryPostRawBody);
+  }
+}
+
+bool takeBinaryPostBody(uint8_t** out, size_t* outLen, size_t minLen, size_t maxLen) {
+  *out = s_binaryPostRawBody.data;
+  *outLen = s_binaryPostRawBody.len;
+  s_binaryPostRawBody.data = nullptr;
+  s_binaryPostRawBody.len = 0;
+  s_binaryPostRawBody.cap = 0;
+  if (!*out || *outLen < minLen || *outLen > maxLen) {
+    if (*out) free(*out);
+    *out = nullptr;
+    *outLen = 0;
+    return false;
+  }
+  return true;
+}
+
+void handlePostEncRaw() {
+  absorbBinaryPostRaw(LMK_HTTP_MAX_CIPHER);
+}
+#endif
+
+#ifndef _USE32
+static bool readLegacyBinaryPostBody(uint8_t** out, size_t* outLen, size_t minLen, size_t maxLen, uint32_t timeoutMs) {
+  *out = nullptr;
+  *outLen = 0;
+  size_t encLen = 0;
+  if (server.hasHeader("Content-Length")) {
+    encLen = (size_t)server.header("Content-Length").toInt();
+  }
+  if (encLen < minLen || encLen > maxLen) return false;
+
+  uint8_t* encBuf = (uint8_t*)malloc(encLen);
+  if (!encBuf) return false;
+
+  WiFiClient client = server.client();
+  size_t got = 0;
+  uint32_t startMs = millis();
+  while (got < encLen && (millis() - startMs) < timeoutMs) {
+    int avail = client.available();
+    if (avail > 0) {
+      int chunk = client.read(encBuf + got, encLen - got);
+      if (chunk > 0) got += (size_t)chunk;
+    } else {
+      delay(1);
+    }
+  }
+  if (got != encLen) {
+    free(encBuf);
+    return false;
+  }
+  *out = encBuf;
+  *outLen = encLen;
+  return true;
+}
+#endif
+
+void handlePostEnc() {
+  String responseMsg = "OK";
+  s_lastIncomingHttpMsgType = "";
+
+  uint8_t* encBuf = nullptr;
+  size_t encLen = 0;
+#ifdef _USE32
+  if (!takeBinaryPostBody(&encBuf, &encLen, 32, LMK_HTTP_MAX_CIPHER)) {
+#else
+  if (!readLegacyBinaryPostBody(&encBuf, &encLen, 32, LMK_HTTP_MAX_CIPHER, 5000)) {
+#endif
+    registerHTTPMessage("badReq");
+    server.send(400, "text/plain", "Invalid or missing body");
+    return;
+  }
+
+  pushJsonPingReplyContext(JSON_PING_REPLY_HTTPS_INLINE);
+  if (!decryptAndProcessHttpPayload(encBuf, (uint16_t)encLen, responseMsg)) {
+    popJsonPingReplyContext();
+    free(encBuf);
+    if (s_lastIncomingHttpMsgType.length() == 0) {
+      registerHTTPMessage("decFail");
+    }
+    server.send(500, "text/plain", responseMsg);
+    return;
+  }
+  popJsonPingReplyContext();
+
+  free(encBuf);
+
+  // POST_ENC ping: always return encrypted ackPing inline (do not rely on ping reply context).
+  if (s_lastIncomingHttpMsgType == "helloPing") {
+    char jsonBuffer[512];
+    JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), false, true);
+    if (jsonBuffer[0] == '\0') {
+      server.send(500, "text/plain", "Failed to build ping ack");
+      return;
+    }
+    if (serverSendEncryptedPlaintext(String(jsonBuffer))) {
+      return;
+    }
+    server.send(500, "text/plain", "Encrypt failed");
+    return;
+  }
+
+  if (responseMsg.startsWith("{")) {
+    if (!serverSendEncryptedPlaintext(responseMsg)) {
+      server.send(500, "text/plain", "Encrypt failed");
+    }
+  } else if (responseMsg == "OK") {
+    server.send(200, "text/plain", responseMsg);
+  } else {
+    server.send(500, "text/plain", responseMsg);
+  }
+}
  
 
 
@@ -6381,6 +7405,15 @@ void wrapupSendData(ArborysSnsType* S) {
   S->timeLogged = I.currentTime;
 }
 
+void wrapupSendDataList(const int16_t* snsIndices, uint8_t count) {
+  if (!snsIndices) {
+    return;
+  }
+  for (uint8_t i = 0; i < count; ++i) {
+    wrapupSendData(Sensors.snsIndexToPointer(snsIndices[i]));
+  }
+}
+
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
   ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002; //device not found
@@ -6390,7 +7423,7 @@ int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* ms
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
   //http method
 
-  if (CheckWifiStatus(false)!=1) {
+  if (!wifiReadyForNetwork()) {
     I.HTTP_OUTGOING_ERRORS++;
     return -1001; //not connected to wifi
   }
@@ -6409,7 +7442,102 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType)
   }
   I.HTTP_OUTGOING_ERRORS++;
   return -1000; //failed to send message
-}  
+}
+
+static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, uint16_t payloadLen, const char* msgType) {
+  if (!payload || payloadLen == 0) return -1002;
+  if (payloadLen > LMK_HTTP_MAX_PLAINTEXT) return -1005;
+  if (!isValidLMKKey()) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1003;
+  }
+  if (!wifiReadyForNetwork()) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1001;
+  }
+
+  const uint16_t framedLen = payloadLen + 2;
+  uint8_t* framed = (uint8_t*)malloc(framedLen);
+  if (!framed) return -1006;
+  framed[0] = payloadLen & 0xFF;
+  framed[1] = (payloadLen >> 8) & 0xFF;
+  memcpy(framed + 2, payload, payloadLen);
+
+  uint8_t* encBuf = (uint8_t*)malloc(LMK_HTTP_MAX_CIPHER);
+  if (!encBuf) {
+    free(framed);
+    return -1006;
+  }
+
+  uint16_t encLen = 0;
+  if (BootSecure::encrypt(framed, framedLen, (char*)Prefs.KEYS.ESPNOW_KEY, encBuf, &encLen, 16) != 1) {
+    free(framed);
+    free(encBuf);
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1004;
+  }
+  free(framed);
+
+  static char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST_ENC", ip.toString().c_str());
+
+  WiFiClient client;
+  HTTPClient http;
+  client.setTimeout(20000);
+  http.begin(client, urlBuffer);
+  http.setTimeout(20000);
+  http.addHeader("Content-Type", "application/octet-stream");
+  esp_task_wdt_reset();
+  int httpCode = http.POST(encBuf, encLen);
+  esp_task_wdt_reset();
+
+  if (httpCode >= 200 && httpCode < 400) {
+    registerHTTPSend(ip, msgType);
+    http.end();
+    free(encBuf);
+    return httpCode;
+  }
+
+  String errDetail;
+  WiFiClient* stream = http.getStreamPtr();
+  if (stream && stream->available() > 0) {
+    char errBuf[64];
+    int n = stream->readBytes(errBuf, sizeof(errBuf) - 1);
+    if (n > 0) {
+      errBuf[n] = '\0';
+      errDetail = String(errBuf);
+    }
+  }
+  http.end();
+  free(encBuf);
+  I.HTTP_OUTGOING_ERRORS++;
+  if (errDetail.length() > 0) {
+    storeError("POST_ENC to " + ip.toString() + " httpCode=" + String(httpCode) + " " + errDetail, ERROR_HTTP_RESPONSE, true);
+  }
+  return (int16_t)httpCode;
+}
+
+int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
+  if (!jsonBuffer) return -1002;
+  uint16_t len = (uint16_t)strlen(jsonBuffer);
+  return sendHTTPEncryptedPayload(ip, (const uint8_t*)jsonBuffer, len, msgType);
+}
+
+int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
+  if (!d) return -1002;
+  return sendHTTPSJSON(d->IP, jsonBuffer, msgType);
+}
+
+int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType) {
+  return sendHTTPEncryptedPayload(ip, data, dataLen, msgType);
+}
+
+int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType) {
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
+  if (!d) return -1002;
+  return sendHTTPSBinary(d->IP, data, dataLen, msgType);
+}
 
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   //can use -1 to send to broadcast (if using HTTP, then send to all servers), or a specific device index to send to a specific device
@@ -6419,103 +7547,305 @@ uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   
 }
 
+void processDeferredDataRequest() {
+  if (!s_pendingDataRequest.pending) return;
+  int16_t senderIndex = s_pendingDataRequest.senderIndex;
+  int16_t snsIndex = s_pendingDataRequest.snsIndex;
+  s_pendingDataRequest.pending = false;
+  if (senderIndex < 0) return;
+  if (snsIndex >= 0) {
+    SendData(snsIndex, true, senderIndex, false);
+  } else {
+    sendAllSensors(true, senderIndex, false);
+  }
+}
 
-bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
-  //forcesend will always send. If sentodeviceindex is >=0, it will send to the device at that index.
-  if (!forceSend) {
-    //should we send unmonitored sensors? Uncomment this to skip sending unmonitored sensors. The advantage of sending is that the server will have all sensor data, but these take up space.
-    //if (bitRead(S->Flags,1) == 0) return false; //not monitored
-    if (!isSensorSendTime(snsIndex)) return false; //not time to send
+
+static constexpr uint64_t LAN_SENSOR_BROADCAST_MAC = 0xFFFFFFFFFFFFULL;
+
+static void markAllServersDataSent() {
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (d && d->IsSet && d->devType >= 100) {
+      d->dataSent = I.currentTime;
+    }
+  }
+}
+
+static void backoffAllServersDataSent() {
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (d && d->IsSet && d->devType >= 100) {
+      d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
+    }
+  }
+}
+
+// ESP-NOW type 12: one frame per sensor (bundle sends each included sensor).
+static bool sendSensorDataLANBundle(ArborysDevType* d, const int16_t* snsIndices, uint8_t count) {
+  if (!d || !d->IsSet || !snsIndices || count == 0) {
+    return false;
+  }
+  const uint8_t tier = 1;
+  bool ok = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
+    if (!S || !S->IsSet) {
+      continue;
+    }
+    if (sendLANSensorData(S, d->MAC, d->IP, tier)) {
+      ok = true;
+    }
+  }
+  return ok;
+}
+
+static bool sendSensorDataLANBroadcastBundle(const int16_t* snsIndices, uint8_t count) {
+  const uint8_t tier = 1;
+  const IPAddress noIp(0, 0, 0, 0);
+  if (!snsIndices || count == 0) {
+    return false;
+  }
+  bool ok = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
+    if (!S || !S->IsSet) {
+      continue;
+    }
+    if (sendLANSensorData(S, LAN_SENSOR_BROADCAST_MAC, noIp, tier)) {
+      ok = true;
+    }
+  }
+  if (ok) {
+    markAllServersDataSent();
+  }
+  return ok;
+}
+
+static bool destinationNeedsLAN(const ArborysDevType* d, bool haveWifi) {
+  if (!d) return true;
+  return !haveWifi || d->IP == IPAddress(0, 0, 0, 0);
+}
+
+static bool isSensorMonitored(const ArborysSnsType* S) {
+  return S && bitRead(S->Flags, 1);
+}
+
+static bool sensorHasFreshUnreadData(const ArborysSnsType* S) {
+  if (!S || !isTimeValid(S->timeRead)) {
+    return false;
+  }
+  return S->timeLogged == 0 || S->timeRead > S->timeLogged;
+}
+
+static bool isIndexAlreadyInList(int16_t idx, const int16_t* list, uint8_t count) {
+  for (uint8_t i = 0; i < count; ++i) {
+    if (list[i] == idx) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Due sensors are always included; monitored sensors with unread reads are added if they fit in the JSON buffer.
+static uint8_t packSensorsForSend(int16_t* outIndices, uint8_t maxOut, bool forceSend, int16_t triggerSnsIndex,
+    bool applyJsonLimit, uint16_t jsonBufferSize, bool forHTTP) {
+  const int16_t myIdx = Sensors.findMyDeviceIndex();
+  int16_t dueIndices[NUMSENSORS];
+  uint8_t dueCount = 0;
+  int16_t freshIndices[NUMSENSORS];
+  uint8_t freshCount = 0;
+
+  for (int16_t i = 0; i < NUMSENSORS; ++i) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(i);
+    if (!S || !S->IsSet || S->deviceIndex != myIdx) {
+      continue;
+    }
+
+    bool isDue = false;
+    if (forceSend) {
+      isDue = (triggerSnsIndex < 0) || (i == triggerSnsIndex);
+    } else {
+      isDue = checkThisSensorTime(S);
+    }
+
+    if (isDue) {
+      dueIndices[dueCount++] = i;
+    } else if (isSensorMonitored(S) && sensorHasFreshUnreadData(S)) {
+      freshIndices[freshCount++] = i;
+    }
   }
 
+  if (dueCount == 0) {
+    return 0;
+  }
+
+  const uint8_t requestedTotal = dueCount + freshCount;
+  uint8_t outCount = 0;
+
+  if (applyJsonLimit) {
+    for (uint8_t d = 0; d < dueCount && outCount < maxOut; ++d) {
+      int16_t trial[NUMSENSORS];
+      memcpy(trial, outIndices, outCount * sizeof(int16_t));
+      trial[outCount] = dueIndices[d];
+      if (sensorMSGFitsBuffer(trial, outCount + 1, jsonBufferSize, forHTTP)) {
+        outIndices[outCount++] = dueIndices[d];
+      }
+    }
+
+    if (outCount == 0) {
+      storeError("SendData: JSON buffer too small for any due sensor payload", ERROR_JSON_PARSE, true);
+      return 0;
+    }
+
+    for (uint8_t f = 0; f < freshCount && outCount < maxOut; ++f) {
+      int16_t candidate = freshIndices[f];
+      if (isIndexAlreadyInList(candidate, outIndices, outCount)) {
+        continue;
+      }
+
+      int16_t trial[NUMSENSORS];
+      memcpy(trial, outIndices, outCount * sizeof(int16_t));
+      trial[outCount] = candidate;
+      if (sensorMSGFitsBuffer(trial, outCount + 1, jsonBufferSize, forHTTP)) {
+        outIndices[outCount++] = candidate;
+      }
+    }
+
+    if (outCount < requestedTotal) {
+      SerialPrint("SendData: JSON buffer limit - sent " + String(outCount) + " of " + String(requestedTotal) + " requested sensors", true);
+    }
+  } else {
+    for (uint8_t d = 0; d < dueCount && outCount < maxOut; ++d) {
+      outIndices[outCount++] = dueIndices[d];
+    }
+    for (uint8_t f = 0; f < freshCount && outCount < maxOut; ++f) {
+      if (!isIndexAlreadyInList(freshIndices[f], outIndices, outCount)) {
+        outIndices[outCount++] = freshIndices[f];
+      }
+    }
+  }
+
+  return outCount;
+}
+
+bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
+  if (snsIndex >= 0 && !forceSend && !isSensorSendTime(snsIndex)) {
+    return false;
+  }
+  if (snsIndex < 0 && !forceSend && !isSensorSendTime(-1)) {
+    return false;
+  }
+
+  const bool haveWifi = wifiReadyForNetwork();
+  const bool forHTTP = !useUDP;
+  static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
+  int16_t sendList[NUMSENSORS];
+  const uint8_t sendCount = packSensorsForSend(sendList, NUMSENSORS, forceSend, snsIndex,
+      haveWifi, SNSDATA_JSON_BUFFER_SIZE, forHTTP);
+  if (sendCount == 0) {
+    return false;
+  }
 
   bool isGood = false;
-
-  if(CheckWifiStatus(false)==1){
-    // Use static buffers to reduce memory fragmentation
-    static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
-
-    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndex);
-    if (S == nullptr) { //send all sensors
-      if (useUDP)  JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
-      else JSONbuilder_sensorMSG_all(jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
-  
-    } else {
-      if (useUDP)  JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,false);
-      else JSONbuilder_sensorMSG(S, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE,true);
-  
+  if (haveWifi) {
+    if (!JSONbuilder_sensorMSG_list(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, forHTTP)) {
+      return false;
     }
-  
+  }
 
-    if (useUDP && sendToDeviceIndex <0) { //special value for sending to broadcast UDP to everyone
-      SerialPrint("Sending to all devices", true);
-  
-      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0,0,0,0), strlen(jsonBuffer),"snsBrdcst");
+  if (useUDP && sendToDeviceIndex < 0) {
+    if (!haveWifi) {
+      SerialPrint("SendData: UDP broadcast unavailable without WiFi; ESP-NOW broadcast to servers", true);
+      isGood = sendSensorDataLANBroadcastBundle(sendList, sendCount);
+    } else {
+      SerialPrint("Sending bundled sensor data to all devices", true);
+      sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0, 0, 0, 0), strlen(jsonBuffer), "snsBrdcst");
       #ifndef _USELOWPOWER
-      for (int16_t i=0; i<NUMDEVICES ; i++) {
+      for (int16_t i = 0; i < NUMDEVICES; ++i) {
         ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-        if (d && d->IsSet && d->IP != WiFi.localIP()) d->dataSent = I.currentTime;
+        if (d && d->IsSet && d->IP != WiFi.localIP()) {
+          d->dataSent = I.currentTime;
+        }
       }
-      wrapupSendData(S);
+      wrapupSendDataList(sendList, sendCount);
       #endif
       return true;
     }
-
-    if (sendToDeviceIndex >= 0) {
-      //send data to a specific device
-      ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
-      if (!d) return false; //device not found
-      if (isDeviceSendTime(d, forceSend)) {
-        if (useUDP) {
-          isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer),"snsMsg");
+  } else if (sendToDeviceIndex >= 0) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+    if (!d) {
+      return false;
+    }
+    if (isDeviceSendTime(d, forceSend)) {
+      if (destinationNeedsLAN(d, haveWifi)) {
+        isGood = sendSensorDataLANBundle(d, sendList, sendCount);
+      } else if (useUDP) {
+        isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsMsg");
+      } else if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
+        isGood = true;
+      }
+      if (isGood) {
+        d->dataSent = I.currentTime;
+      }
+    }
+  } else {
+    if (!haveWifi) {
+      bool anyServer = false;
+      for (int16_t i = 0; i < NUMDEVICES; ++i) {
+        ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+        if (d && d->IsSet && d->devType >= 100 && isDeviceSendTime(d, false)) {
+          anyServer = true;
+          break;
         }
-        else if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
-          isGood = true;                  
+      }
+      if (anyServer) {
+        SerialPrint("SendData: ESP-NOW broadcast bundled sensor data to all servers", true);
+        isGood = sendSensorDataLANBroadcastBundle(sendList, sendCount);
+        if (!isGood) {
+          backoffAllServersDataSent();
         }
-        if (isGood) d->dataSent = I.currentTime;
       }
     } else {
-      // now send to all servers I know of. iterate all known devices to find servers  (devType >=100). forcesend MUST be false here (we are not going to send to every device)
-      for (int16_t i=0; i<NUMDEVICES ; i++) {
+      for (int16_t i = 0; i < NUMDEVICES; ++i) {
         ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-        if (!isDeviceSendTime(d, false)) continue; //not time to send to this server yet because we have recently sent data
-        
-        //udp method, targetted
-        if (useUDP) {
-          SerialPrint("Sending UDP sensor data to " + d->IP.toString(), true);
-          if (sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsMsg") == true) {
-            d->dataSent = I.currentTime;
-            isGood = true;
-          } else {
-            SerialPrint("Failed to send UDP sensor data to " + d->IP.toString(), true);
-            //set the sent time such that it will trigger a retry send in 10 minutes
-            d->dataSent = I.currentTime -d->SendingInt + 10*60;
-          }
-        } else {
-          if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
-            d->dataSent = I.currentTime;
-            isGood = true;
-          } else {
-            SerialPrint("Failed to send HTTP sensor data to " + d->IP.toString(), true);
-            //set the sent time such that it will trigger a retry send in 10 minutes
-            d->dataSent = I.currentTime -d->SendingInt + 10*60;
-          }
+        if (!isDeviceSendTime(d, false)) {
+          continue;
         }
-        
-        // Small delay to prevent overwhelming servers
+
+        if (destinationNeedsLAN(d, haveWifi)) {
+          SerialPrint("SendData: LAN/ESP-NOW unicast bundle to " + String(d->devName), true);
+          if (sendSensorDataLANBundle(d, sendList, sendCount)) {
+            d->dataSent = I.currentTime;
+            isGood = true;
+          } else {
+            d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
+          }
+        } else if (useUDP) {
+          SerialPrint("Sending bundled UDP sensor data to " + d->IP.toString(), true);
+          if (sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsMsg")) {
+            d->dataSent = I.currentTime;
+            isGood = true;
+          } else {
+            d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
+          }
+        } else if (sendHTTPJSON(d->IP, jsonBuffer, "snsMsg") == 200) {
+          d->dataSent = I.currentTime;
+          isGood = true;
+        } else {
+          d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
+        }
         delay(10);
       }
     }
-  
-    if (isGood) {
-      wrapupSendData(S);
-    }  else {
-      I.makeBroadcast = true; //broadcast my presence if I failed to send the data
-    }
-    return isGood;
   }
 
-  return false;
+  if (isGood) {
+    wrapupSendDataList(sendList, sendCount);
+  } else {
+    I.makeBroadcast = true;
+  }
+  return isGood;
 }
 
 
@@ -6746,12 +8076,12 @@ bool receiveUDPMessage() {
     bool isESPNOW = false;
 
     if (packetSize != sizeof(ESPNOW_type)) {
-      //assume this is a sensor data json buffer
-      //am I a server type? Should I interpret this?
+      // JSON UDP: local-sensor nodes always accept; hub-only builds require _MYTYPE >= 100
+      #if !_HAS_LOCAL_SENSORS && _IS_SERVER_HUB
       if (_MYTYPE < 100) {
-        //do not process JSON; still count as received (it just wasn't for me)
         return closeUDP(true);
-      } 
+      }
+      #endif
 
     } else {
       isESPNOW = true;
@@ -6789,7 +8119,10 @@ bool receiveUDPMessage() {
       String responseMsg = "OK";
       String postData = (String)buffer;
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "JSON");
+      registerHttpMsgTypeFromJson(postData);
+      pushJsonPingReplyContext(JSON_PING_REPLY_UDP, remoteIP);
       processJSONMessage(postData, responseMsg);
+      popJsonPingReplyContext();
     }
 
   

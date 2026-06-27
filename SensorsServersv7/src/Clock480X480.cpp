@@ -674,52 +674,49 @@ bool getWeather() {
     if (weatherServer->IP == IPAddress(0,0,0,0)) return false;
 
 
-    WiFiClient wfclient;
-    HTTPClient http;
+    if (!wifiReadyForNetwork()) return false;
 
-    if(WiFi.status()== WL_CONNECTED){
-        String payload;
-        String tempstring;
-        int httpCode=404;
-        
+    char url[280];
+    snprintf(url, sizeof(url),
+        "http://%s/REQUESTWEATHER?hourly_temp=0&hourly_weatherID=0&daily_weatherID=0&daily_tempMax=0&daily_tempMin=0&daily_pop=0&sunrise=0&sunset=0",
+        weatherServer->IP.toString().c_str());
 
-        tempstring = "http://" + weatherServer->IP.toString() + "/REQUESTWEATHER?hourly_temp=0&hourly_weatherID=0&daily_weatherID=0&daily_tempMax=0&daily_tempMin=0&daily_pop=0&sunrise=0&sunset=0";
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.timeout = 5000;
+    M.allowInsecure = true;
+    M.usePSRAM = false;
 
-        http.useHTTP10(true);    
-        http.begin(wfclient,tempstring.c_str());
-        httpCode = http.GET();
-        payload = http.getString();
-        http.end();
+    if (!SendHTTPMessage(M) || M.httpCode < 200 || M.httpCode >= 300 || !M.payload) return false;
 
-        if (!(httpCode >= 200 && httpCode < 300)) return false;
-        
-        myScreen.wthr_currentTemp = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
-        
-        myScreen.wthr_currentWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    String payload = String(M.payload.get());
 
-        myScreen.wthr_DailyWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
-        
-        myScreen.wthr_DailyHigh = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
-        
-        myScreen.wthr_DailyLow = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
-        
-        myScreen.wthr_DailyPoP = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
-        
-        myScreen.wthr_sunrise = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        payload.remove(0, payload.indexOf(";",0) + 1); //+1 is for the length of delimiter
+    myScreen.wthr_currentTemp = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
 
-        myScreen.wthr_sunset = payload.substring(0, payload.indexOf(";",0)).toInt(); 
-        
-        myScreen.time_lastWeather = I.currentTime;
-        return true;
-    }
-    return false;
+    myScreen.wthr_currentWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_DailyWeatherID = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_DailyHigh = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_DailyLow = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_DailyPoP = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_sunrise = payload.substring(0, payload.indexOf(";",0)).toInt();
+    payload.remove(0, payload.indexOf(";",0) + 1);
+
+    myScreen.wthr_sunset = payload.substring(0, payload.indexOf(";",0)).toInt();
+
+    myScreen.time_lastWeather = I.currentTime;
+    return true;
 }
 
 

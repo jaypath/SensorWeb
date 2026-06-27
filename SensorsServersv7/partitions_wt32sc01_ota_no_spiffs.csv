@@ -3,7 +3,7 @@
 nvs,      data, nvs,     0x9000,   0x4000,
 otadata,  data, ota,     0xd000,   0x2000,
 phy_init, data, phy,     0xf000,   0x1000,
-# app0 starts at 0x10000 (64KB aligned)
+# Equal OTA slots (64KB-aligned offsets): 0x1F0000 (2031616 bytes) each
+# Note: current firmware (~2063 KB) exceeds this; shrink build or use asymmetric layout
 app0,     app,  ota_0,   0x10000,  0x1F0000,
-# app1 starts at 0x200000 (2MB mark, 64KB aligned)
-app1,     app,  ota_1,   0x200000, 0x200000,
+app1,     app,  ota_1,   0x200000, 0x1F0000,

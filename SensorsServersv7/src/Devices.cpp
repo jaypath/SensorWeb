@@ -3,10 +3,79 @@
 #include "utility.hpp"
 #include <TimeLib.h>
 
+static void setDeviceFirmware(ArborysDevType* device, const FirmwareVersion& fw) {
+    if (!device) return;
+    device->firmware = fw;
+}
+
+static void applyDeviceFirmware(ArborysDevType* device, uint64_t MAC, const FirmwareVersion* firmware) {
+    if (!device) return;
+    if (firmware) {
+        device->firmware = *firmware;
+    } else if (MAC == (uint64_t) ESP.getEfuseMac()) {
+        getLocalFirmware(device->firmware);
+    }
+}
+
+static bool isLocalDeviceMAC(uint64_t MAC) {
+    return MAC == (uint64_t)ESP.getEfuseMac();
+}
+
+// Non-hub nodes: local device + servers (devType >= 100) only. Hub nodes: all devices.
+static bool shouldAcceptRemoteDevice(uint64_t MAC, uint8_t devType, const ArborysDevType* existing) {
+    if (isLocalDeviceMAC(MAC)) return true;
+#if _IS_SERVER_HUB
+    return true;
+#else
+    if (devType >= 100) return true;
+    if (existing && existing->IsSet && existing->devType >= 100) return true;
+    return false;
+#endif
+}
+
+// Non-hub nodes: local sensors only. Hub nodes: all sensors.
+static bool shouldAcceptRemoteSensor(uint64_t deviceMAC) {
+    if (isLocalDeviceMAC(deviceMAC)) return true;
+#if _IS_SERVER_HUB
+    return true;
+#else
+    return false;
+#endif
+}
+
+#if !_IS_SERVER_HUB
+static void enforceStoragePolicy(Devices_Sensors& sensors) {
+    const uint64_t myMac = (uint64_t)ESP.getEfuseMac();
+
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+        ArborysSnsType* S = sensors.snsIndexToPointer(i);
+        if (!S || !S->IsSet) continue;
+        ArborysDevType* D = sensors.devIndexToPointer(S->deviceIndex);
+        if (!D || !D->IsSet || D->MAC != myMac) {
+            S->IsSet = 0;
+            S->deviceIndex = -1;
+            S->expired = false;
+        }
+    }
+
+    for (int16_t i = 0; i < NUMDEVICES; i++) {
+        ArborysDevType* D = sensors.devIndexToPointer(i);
+        if (!D || !D->IsSet) continue;
+        if (D->MAC == myMac) continue;
+        if (D->devType >= 100) continue;
+        D->IsSet = 0;
+        D->expired = false;
+    }
+
+    sensors.getNumDevices();
+    sensors.getNumSensors();
+}
+#endif
+
 // Global instance
 Devices_Sensors Sensors;
 extern STRUCT_PrefsH Prefs;
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
   extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
@@ -19,6 +88,7 @@ Devices_Sensors::Devices_Sensors() {
     for (int i = 0; i < NUMDEVICES; i++) {
         devices[i].IsSet = 0;
         devices[i].expired = false;
+        devices[i].firmware.clear();
     }
     
     for (int i = 0; i < NUMSENSORS; i++) {
@@ -38,11 +108,15 @@ bool Devices_Sensors::cycleSensors(int16_t& currentPosition, uint8_t origin) {
 }
 
 // Device management functions
-int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devName, uint32_t sendingInt, uint8_t flags, uint8_t devType) {
+int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devName, uint32_t sendingInt, uint8_t flags, uint8_t devType, const FirmwareVersion* firmware) {
     // Check if device already exists
 
     if (MAC == 0) return -1;
     int16_t existingIndex = findDevice(MAC);
+    const ArborysDevType* existing = (existingIndex >= 0) ? &devices[existingIndex] : nullptr;
+    if (!shouldAcceptRemoteDevice(MAC, devType, existing)) {
+        return -1;
+    }
     if (existingIndex >= 0) {
         //check if existing device has all the same parameters as the new device
         ArborysDevType* device = &devices[existingIndex];
@@ -53,7 +127,9 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             //do nothing
         }        else {
             // Update existing device
-            device->IP = IP;
+            if (IP != IPAddress(0, 0, 0, 0)) {
+                device->IP = IP;
+            }
             //do not change time logged
 
             if (devName[0] != '\0') {
@@ -77,6 +153,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             }
             #endif
         }
+        applyDeviceFirmware(device, MAC, firmware);
         return existingIndex;
     }
     
@@ -99,6 +176,8 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             else devices[i].SendingInt = sendingInt;
             devices[i].expired = false;
             devices[i].devType = devType;
+            devices[i].firmware.clear();
+            applyDeviceFirmware(&devices[i], MAC, firmware);
             
             numDevices++;
             
@@ -312,7 +391,10 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
                                   uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType, int16_t snsPin, int16_t powerPin) {
     //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
-    
+
+    if (!shouldAcceptRemoteSensor(deviceMAC)) {
+        return -2;
+    }
 
     uint8_t deviceFlags = 0;
     if (bitRead(flags,2) == 1) bitWrite(deviceFlags, 2, 1); //if sensor is low power, then device is low power
@@ -347,12 +429,10 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
         sensor->expired = false;
         sensor->IsSet=true;
         Sensors.lastUpdatedTime = I.currentTime;
-        #ifdef _ISPERIPHERAL
-        if (snsPin !=0 && snsPin != -9999) {
+        if (snsPin != 0 && snsPin != -9999) {
             sensor->snsPin = snsPin;
             sensor->powerPin = powerPin;
         }
-        #endif
         return existingIndex;
     } 
     
@@ -376,12 +456,9 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].SendingInt = sendingInt;
             sensors[i].IsSet = 1;
             sensors[i].expired = false;
-            #ifdef _ISPERIPHERAL
             sensors[i].snsPin = snsPin;
             sensors[i].powerPin = powerPin;
-            #else
             sensors[i].OverrideFlags = 0;
-            #endif            
             numSensors++;
             Sensors.lastUpdatedTime = I.currentTime;
             return i;
@@ -604,12 +681,11 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 //optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, ..., 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
 
 byte overrideFlags = 0;
-#ifdef _ISPERIPHERAL
-overrideFlags = 0; 
-useOverrideFlags = false;
-#else
-overrideFlags = sensors[snsIndex].OverrideFlags;
-#endif
+if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
+    useOverrideFlags = false;
+} else {
+    overrideFlags = sensors[snsIndex].OverrideFlags;
+}
 
     if (!sensors[snsIndex].IsSet) return -100; //no sensor
 
@@ -918,7 +994,10 @@ uint8_t Devices_Sensors::storeDevicesSensorsArrayToSD(uint8_t intervalMinutes) {
 }
 
 bool Devices_Sensors::readDevicesSensorsArrayFromSD() {
-    readDevicesSensorsSD();
+    if (!readDevicesSensorsSD()) return false;
+#if !_IS_SERVER_HUB
+    enforceStoragePolicy(*this);
+#endif
     return true;
 }
 
@@ -964,14 +1043,7 @@ int16_t Devices_Sensors::isDeviceIndexValid(int16_t index) {
             // But only if WiFi is connected and we have a valid IP
             // This prevents registering with IP 0.0.0.0 which can cause devices to be lost
 
-            if (CheckWifiStatus(false)!=1) {
-                // WiFi not connected or no IP - can't register safely
-                // Return -2 to indicate fatal error (I am not registered and could not be registered)
-                SerialPrint("isDeviceIndexValid: Cannot register device - WiFi not connected or no IP address", true);
-                return -2;
-            }
-
-            IPAddress myIP = WiFi.localIP();
+            IPAddress myIP = wifiReadyForNetwork() ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
             ismine = addDevice(ESP.getEfuseMac(), myIP, Prefs.DEVICENAME, 0, 0, _MYTYPE);
             if (ismine == -1) {
                 //failed to register me, so return invalid
@@ -1072,7 +1144,7 @@ void Devices_Sensors::checkDeviceFlags() {
 }
 
 //there are two ways to check expiration of device:
-//1. check if any sensors are expired, and if the last read was multiplier x the sending interval ago then also label the device expired. This ensures that a device is expired even if only one sensor is missing (otherwise, other sensors could mask the expiration of one missing sensor)
+//1. check if any sensors are expired at timeLogged + 1.25 × SendingInt; may also label the device expired
 //1a. call checkExpirationAllSensors(currentTime, onlyCritical, multiplier, expireDevice)
 //1b. then call any device expiration checker function, such as checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
 //2. check the devie directly, assuming that sendingInt has been registered as the shortest sending interval of all attached sensors. If the last read was multiplier x the sending interval ago then label the device expired. This is simpler and faster, but may miss a sensor if others are present.
@@ -1085,7 +1157,7 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
     if (currentTime == 0) currentTime = I.currentTime;
 
 
-    if (device->dataReceived + device->SendingInt * multiplier < currentTime) {
+    if (device->dataReceived + sensorExpiryGraceSec(device->SendingInt) < (uint32_t)currentTime) {
         device->expired = true;
         return 1;
     }
@@ -1096,7 +1168,7 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
 byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
     byte count = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-        if (checkExpirationSensor(i, currentTime, onlyCritical, 3, expireDevice) == 1)    count++; //check if any sensors are expired
+        if (checkExpirationSensor(i, currentTime, onlyCritical, multiplier, expireDevice) == 1)    count++;
         
     }
     return count;
@@ -1108,11 +1180,11 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
     int16_t result = isSensorIndexInvalid(index);
     if (result != 0) return -1*result;
     if (onlyCritical && !bitRead(sensors[index].Flags, 7)) return -5;
-    
-    if (multiplier == 0) multiplier = 3;
+    (void)multiplier; // legacy param; expiration uses 1.25 × SendingInt
+
     uint16_t sendint = sensors[index].SendingInt;
     if (sendint==0) return -10;
-    uint32_t expirationTime = sensors[index].timeLogged + sendint * multiplier; // 2x sending interval buffer allows for missing one reading
+    uint32_t expirationTime = sensorExpirationTime(sensors[index].timeLogged, sendint);
 
     if (currentTime > expirationTime) {
         if (expireDevice) devices[sensors[index].deviceIndex].expired = true;
@@ -1210,6 +1282,9 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "clock") {//clock
         return (snsType == 98);
     }
+    if (type == "network") {//network monitor
+        return (snsType >= 81 && snsType <= 89);
+    }
     if (type == "binary") {//binary
         return (snsType == 71);
     }
@@ -1219,6 +1294,13 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     }
 
     return false;
+}
+
+void Devices_Sensors::updateMyDeviceVersion() {
+    int16_t index = findDevice((uint64_t) ESP.getEfuseMac());
+    if (index >= 0) {
+        getLocalFirmware(devices[index].firmware);
+    }
 }
 
 int16_t Devices_Sensors::findMyDeviceIndex() {
@@ -1232,12 +1314,7 @@ int16_t Devices_Sensors::findMyDeviceIndex() {
         
         // Only register if WiFi is connected and we have a valid IP
         // This prevents registering with IP 0.0.0.0 which can cause devices to be lost
-        if (CheckWifiStatus(false)!=1) {
-            SerialPrint("Cannot register device: WiFi not connected or no IP address", true);
-            return -1; // Don't register with invalid IP
-        }
-        
-        IPAddress myIP = WiFi.localIP();
+        IPAddress myIP = wifiReadyForNetwork() ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
         index = addDevice(ESP.getEfuseMac(), myIP, Prefs.DEVICENAME, 0, 0, _MYTYPE);
         if (index >= 0) {
             SerialPrint("Device registered successfully with IP: " + myIP.toString(), true);

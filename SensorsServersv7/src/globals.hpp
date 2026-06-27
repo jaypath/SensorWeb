@@ -1,6 +1,8 @@
 #ifndef GLOBALS_HPP
 #define GLOBALS_HPP
 
+#include "device_roles.hpp"
+
 //edit these!
 
 
@@ -45,6 +47,24 @@ class Devices_Sensors;
 #define RESET_ENUM_TO_STRING(enum_val) (#enum_val)
 
 
+
+typedef enum {
+  EVENT_DEFAULT, //any event, no specific type specified
+  EVENT_WIFI_CONNECTED, //wifi connected
+  EVENT_WIFI_DISCONNECTED, //wifi disconnected
+  EVENT_WIFI_AP_STARTED, //wifi AP started
+  EVENT_WIFI_AP_STOPPED, //wifi AP stopped
+  EVENT_WIFI_AP_CLIENT_CONNECTED, //wifi AP client connected
+  EVENT_WIFI_AP_CLIENT_DISCONNECTED, //wifi AP client disconnected
+  EVENT_REBOOT_TRIGGERED, //reboot triggered
+  EVENT_BOOT_WARNING, //boot warning - any non error occured
+  EVENT_BOOT_COMPLETE, //boot complete
+  EVENT_FIRMWARE_UPDATED //firmware updated
+  } SYSTEMEVENTS;
+
+void logSystemEvent(const char* description, SYSTEMEVENTS code = EVENT_DEFAULT);
+void logSystemEvent(String description, SYSTEMEVENTS code = EVENT_DEFAULT);
+
 //potential reset issues
 typedef enum {
   RESET_DEFAULT, //reset due to some unknown fault, where the reset state could not be set (probably triggered by a hang and watchdog timer kicked)
@@ -64,6 +84,7 @@ typedef enum {
   //errors in operation
   typedef enum {
     ERROR_UNDEFINED, 
+    ERROR_REBOOT_TRIGGERED, //system rebooted, which may or may not be an error
     ERROR_HTTP_GENERAL, //HTTP general error
     ERROR_HTTP_REQUEST, //HTTP request error
     ERROR_HTTP_RESPONSE, //HTTP response error
@@ -153,11 +174,26 @@ typedef enum {
     ERROR_BMP_PLANES, //BMP error with planes
     ERROR_BMP_BITDEPTH, //BMP error with bitDepth
     ERROR_BMP_COMPRESSION, //BMP error with compression
+    ERROR_WEATHER_TIMEOUT //weather error
   } ERRORCODES;
 
 
 
   
+  // Firmware major.minor.patch — each element 0-255; compare byte 0, then 1, then 2.
+  struct FirmwareVersion {
+    uint8_t v[3];
+
+    void clear();
+    bool isUnset() const;
+    bool fromText(const char* text);
+    void toChar(char* out, size_t outLen) const;
+    void toBinPathSegment(char* out, size_t outLen) const;
+    int compare(const uint8_t other[3]) const;
+    int compare(const FirmwareVersion& other) const;
+    static int compareBytes(const uint8_t a[3], const uint8_t b[3]);
+  };
+
   struct STRUCT_KEYS {
     uint8_t ESPNOW_KEY[17]; // espnow PMK key, only 16 bytes are used
   };
@@ -195,8 +231,9 @@ typedef enum {
     
     double LATITUDE;
     double LONGITUDE;
-    
-    #ifdef _ISPERIPHERAL
+    FirmwareVersion FIRMWARE; // running firmware version (0.0.0 default)
+
+    #if _HAS_LOCAL_SENSORS
     double SNS_LIMIT_MAX[_SENSORNUM] = {0}; //store max values for each sensor in NVS
     double SNS_LIMIT_MIN[_SENSORNUM] = {0}; //store min values for each sensor in NVS
     uint16_t SNS_FLAGS[_SENSORNUM] = {0}; //store this, as user may have changed some settings here
@@ -225,8 +262,16 @@ typedef enum {
       time_t lastResetTime;
       byte rebootsToday=0;
       time_t ALIVESINCE;
-      uint8_t wifiFailCount;
+      uint8_t wifiFailCount; // consecutive minutes WiFi reconnect failed (reset when connected)
       time_t wifiDownSince;
+      bool apModeActive; // non-blocking soft-AP provisioning active
+      bool initialSetupFinalized; // initial wizard submitted (or already configured at boot)
+      bool initialSetupExitPending; // wait for provisioning client to leave AP before stopping soft-AP
+      time_t apLastClientActivity; // last HTTP request while in AP mode (0 = none)
+      time_t apLastReconnectCheckTime; // last minute tick for AP-mode STA reconnect attempt
+      time_t apModeEnteredTime; // when soft-AP provisioning started
+      time_t apLastChannelScanTime; // last AP-mode ESP-NOW channel scan (0 = none this session)
+      time_t lastTimezoneRefresh; // last successful TimeAPI timezone fetch (0 = never)
 
 
       //timezone offset is in prefs
@@ -237,6 +282,11 @@ typedef enum {
 
       int8_t WiFiStatus; //2= connected but wifi.status() doesn't list this correctly, 1 = connected, 0=unknown, -1 - no valid IP address, -2 - no valid RSSI range, -3 - no valid SSID, -4 - no valid gateway, -5 - no connection
       WiFiEvent_t WiFiLastEvent; //last WiFi event
+      uint8_t WifiChannel; // current WiFi RF channel (1-14); 0 if unknown
+      int16_t RSSIcurrent = -999; // current WiFi RSSI (dBm); -999 = invalid
+      int16_t RSSIlow = -999;     // worst (most negative) RSSI seen since boot
+      int16_t RSSIhigh = -999;    // best (least negative) RSSI seen since boot
+      time_t lastRSSItime = 0;    // last RSSI sample time (updated every 5 sec)
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
 
   
@@ -259,8 +309,8 @@ typedef enum {
       //bit 7 = 
       #endif
   
-      #ifdef _USEBATTERY
-      uint8_t localBatteryIndex; //index of battery
+      #ifdef _MONITOROUTDOORBATTERYSENSORS
+      uint8_t localBatteryIndex; // index of outside battery_li sensor (255 = none)
       #endif
   
       //espnow info
@@ -320,7 +370,7 @@ typedef enum {
       uint8_t isFlagged=false;
       uint8_t wasFlagged=false;
   
-      #ifndef _ISPERIPHERAL //these are not used by peripherals
+      #if _IS_SERVER_HUB // HVAC aggregate state (hub displays)
       uint8_t isHeat=false; //first bit is heat on, bits 1-6 are zones
       uint8_t isAC=false; //first bit is compressor on, bits 1-6 are zones
       uint8_t isFan=false; //first bit is fan on, bits 1-6 are zones
@@ -341,7 +391,7 @@ typedef enum {
       time_t lastErrorTime;
       ERRORCODES lastErrorCode;
 
-      int8_t SerialPrintLevel=3; //negative values... print only that level, 0=print everything, 1=print outputs and worse, 2=print info and worse, 3=print errors and worse, 4=print serious faults, 5=print critical only
+      int8_t SerialPrintLevel=0; //negative values... print only that level, 0=print everything, 1=print outputs and worse, 2=print info and worse, 3=print errors and worse, 4=print serious faults, 5=print critical only
   
   
   };
@@ -441,7 +491,7 @@ class LGFX;
 #include "AddESPNOW.hpp"
 #include "BootSecure.hpp"
 
-#ifdef _ISPERIPHERAL
+#ifdef _HAS_LOCAL_SENSORS
 #include "sensors.hpp"
 #endif
 
@@ -466,7 +516,7 @@ class LGFX;
 #include <SPI.h>
 #include <SD.h>
 #include <string>
-#if defined(_USETFT) && !defined(_ISPERIPHERAL)
+#if defined(_USETFT) && _IS_SERVER_HUB
 #include <LovyanGFX.hpp>
 #endif
 

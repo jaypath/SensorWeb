@@ -1,9 +1,13 @@
-#ifdef _ISPERIPHERAL
+#include "device_roles.hpp"
+#if _HAS_LOCAL_SENSORS
 #include "globals.hpp"
 #include "sensors.hpp"
 
 #ifdef _USENETWORKMONITOR
 #include "NetworkMonitor.hpp" 
+#endif
+#ifdef _USEUDP
+#include "server.hpp"
 #endif
 
 /*sens types - see hpp file
@@ -11,7 +15,7 @@
 
 
 extern Devices_Sensors Sensors;
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 STRUCT_SNSHISTORY SensorHistory;
 #endif
 
@@ -223,20 +227,32 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   for (byte i=0;i<_SENSORNUM;i++) {
     byte snsID = Sensors.countSensors(sensortypes[i],I.MY_DEVICE_INDEX)+1;
 
-    //;pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin. // pin number for the sensor, if applicable. If 0-99 then it is an analoginput pin. If 100-199 then it is 100-pin number and a digital input. If >=200 then SPI and (snsPin-100) is the chip select pin. If -1 to -128 then it is -1*the I2C address of the sensor. If -200 then there is no pin, if -201 then it is a special case
-    int8_t correctedPin=-1;
-    uint8_t pintype = getPinType(snsPins[i], &correctedPin);
-    if (pintype !=0) {
-      //set up pins
-      if (pintype <= 4) pinMode(correctedPin, INPUT);
-      //if pintype is even, then it has a power pin, and we need to set the pin to output and low
-      if (pintype % 2 == 0 && pintype <= 6) {
-        togglePowerPin(powerPins[i], 0);
-      } 
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+    const bool isVirtualSensor = (sensortypes[i] == 80) || NetworkMonitor.isSensorType(sensortypes[i]);
+#else
+    const bool isVirtualSensor = (sensortypes[i] == 80);
+#endif
+
+    int8_t correctedPin = -1;
+    uint8_t pintype = 0;
+    if (!isVirtualSensor) {
+      //;pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin.
+      pintype = getPinType(snsPins[i], &correctedPin);
+      if (pintype !=0) {
+        //set up pins
+        if (pintype <= 4) pinMode(correctedPin, INPUT);
+        //if pintype is even, then it has a power pin, and we need to set the pin to output and low
+        if (pintype % 2 == 0 && pintype <= 6) {
+          togglePowerPin(powerPins[i], 0);
+        } 
+      }
     }
 
+    const int16_t sensorPin = isVirtualSensor ? (int16_t)-9999 : snsPins[i];
+    const int16_t sensorPowerPin = isVirtualSensor ? (int16_t)-9999 : powerPins[i];
+
     //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
-    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, snsPins[i],powerPins[i]);
+    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, sensorPin, sensorPowerPin);
     //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
     SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
@@ -256,19 +272,19 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
         break;
         }
 
-      case 80: //Network Monitor
-      case 81: //Network Monitor
-      case 82: //Network Monitor
-      case 83: //Network Monitor
-      case 84: //Network Monitor
-      case 85: //Network Monitor
-      case 86: //Network Monitor
-        {
-          bitWrite(Prefs.SNS_FLAGS[i],7,0); 
-          bitWrite(Prefs.SNS_FLAGS[i],3,1); 
-          bitWrite(Prefs.SNS_FLAGS[i],1,0);
+      case 80: // WiFi RSSI (universal; snsID 1=current, 2=low, 3=high)
         break;
-        }
+
+      case 81: // Network Monitor - BSSID changes
+      case 82: // Network Monitor - local IP changes
+      case 83: // Network Monitor - DNS resolution
+      case 84: // Network Monitor - HTTP Tx failures
+      case 85: // Network Monitor - gateway ping avg RTT
+      case 86: // Network Monitor - gateway ping jitter
+      case 87: // Network Monitor - external ping avg RTT
+      case 88: // Network Monitor - external ping jitter
+      case 89: // Network Monitor - download speed (Mbps)
+        break;
       case 90: //Sleep info
         {
           bitWrite(Prefs.SNS_FLAGS[i],7,0); bitWrite(Prefs.SNS_FLAGS[i],3,1); bitWrite(Prefs.SNS_FLAGS[i],1,0);
@@ -276,6 +292,10 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
         }
     }
   }
+
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+  NetworkMonitor.init();
+#endif
 
 
   #ifdef _USETFLUNA
@@ -380,8 +400,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
   double LastsnsValue = P->snsValue;
   bool isInvalid = false;
-  
-  switch (P->snsType) {
+  time_t measuredReadTime = 0;
+
+  switch (P->snsType) {  
     case 1: //DHT temp
       {
         #ifdef DHTTYPE
@@ -953,55 +974,50 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
       break;
       }
-    case 80: //Network Monitor, IGMPv2 Group-Specific Query
+    case 80: // WiFi RSSI from STRUCT_CORE (snsID 1=current, 2=low, 3=high)
       {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_IGMP(P->snsValue);
-        #endif
+        switch (P->snsID) {
+          case 2:
+            P->snsValue = I.RSSIlow;
+            break;
+          case 3:
+            P->snsValue = I.RSSIhigh;
+            break;
+          default:
+            P->snsValue = I.RSSIcurrent;
+            break;
+        }
+        if (P->snsValue <= -999) {
+          isInvalid = true;
+        } else if (I.lastRSSItime > 0) {
+          measuredReadTime = I.lastRSSItime;
+        }
         break;
       }
-    case 81: //Network Monitor, RSSI of the current connected Access Point
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+    case 81: // AP switch count
+    case 82: // local IP change count
+    case 83: // DNS resolution (ms)
+    case 84: // HTTP Tx failure count
+    case 85: // gateway ping avg RTT (ms)
+    case 86: // gateway ping jitter (ms)
+    case 87: // external ping avg RTT (ms)
+    case 88: // external ping jitter (ms)
+    case 89: // download speed (Mbps)
       {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_RSSI(P->snsValue);
-        #endif
+        int8_t nmTest = NetworkMonitor.runTestIndexFromSensorType(P->snsType);
+        if (nmTest >= 0) {
+          NetworkMonitor.runTest((uint8_t)nmTest);
+          measuredReadTime = NetworkMonitor.readSensorTime(P->snsType);
+        }
+        if (nmTest < 0
+            || !NetworkMonitor.readSensorValue(P->snsType, P->snsValue)
+            || NetworkMonitor.isSensorValueInvalid(P->snsType, P->snsValue)) {
+          isInvalid = true;
+        }
         break;
       }
-    case 82: //Network Monitor, MAC address of the current connected Access Point
-      {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_BSSID(P->snsValue);
-        #endif
-        break;
-      }
-    case 83: //Network Monitor, octet of the allocated IP address
-      {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_LocalIPByte(P->snsValue);
-        #endif
-        break;
-      }
-    case 84: //Network Monitor, time taken to resolve a DNS query
-      {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_DNSResolutionTime(P->snsValue);
-        #endif
-        break;
-      }
-    case 85: //Network Monitor, total number of transmission failures registered since boot up
-      {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_TxFailures(P->snsValue);
-        #endif
-        break;
-      }
-    case 86: //Network Monitor, latency to the local default gateway
-      {
-        #ifdef _USENETWORKMONITOR
-          NetworkMonitor_GatewayLatency(P->snsValue);
-        #endif
-        break;
-      }
+#endif
     case 90:
       {
         //don't do anything here
@@ -1041,7 +1057,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     } else {
       //no change in flag status. bit 6 is already 0.
     }
-    P->timeRead = I.currentTime; //localtime
+    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : I.currentTime; //localtime
 
     //add to sensor history
     SensorHistory.recordSentValue(P);     
@@ -1061,7 +1077,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     if (bitRead(lastflag,0)!=bitRead(P->Flags,0)) {     
       bitWrite(P->Flags,6,1); //flag changed
     }
-    P->timeRead = I.currentTime; //localtime
+    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : I.currentTime; //localtime
     //add to sensor history
     SensorHistory.recordSentValue(P);  
   }

@@ -1,4 +1,5 @@
-#ifdef _ISPERIPHERAL
+#include "device_roles.hpp"
+#if _HAS_LOCAL_SENSORS
 #ifndef SENSORS_HPP
 #define SENSORS_HPP
 
@@ -55,6 +56,11 @@ class Devices_Sensors;
 62 - battery voltage, ads1115
 70 - leak yes/no
 71 - any binary, 1=yes/true/on
+80-89 network monitor sensors (sns/power pins ignored)
+80 WiFi RSSI (dBm) from STRUCT_CORE I; snsID 1=current, 2=low, 3=high — universal, no _USENETWORKMONITOR
+81-89 network monitor tests (_USENETWORKMONITOR): 81 AP switch count, 82 local IP change count,
+83 DNS resolution (ms), 84 HTTP Tx failures, 85 gateway ping avg RTT (ms), 86 gateway ping jitter (ms),
+87 external ping avg RTT (ms), 88 external ping jitter (ms), 89 download speed (Mbps)
 98 - clock
 99 = any numerical value
 100+ is a server type sensor, to which other sensors will send their data

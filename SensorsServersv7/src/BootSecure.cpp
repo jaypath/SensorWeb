@@ -1,6 +1,5 @@
 #include "globals.hpp"
 #include "BootSecure.hpp"
-#include <stddef.h>
 
 byte prefs_set = 0;
 
@@ -12,10 +11,6 @@ static uint16_t prefsEncryptedLength(size_t plainSize) {
     }
     return (uint16_t)(plainSize + padding + 16);
 }
-
-// v8.4.0 and earlier: DST fields were not stored in STRUCT_PrefsH (added in v8.4.1).
-static constexpr size_t PREFS_PLAIN_V0_SIZE =
-    offsetof(STRUCT_PrefsH, LATITUDE) - offsetof(STRUCT_PrefsH, DST);
 
 static int8_t decryptPrefsBlob(uint8_t* blob, uint8_t* decoded, uint16_t blobLen, size_t plainSize) {
     if (blobLen != prefsEncryptedLength(plainSize)) {
@@ -101,48 +96,37 @@ int8_t BootSecure::getPrefs() {
 
     const uint16_t storedLen = p.getBytesLength("Boot");
     const uint16_t currentLen = prefsEncryptedLength(sizeof(STRUCT_PrefsH));
-    const uint16_t legacyLen = prefsEncryptedLength(PREFS_PLAIN_V0_SIZE);
 
-    uint8_t blob[storedLen];
-    uint8_t decoded[storedLen];
-    memset(blob, 0, storedLen);
-    memset(decoded, 0, storedLen);
-    p.getBytes("Boot", blob, storedLen);
-
-    int8_t loadStatus = -1;
-    bool migratedLegacy = false;
-    if (storedLen == currentLen) {
-        loadStatus = decryptPrefsBlob(blob, decoded, storedLen, sizeof(STRUCT_PrefsH));
-    } else if (storedLen == legacyLen) {
-        // Migrate prefs saved before DST fields were added to STRUCT_PrefsH (v8.4.1).
-        loadStatus = decryptPrefsBlob(blob, decoded, storedLen, PREFS_PLAIN_V0_SIZE);
-        if (loadStatus == 1) {
-            Prefs.DST = 0;
-            Prefs.DSTOffset = 0;
-            Prefs.DSTStartUnixTime = 0;
-            Prefs.DSTEndUnixTime = 0;
-            Prefs.isUpToDate = false;
-            migratedLegacy = true;
-        }
+    if (storedLen != currentLen) {
+        storeError("BootSecure::getPrefs: Boot length mismatch, prefs failed to load", ERROR_FAILED_PREFS, false);
+        p.remove("Boot");
+        p.end();
+        memset(&Prefs, 0, sizeof(Prefs));
+        Prefs.isUpToDate = false;
+        return -1;
     }
 
-    BootSecure::zeroize(blob, storedLen);
-    BootSecure::zeroize(decoded, storedLen);
+    uint8_t blob[currentLen];
+    uint8_t decoded[currentLen];
+    memset(blob, 0, currentLen);
+    memset(decoded, 0, currentLen);
+    p.getBytes("Boot", blob, storedLen);
     p.end();
 
+    int8_t loadStatus = decryptPrefsBlob(blob, decoded, storedLen, sizeof(STRUCT_PrefsH));
+    BootSecure::zeroize(blob, currentLen);
+    BootSecure::zeroize(decoded, currentLen);
+
     if (loadStatus != 1) {
-        storeError("BootSecure::getPrefs: Boot length mismatch, prefs failed to load", ERROR_FAILED_PREFS, false);
+        storeError("BootSecure::getPrefs: Boot decrypt failed, prefs failed to load", ERROR_FAILED_PREFS, false);
         Preferences p2;
         if (p2.begin("STARTUP", false)) {
             p2.remove("Boot");
             p2.end();
         }
+        memset(&Prefs, 0, sizeof(Prefs));
+        Prefs.isUpToDate = false;
         return (loadStatus == -2) ? -2 : -1;
-    }
-
-    if (migratedLegacy) {
-        SerialPrint("BootSecure::getPrefs: migrated legacy prefs to v8.4.1 layout", true, 5);
-        setPrefs(true);
     }
 
     return 1;

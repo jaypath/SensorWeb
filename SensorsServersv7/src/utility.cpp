@@ -1,6 +1,9 @@
 #include "globals.hpp"
 #include "utility.hpp"
 #include "BootSecure.hpp"
+#include "firmwareUpdate.hpp"
+#include "server.hpp"
+#include <esp_app_format.h>
 #include "esp_ota_ops.h"
 
 #ifdef _USETFT
@@ -9,7 +12,7 @@ extern const uint16_t FG_COLOR ; //Foreground color
 extern const uint16_t BG_COLOR;
 #endif
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 extern STRUCT_SNSHISTORY SensorHistory;
 #endif
 
@@ -18,7 +21,7 @@ extern STRUCT_SNSHISTORY SensorHistory;
 
 ERROR_STRUCT LASTERROR;
 
-// SD is mounted in initSDCard() after initSystem(); avoid SD writes (and recursion) before that.
+// SD is mounted in initSystem() after TFT init; guard writes until mount completes.
 static bool sdCardReady() {
   #ifdef _USESDCARD
   return SD.cardType() != CARD_NONE;
@@ -28,14 +31,25 @@ static bool sdCardReady() {
 }
 
 //setup functions
+void updateWifiChannel() {
+  uint8_t ch = WiFi.channel();
+  if (ch < 1 || ch > 14) return;
+
+  if (ch != I.WifiChannel) {
+    if (I.WifiChannel != 0) {
+      SerialPrint("Wifi channel changed: " + String(I.WifiChannel) + " -> " + String(ch), true);
+    }
+    I.WifiChannel = ch;
+    I.isUpToDate = false;
+  }
+}
+
 void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
 
-  static bool rebootCountedThisBoot = false;
-  if (!rebootCountedThisBoot) {
-    if (I.rebootsToday < 255) I.rebootsToday++;
-    rebootCountedThisBoot = true;
+  if (I.apModeActive) {
+    serviceAPStationMode();
   }
 
   if (fullHousekeeping) {
@@ -52,11 +66,10 @@ void systemHousekeeping(bool fullHousekeeping) {
       controlledReboot("Low memory detected, restarting system", RESET_MEMORY_LOW, true);
     }
     
-    // If minimum free heap is very low, log warning
-    if (minFreeHeap < 5000) { // Less than 5KB minimum
-      SerialPrint("WARNING: Memory fragmentation detected", true);
-      storeError("WARNING: Memory fragmentation detected", ERROR_HARDWARE_MEMORY,true);
-      controlledReboot("Memory fragmentation detected, restarting system", RESET_MEMORY_FRAGMENTED, true);
+    // minFreeHeap is a lifetime watermark (lowest since boot), not current fragmentation.
+    // Only warn when both watermark and current free heap are critically low.
+    if (minFreeHeap < 5000 && freeHeap < 15000) {
+      SerialPrint("WARNING: Heap critically low (min=" + String(minFreeHeap) + " free=" + String(freeHeap) + ")", true);
     }
 
 
@@ -64,33 +77,35 @@ void systemHousekeeping(bool fullHousekeeping) {
 
     if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = I.currentTime; //if lastResetTime is not valid, set it to the current time
 
-    if (WiFi.status() != WL_CONNECTED) {
-      if (I.wifiDownSince == 0) I.wifiDownSince = I.currentTime;
-      int16_t retries = connectWiFi();
-      if (WiFi.status() != WL_CONNECTED) I.wifiFailCount++;
-      // If WiFi has been down for 10 minutes, enter AP mode
-      if (I.wifiDownSince && (I.currentTime - I.wifiDownSince >= 600)) {
-          #ifdef _USETFT
-          tftPrint("Wifi failed for 10 minutes, entering AP mode...", true, TFT_RED, 2, 1, true, 0, 0);
-          #endif
-          SerialPrint("Wifi failed for 10 minutes, entering AP mode...",true);
-          delay(3000);
-          APStation_Mode();
+    if (wifiReadyForNetwork() && I.UTCTime >= TIMEZERO) {
+      if (I.lastTimezoneRefresh == 0
+          || (I.currentTime >= I.lastTimezoneRefresh
+              && I.currentTime - I.lastTimezoneRefresh >= TIMEZONE_REFRESH_INTERVAL_SEC)) {
+        refreshTimezoneFromNetwork(TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
       }
-    } else {
-        I.wifiDownSince = 0;
-        I.wifiFailCount = 0;
     }
 
-    if (I.wifiFailCount > 60) controlledReboot("Wifi failed so resetting", RESET_WIFI, true);
+    CheckWifiStatus(WIFI_CHECK_NORMAL);
 
+    updateWifiChannel();
 
+    ensureESPNOW(); // router not required; retry if init failed earlier
+
+    #ifdef _USEUDP
+    maybeRefreshIGMPMembership();
+    #endif
+
+    #if _HAS_LOCAL_SENSORS
+    peripheralFirmwareHourlyCheck();
+    processChunkFirmwareTick();
+    #endif
 
   }
 
-  // Service web server and OTA every loop when WiFi connected (avoids up-to-1-minute delay when handleClient was only in fullHousekeeping)
-  if (WiFi.status() == WL_CONNECTED) {
+  if (wifiReadyForNetwork()) {
     ArduinoOTA.handle();
+  }
+  if (wifiReadyForNetwork() || I.apModeActive) {
     server.handleClient();
   }
 
@@ -100,6 +115,7 @@ void systemHousekeeping(bool fullHousekeeping) {
   receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
   #endif
 
+  processDeferredDataRequest();
 
 }
 void initI2C() {
@@ -108,6 +124,78 @@ void initI2C() {
   Wire.setClock(400000L);
   SerialPrint("Wire initialized",true);
   #endif
+}
+
+void FirmwareVersion::clear() {
+  v[0] = v[1] = v[2] = 0;
+}
+
+bool FirmwareVersion::isUnset() const {
+  return v[0] == 0 && v[1] == 0 && v[2] == 0;
+}
+
+bool FirmwareVersion::fromText(const char* text) {
+  if (!text || text[0] == '\0') return false;
+  unsigned int major = 0, minor = 0, patch = 0;
+  if (sscanf(text, "%u.%u.%u", &major, &minor, &patch) != 3) return false;
+  if (major > 255 || minor > 255 || patch > 255) return false;
+  char normalized[20];
+  snprintf(normalized, sizeof(normalized), "%u.%u.%u", major, minor, patch);
+  if (strcmp(normalized, text) != 0) return false;
+  v[0] = (uint8_t)major;
+  v[1] = (uint8_t)minor;
+  v[2] = (uint8_t)patch;
+  return true;
+}
+
+void FirmwareVersion::toChar(char* out, size_t outLen) const {
+  if (!out || outLen == 0) return;
+  snprintf(out, outLen, "%u.%u.%u", v[0], v[1], v[2]);
+}
+
+void FirmwareVersion::toBinPathSegment(char* out, size_t outLen) const {
+  toChar(out, outLen);
+}
+
+int FirmwareVersion::compareBytes(const uint8_t a[3], const uint8_t b[3]) {
+  if (!a || !b) return 0;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (a[i] != b[i]) return (a[i] > b[i]) ? 1 : -1;
+  }
+  return 0;
+}
+
+int FirmwareVersion::compare(const uint8_t other[3]) const {
+  return compareBytes(v, other);
+}
+
+int FirmwareVersion::compare(const FirmwareVersion& other) const {
+  return compare(other.v);
+}
+
+bool getEmbeddedFirmwareVersion(FirmwareVersion& out) {
+  const esp_app_desc_t* desc = esp_app_get_description();
+  if (desc && out.fromText(desc->version)) {
+    return true;
+  }
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!running) return false;
+
+  esp_app_desc_t partitionDesc = {};
+  if (esp_ota_get_partition_description(running, &partitionDesc) != ESP_OK) {
+    return false;
+  }
+  return out.fromText(partitionDesc.version);
+}
+
+void getLocalFirmware(FirmwareVersion& out) {
+  if (getEmbeddedFirmwareVersion(out)) return;
+  out = Prefs.FIRMWARE;
+}
+
+String firmwareJsonArray(const FirmwareVersion& fw) {
+  return "[" + String(fw.v[0]) + "," + String(fw.v[1]) + "," + String(fw.v[2]) + "]";
 }
 
 bool initSystem() {
@@ -146,6 +234,10 @@ bool initSystem() {
   #endif
   #endif
 
+  #if defined(_USESDCARD) && !defined(_ISCLOCK480X480)
+  if (initSDCard() == 0) return false;
+  #endif
+
   SerialPrint("Check core data ...", true);
   BootSecure bootSecure;
   int8_t boot_status = bootSecure.setup();
@@ -161,7 +253,10 @@ bool initSystem() {
       SerialPrint("Will redefine Prefs struct later...", true,5);
   } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true,5);
 
-
+  #ifdef _USESDCARD
+  // Load devices/sensors before any registration or IP sync can overwrite DevicesSensors.dat.
+  loadSensorData();
+  #endif
 
   //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
   if (Prefs.DEVICENAME[0] == 0) {
@@ -177,13 +272,38 @@ bool initSystem() {
     Prefs.isUpToDate = false;
   }
 
+  {
+    FirmwareVersion buildFw;
+    if (getEmbeddedFirmwareVersion(buildFw)) {
+      if (Prefs.FIRMWARE.compare(buildFw) != 0) {
+        char oldBuf[16], newBuf[16];
+        Prefs.FIRMWARE.toChar(oldBuf, sizeof(oldBuf));
+        buildFw.toChar(newBuf, sizeof(newBuf));
+        Prefs.FIRMWARE = buildFw;
+        int8_t saveStatus = bootSecure.setPrefs(true);
+        if (saveStatus > 0) {
+          SerialPrint("Prefs.FIRMWARE updated from " + String(oldBuf) + " to embedded version " + String(newBuf), true, 5);
+        } else {
+          Prefs.isUpToDate = false;
+          SerialPrint("Prefs.FIRMWARE set to " + String(newBuf) + " but NVS save failed: " + String(saveStatus), true, 5);
+        }
+      }
+    } else {
+      SerialPrint("Embedded firmware version parse failed", true, 5);
+    }
+  }
 
   SerialPrint("Check firmware version...", true,5);
-  tftPrint("Cuurrent firmware version: " + String(PROJECT_VER), true);
-  bool newfirmware = check_and_switch_to_newer_firmware(true,false);
+  {
+    FirmwareVersion fw;
+    getLocalFirmware(fw);
+    char verBuf[16];
+    fw.toChar(verBuf, sizeof(verBuf));
+    tftPrint("Cuurrent firmware version: " + String(verBuf), true);
+  }
+  bool newfirmware = checkOtaSlotAtBoot();
   if (newfirmware && Prefs.AUTOSWITCHNEWERFIRMWARE) {
-    delay(1000);
-    check_and_switch_to_newer_firmware(false,true);
+    check_and_switch_to_newer_firmware(false, true);
   }
 
   tftPrint("Init Wifi... \n", true);
@@ -191,52 +311,43 @@ bool initSystem() {
   setupServerRoutes();
   WiFi.onEvent(WiFiEvent); //register the WiFi event handler
 
-  if (Prefs.HAVECREDENTIALS) {
-
-    if (CheckWifiStatus(true)!=1) {
-      int16_t retries = connectWiFi(20);
-      if (retries<0) {
-        SerialPrint("Failed to connect to Wifi",true,5);
-        APStation_Mode();
-      }
-    }
-  } else {
-    tftPrint("No credentials, starting AP Station Mode", true);
-    SerialPrint("No credentials, starting AP Station Mode",true,5);
-    APStation_Mode();
-  }
+  CheckWifiStatus(WIFI_CHECK_BOOT);
+  syncInitialSetupState();
 
   #ifdef _USEUDP
-  if (!connectUDP()) {
+  if (wifiReadyForNetwork() && !connectUDP()) {
     SerialPrint("Failed to connect to UDP",true,5);
     storeError("Failed to connect to UDP");
   }
   #endif
 
-
   #ifdef _USETFT
-  displaySetupProgress( true);
+  displaySetupProgress(true);
   #endif
-  SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(),true,5);
 
-  // Only register device if WiFi is connected and we have a valid IP
-  int8_t wifiStatus = CheckWifiStatus(false);
-  if (wifiStatus!=1 ) {
-    SerialPrint("Cannot register device: WiFi not connected or no IP address. Wifi status is: " + String(wifiStatus), true,5);
+  if (wifiReadyForNetwork()) {
+    SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(), true, 5);
+  } else {
+    SerialPrint("Wifi not connected; continuing with AP/ESP-NOW. Status: " + String(I.WiFiStatus), true, 5);
+  }
+
+  IPAddress regIP = wifiReadyForNetwork() ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
+  int16_t devIndex = Sensors.findMyDeviceIndex();
+  if (devIndex < 0) {
+    devIndex = Sensors.addDevice(ESP.getEfuseMac(), regIP, Prefs.DEVICENAME, 0, 0, _MYTYPE);
+  }
+  if (devIndex < 0) {
     failedToRegister();
     return false;
   }
-
-  byte devIndex = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
-  if (devIndex == -1) {
-    failedToRegister();
-    return false;
-  }
-
-
+  I.MY_DEVICE_INDEX = devIndex;
+  Sensors.updateMyDeviceVersion();
+  syncDeviceIPFromWifi();
 
   tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-  server.begin();
+  if (!I.apModeActive) {
+    server.begin();
+  }
   tftPrint(" OK.", true, TFT_GREEN);
 
 
@@ -255,8 +366,8 @@ bool initSystem() {
       storeError("ESPNow init error: " + String(errorCode));
   }
 
-  // NTP + DST interval check for all builds (peripherals skip setupTime() in main)
-  if (CheckWifiStatus(false) == 1) {
+  // Early NTP when WiFi is already up; setupTime() in main handles full path + ESP-NOW fallback.
+  if (wifiReadyForNetwork()) {
     if (!syncNtpAndApplyDST()) {
       SerialPrint("Boot NTP/DST apply failed; will retry when time is valid", true, 5);
     }
@@ -323,9 +434,14 @@ bool loadSensorData() {
   tftPrint("Loading sensor data from SD... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   #endif
   bool sdread = Sensors.readDevicesSensorsArrayFromSD();
+  Sensors.updateMyDeviceVersion();
+  I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex();
   displaySetupProgress( sdread);
   SerialPrint("Sensor data loaded? ",false);
   SerialPrint((sdread==true)?"yes":"no",true);
+  if (sdread) {
+    SerialPrint("Loaded devices/sensors: " + String(Sensors.getNumDevices()) + " / " + String(Sensors.getNumSensors()), true);
+  }
   return sdread;
   #endif
   return false;
@@ -367,7 +483,7 @@ bool isPressureValid(double pressure) {
   return true;
 }
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N, uint32_t* t, double* v, uint8_t* f, uint32_t timeStart, uint32_t timeEnd, bool forwardOrder) {
   //retrieve up to N most recent data points ending at timeEnd. If fewer than N data points are found, return the number of data points found.
 
@@ -609,14 +725,6 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t senso
 
 
 
-void handleESPNOWPeriodicBroadcast(uint8_t interval) {    
-  #ifndef _ISPERIPHERAL
-  if (I.makeBroadcast || (minute() % interval == 0)) {        
-      // ESPNow does not require WiFi connection; always broadcast      
-      broadcastServerPresence();
-  }
-  #endif
-}
 
 void handleStoreCoreData() {
   //use the handle version of storeCoreData for regular timed storage. use storeCoreData directly for forced manual storage.
@@ -636,7 +744,7 @@ void initScreenFlags(bool completeInit) {
       I.wifiFailCount=0;
       I.currentTime=0;
 
-      #if defined(_USETFT) && !defined(_ISPERIPHERAL)
+      #if defined(_USETFT) && _IS_SERVER_HUB
       
     
       I.isExpired = false; //are any critical sensors expired?
@@ -647,15 +755,14 @@ void initScreenFlags(bool completeInit) {
       I.wasHeat=false; //first bit is heat on, bits 1-6 are zones
       I.wasAC=false; //first bit is compressor on, bits 1-6 are zones
       I.wasFan=false; //first bit is fan on, bits 1-6 are zones
+      #ifdef _MONITOROUTDOORBATTERYSENSORS
       I.localBatteryIndex=255;
+      #endif
 
       I.isHot=0;
       I.isCold=0;
       I.isSoilDry=0;
       I.isLeak=0;
-
-
-      I.localBatteryIndex=255; //index of outside sensor
 
       I.currentOutsideTemp=-127;
       I.currentOutsideHumidity=-127;
@@ -674,7 +781,7 @@ void initScreenFlags(bool completeInit) {
   initGraphics();
   #endif
 
-  #if defined(_USETFT) && !defined(_ISPERIPHERAL)
+  #if defined(_USETFT) && _IS_SERVER_HUB
   
   #ifdef _USEWEATHER
   #endif
@@ -685,6 +792,7 @@ void initScreenFlags(bool completeInit) {
   #endif
 
   I.WiFiLastEvent = ARDUINO_EVENT_WIFI_READY;
+  I.WifiChannel = 0;
   I.makeBroadcast = true;
   I.ESPNOW_SENDS = 0;
   I.ESPNOW_RECEIVES = 0;
@@ -756,23 +864,6 @@ bool SerialPrint(const char* S,bool newline, int8_t level) {
 
 }
 
-int inArray(int arr[], int N, int value,bool returncount) {
-  //returns index to the integer array of length N holding value, or -1 if not found
-  //if returncount == true then returns number of occurrences
-
-byte cnt=0;
-
-for (int i = 0; i < N-1 ; i++)   {
-  if (arr[i]==value) {
-    if (returncount) cnt++;
-    else return i;
-  }
-}
-
-return -1;
-
-}
-
 int inArrayBytes(byte arr[], int N, byte value,bool returncount) {
   //returns index to the integer array of length N holding value, or -1 if not found
   //if returncount == true then returns number of occurrences
@@ -839,26 +930,6 @@ void uint16ToBin(uint16_t value, char* output, bool invert) {
   return;
 }
 
-char* strPad(char* str, char* pad, byte L)     // Simple C string function
-{
-  byte clen = strlen(str);
- 
-  for (byte j=clen;j<L;j++) {
-    strcat(str,pad);
-  }
-
-  return str;
-}
-
-bool uint64ToString(uint64_t val, char* str, bool strHex) {
-  if (strHex) {
-    snprintf(str, 16, "%012llX", val);
-  } else {
-    snprintf(str, 16, "%012llu", val);
-  }
-  return true;
-}
-
 bool stringToUInt64(String s, uint64_t* val, bool isHex) {
   char* e;
   uint64_t myint = 0;
@@ -878,103 +949,19 @@ bool stringToUInt64(String s, uint64_t* val, bool isHex) {
 
 }
 
-bool stringToLong(String s, uint32_t* val) {
- 
-  char* e;
-  uint32_t myint = strtol(s.c_str(), &e, 0);
-
-  if (e != s.c_str()) { // check if strtol actually found some digits
-    *val = myint;
-    return true;
-  } else {
-    return false;
-  }
-  
-}
-
-int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2) {
-  int16_t output = 0;
-  for (int x=ind1;x<=ind2;x++) {
-    output+=arr[x];
-  }
-  return output;
-}
-
 float mapfloat(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-
-
-// Legacy compatibility functions that delegate to the Devices_Sensors class
-
-void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow){
-  Sensors.find_limit_sensortypes(snsname, snsType, snsIndexHigh, snsIndexLow);
-}
-
-uint8_t find_sensor_count(String snsname,uint8_t snsType) {
-  return Sensors.find_sensor_count(snsname, snsType);
-}
-
-uint8_t findSensorByName(String snsname,uint8_t snsType,uint8_t snsID) {
-  return Sensors.findSensorByName(snsname, snsType, snsID);
-}
-
-uint8_t findSensorByName(String snsname,uint8_t snsType) {
-  return Sensors.findSensorByName(snsname, snsType, 0);
-}
-
-//sensor fcns
-int16_t findOldestDev() {
-  //return 0 entry or oldest expired noncritical (but never critical sensors)
-  int oldestInd = 0;
-  int  i=0;
-
-  for (i=0;i<Sensors.getNumSensors();i++) {
-    //find a zero slot
-    if (!Sensors.isSensorInit(i)) return i;
-
-    //find an expired noncritical slot
-    ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(i);
-    if (sensor && sensor->expired == 1 && !bitRead(sensor->Flags,7)) {
-      return i;
-    }
-  }
-
-  return oldestInd;
 }
 
 void initSensor(int k) {
   Sensors.initSensor(k);
 }
 
-
-bool isSensorInit(int i) {
-  return Sensors.isSensorInit(i);
-}
-
-
-uint8_t countDev() {
-  return Sensors.getNumDevices();
-}
-
-int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest) {
-  // Legacy function - convert to new format
-  uint64_t mac=0;
-  memcpy(&mac, macID, 6);
-  return Sensors.findDevice(mac);
-}
-
-//remove the following, and require explicit type name
-/*int16_t findSnsOfType(byte snstype, bool newest) {
-  return Sensors.findSnsOfType(snstype, newest);
-}*/
-
 uint8_t countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags) {
   return Sensors.countFlagged(snsType, flagsthatmatter, flagsettings, MoreRecentThan,  countCriticalExpired, countAnyExpired, optionalsnsflags);    
 }
 
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
 void checkHVAC() {
   // Check if any HVAC sensors are active
   I.isHeat = 0;
@@ -1066,36 +1053,6 @@ String breakString(String *inputstr,String token,bool reduceOriginal)
 }
 
 
-uint16_t countSubstr(String orig, String token) {
-  uint16_t count = 0;
-  int pos = 0;
-  while ((pos = orig.indexOf(token, pos)) != -1) {
-    count++;
-    pos += token.length();
-  }
-  return count;
-}
-
-String enumErrorToName(ERRORCODES E) {
-  switch (E) {
-    case ERROR_HTTPFAIL_BOX: return "HTTP failed for NOAA grid location";
-    case ERROR_HTTPFAIL_DAILY: return "HTTP failed for NOAA daily weather";
-    case ERROR_HTTPFAIL_GRID: return "HTTP failed for NOAA weather grid";
-    case ERROR_HTTPFAIL_HOURLY: return "HTTP failed for NOAA hourly weather";
-    case ERROR_HTTPFAIL_SUNRISE: return "HTTP failed for sunrise.io";
-    case ERROR_JSON_BOX: return "Json parsing failed for NOAA grid location";
-    case ERROR_JSON_DAILY: return "Json parsing failed for NOAA daily weather";
-    case ERROR_JSON_GRID: return "Json parsing failed for NOAA weather grid";
-    case ERROR_JSON_HOURLY: return "Json parsing failed for NOAA hourly weather";
-    case ERROR_JSON_SUNRISE: return "Json parsing failed for sunrise.io";
-    case ERROR_SD_LOGOPEN: return "Could not open log on SD";
-    
-
-    default: return "Error code is indeterminate";
-  }
-
-}
-
 void storeError(String E, ERRORCODES CODE, bool writeToSD) {
   storeError(E.c_str(), CODE, writeToSD);
 }
@@ -1114,6 +1071,53 @@ void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
   I.lastErrorCode = LASTERROR.errorCode;
   I.lastErrorTime = LASTERROR.errorTime;
 
+}
+
+static void sanitizeSystemLogField(char* dest, const char* src, size_t maxLen) {
+  size_t j = 0;
+  if (!src) src = "";
+  for (size_t i = 0; src[i] != '\0' && j < maxLen; ++i) {
+    char c = src[i];
+    if (c == '|' || c == '\n' || c == '\r') c = ' ';
+    dest[j++] = c;
+  }
+  dest[j] = '\0';
+}
+
+void logSystemEvent(const char* description, SYSTEMEVENTS code) {
+  #ifdef _USESDCARD
+  if (!sdCardReady()) return;
+
+  char descBuf[61];
+  sanitizeSystemLogField(descBuf, description, 60);
+
+  char timeBuf[32];
+  if (isTimeValid(I.currentTime)) {
+    strncpy(timeBuf, dateify(I.currentTime, "yyyy-mm-dd hh:nn:ss"), sizeof(timeBuf) - 1);
+  } else {
+    strncpy(timeBuf, "???", sizeof(timeBuf) - 1);
+  }
+  timeBuf[sizeof(timeBuf) - 1] = '\0';
+
+  char line[128];
+  snprintf(line, sizeof(line), "%s|%s|%d\n", timeBuf, descBuf, (int)code);
+
+  if (!SD.exists("/Data")) SD.mkdir("/Data");
+  File file = SD.open("/Data/systemlog.txt", FILE_APPEND);
+  if (!file) {
+    storeError("logSystemEvent: Could not open systemlog.txt", ERROR_SD_FILEWRITE, false);
+    return;
+  }
+  file.print(line);
+  file.close();
+  #else
+  (void)description;
+  (void)code;
+  #endif
+}
+
+void logSystemEvent(String description, SYSTEMEVENTS code) {
+  logSystemEvent(description.c_str(), code);
 }
 
 
@@ -1154,6 +1158,7 @@ void storeCoreData(bool forceStore) {
 
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   storeError(E);
+  logSystemEvent(E, EVENT_REBOOT_TRIGGERED);
   I.resetInfo = R;
   I.lastResetTime = I.currentTime;
 
@@ -1201,22 +1206,6 @@ String getRebootDebugInfo() {
   return info;
 }
 
-// --- IP address conversion utilities ---
-
-uint64_t IPToMACID(IPAddress ip) {
-  //convert IP address to MAC ID
-  //replace with 0x00000000FF000000 prefix if desired
-  uint32_t ip32 = IPToUint32(ip);
-  return (uint64_t)ip32;
-
-}
-
-uint64_t IPToMACID(byte* ip) {
-  //wrapper for IPToMACID when ip is a byte array
-
-  return IPToMACID(IPAddress(ip));
-}
-
 // Convert uint64_t MAC to 6-byte array
 void uint64ToMAC(uint64_t mac64, byte* macArray) {
     memcpy(macArray, &mac64, 6); //note that arduino is little endian, so this is correct
@@ -1238,24 +1227,6 @@ String MACToString(const uint64_t mac64, char separator, bool asHex) {
 String MACToString(const uint8_t* mac, char separator, bool asHex) {
   
   return ArrayToString(mac, 6,separator,asHex);
-}
-
-
-bool compareMAC(byte *MAC1,byte *MAC2) {
-  for (byte i=0;i<6;i++) {
-    if (MAC1[i]!=MAC2[i]) return false;
-  }
-  return true;
-}
-
-bool isMACSet(byte *m, bool doReset) {
-  for (byte i=0;i<6;i++) {
-    if (m[i]!=0) return true;
-  }
-  if (doReset) {
-    memset(m,0,6);
-  }
-  return false;
 }
 
 
@@ -1355,24 +1326,6 @@ bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwa
 }
 
 
-uint32_t IPToUint32(IPAddress ip) {
-  return (ip[0]<<24) + (ip[1]<<16) + (ip[2]<<8) + ip[3];
-} 
-
-int16_t updateMyDevice() {
-    //update mySensorsIndices array and update my IP if needed
-    // Only update if WiFi is connected and we have a valid IP
-    // This prevents registering/updating with IP 0.0.0.0 which can cause devices to be lost
-    int8_t wifiStatus = CheckWifiStatus(false);
-    if (wifiStatus!=1) {
-      return Sensors.findMyDeviceIndex();
-    }
-
-    I.MY_DEVICE_INDEX = Sensors.addDevice(ESP.getEfuseMac(), WiFi.localIP(), Prefs.DEVICENAME, 0, 0, _MYTYPE);
-
-  return I.MY_DEVICE_INDEX;
-}
-
 void failedToRegister() {
   SerialPrint("I am not registered as a device, and could not register, so I cannot run...",true);
   
@@ -1458,7 +1411,20 @@ bool tftPrint(String S, bool newline, uint16_t color, byte fontType, byte fontsi
 }
 
 
-int16_t force_switch_ota_slot(int slot_number) {
+static String otaSlotSwitchFailureCondition(esp_err_t err) {
+    switch (err) {
+        case ESP_ERR_OTA_VALIDATE_FAILED:
+            return "target partition does not contain a valid firmware image (empty, corrupt, or incomplete OTA write)";
+        case ESP_ERR_NOT_FOUND:
+            return "OTA data partition (otadata) not found or invalid";
+        case ESP_ERR_INVALID_ARG:
+            return "target is not a valid OTA app partition";
+        default:
+            return "boot partition could not be updated";
+    }
+}
+
+int16_t force_switch_ota_slot(int slot_number, String* failureDetail) {
     const esp_partition_t* target_partition = NULL;
     
     if (slot_number == -1) {
@@ -1489,66 +1455,146 @@ int16_t force_switch_ota_slot(int slot_number) {
             return 1; //allow caller to restart
         } else {
             SerialPrint("Failed to set boot partition: " + String(esp_err_to_name(err)), true);
+            if (failureDetail) {
+                String runningLabel = running_partition ? String(running_partition->label) : String("unknown");
+                *failureDetail = "Code -2: esp_ota_set_boot_partition failed with "
+                    + String(esp_err_to_name(err)) + " (0x" + String((uint32_t)err, HEX) + "). "
+                    + otaSlotSwitchFailureCondition(err)
+                    + ". Running slot: " + runningLabel
+                    + ", target slot: " + String(target_partition->label) + ".";
+            }
             return -2; //error, could not set boot partition
         }
     } else {
         SerialPrint("Target partition not found! Check your partition table.", true);
+        if (failureDetail) {
+            if (slot_number == -1) {
+                *failureDetail = "Code -1: esp_ota_get_next_update_partition returned NULL. "
+                    "No alternate OTA app slot is available; check that the flash partition table defines both ota_0 and ota_1.";
+            } else if (slot_number == 0 || slot_number == 1) {
+                *failureDetail = "Code -1: OTA slot " + String(slot_number)
+                    + " (ota_" + String(slot_number) + ") was not found in the partition table.";
+            } else {
+                *failureDetail = "Code -1: Invalid OTA slot request (" + String(slot_number)
+                    + "); use -1 (toggle), 0 (ota_0), or 1 (ota_1).";
+            }
+        }
         return -1; //error, target partition not found
     }
 }
 
-// Helper to compare "1.2.3" style strings
-// Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal
-int compare_versions(const char* v1, const char* v2) {
-  int major1 = 0, minor1 = 0, patch1 = 0;
-  int major2 = 0, minor2 = 0, patch2 = 0;
+int8_t otaPartitionSlotNumber(const esp_partition_t* partition) {
+  if (!partition) return -1;
+  if (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) return 0;
+  if (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) return 1;
+  return -1;
+}
 
-  sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
-  sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
+bool getOtaPartitionFirmwareVersion(const esp_partition_t* partition, FirmwareVersion& out) {
+  if (!partition) return false;
+  esp_app_desc_t desc = {};
+  if (esp_ota_get_partition_description(partition, &desc) != ESP_OK) return false;
+  return out.fromText(desc.version);
+}
 
-  if (major1 != major2) return (major1 > major2) ? 1 : -1;
-  if (minor1 != minor2) return (minor1 > major2) ? 1 : -1;
-  if (patch1 != patch2) return (patch1 > patch2) ? 1 : -1;
-  return 0;
+#ifdef _USETFT
+static void bootOtaTftLine(const char* text, uint16_t fg, uint16_t bg) {
+  if (!text) return;
+  tft.setTextColor(fg, bg);
+  tft.setTextFont(2);
+  tft.setTextSize(1);
+  tft.println(text);
+}
+#endif
+
+bool checkOtaSlotAtBoot() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
+  if (!next) return false;
+
+  esp_app_desc_t running_desc = {};
+  esp_app_desc_t next_desc = {};
+  if (esp_ota_get_partition_description(running, &running_desc) != ESP_OK
+      || esp_ota_get_partition_description(next, &next_desc) != ESP_OK) {
+    return false;
+  }
+
+  SerialPrint(String("OTA boot: running ") + running_desc.version + " | next " + next_desc.version, true, 5);
+
+  FirmwareVersion runningFw;
+  if (!runningFw.fromText(running_desc.version) && !getEmbeddedFirmwareVersion(runningFw)) {
+    SerialPrint("OTA: running partition version invalid: " + String(running_desc.version), true, 5);
+    return false;
+  }
+
+  FirmwareVersion nextFw;
+  if (!nextFw.fromText(next_desc.version)) {
+    SerialPrint("OTA: next partition version invalid (not x.x.x): " + String(next_desc.version), true, 5);
+    #ifdef _USETFT
+    bootOtaTftLine("Next OTA slot has invalid firmware", TFT_YELLOW, BG_COLOR);
+    bootOtaTftLine("Current firmware is up to date.", TFT_GREEN, BG_COLOR);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    #endif
+    return false;
+  }
+
+  if (nextFw.compare(runningFw) <= 0) {
+    SerialPrint("OTA: current firmware is up to date", true, 5);
+    #ifdef _USETFT
+    bootOtaTftLine("Current firmware is up to date.", TFT_GREEN, BG_COLOR);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    #endif
+    return false;
+  }
+
+  SerialPrint("OTA: next slot is newer than running firmware", true);
+  #ifdef _USETFT
+  bootOtaTftLine("Next OTA slot is newer", TFT_BLACK, TFT_RED);
+  bootOtaTftLine("Consider a manual switch:", TFT_RED, BG_COLOR);
+  bootOtaTftLine("System Config -> switch OTA", TFT_RED, BG_COLOR);
+  tft.setTextColor(FG_COLOR, BG_COLOR);
+  #endif
+  logSystemEvent("Firmware is older than next OTA.", EVENT_BOOT_WARNING);
+  delay(3000);
+  return true;
 }
 
 bool check_and_switch_to_newer_firmware(bool verbose,bool doswitch) {
   const esp_partition_t* running = esp_ota_get_running_partition();
   const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
 
-  bool newfirmware = false;
-  if (next == NULL) return false; // Only one OTA partition exists
+  if (next == NULL) return false;
 
-  esp_app_desc_t running_desc, next_desc;
-  
-  // Get info for both partitions
-  if (esp_ota_get_partition_description(running, &running_desc) == ESP_OK &&
-      esp_ota_get_partition_description(next, &next_desc) == ESP_OK) {
-      
-      ESP_LOGI("OTA", "Running: %s | Next: %s", running_desc.version, next_desc.version);
-      if (verbose) shoutThis("Running: " + String(running_desc.version) + " | Next: " + String(next_desc.version), true);
-        
-      if (compare_versions(next_desc.version, running_desc.version) > 0) {
-          ESP_LOGW("OTA", "Newer firmware detected in other partition...");
-          if (verbose) shoutThis("Newer firmware detected in other partition...", true);
-          newfirmware = true;
-
-          // Set the other partition as the boot target
-          if (doswitch) {
-            ESP_LOGW("OTA", "Switching to newer firmware...");
-            if (verbose) shoutThis("Switching to newer firmware...", true);
-            esp_err_t err = esp_ota_set_boot_partition(next);
-            if (err == ESP_OK) {
-                esp_restart(); // Reboot to start the new version
-            }
-          }
-      } else {
-          ESP_LOGI("OTA", "Current partition is up to date.");
-          if (verbose) shoutThis("Current partition is up to date.", true);
-          newfirmware = false;
-      }
+  esp_app_desc_t running_desc = {};
+  esp_app_desc_t next_desc = {};
+  if (esp_ota_get_partition_description(running, &running_desc) != ESP_OK
+      || esp_ota_get_partition_description(next, &next_desc) != ESP_OK) {
+    return false;
   }
-  return newfirmware;
+
+  FirmwareVersion runningFw, nextFw;
+  if (!runningFw.fromText(running_desc.version) && !getEmbeddedFirmwareVersion(runningFw)) {
+    return false;
+  }
+  if (!nextFw.fromText(next_desc.version)) {
+    return false;
+  }
+  if (nextFw.compare(runningFw) <= 0) {
+    return false;
+  }
+
+  if (!doswitch) {
+    return true;
+  }
+
+  SerialPrint("OTA: switching to newer firmware in other partition", true);
+  if (verbose) {
+    shoutThis("Switching to newer firmware...", true);
+  }
+  if (esp_ota_set_boot_partition(next) == ESP_OK) {
+    esp_restart();
+  }
+  return true;
 }
 
 
@@ -1581,8 +1627,8 @@ uint8_t returnPbBatteryPercentage(double voltage) {
 }
 
 
-#ifdef _USETFT
 void displaySetupProgress(bool success) {
+  #ifdef _USETFT
   if (success) {
     tft.setTextColor(TFT_GREEN);
     tft.println("OK.\n");
@@ -1592,7 +1638,10 @@ void displaySetupProgress(bool success) {
     tft.println("FAIL");
     tft.setTextColor(FG_COLOR,BG_COLOR);
   }
+  #endif
 }
+
+#ifdef _USETFT
 
 void screenWiFiDown() {
   tft.clear();

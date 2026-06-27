@@ -1,4 +1,4 @@
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 #ifdef _USETFLUNA
 #ifndef TFLUNA_HPP
 #define TFLUNA_HPP

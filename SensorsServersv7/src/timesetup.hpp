@@ -17,7 +17,13 @@ extern NTPClient timeClient;
 extern char DATESTRING[];
 extern STRUCT_CORE I;
 
-bool getTimezoneInfo();
+static constexpr uint16_t TIMEZONE_BOOT_HTTP_TIMEOUT_MS = 5000;
+static constexpr uint16_t TIMEZONE_REFRESH_HTTP_TIMEOUT_MS = 10000;
+static constexpr uint32_t TIMEZONE_REFRESH_INTERVAL_SEC = 3600;
+
+bool timezonePrefsValid();
+bool getTimezoneInfo(uint16_t timeoutMs = TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
+bool refreshTimezoneFromNetwork(uint16_t timeoutMs = TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
 bool updateTime();
 void DSTsetup(void);
 bool setupTime(void);

@@ -1,12 +1,13 @@
 #include "globals.hpp"
 
-#if defined(_USETFT) && !defined(_ISPERIPHERAL)
+#if defined(_USETFT) && _IS_SERVER_HUB
 
 #include "graphics.hpp"
 #include "BootSecure.hpp"
 #include "utility.hpp"
+#include "server.hpp"
 
-#if defined(_USENETWORKMONITOR) && !defined(_ISPERIPHERAL)
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
 #include "NetworkMonitor.hpp"
 extern NetworkMonitor_type NetworkMonitor;
 #endif
@@ -176,6 +177,39 @@ uint16_t temp2color(int temp, bool invertgray) {
   return tft.color565(temp_colors[j+1],temp_colors[j+2],temp_colors[j+3]);
 }
 
+static bool isUnsetDisplayTemp(int temp) {
+  return temp < -100;
+}
+
+static String formatDisplayTemp(int temp) {
+  return isUnsetDisplayTemp(temp) ? String("?") : String(temp);
+}
+
+static constexpr int16_t OUTSIDE_PRESSURE_BASELINE_HPA = 1000;
+
+static bool isUnsetDisplayPressure(int8_t pressureModifier) {
+  return pressureModifier < -100;
+}
+
+static String formatDisplayPressure(int8_t pressureModifier) {
+  return isUnsetDisplayPressure(pressureModifier)
+    ? String("?")
+    : String(OUTSIDE_PRESSURE_BASELINE_HPA + pressureModifier);
+}
+
+static String formatDisplayTempPair(int tmax, int tmin) {
+  return formatDisplayTemp(tmax) + "/" + formatDisplayTemp(tmin);
+}
+
+static uint16_t tempDisplayColor(int temp, bool invertgray = false) {
+  return isUnsetDisplayTemp(temp) ? FG_COLOR : temp2color(temp, invertgray);
+}
+
+static void fcnPrintTxtCenterTempPair(int tmax, int tmin, byte FNTSZ, int x, int y, uint16_t bgcolor = BG_COLOR) {
+  fcnPrintTxtCenter(formatDisplayTempPair(tmax, tmin), FNTSZ, x, y,
+    tempDisplayColor(tmax), tempDisplayColor(tmin), bgcolor);
+}
+
 // Drawing functions
 
 int8_t drawBmp(const char *filename, int16_t x, int16_t y, LGFX_Sprite *sprite) {
@@ -318,8 +352,8 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
     //get sensor vals 1, 4, 3, 70, 61... if any are flagged then set box color
     if (Sensors.isSensorOfType(sensor, "temperature")) {
       box_border = set_color(150,150,20);
-      if (isnan(sensor->snsValue)) {
-        box_text += (String) ("???_");
+      if (isnan(sensor->snsValue) || isUnsetDisplayTemp((int)sensor->snsValue)) {
+        box_text += (String) ("?F_");
         box_fill = set_color(200,200,200);
         text_color = set_color(55,55,55);    
       } else {
@@ -459,6 +493,10 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
 
 // Text drawing functions
 void fcnPrintTxtCenter(int msg, byte FNTSZ, int x, int y, uint16_t color1, uint16_t color2, uint16_t bgcolor, LGFX_Device* target) {
+  if (isUnsetDisplayTemp(msg)) {
+    fcnPrintTxtCenter("?", FNTSZ, x, y, FG_COLOR, FG_COLOR, bgcolor, target);
+    return;
+  }
   String t = String(msg);
   fcnPrintTxtCenter(t, FNTSZ,  x,  y, color1,  color2, bgcolor, target);
 }
@@ -654,8 +692,8 @@ void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y,bool autoco
   }
   
 
-  tft.setTextColor(temp2color(value1),bg_color);
-  tft.print(value1);
+  tft.setTextColor(tempDisplayColor(value1),bg_color);
+  tft.print(formatDisplayTemp(value1));
 
    fg_color = TFT_WHITE;
    bg_color = TFT_BLACK;
@@ -664,8 +702,8 @@ void fcnPrintTxtColor2(int value1,int value2,byte FNTSZ, int x,int y,bool autoco
     bg_color = temp2color(value2,true);  
   }
   
-  tft.setTextColor(temp2color(value2),bg_color);
-  tft.print(value2);
+  tft.setTextColor(tempDisplayColor(value2),bg_color);
+  tft.print(formatDisplayTemp(value2));
 
    fg_color = TFT_WHITE;
    bg_color = TFT_BLACK;
@@ -690,8 +728,8 @@ void fcnPrintTxtColor(int value,byte FNTSZ,int x,int y,bool autocontrast) {
   }
   
 
-  tft.setTextColor(temp2color(value),bg_color);
-  tft.print(value);
+  tft.setTextColor(tempDisplayColor(value),bg_color);
+  tft.print(formatDisplayTemp(value));
 
    fg_color = TFT_WHITE;
    bg_color = TFT_BLACK;
@@ -790,6 +828,10 @@ void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) {
 
 
 // Weather text functions
+static bool weatherDataIsFresh() {
+  return WeatherData.lastUpdateT > 0 && WeatherData.lastUpdateT + 86400 > I.currentTime;
+}
+
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   // print air pressure
   double tempval = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 3600); //get the average pressure in the last hour
@@ -1071,6 +1113,12 @@ void fcnDrawNavButtons(int16_t index) {
     case 111:
       fcnPrintTxtCenter("WthrUpd",1, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY); //weather update
       break;
+    case 112:
+      fcnPrintTxtCenter("Reset WiFi",1, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
+      break;
+    case 113:
+      fcnPrintTxtCenter("Yes",2, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
+      break;
     case 120: //alternative yes
       fcnPrintTxtCenter("YES",1, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
       break;
@@ -1095,7 +1143,9 @@ void fcnSwitchSubScreen(int16_t index) {
 }
 
 static uint32_t helper_weatherDayMidnight(uint8_t daysfromnow) {
-  uint32_t midnightToday = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+  // Use I.currentTime (local pseudo-unix), not now()/year()/month()/day() (UTC calendar).
+  time_t localNow = I.currentTime;
+  uint32_t midnightToday = unixToLocal(makeUnixTime((byte)(year(localNow) - 2000), month(localNow), day(localNow), 0, 0, 0, false));
   return midnightToday + (uint32_t)daysfromnow * 86400UL;
 }
 
@@ -1152,9 +1202,9 @@ void fcnTouchWeatherForecast(int16_t index) {
   if (drawFn == &fcnDrawHourlyWeather) {
     dayOffset = 0;
   } else if (drawFn == &fcnDrawDailyWeather) {
-    uint16_t colWidth = tft.width() / 5;
+    uint16_t colWidth = tft.width() / (NUMWTHRDAYS - 1);
     uint8_t col = (uint8_t)(GRAPHICS.touchX / colWidth);
-    if (col > 4) col = 4;
+    if (col > NUMWTHRDAYS - 2) col = NUMWTHRDAYS - 2;
     dayOffset = col + 1;
   } else {
     return;
@@ -1167,7 +1217,7 @@ void fcnTouchWeatherForecast(int16_t index) {
 void fcnTouchDailyDetailNav(int16_t index) {
   (void)index;
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[0].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
   const uint16_t btnW = 64;
 
   if (GRAPHICS.touchX < btnW) {
@@ -1182,7 +1232,7 @@ void fcnTouchDailyDetailNav(int16_t index) {
     fcnDrawScreen();
     return;
   }
-  if (dayOffset < 5 && GRAPHICS.touchX >= 2 * btnW && GRAPHICS.touchX < 3 * btnW) {
+  if (dayOffset < NUMWTHRDAYS - 1 && GRAPHICS.touchX >= 2 * btnW && GRAPHICS.touchX < 3 * btnW) {
     GRAPHICS.SCREEN_DATA[0].Local_Code = dayOffset + 1;
     GRAPHICS.SubScreen_Now = -1;
     GRAPHICS.zeroChildTimers();
@@ -1529,16 +1579,30 @@ void fcnDrawHeaderInfo(int16_t index) {
   uint8_t InfoFlags = GRAPHICS.SCREEN_DATA[index].Local_Code; //bit 0 - showing wifi out, bit 1 =  showing weather alerts, bit 2 = last error msg within 2h, bit 3 = IP in header, bit 4 = dawn/dusk info
   uint16_t textWidth = 0;
 
-  //Order is: no wifi, then weather alerts, then cycle amongst [IP address, dawn/dusk info, last error msg within 2h]
-  if(WiFi.status()!= WL_CONNECTED){  
-    InfoFlags =0;
-    bitSet(InfoFlags,0); //set bit 0 to 1
+  //Order is: no wifi (or AP/NO WIFI alternate), then weather alerts, then cycle amongst [IP address, dawn/dusk info, last error msg within 2h]
+  if (!wifiReadyForNetwork()) {
     setFont(2);
-    st = "NO WIFI!";
-    tft.setTextColor(TFT_RED,BG_COLOR);
-    //calculate the width of the text
+    if (I.apModeActive) {
+      // Alternate NO WIFI and AP address (replaces dawn/dusk slot while provisioning)
+      if (isBit(InfoFlags, 3) == false) {
+        InfoFlags = 0;
+        bitSet(InfoFlags, 0);
+        st = "NO WIFI!";
+        tft.setTextColor(TFT_RED, BG_COLOR);
+      } else {
+        InfoFlags = 0;
+        bitSet(InfoFlags, 3);
+        st = "AP: " + WiFi.softAPIP().toString();
+        tft.setTextColor(TFT_YELLOW, BG_COLOR);
+      }
+    } else {
+      InfoFlags = 0;
+      bitSet(InfoFlags, 0);
+      st = "NO WIFI!";
+      tft.setTextColor(TFT_RED, BG_COLOR);
+    }
     textWidth = tft.textWidth(st);
-    tft.drawString(st,tft.width()-textWidth-4,y+2);
+    tft.drawString(st, tft.width() - textWidth - 4, y + 2);
   } else {
     clearBit(InfoFlags,0); //clear bit 0
     //check if there are weather alerts
@@ -1670,13 +1734,14 @@ void fcnDrawCurrentWeatherText(int16_t index) {
 
     st = "Local:" ;
 
-    //insert outside battery if we have one
+    #ifdef _MONITOROUTDOORBATTERYSENSORS
     if (I.localBatteryIndex<255) {
       ArborysSnsType* sensor = Sensors.snsIndexToPointer(I.localBatteryIndex);
       if (sensor && sensor->IsSet && sensor->timeLogged + 3600>I.currentTime) {        
         st += " Bat" + (String) (returnLiBatteryPercentage(sensor->snsValue)) + "%";
       }
     }
+    #endif
 
     FH = setFont(1);
     tft.setCursor(X,Y);
@@ -1688,23 +1753,28 @@ void fcnDrawCurrentWeatherText(int16_t index) {
 
   // draw current temp
   FH = setFont(FNTSZ);
-  tft.setTextColor(temp2color(I.currentOutsideTemp),BG_COLOR);
-  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+FH/2,temp2color(I.currentOutsideTemp),temp2color(I.currentOutsideTemp),BG_COLOR);
+  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+FH/2,tempDisplayColor(I.currentOutsideTemp),tempDisplayColor(I.currentOutsideTemp),BG_COLOR);
   Y=Y+FH+section_spacer;
 
   //print today max / min
     FNTSZ = 4;  
     FH = setFont(FNTSZ);
-    int8_t tempMaxmin[2];
-    WeatherData.getDailyTemp(0,tempMaxmin);
-    if (isTempValid(tempMaxmin[0])==false) tempMaxmin[0] = WeatherData.getTemperature(I.currentTime);
-    //does local max/min trump reported?
-    if (tempMaxmin[0]<I.currentOutsideTemp) tempMaxmin[0]=I.currentOutsideTemp;
-    if (tempMaxmin[1]>I.currentOutsideTemp) tempMaxmin[1]=I.currentOutsideTemp;
-    I.Tmax = tempMaxmin[0];
-    I.Tmin = tempMaxmin[1];
+    if (!weatherDataIsFresh()) {
+      fcnPrintTxtCenter("?/?", FNTSZ, X, Y + FH / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+    } else {
+      int8_t tempMaxmin[2];
+      WeatherData.getDailyTemp(0,tempMaxmin);
+      if (isTempValid(tempMaxmin[0])==false) tempMaxmin[0] = WeatherData.getTemperature(I.currentTime);
+      //does local max/min trump reported?
+      if (!isUnsetDisplayTemp(I.currentOutsideTemp)) {
+        if (tempMaxmin[0]<I.currentOutsideTemp) tempMaxmin[0]=I.currentOutsideTemp;
+        if (tempMaxmin[1]>I.currentOutsideTemp) tempMaxmin[1]=I.currentOutsideTemp;
+      }
+      I.Tmax = tempMaxmin[0];
+      I.Tmin = tempMaxmin[1];
 
-    fcnPrintTxtCenter((String) I.Tmax + "/" + I.Tmin,FNTSZ,X,Y+FH/2,temp2color(I.Tmax),temp2color(I.Tmin),BG_COLOR);  
+      fcnPrintTxtCenterTempPair(I.Tmax, I.Tmin, FNTSZ, X, Y + FH / 2, BG_COLOR);
+    }
     
     Y=Y+FH+section_spacer;
 
@@ -1765,10 +1835,69 @@ void fcnDrawCurrentWeatherText(int16_t index) {
   return;
 }
 
+static bool isApProvisioningWithoutCredentials() {
+  return I.apModeActive && (!Prefs.HAVECREDENTIALS || Prefs.WIFISSID[0] == '\0');
+}
+
+// AP provisioning info in the 180x180 icon/alert slot
+static void fcnDrawAPInfo(int16_t X, int16_t Y, int16_t W, int16_t H) {
+  tft.fillRect(X, Y, W, H, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+
+  int16_t cx = X + 4;
+  int16_t cy = Y + 4;
+  uint32_t fh;
+
+  fh = setFont(4);
+  tft.setTextFont(4);
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.setCursor(cx, cy);
+  tft.print("NO WIFI!");
+  cy += fh + 2;
+
+  fh = setFont(2);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setCursor(cx, cy);
+  tft.print("Join this device:");
+  cy += fh + 2;
+
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(cx, cy);
+  tft.print("SSID: ");
+  tft.print(WiFi.softAPSSID());
+  cy += fh + 2;
+
+  tft.setCursor(cx, cy);
+  tft.print("PWD: ");
+  tft.print(AP_STATION_PASSWORD);
+  cy += fh + 2;
+
+  fh = setFont(1);
+  tft.setTextFont(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(cx, cy);
+  tft.print("website: ");
+  tft.print(WiFi.softAPIP().toString());
+}
+
 //redraw current weather icon or alert --------------------------------------------------------
 void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   int16_t timernum = helper_runScreenElementFunction(index, true); 
   if (timernum<0) return; //this is an error condition
+
+  if (isApProvisioningWithoutCredentials()) {
+    if ((GRAPHICS.SCREEN_DATA[index].Local_Code & 0b00000111) == 2) {
+      GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
+      return;
+    }
+    GRAPHICS.clearScreenArea(index);
+    fcnDrawAPInfo(GRAPHICS.SCREEN_DATA[index].X, GRAPHICS.SCREEN_DATA[index].Y,
+                  GRAPHICS.SCREEN_DATA[index].W, GRAPHICS.SCREEN_DATA[index].H);
+    GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
+    GRAPHICS.SCREEN_DATA[index].Local_Code = 2;
+    return;
+  }
 
   //assign iconflags to the first 3 bits of the local code
   uint8_t IconFlags = GRAPHICS.SCREEN_DATA[index].Local_Code & 0b00000111; //bit 0 - showing icon, bit 1 = showing flags, bit 2 = showing alerts
@@ -1778,11 +1907,11 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   uint8_t oldIconFlags = IconFlags;
   bool weatherAlerts = isBit(I.WeatherEventFlags, 0);
 
-  GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; //set the screen next to show alerts      
+  GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; // touch icon/alert area -> sensor screen (alert text is on temp pane)
 
   if (isBit(IconFlags,0)) {
-    if (GRAPHICS.alarmCount > 0) {
-      IconFlags = 2; //was showing icon, now showing alerts
+    if (GRAPHICS.alarmCount > 0 || I.apModeActive) {
+      IconFlags = 2; //was showing icon, now showing sensor alerts or AP info
     }
     else {
       if (weatherAlerts) IconFlags = 4; //no flags, skip to alerts
@@ -1807,32 +1936,27 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
 
   skipcount = 0;
 
-  if (IconFlags == 2)  { //show alerts
-    //clear the icon area, it must be redrawn now
+  if (IconFlags == 2)  { //show sensor alerts, or AP info when AP mode is active
     GRAPHICS.clearScreenArea(index);
-    uint8_t checkTheseFlags = 3; //bits 0 and 1 are set to 1
-    uint16_t sensorTypes = 0xFFFF; //set all bits to 1
-    clearBit(sensorTypes, 15); //do not exclude all sensor types
-    clearBit(sensorTypes, 14); //do not use a specific sensor type
-    clearBit(sensorTypes, 0); //no need to use 
-    //now we will check all sensortypes, but in order!
-
-    //previously I was checking for specific sensors, but now I will only check for sensors that are monitored and flagged. Up to user to decide
-    //clearBit(sensorTypes, 0); //clear bit 0 for "all"
-    // setBit(sensorTypes, 3);
-    // setBit(sensorTypes, 8);
-    // setBit(sensorTypes, 9);
-    // setBit(sensorTypes, 10);
-    byte alarmcount = fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,3,3);
-    if (alarmcount>0) {
-      fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);            
-    }    
+    if (I.apModeActive) {
+      fcnDrawAPInfo(GRAPHICS.SCREEN_DATA[index].X, GRAPHICS.SCREEN_DATA[index].Y,
+                    GRAPHICS.SCREEN_DATA[index].W, GRAPHICS.SCREEN_DATA[index].H);
+    } else {
+      uint8_t checkTheseFlags = 3; //bits 0 and 1 are set to 1
+      uint16_t sensorTypes = 0xFFFF; //set all bits to 1
+      clearBit(sensorTypes, 15); //do not exclude all sensor types
+      clearBit(sensorTypes, 14); //do not use a specific sensor type
+      clearBit(sensorTypes, 0); //no need to use 
+      byte alarmcount = fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,3,3);
+      if (alarmcount>0) {
+        fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);
+      }
+    }
   }
   else {
     //whether to draw alerts or regular icon will be determined by the next function call
     if (IconFlags != 4) IconFlags = 1; //was showing nothing, now showing icon
     fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,Sprite180x180,true);   
-    if (IconFlags == 4) GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_ALERT; //set the screen next to show alerts
   }
   
   //reset the timer. If either alert flags or event flags are present, then the reset is 5 seconds, otherwise 30 seconds.
@@ -1867,7 +1991,7 @@ bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool u
   sprite.setTextFont(FNTSZ);
 
   //precipitation alerts, these go at Y=170-fontheight (current conditions / today only)
-  if (daysfromnow == 0 && !useAlerts && WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in next 24 h
+  if (weatherDataIsFresh() && daysfromnow == 0 && !useAlerts && WeatherData.getPoP() > 50) {//greater than 50% cumulative precip prob in next 24 h
     uint32_t Next_Precip = WeatherData.nextPrecip();
     uint32_t nextrain = WeatherData.nextRain();
     double rain =  WeatherData.getRain() * 0.0393701; //to inches
@@ -1912,6 +2036,22 @@ bool fcnDrawWeatherSprite180(uint16_t X, uint16_t Y, LGFX_Sprite &sprite, bool u
 }
 
 
+static void cycleWeatherIconSet() {
+  bool found = false;
+  byte failCount = 0;
+  char filedir[30];
+  while (failCount < 10 && found == false) {
+    GRAPHICS.IconSet++;
+    if (GRAPHICS.IconSet > 99) GRAPHICS.IconSet = 0;
+    snprintf(filedir, 30, "/Icons/Set%d", GRAPHICS.IconSet);
+    if (FileOrDirectoryExists(filedir)) found = true;
+    else failCount++;
+  }
+  if (found == false) {
+    GRAPHICS.IconSet = 0;
+  }
+}
+
 bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts, uint8_t daysfromnow) {
 
   char filename[50];
@@ -1926,25 +2066,21 @@ bool fillSprite180(int16_t X, int16_t Y, LGFX_Sprite &sprite, bool useAlerts, ui
     if (FileOrDirectoryExists(filename)==false)   snprintf(filename,50,"/Icons/Events/180x180/zz.bmp");
 
   } else {
-    bool found = false;
-    byte failCount =0;
-    char filedir[21];
-    //get the weather icon, switching to the next available set
-    while (failCount < 10 && found == false) {
-      GRAPHICS.IconSet++;
-      if (GRAPHICS.IconSet > 99) GRAPHICS.IconSet = 0;
-      snprintf(filedir,30,"/Icons/Set%d", GRAPHICS.IconSet);
-      if (FileOrDirectoryExists(filedir))    found = true;
-      else     failCount++;  
-    }
-
-    if (found == false) {
-      GRAPHICS.IconSet = 0; //fallback to generic icons
-      snprintf(filedir,21,"/Icons/Set0");
-    }
+    char filedir[30];
+    cycleWeatherIconSet();
+    snprintf(filedir, 30, "/Icons/Set%d", GRAPHICS.IconSet);
 
     int iconID = 999;
-    if (daysfromnow == 0) {
+    if (!weatherDataIsFresh()) {
+      iconID = 999;
+      if (daysfromnow == 0 && I.currentTime > WeatherData.sunrise && I.currentTime < WeatherData.sunset) {
+        snprintf(filename, 50, "%s/BMP180x180day/%d.bmp", filedir, iconID);
+      } else if (daysfromnow == 0) {
+        snprintf(filename, 50, "%s/BMP180x180night/%d.bmp", filedir, iconID);
+      } else {
+        snprintf(filename, 50, "%s/BMP180x180day/%d.bmp", filedir, iconID);
+      }
+    } else if (daysfromnow == 0) {
       iconID = WeatherData.getWeatherID(0);
       if (iconID < 0) iconID = 999;
       if (I.currentTime > WeatherData.sunrise && I.currentTime < WeatherData.sunset) {
@@ -1994,6 +2130,7 @@ void fcnDrawHourlyWeather(int16_t index) {
 
   //clear the future weather area, it must be redrawn now
   GRAPHICS.clearScreenArea(index);  
+  cycleWeatherIconSet();
   byte section_spacer = 3;
   int16_t Y = GRAPHICS.SCREEN_DATA[index].Y;
   int16_t X = GRAPHICS.SCREEN_DATA[index].X;
@@ -2011,12 +2148,16 @@ void fcnDrawHourlyWeather(int16_t index) {
   tft.setCursor(X,Y);
 
   for (i=1;i<7;i++) { //draw 6 icons, with I.HourlyInterval hours between icons. Note that index 1 is  1 hour from now
-    if (i*GRAPHICS.IntervalHourlyWeatherDisplay>72) break; //safety check if user asked for too large an interval ... cannot display past download limit
+    if (i*GRAPHICS.IntervalHourlyWeatherDisplay >= NUMWTHRDAYS * 24) break; //cannot display past hourly download limit
     Z=0;
     X = (i-1)*(tft.width()/6) + ((tft.width()/6)-30)/2; 
     uint32_t temptime = I.currentTime+i*GRAPHICS.IntervalHourlyWeatherDisplay*60*60;
-    iconID = WeatherData.getWeatherID(temptime);
-    if (iconID < 0) iconID = 999;      
+    if (!weatherDataIsFresh()) {
+      iconID = 999;
+    } else {
+      iconID = WeatherData.getWeatherID(temptime);
+      if (iconID < 0) iconID = 999;
+    }
     if (temptime > WeatherData.sunrise  && temptime< WeatherData.sunset) snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30day/%d.bmp", GRAPHICS.IconSet, iconID); //the listed sunrise is for this day, so might be in the past. If it is in the past, we are in the day if sunset is in the future, otherwise in the night.
     else     snprintf(tempbuf,49,"/Icons/Set%d/BMP30x30night/%d.bmp", GRAPHICS.IconSet, iconID);
           
@@ -2041,9 +2182,12 @@ void fcnDrawHourlyWeather(int16_t index) {
     FNTSZ=4;
     deltaY = setFont(FNTSZ);
     tft.setTextFont(FNTSZ); //med font
-    byte temp = WeatherData.getTemperature(I.currentTime + i*GRAPHICS.IntervalHourlyWeatherDisplay*3600);
-    
-    fcnPrintTxtCenter(temp,FNTSZ,X,Y+Z+deltaY/2,temp2color(temp));
+    if (!weatherDataIsFresh()) {
+      fcnPrintTxtCenter("?", FNTSZ, X, Y + Z + deltaY / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+    } else {
+      byte temp = WeatherData.getTemperature(I.currentTime + i*GRAPHICS.IntervalHourlyWeatherDisplay*3600);
+      fcnPrintTxtCenter(temp,FNTSZ,X,Y+Z+deltaY/2,tempDisplayColor(temp));
+    }
     tft.setTextColor(FG_COLOR,BG_COLOR);
     Z+=deltaY+section_spacer;
   }
@@ -2061,6 +2205,7 @@ void fcnDrawDailyWeather(int16_t index) {
 
   //clear the future weather area, it must be redrawn now
   GRAPHICS.clearScreenArea(index);  
+  cycleWeatherIconSet();
 
   byte section_spacer = 3;
   int16_t Y = GRAPHICS.SCREEN_DATA[index].Y;
@@ -2082,11 +2227,16 @@ void fcnDrawDailyWeather(int16_t index) {
   
   //now draw daily weather
   tft.setCursor(0,Y);
-  for (i=1;i<6;i++) {
+  for (i=1;i<NUMWTHRDAYS;i++) {
     int8_t tmm[2];
     Z=0;
-    X = (i-1)*(tft.width()/5) + ((tft.width()/5)-60)/2; 
-    iconID = WeatherData.getDailyWeatherID(i,true);
+    X = (i-1)*(tft.width()/(NUMWTHRDAYS-1)) + ((tft.width()/(NUMWTHRDAYS-1))-60)/2; 
+    if (!weatherDataIsFresh()) {
+      iconID = 999;
+    } else {
+      iconID = WeatherData.getDailyWeatherID(i,true);
+      if (iconID < 0) iconID = 999;
+    }
     snprintf(tempbuf,49,"/Icons/Set%d/BMP60x60day/%d.bmp", GRAPHICS.IconSet, iconID); //icon
     
     if (drawBmp(tempbuf,X,Y)==-1) {
@@ -2097,15 +2247,19 @@ void fcnDrawDailyWeather(int16_t index) {
     }
     Z+=60;
     
-    X = (i-1)*(tft.width()/5) + ((tft.width()/5))/2; 
+    X = (i-1)*(tft.width()/(NUMWTHRDAYS-1)) + ((tft.width()/(NUMWTHRDAYS-1)))/2; 
     FNTSZ=2;
     deltaY = setFont(FNTSZ);
-    snprintf(tempbuf,50,"%s",dateify(I.currentTime+i*60*60*24,"DOW"));
+    snprintf(tempbuf,50,"%s",dateify(helper_weatherDayMidnight((uint8_t)i) + 43200UL,"DOW"));
     fcnPrintTxtCenter((String) tempbuf,FNTSZ, X,Y+Z+deltaY/2);
     
     Z+=deltaY;
-    WeatherData.getDailyTemp(i,tmm);
-    fcnPrintTxtCenter((String) tmm[0] + "/" + tmm[1],FNTSZ,X,Y+Z+deltaY/2,temp2color(tmm[0]),temp2color(tmm[1])); 
+    if (!weatherDataIsFresh()) {
+      fcnPrintTxtCenter("?/?", FNTSZ, X, Y + Z + deltaY / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+    } else {
+      WeatherData.getDailyTemp(i,tmm);
+      fcnPrintTxtCenterTempPair(tmm[0], tmm[1], FNTSZ, X, Y + Z + deltaY / 2, BG_COLOR);
+    }
     tft.setTextColor(FG_COLOR,BG_COLOR);
     
     Z+=deltaY+section_spacer;
@@ -2121,7 +2275,7 @@ void fcnDrawDailyDetailIcon(int16_t index) {
 
   GRAPHICS.clearScreenArea(index);
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[index].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
   fcnDrawWeatherSprite180(GRAPHICS.SCREEN_DATA[index].X, GRAPHICS.SCREEN_DATA[index].Y, Sprite180x180, false, dayOffset);
   GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
 }
@@ -2133,7 +2287,7 @@ void fcnDrawDailyDetailText(int16_t index) {
   GRAPHICS.clearScreenArea(index);
 
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[index].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
   uint32_t dayTime = helper_weatherDayMidnight(dayOffset) + 43200UL;
 
   int16_t X = GRAPHICS.SCREEN_DATA[index].X + GRAPHICS.SCREEN_DATA[index].W / 2;
@@ -2150,22 +2304,31 @@ void fcnDrawDailyDetailText(int16_t index) {
   fcnPrintTxtCenter((String)datebuf, FNTSZ, X, Y + FH / 2);
   Y += FH + section_spacer;
 
-  int8_t tmm[2];
-  WeatherData.getDailyTemp(dayOffset, tmm);
-  if (dayOffset == 0 && isTempValid(tmm[0]) == false) tmm[0] = WeatherData.getTemperature(I.currentTime);
+  if (!weatherDataIsFresh()) {
+    fcnPrintTxtCenter("?/?", FNTSZ, X, Y + FH / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+    Y += FH + section_spacer;
+    FNTSZ = 3;
+    FH = setFont(FNTSZ);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    fcnPrintTxtCenter("?", FNTSZ, X, Y + FH / 2);
+  } else {
+    int8_t tmm[2];
+    WeatherData.getDailyTemp(dayOffset, tmm);
+    if (dayOffset == 0 && isTempValid(tmm[0]) == false) tmm[0] = WeatherData.getTemperature(I.currentTime);
 
-  fcnPrintTxtCenter((String)tmm[0] + "/" + tmm[1], FNTSZ, X, Y + FH / 2, temp2color(tmm[0]), temp2color(tmm[1]), BG_COLOR);
-  Y += FH + section_spacer;
+    fcnPrintTxtCenterTempPair(tmm[0], tmm[1], FNTSZ, X, Y + FH / 2, BG_COLOR);
+    Y += FH + section_spacer;
 
-  int16_t iconID = WeatherData.getDailyWeatherID(dayOffset, true);
-  if (iconID < 0) iconID = 999;
-  char wname[50];
-  WeatherData.nameWeatherIcon((uint16_t)iconID, wname);
+    int16_t iconID = WeatherData.getDailyWeatherID(dayOffset, true);
+    if (iconID < 0) iconID = 999;
+    char wname[50];
+    WeatherData.nameWeatherIcon((uint16_t)iconID, wname);
 
-  FNTSZ = 3;
-  FH = setFont(FNTSZ);
-  tft.setTextColor(FG_COLOR, BG_COLOR);
-  fcnPrintTxtCenter((String)wname, FNTSZ, X, Y + FH / 2);
+    FNTSZ = 3;
+    FH = setFont(FNTSZ);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    fcnPrintTxtCenter((String)wname, FNTSZ, X, Y + FH / 2);
+  }
 
   GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
 }
@@ -2177,17 +2340,22 @@ void fcnDrawDailyDetailPlots(int16_t index) {
   GRAPHICS.clearScreenArea(index);
 
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[index].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
   uint32_t midnight = helper_weatherDayMidnight(dayOffset);
 
   int8_t temps[24];
   int8_t pops[24];
   for (byte h = 0; h < 24; h++) {
     uint32_t dt = midnight + (uint32_t)h * 3600UL;
-    int8_t t = WeatherData.getTemperature(dt);
-    int8_t p = WeatherData.getPoP(dt);
-    temps[h] = (t >= 0 && t <= 100) ? t : (int8_t)-1;
-    pops[h] = (p >= 0 && p <= 100) ? p : (int8_t)-1;
+    if (!weatherDataIsFresh()) {
+      temps[h] = -1;
+      pops[h] = -1;
+    } else {
+      int8_t t = WeatherData.getTemperature(dt);
+      int8_t p = WeatherData.getPoP(dt);
+      temps[h] = (!isUnsetDisplayTemp(t) && t <= 100) ? t : (int8_t)-1;
+      pops[h] = (p >= 0 && p <= 100) ? p : (int8_t)-1;
+    }
   }
 
   int16_t plotX = GRAPHICS.SCREEN_DATA[index].X + 22;
@@ -2218,7 +2386,7 @@ void fcnDrawDailyDetailNavBar(int16_t index) {
   GRAPHICS.clearScreenArea(index);
 
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[0].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
 
   const uint16_t btnW = 64;
   const uint16_t btnH = 60;
@@ -2231,7 +2399,7 @@ void fcnDrawDailyDetailNavBar(int16_t index) {
     tft.fillRoundRect(btnW + 2, y + 2, btnW - 4, btnH - 4, 10, TFT_LIGHTGREY);
     fcnPrintTxtCenter("Prev", 2, btnW + btnW / 2, y + btnH / 2, TFT_BLACK, TFT_BLACK, TFT_LIGHTGREY);
   }
-  if (dayOffset < 5) {
+  if (dayOffset < NUMWTHRDAYS - 1) {
     tft.fillRoundRect(2 * btnW + 2, y + 2, btnW - 4, btnH - 4, 10, TFT_LIGHTGREY);
     fcnPrintTxtCenter("Next", 2, 2 * btnW + btnW / 2, y + btnH / 2, TFT_BLACK, TFT_BLACK, TFT_LIGHTGREY);
   }
@@ -2249,7 +2417,7 @@ void fcnDrawDailyDetailScreen(int16_t index) {
   }
 
   uint8_t dayOffset = (uint8_t)GRAPHICS.SCREEN_DATA[0].Local_Code;
-  if (dayOffset > 5) dayOffset = 5;
+  if (dayOffset > NUMWTHRDAYS - 1) dayOffset = NUMWTHRDAYS - 1;
 
   if (I.currentTime % 5 == 0) {
     if (I.isFlagged > 0) {
@@ -2533,18 +2701,23 @@ void fcnDrawSensorDetailsSubscreen(int16_t index) {
     tft.drawLine(tft.width()-graphwidth,graphstart,tft.width()-graphwidth,graphstart+graphheight,FG_COLOR);
 
     double oldtval = -1;
-    //draw pixels representing each [time,value]. Scale to maxv and minv to fit in 100 pixel height and 300 pixel width, and to maxt and mint to fit in 300 pixel width
+    bool isTempSensor = Sensors.isSensorOfType(sensor, "temperature");
+    //draw dots representing each [time,value], same style as daily weather plot
     for (byte k=0;k<N;k++) {
-      //ensure pixels do not overlap
-      double tval = (double)(t[k]-mint)/(maxt-mint)*(graphwidth-rightmargin); //right margin so that plotting does not hit screen edges
-      //SerialPrint(String("tval: ") + tval + " oldtval: " + oldtval + "\n");
-      if ((int) tval != (int) oldtval || k==N-1) { //draw the last pixel no matter what
-        double vscale = (v[k]-minv)/(maxv-minv)*graphheight;          
-        if (bitRead(f[k],0)==1) {
-          tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_RED);
+      double tval = (double)(t[k]-mint)/(maxt-mint)*(graphwidth-rightmargin);
+      if ((int) tval != (int) oldtval || k==N-1) {
+        double vscale = (v[k]-minv)/(maxv-minv)*graphheight;
+        int16_t px = (int16_t)(tval + (tft.width() - graphwidth));
+        int16_t py = (int16_t)(-1 * vscale + (graphstart + graphheight));
+        uint16_t dotColor;
+        if (bitRead(f[k], 0) == 1) {
+          dotColor = TFT_RED;
+        } else if (isTempSensor) {
+          dotColor = temp2color((int)v[k]);
         } else {
-          tft.drawPixel(tval+(tft.width()-graphwidth),-1*vscale+(graphstart+graphheight),TFT_GREEN);
+          dotColor = TFT_GREEN;
         }
+        tft.fillCircle(px, py, 2, dotColor);
         oldtval = tval;
       }
     }
@@ -2661,7 +2834,8 @@ void fcnDrawStatusScreen(int16_t index) {
   //subscreen 100 = delete core
   //subscreen 106 = reboot
   //subscreen 111 = weather update
-  //subscreen 3 = 
+  //subscreen 112 = confirm reset WiFi credentials
+  //subscreen 113 = execute reset WiFi credentials
 
   if (GRAPHICS.SubScreen_Next != GRAPHICS.SubScreen_Now || GRAPHICS.SCREEN_DATA[1].drawFunction == nullptr) {
 
@@ -2682,6 +2856,8 @@ void fcnDrawStatusScreen(int16_t index) {
     else if (GRAPHICS.SubScreen_Next == 100) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawStatusDelCore, 0,0,320,360, SCREEN_NONE, 0, 0, 30, 1, nullptr);
     else if (GRAPHICS.SubScreen_Next == 106) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawStatusReboot, 0,0,320,360, SCREEN_NONE, 0, 0, 30, 1, nullptr); 
     else if (GRAPHICS.SubScreen_Next == 111) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawStatusWeatherUpdate, 0,0,320,360, SCREEN_MAIN, 0, 0, 30, 1, &fcnSwitchScreen);
+    else if (GRAPHICS.SubScreen_Next == 112) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawStatusResetWiFiConfirm, 0,0,320,360, SCREEN_NONE, 0, 0, 30, 1, nullptr);
+    else if (GRAPHICS.SubScreen_Next == 113) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawStatusResetWiFi, 0,0,320,360, SCREEN_NONE, 0, 0, 30, 1, nullptr);
 
     //run the new subscreen
     GRAPHICS.SCREEN_DATA[1].drawFunction(1);
@@ -2762,6 +2938,42 @@ void fcnDrawStatusReboot(int16_t index) {
   return;
 }
 
+void fcnDrawStatusResetWiFiConfirm(int16_t index) {
+  int16_t timernum = helper_runScreenElementFunction(index, false);
+  if (timernum < 0) return;
+
+  GRAPHICS.clearScreenArea(0);
+
+  tft.setTextFont(2);
+  tft.setTextColor(FG_COLOR, BG_COLOR);
+  tft.setCursor(0, 0);
+  tft.println("Are you sure?");
+  tft.println("This will delete stored");
+  tft.println("WiFi credentials.");
+  tft.println("The device will reboot.");
+
+  GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0, 419, 64, 60, SCREEN_NONE, 113, 0, 30, 2, &fcnSwitchSubScreen);
+  GRAPHICS.SCREEN_DATA[2].drawFunction(2);
+
+  GRAPHICS.GRAPHICS_TIMERS.Timers[0] = 10;
+}
+
+void fcnDrawStatusResetWiFi(int16_t index) {
+  int16_t timernum = helper_runScreenElementFunction(index, false);
+  if (timernum < 0) return;
+
+  WiFi.disconnect(false);
+  memset(Prefs.WIFISSID, 0, sizeof(Prefs.WIFISSID));
+  memset(Prefs.WIFIPWD, 0, sizeof(Prefs.WIFIPWD));
+  Prefs.HAVECREDENTIALS = false;
+  Prefs.isUpToDate = false;
+
+  BootSecure bootSecure;
+  bootSecure.setPrefs();
+
+  controlledReboot("WIFI CREDENTIALS RESET", RESET_NEWWIFI, true);
+}
+
 
 void fcnDrawStatusText(int16_t index) {
   int16_t timernum = helper_runScreenElementFunction(index, false); 
@@ -2777,16 +2989,18 @@ void fcnDrawStatusText(int16_t index) {
   GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0,419,64,60, SCREEN_MAIN, 0, 0, 30, 2, &fcnSwitchScreen); 
   GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawNavButtons, 64,419,64,60, SCREEN_NONE, 108, 0, 30, 3, &fcnSwitchSubScreen); 
   GRAPHICS.SCREEN_DATA[4].loadScreenElements(&fcnDrawNavButtons, 128,419,64,60, SCREEN_NONE, 106, 0, 30, 4, &fcnSwitchSubScreen); 
-  GRAPHICS.SCREEN_DATA[5].loadScreenElements(&fcnDrawNavButtons, 192,419,64,60, SCREEN_NONE, 111, 0, 30, 5, &fcnSwitchSubScreen); 
+  GRAPHICS.SCREEN_DATA[5].loadScreenElements(&fcnDrawNavButtons, 192,419,64,60, SCREEN_NONE, 111, 0, 30, 5, &fcnSwitchSubScreen);
+  GRAPHICS.SCREEN_DATA[6].loadScreenElements(&fcnDrawNavButtons, 256,419,64,60, SCREEN_NONE, 112, 0, 30, 6, &fcnSwitchSubScreen);
 
   //run the new screen elements
   GRAPHICS.SCREEN_DATA[4].drawFunction(4);
   GRAPHICS.SCREEN_DATA[2].drawFunction(2);
   GRAPHICS.SCREEN_DATA[3].drawFunction(3);
   GRAPHICS.SCREEN_DATA[5].drawFunction(5);
+  GRAPHICS.SCREEN_DATA[6].drawFunction(6);
 
-  #if defined(_USENETWORKMONITOR) && !defined(_ISPERIPHERAL)
-  NetworkMonitor.update();
+  #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
+  // Network monitor tests run on demand via sensors; no periodic update here.
   #endif
 
 
@@ -2796,7 +3010,13 @@ void fcnDrawStatusText(int16_t index) {
   tft.setTextDatum(TL_DATUM);  
   tft.setTextFont(2);
   tft.printf("%s\n",WiFi.localIP().toString().c_str());
-  tft.printf("OS Version: %s\n",PROJECT_VER);
+  {
+    FirmwareVersion fw;
+    getLocalFirmware(fw);
+    char verBuf[16];
+    fw.toChar(verBuf, sizeof(verBuf));
+    tft.printf("OS Version: %s\n", verBuf);
+  }
   tft.setTextFont(1);
   tft.printf("-----------------------\n");
   tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
@@ -2827,13 +3047,49 @@ void fcnDrawStatusText(int16_t index) {
   //print network monitor data
   tft.printf("-----------------------\n");
   tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
-  
-#if defined(_USENETWORKMONITOR) && !defined(_ISPERIPHERAL)
-  int16_t rssi = NetworkMonitor.NetworkTestValue[1];
-  if (rssi <= -999) tft.printf("RSSI: n/a\n");
-  else tft.printf("RSSI: %d dBm\n", rssi);
-  tft.printf("DNS Resolution Time: %d ms\n", NetworkMonitor.NetworkTestValue[4]);
-  tft.printf("Gateway Latency: %d ms\n", NetworkMonitor.NetworkTestValue[6]);
+  {
+    int16_t rssi = I.RSSIcurrent;
+    uint16_t rssiColor = FG_COLOR;
+    if (rssi > -60) rssiColor = TFT_GREEN;
+    else if (rssi > -70) rssiColor = TFT_YELLOW;
+    else if (rssi > -999) rssiColor = TFT_RED;
+    tft.setTextColor(rssiColor, BG_COLOR);
+    if (rssi <= -999) tft.printf("RSSI: n/a\n");
+    else tft.printf("RSSI: %d dBm (low %d, high %d)\n", rssi, I.RSSIlow, I.RSSIhigh);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+  }
+
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
+  tft.printf("DNS Resolution Time: %d ms\n", NetworkMonitor.dns.resolutionMs);
+  tft.printf("Gateway Ping: %d ms, %d/%d lost, jitter %d ms\n",
+      NetworkMonitor.gatewayLatency.ping.avgRttMs,
+      NetworkMonitor.gatewayLatency.ping.packetsLost,
+      NetworkMonitor.gatewayLatency.ping.packetsSent,
+      NetworkMonitor.gatewayLatency.ping.jitterMs);
+  tft.printf("External Ping: %d ms, %d/%d lost, jitter %d ms (WAN)\n",
+      NetworkMonitor.externalPing.wan.avgRttMs,
+      NetworkMonitor.externalPing.wan.packetsLost,
+      NetworkMonitor.externalPing.wan.packetsSent,
+      NetworkMonitor.externalPing.wan.jitterMs);
+  if (NetworkMonitor.externalPing.gatewayChecked) {
+    tft.printf("Gateway Ping: %d ms, %d/%d lost (LAN)\n",
+        NetworkMonitor.externalPing.gateway.avgRttMs,
+        NetworkMonitor.externalPing.gateway.packetsLost,
+        NetworkMonitor.externalPing.gateway.packetsSent);
+  }
+  {
+    double speedMbps = -1;
+    NetworkMonitor.readSensorValue(89, speedMbps);
+    if (speedMbps < 0) {
+      tft.printf("CF Download: failed\n");
+    } else {
+      tft.printf("CF Download: %.2f Mbps (%lu ms, %lu bytes from %s)\n",
+          speedMbps,
+          (unsigned long)NetworkMonitor.download.durationMs,
+          (unsigned long)NetworkMonitor.download.downloadBytes,
+          NetworkMonitor.download.sourceIP.toString().c_str());
+    }
+  }
 #endif
 
   tft.printf("-----------------------\n");
@@ -2853,11 +3109,13 @@ void fcnDrawStatusText(int16_t index) {
   }
 
   tft.printf("-----------------------\n");
+  #ifdef _MONITOROUTDOORBATTERYSENSORS
   tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
+  #endif
   tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
-  tft.printf("Current Outside Temp: %d\n",I.currentOutsideTemp);
+  tft.printf("Current Outside Temp: %s\n", formatDisplayTemp(I.currentOutsideTemp).c_str());
   tft.printf("Current Outside Humidity: %d\n",I.currentOutsideHumidity);
-  tft.printf("Current Outside Pressure: %d\n",I.currentOutsidePressure);
+  tft.printf("Current Outside Pressure: %s hPa\n", formatDisplayPressure(I.currentOutsidePressure).c_str());
 
   return;
 }

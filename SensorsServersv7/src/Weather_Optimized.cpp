@@ -6,6 +6,66 @@
 #include "timesetup.hpp"
 #include "server.hpp"
 
+namespace {
+
+void buildHourlyJsonFilter(JsonDocument& filterDoc) {
+    JsonObject period = filterDoc["properties"]["periods"][0].to<JsonObject>();
+    period["startTime"] = true;
+    period["temperature"] = true;
+    period["temperatureUnit"] = true;
+    period["probabilityOfPrecipitation"]["value"] = true;
+    period["dewpoint"]["value"] = true;
+    period["relativeHumidity"]["value"] = true;
+    period["windSpeed"] = true;
+    period["icon"] = true;
+}
+
+void buildDailyJsonFilter(JsonDocument& filterDoc) {
+    JsonObject period = filterDoc["properties"]["periods"][0].to<JsonObject>();
+    period["startTime"] = true;
+    period["endTime"] = true;
+    period["icon"] = true;
+    period["isDaytime"] = true;
+    period["temperature"] = true;
+    period["temperatureUnit"] = true;
+    period["probabilityOfPrecipitation"]["value"] = true;
+    period["number"] = true;
+    period["detailedForecast"] = true;
+}
+
+void buildGridJsonFilter(JsonDocument& filterDoc) {
+    JsonObject wbgt = filterDoc["properties"]["wetBulbGlobeTemperature"]["values"][0].to<JsonObject>();
+    wbgt["validTime"] = true;
+    wbgt["value"] = true;
+    JsonObject rain = filterDoc["properties"]["quantitativePrecipitation"]["values"][0].to<JsonObject>();
+    rain["validTime"] = true;
+    rain["value"] = true;
+    JsonObject ice = filterDoc["properties"]["iceAccumulation"]["values"][0].to<JsonObject>();
+    ice["validTime"] = true;
+    ice["value"] = true;
+    JsonObject snow = filterDoc["properties"]["snowfallAmount"]["values"][0].to<JsonObject>();
+    snow["validTime"] = true;
+    snow["value"] = true;
+}
+
+void weatherSetupStepBegin(const char* label, bool setupProgress) {
+    if (!setupProgress) return;
+    SerialPrint((String("Weather setup: ") + label + "...").c_str(), true);
+    #ifdef _USETFT
+    tftPrint(String(label) + "... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+    #endif
+}
+
+void weatherSetupStepEnd(bool ok, bool setupProgress) {
+    if (!setupProgress) return;
+    SerialPrint(ok ? "Weather setup: OK." : "Weather setup: FAIL.", true);
+    #ifdef _USETFT
+    tftPrint(ok ? "OK." : "FAIL.", true, ok ? TFT_GREEN : TFT_RED);
+    #endif
+}
+
+} // namespace
+
 
 
 
@@ -39,6 +99,85 @@ TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
     return ti;
 }
 
+uint32_t WeatherInfoOptimized::localMidnightToday() {
+    time_t localNow = I.currentTime;
+    return unixToLocal(makeUnixTime((byte)(year(localNow) - 2000), month(localNow), day(localNow), 0, 0, 0, false));
+}
+
+int32_t WeatherInfoOptimized::nwsDayOffsetFromMidnight(time_t t) {
+    uint32_t midnightToday = localMidnightToday();
+    int32_t dayOffset = (int32_t)((t - 21600 - midnightToday) / 86400);
+    if (dayOffset < 0) dayOffset = 0;
+    return dayOffset;
+}
+
+time_t WeatherInfoOptimized::floorToHour(time_t t) {
+    return (time_t)((uint32_t)t - ((uint32_t)t % 3600UL));
+}
+
+int16_t WeatherInfoOptimized::hourSlot(time_t targetTime) const {
+    if (!isHourlyValid()) return -1;
+    if (targetTime < (time_t)hourBase) return -1;
+    int32_t i = (int32_t)((targetTime - (time_t)hourBase) / 3600);
+    if (i >= 0 && i < NUM_HOURLY) return (int16_t)i;
+    return -1;
+}
+
+time_t WeatherInfoOptimized::hourTime(int16_t slot) const {
+    if (!isHourlyValid() || slot < 0 || slot >= NUM_HOURLY) return 0;
+    return (time_t)hourBase + (time_t)slot * 3600;
+}
+
+void WeatherInfoOptimized::ensureHourBaseFromTimestamp(time_t t) {
+    if (t == 0) return;
+    time_t h = floorToHour(t);
+
+    if (!isHourlyValid()) {
+        hourBase = (uint32_t)h;
+        return;
+    }
+
+    // Re-anchor when hourly failed but SD left an old hourBase with no live slots
+    bool anyHourly = false;
+    for (uint16_t i = 0; i < NUM_HOURLY; i++) {
+        if (hourly[i].isValid()) {
+            anyHourly = true;
+            break;
+        }
+    }
+    if (!anyHourly) {
+        time_t windowEnd = (time_t)hourBase + (time_t)NUM_HOURLY * 3600;
+        if (h < (time_t)hourBase || h >= windowEnd) {
+            hourBase = (uint32_t)h;
+        }
+    }
+}
+
+void WeatherInfoOptimized::setupPeriodAnchor(time_t firstPeriodStart, bool firstIsDaytime) {
+    periodBaseIsDaytime = true;
+    periodAnchorDayOffset = nwsDayOffsetFromMidnight(firstPeriodStart);
+    if (firstIsDaytime) {
+        periodBaseStart = (uint32_t)firstPeriodStart;
+        firstFilledPeriod = 0;
+    } else {
+        periodBaseStart = localMidnightToday() + (uint32_t)periodAnchorDayOffset * 86400UL;
+        firstFilledPeriod = 1;
+    }
+}
+
+int16_t WeatherInfoOptimized::periodSlotForDayDiff(int32_t dayDiff, bool wantDaytime) const {
+    if (periodBaseStart == 0) return -1;
+    int16_t slot = (int16_t)(2 * dayDiff + (wantDaytime ? 0 : 1));
+    if (slot < 0 || slot >= NUM_PERIODS) return -1;
+    return slot;
+}
+
+int16_t WeatherInfoOptimized::getPeriodSlotForDaysFromToday(uint8_t daysfromnow, bool wantDaytime) const {
+    int32_t todayDayOffset = nwsDayOffsetFromMidnight(I.currentTime);
+    int32_t dayDiff = (todayDayOffset + (int32_t)daysfromnow) - periodAnchorDayOffset;
+    return periodSlotForDayDiff(dayDiff, wantDaytime);
+}
+
 
 
 // Constructor
@@ -64,66 +203,111 @@ WeatherInfoOptimized::WeatherInfoOptimized() {
 }
 
 // Optimized updateWeather method
-byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime) {
+byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupProgress) {
     //returns 3 if data is still fresh, 2 if too soon to retry, 1 if update was needed and successful, 0 if update failed
 
     // Check if update is needed
     if (this->lastUpdateT>0 && this->lastUpdateT + synctime > I.currentTime) {
+        if (setupProgress) {
+            SerialPrint("Weather setup: data still fresh, skipping NOAA fetch.", true);
+            #ifdef _USETFT
+            tftPrint("Weather data still fresh.", true, TFT_GREEN);
+            #endif
+        }
         return 3; // Data is still fresh
     }
     
     // Check retry logic
     if ((uint32_t) this->lastUpdateAttempt>0 && this->lastUpdateAttempt + 600 > I.currentTime) {
+        if (setupProgress) {
+            SerialPrint("Weather setup: too soon to retry NOAA fetch.", true);
+            #ifdef _USETFT
+            tftPrint("Weather retry cooldown.", true, TFT_YELLOW);
+            #endif
+        }
         return 2; // Too soon to retry
     }
 
     this->lastUpdateAttempt = I.currentTime;
+
+    if (!wifiReadyForNetwork()) {
+        SerialPrint("Weather update: WiFi not available", true);
+        return 0;
+    }
     
     SerialPrint("Weather update optimized starting...",true);
+    esp_task_wdt_reset();
 
-    // Try to load from cache first
-    if (loadFromCache()) {
-        SerialPrint("Grid data loaded from cache",true);
-    }        else {
-        fetchGridCoordinates();
+    weatherSetupStepBegin("Grid coords", setupProgress);
+    bool gridCoordsOk = loadFromCache() || fetchGridCoordinates();
+    if (gridCoordsOk) {
+        SerialPrint("Grid coordinates ready", true);
+    }
+    weatherSetupStepEnd(gridCoordsOk, setupProgress);
+    esp_task_wdt_reset();
+
+    uint32_t start_time = millis();
+
+    // Each fetch clears only its own domain inside the processor (on new data).
+    // Failed fetches leave other domains (e.g. SD-loaded daily) intact.
+    weatherSetupStepBegin("Hourly forecast", setupProgress);
+    bool hourlyOk = fetchHourlyForecast();
+    weatherSetupStepEnd(hourlyOk, setupProgress);
+    esp_task_wdt_reset();
+
+    weatherSetupStepBegin("Grid forecast", setupProgress);
+    bool gridOk = fetchGridForecast();
+    weatherSetupStepEnd(gridOk, setupProgress);
+    esp_task_wdt_reset();
+
+    weatherSetupStepBegin("Daily forecast", setupProgress);
+    bool dailyOk = fetchDailyForecast();
+    weatherSetupStepEnd(dailyOk, setupProgress);
+    esp_task_wdt_reset();
+
+    weatherSetupStepBegin("Weather alerts", setupProgress);
+    bool alertsOk = fetchWeatherAlerts();
+    weatherSetupStepEnd(alertsOk, setupProgress);
+    esp_task_wdt_reset();
+
+    weatherSetupStepBegin("Sunrise/sunset", setupProgress);
+    bool sunOk = fetchSunriseSunset();
+    weatherSetupStepEnd(sunOk, setupProgress);
+    esp_task_wdt_reset();
+
+    bool forecastUpdated = hourlyOk || gridOk || dailyOk;
+    bool fullSuccess = hourlyOk && gridOk && dailyOk && alertsOk && sunOk;
+
+    SerialPrint(("Weather fetch results: hourly=" + String(hourlyOk) + " grid=" + String(gridOk) +
+        " daily=" + String(dailyOk) + " alerts=" + String(alertsOk) + " sun=" + String(sunOk)).c_str(), true);
+
+    if (forecastUpdated) {
+        #ifdef _USESDCARD
+        storeWeatherDataSD();
+        #endif
     }
 
-
-    // Initialize fresh data
-    initWeather();
-    
-    uint32_t start_time = millis();
-    bool success = false;
-
-
-        // Sequential requests 
-        success = fetchHourlyForecast() &&
-                  fetchGridForecast() &&
-                  fetchDailyForecast() &&
-                  fetchWeatherAlerts() &&
-                  fetchSunriseSunset();
-    
-    if (success) {
+    if (fullSuccess) {
         this->lastUpdateT = I.currentTime;
+        this->fetchedAt = I.currentTime;
 
         saveToCache();
-        
-        // Update performance stats
+
         uint32_t response_time = millis() - start_time;
         average_response_time = (average_response_time + response_time) / 2;
         total_api_calls++;
 
-        #ifdef _USESDCARD
-        storeWeatherDataSD(); //store weather data to SD card
-        #endif
-
         SerialPrint(("Weather update completed in " + String(response_time) + " ms").c_str(),true);
     } else {
         failed_api_calls++;
-        SerialPrint("Weather update failed for the " + (String) failed_api_calls + "th time",true);
+        if (forecastUpdated) {
+            SerialPrint("Weather update partially succeeded (some fetches failed)", true);
+        } else {
+            SerialPrint("Weather update failed for the " + (String) failed_api_calls + "th time", true);
+        }
     }
 
-    return success?1:0; //1 if successful, 0 if failed, 2 if too soon to retry
+    return fullSuccess ? 1 : 0;
 }
 
 
@@ -139,7 +323,7 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
     M.setMethod("GET");
     M.setContentType("application/json");
     M.setExtraHeaders("User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n");    
-    M.timeout = 15000; // 15 second timeout for geocoding
+    M.timeout = WEATHER_HTTP_TIMEOUT_SHORT_MS;
     M.usePSRAM = true;
     M.responseDoc = &doc;
 
@@ -173,45 +357,45 @@ bool WeatherInfoOptimized::fetchGridCoordinates() {
 
 // Optimized data processing methods
 bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
+    initHourlyForecastData();
+
     JsonArray periodsArray = properties["periods"].as<JsonArray>();
-    uint32_t midnightToday = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0,false)); //midnight local time, default behavior is to return local time
     uint8_t processedCount = 0;
-        
-    for (JsonObject period : periodsArray) {        
+    bool hourBaseSet = false;
+
+    for (JsonObject period : periodsArray) {
         String tmp = period["startTime"].as<const char*>();
         TimeInterval ti = parseNOAAInterval(tmp);
-        
 
-        int16_t i = getIndex(ti.start);
+        time_t periodHour = floorToHour(ti.start);
+        if (!hourBaseSet) {
+            hourBase = (uint32_t)periodHour;
+            hourBaseSet = true;
+        }
+
+        int16_t i = hourSlot(periodHour);
         if (i < 0) continue;
-        
-        this->dT[i] = ti.start;
-        
-        // Temperature processing
+
         double temp = (double)period["temperature"];
         const char* tu = period["temperatureUnit"];
         if (tu && strcmp(tu, "C") == 0) {
             temp = (temp * 9.0 / 5.0) + 32.0;
         }
-        this->temperature[i] = (int8_t)temp;
-        
-        // Other fields using the same anchored index
-        this->PoP[i] = (uint8_t)period["probabilityOfPrecipitation"]["value"];
-        this->dewPoint[i] = (int8_t)period["dewpoint"]["value"];
-        this->humidity[i] = (uint8_t)period["relativeHumidity"]["value"];
-        
-        // Wind speed parsing
+        hourly[i].temperature = (int8_t)temp;
+        hourly[i].PoP = (int8_t)period["probabilityOfPrecipitation"]["value"];
+        hourly[i].dewPoint = (int8_t)period["dewpoint"]["value"];
+        hourly[i].humidity = (int8_t)period["relativeHumidity"]["value"];
+
         const char* ws = period["windSpeed"].as<const char*>();
         String wind_str = String(ws);
         int mph_index = wind_str.indexOf(" mph");
         if (mph_index > 0) {
-            this->windspeed[i] = (int16_t)wind_str.substring(0, mph_index).toInt();
+            hourly[i].windSpeed = (int16_t)wind_str.substring(0, mph_index).toInt();
         }
-        
-        // Icon / Weather ID
+
         const char* icon = period["icon"].as<const char*>();
-        this->weatherID[i] = breakIconLink(String(icon), ti);
-        
+        hourly[i].weatherID = breakIconLink(String(icon), ti);
+
         processedCount++;
     }
 
@@ -224,74 +408,124 @@ bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
 
 
 bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
-    // Process wet bulb temperature
+    bool hasWbgtField = properties["wetBulbGlobeTemperature"]["values"].is<JsonArray>();
+    bool hasRainField = properties["quantitativePrecipitation"]["values"].is<JsonArray>();
+    bool hasIceField = properties["iceAccumulation"]["values"].is<JsonArray>();
+    bool hasSnowField = properties["snowfallAmount"]["values"].is<JsonArray>();
 
-
-    JsonArray values = properties["wetBulbGlobeTemperature"]["values"].as<JsonArray>();
-    uint16_t cnt = 0;
-    for (JsonObject value : values) {
-        if (cnt >= NUMWTHRDAYS * 24) break;
-        
-        String tmp = value["validTime"];
-        TimeInterval ti = parseNOAAInterval(tmp);
-        int16_t i = getIndex(ti.start);
-        if (i < 0) continue;
-        
-        while (cnt <= i && cnt < NUMWTHRDAYS * 24) {
-            double tempC = (double)value["value"];
-            this->wetBulbTemperature[cnt] = (int8_t)((tempC * 9.0 / 5.0) + 32.0);
-            cnt++;
-        }
-    }
-    
-    if (cnt==0) {
-        storeError("Could not parse Grid JSON",ERROR_JSON_GRID,true);
+    if (!hasWbgtField && !hasRainField && !hasIceField && !hasSnowField) {
+        storeError("Grid JSON missing expected fields", ERROR_JSON_GRID, true);
         this->lastUpdateError = I.currentTime;
-        // Precipitation flags are updated only inside processPrecipitationData — clear them
-        // so a failed/partial grid response does not leave stale rain/snow/ice indicators.
-        this->flag_rain = false;
-        this->flag_ice = false;
-        this->flag_snow = false;
         return false;
     }
 
-    // Process precipitation data with optimized loops
-    processPrecipitationData(properties, "quantitativePrecipitation", this->rainmm, this->flag_rain);
-    processPrecipitationData(properties, "iceAccumulation", this->icemm, this->flag_ice);
-    processPrecipitationData(properties, "snowfallAmount", this->snowmm, this->flag_snow);
-    return true;
+    for (uint16_t i = 0; i < NUM_HOURLY; i++) {
+        hourly[i].wetBulb = WEATHER_INVALID_TEMP;
+    }
+    flag_rain = false;
+    flag_ice = false;
+    flag_snow = false;
+
+    uint16_t wetBulbCount = 0;
+
+    if (hasWbgtField) {
+        JsonArray values = properties["wetBulbGlobeTemperature"]["values"].as<JsonArray>();
+        for (JsonObject value : values) {
+            if (value["validTime"].isNull() || value["value"].isNull()) continue;
+
+            TimeInterval ti = parseNOAAInterval(value["validTime"].as<const char*>());
+            if (ti.start == 0) continue;
+
+            ensureHourBaseFromTimestamp(ti.start);
+
+            int hoursInInterval = ti.duration / 3600;
+            if (hoursInInterval < 1) hoursInInterval = 1;
+
+            double tempC = (double)value["value"];
+            int8_t tempF = (int8_t)((tempC * 9.0 / 5.0) + 32.0);
+
+            for (int h = 0; h < hoursInInterval; h++) {
+                time_t slotTime = floorToHour(ti.start + (h * 3600));
+                int16_t idx = hourSlot(slotTime);
+                if (idx >= 0 && idx < NUM_HOURLY) {
+                    hourly[idx].wetBulb = tempF;
+                    wetBulbCount++;
+                }
+            }
+        }
+    }
+
+    uint16_t precipSlots = 0;
+    if (hasRainField) {
+        processPrecipitationData(properties, "quantitativePrecipitation", PrecipField::Rain, this->flag_rain);
+        precipSlots += flag_rain ? 1 : 0;
+    }
+    if (hasIceField) {
+        processPrecipitationData(properties, "iceAccumulation", PrecipField::Ice, this->flag_ice);
+        precipSlots += flag_ice ? 1 : 0;
+    }
+    if (hasSnowField) {
+        processPrecipitationData(properties, "snowfallAmount", PrecipField::Snow, this->flag_snow);
+        precipSlots += flag_snow ? 1 : 0;
+    }
+
+    if (wetBulbCount > 0 || precipSlots > 0) {
+        return true;
+    }
+
+    // NOAA often omits WBGT values; accept a parsed grid response with no active precip.
+    if (hasRainField || hasIceField || hasSnowField) {
+        SerialPrint("processGridData: no mapped grid slots (WBGT/precip empty for window)", true);
+        return true;
+    }
+
+    storeError("Could not parse Grid JSON", ERROR_JSON_GRID, true);
+    this->lastUpdateError = I.currentTime;
+    return false;
 }
 
-void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, const char* field_name, int16_t* data_array, bool& flag) {
-    // Reset the 168-hour array (7 days * 24 hours)
-    memset(data_array, 0, NUMWTHRDAYS * 24);
+void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, const char* field_name,
+                                                    PrecipField field, bool& flag) {
+    if (field == PrecipField::Rain) {
+        for (uint16_t i = 0; i < NUM_HOURLY; i++) hourly[i].rainMm = 0;
+    } else if (field == PrecipField::Ice) {
+        for (uint16_t i = 0; i < NUM_HOURLY; i++) hourly[i].iceMm = 0;
+    } else {
+        for (uint16_t i = 0; i < NUM_HOURLY; i++) hourly[i].snowMm = 0;
+    }
     flag = false;
 
     JsonArray values = properties[field_name]["values"].as<JsonArray>();
 
     for (JsonObject value : values) {
+        if (value["validTime"].isNull() || value["value"].isNull()) continue;
+
         TimeInterval ti = parseNOAAInterval(value["validTime"].as<String>());
         if (ti.start == 0) continue;
 
-        float totalValue = value["value"]; // Total mm for the whole duration
+        float totalValue = value["value"];
         if (totalValue <= 0) continue;
 
-        // Calculate how many hours this record covers
+        ensureHourBaseFromTimestamp(ti.start);
+
         int hoursInInterval = ti.duration / 3600;
         if (hoursInInterval < 1) hoursInInterval = 1;
 
-        // Hourly rate (mm per hour)
         float hourlyRate = totalValue / (float)hoursInInterval;
 
-        // Populate each hour in the cache
         for (int h = 0; h < hoursInInterval; h++) {
-            time_t currentHour = ti.start + (h * 3600);
-            int16_t idx = getIndex(currentHour);
-            
-            if (idx >= 0 && idx < NUMWTHRDAYS * 24) {
-                // If NWS sends overlapping intervals, we take the max rate 
-                // or you could add them, but assignment is safer for grid data.
-                data_array[idx] = (int16_t)hourlyRate;
+            time_t currentHour = floorToHour(ti.start + (h * 3600));
+            int16_t idx = hourSlot(currentHour);
+
+            if (idx >= 0 && idx < NUM_HOURLY) {
+                int16_t rate = (int16_t)hourlyRate;
+                if (field == PrecipField::Rain) {
+                    hourly[idx].rainMm = rate;
+                } else if (field == PrecipField::Ice) {
+                    hourly[idx].iceMm = rate;
+                } else {
+                    hourly[idx].snowMm = rate;
+                }
                 flag = true;
             }
         }
@@ -300,21 +534,16 @@ void WeatherInfoOptimized::processPrecipitationData(JsonObject& properties, cons
 
 
 bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
-    // Reset arrays to your invalid temperature constant
-    memset(this->daily_tempMax, -120, sizeof(this->daily_tempMax));
-    memset(this->daily_tempMin, -120, sizeof(this->daily_tempMin));
+    initDailyPeriodData();
 
     JsonArray periodsArray = properties["periods"].as<JsonArray>();
-    
-    // Get current day start (Midnight)
-    uint32_t midnightToday = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0,false)); //this is local time unless asLocalTime is false
+    bool anchorSet = false;
 
     for (JsonObject period : periodsArray) {
         TimeInterval ti = parseNOAAInterval(period["startTime"].as<const char*>());
         TimeInterval ti_end = parseNOAAInterval(period["endTime"].as<const char*>());
-        // FIX: Subtract 6 hours (21600s) before calculating dayOffset.
-        // This ensures "Saturday Night" (starts 6pm) groups with "Saturday Day".
         const char* icon = period["icon"];
+        bool periodIsDaytime = period["isDaytime"].as<bool>();
         double temp = (double)period["temperature"];
         const char* tu = period["temperatureUnit"];
         if (tu && strcmp(tu, "C") == 0) {
@@ -322,15 +551,12 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
         }
 
         uint8_t currentPeriodNumber = (uint8_t)period["number"];
-        
-        //initialize the tomorrowPeriodNumber and isDaytime variables
-        if (currentPeriodNumber == 1) {
-            this->isDaytime = period["isDaytime"].as<bool>();
-            if (period["isDaytime"]) this->tomorrowPeriodNumber = 3;
-            else this->tomorrowPeriodNumber = 2;
-        } 
 
-        //save the daily forecast to a file for this day
+        if (!anchorSet && currentPeriodNumber == 1) {
+            setupPeriodAnchor(ti.start, periodIsDaytime);
+            anchorSet = true;
+        }
+
         dailyWeatherForecast dWF;
         dWF.initDailyWeatherForecast();
         dWF.dT_start = ti.start;
@@ -338,10 +564,9 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
         dWF.tempF = (int8_t)temp;
         dWF.weatherID = breakIconLink(String(icon), ti);
         dWF.PoP = (uint8_t)period["probabilityOfPrecipitation"]["value"];
-        dWF.isDaytime = period["isDaytime"];
+        dWF.isDaytime = periodIsDaytime;
         strncpy(dWF.details, period["detailedForecast"].as<const char*>(), sizeof(dWF.details));
 
-        //store this daily forecast to a file for this day, relative to now
         char filename[35];
         snprintf(filename, 34, "/Data/DailyWthr/%d.bin", currentPeriodNumber);
         if (!writeAnythingToSD(filename, &dWF, sizeof(dailyWeatherForecast))) {
@@ -349,34 +574,20 @@ bool WeatherInfoOptimized::processDailyData(JsonObject& properties) {
             return false;
         }
 
-        int dayOffset = (ti.start - 21600 - midnightToday) / 86400;
-        
-        // Safety: If it's early morning and we subtracted 6 hours, 
-        // dayOffset might be -1. Clamp it to 0.
-        if (dayOffset < 0) dayOffset = 0;
-        if (dayOffset >= 14) continue;
+        if (!anchorSet) continue;
 
+        int32_t dayOffset = nwsDayOffsetFromMidnight(ti.start);
+        int16_t slot = (int16_t)(2 * dayOffset + (periodIsDaytime ? 0 : 1));
+        if (slot < 0 || slot >= NUM_PERIODS) continue;
 
-        if (period["isDaytime"]) {
-            // It's a High temp for that day
-            this->daily_tempMax[dayOffset] = dWF.tempF;
-            
-            // Daytime data is usually the primary for the daily summary
-            this->daily_PoP[dayOffset] = dWF.PoP;
-            this->daily_weatherID[dayOffset] = dWF.weatherID;
-        } else {
-            // It's a Low temp for that day
-            this->daily_tempMin[dayOffset] = dWF.tempF;
-            
-            // If Max is still -120, it means it's already evening and "Today's" High 
-            // wasn't sent. Use Night's PoP/Icon as the fallback representative.
-            if (this->daily_tempMax[dayOffset] == -120) { 
-                this->daily_PoP[dayOffset] = dWF.PoP;
-                this->daily_weatherID[dayOffset] = dWF.weatherID;
-            }
-        }
+        periods[slot].start = ti.start;
+        periods[slot].end = ti_end.start;
+        periods[slot].temp = dWF.tempF;
+        periods[slot].weatherID = dWF.weatherID;
+        periods[slot].PoP = dWF.PoP;
+        periods[slot].isDaytime = periodIsDaytime;
     }
-    return true;
+    return anchorSet;
 }
 
 // Caching methods
@@ -426,13 +637,17 @@ bool WeatherInfoOptimized::handleApiError(const String& operation, int httpCode)
 
 bool WeatherInfoOptimized::retryWithBackoff(const String& operation, std::function<bool()> request_func) {
     for (int attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+        esp_task_wdt_reset();
         if (request_func()) {
             return true;
         }
         
         if (attempt < MAX_RETRY_ATTEMPTS - 1) {
-            uint32_t delay_ms = (3 * attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
-            delay(delay_ms);
+            uint32_t delay_ms = (3 * attempt) * 1000; // Exponential backoff: 0s, 3s, 6s
+            for (uint32_t waited = 0; waited < delay_ms; waited += 500) {
+                delay(500);
+                esp_task_wdt_reset();
+            }
         }
     }
     
@@ -468,33 +683,22 @@ size_t WeatherInfoOptimized::getMemoryUsage() {
 bool WeatherInfoOptimized::fetchHourlyForecast() {
     return retryWithBackoff("hourly forecast", [this]() {
 
+        JsonDocument filterDoc;
+        buildHourlyJsonFilter(filterDoc);
         JsonDocument doc;
 
-        int16_t httpCode;
         String url = getGrid(2);
-
-        bool b1=false;
-        String extraHeaders = "User-Agent:(ArborysWeatherProject, contact@yourdomain.com)\n";
-
-        JsonDocument filter;
-        filter["properties"]["periods"][0]["startTime"] = true;
-        filter["properties"]["periods"][0]["temperature"] = true;
-        filter["properties"]["periods"][0]["temperatureUnit"] = true;
-        filter["properties"]["periods"][0]["probabilityOfPrecipitation"]["value"] = true;
-        filter["properties"]["periods"][0]["dewpoint"]["value"] = true;
-        filter["properties"]["periods"][0]["relativeHumidity"]["value"] = true;
-        filter["properties"]["periods"][0]["windSpeed"] = true;
-        filter["properties"]["periods"][0]["icon"] = true;
+        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\nAccept: application/geo+json\n";
 
         HTTPMessage M;
         M.setUrl(url.c_str());
         M.setMethod("GET");
         M.setContentType("application/json");
         M.setCacert("bundle");
-        M.timeout = 15000; // 15 second timeout for nws
+        M.timeout = WEATHER_HTTP_TIMEOUT_MS;
         M.usePSRAM = true;
         M.responseDoc = &doc;
-        M.filter = &filter;
+        M.filter = &filterDoc;
         M.setExtraHeaders(extraHeaders.c_str());
 
         if (SendHTTPMessage(M)) {
@@ -509,7 +713,7 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
             if (!props.isNull()) {
                 return processHourlyData(props);
             } else {
-                SerialPrint("Hourly properties missing or doc too small", true);
+                SerialPrint("Hourly properties missing after HTTP OK", true);
             }
             
         } else {
@@ -526,40 +730,22 @@ bool WeatherInfoOptimized::fetchGridForecast() {
     return retryWithBackoff("grid forecast", [this]() {
 
         SerialPrint("fetchGridForecast: starting", true);
+        JsonDocument filterDoc;
+        buildGridJsonFilter(filterDoc);
         JsonDocument doc;
 
         String url = getGrid(0);
-        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
-
-        // Filter can stay in Stack/Internal RAM as it is very small
-        JsonDocument filter;
-        JsonObject props = filter["properties"];
-        /*
-        props["wetBulbGlobeTemperature"]["values"][0]["validTime"] = true;
-        props["wetBulbGlobeTemperature"]["values"][0]["value"] = true;
-        props["quantitativePrecipitation"]["values"][0]["validTime"] = true;
-        props["quantitativePrecipitation"]["values"][0]["value"] = true;
-        props["iceAccumulation"]["values"][0]["validTime"] = true;
-        props["iceAccumulation"]["values"][0]["value"] = true;
-        props["snowfallAmount"]["values"][0]["validTime"] = true;
-        props["snowfallAmount"]["values"][0]["value"] = true;
-        */
-
-        props["wetBulbGlobeTemperature"]["values"] = true;
-        props["quantitativePrecipitation"]["values"] = true;
-        props["iceAccumulation"]["values"] = true;
-        props["snowfallAmount"]["values"] = true;
-
+        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\nAccept: application/geo+json\n";
 
         HTTPMessage M;
         M.setUrl(url.c_str());
         M.setMethod("GET");
         M.setContentType("application/json");
         M.setCacert("bundle");
-        M.timeout = 15000; // 15 second timeout for nws
+        M.timeout = WEATHER_HTTP_TIMEOUT_MS;
         M.usePSRAM = true;
         M.responseDoc = &doc;
-        //M.filter = &filter;
+        M.filter = &filterDoc;
         M.setExtraHeaders(extraHeaders.c_str());
 
         if (SendHTTPMessage(M)) {
@@ -572,9 +758,11 @@ bool WeatherInfoOptimized::fetchGridForecast() {
 
             JsonObject props = doc["properties"];
             if (!props.isNull()) {
-                return processGridData(props);
+                if (processGridData(props)) return true;
+                SerialPrint("fetchGridForecast: processGridData failed", true);
             } else {
-                SerialPrint("Grid properties missing or doc too small", true);
+                SerialPrint("Grid properties missing after HTTP OK", true);
+                storeError("Grid properties missing after HTTP OK", ERROR_JSON_GRID, true);
             }
             
         } else {
@@ -590,9 +778,11 @@ bool WeatherInfoOptimized::fetchGridForecast() {
 
 bool WeatherInfoOptimized::fetchDailyForecast() {
     return retryWithBackoff("daily forecast", [this]() {
+        JsonDocument filterDoc;
+        buildDailyJsonFilter(filterDoc);
         JsonDocument doc;
         String url = getGrid(1);
-        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
+        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\nAccept: application/geo+json\n";
 
 
         HTTPMessage M;
@@ -600,10 +790,10 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
         M.setMethod("GET");
         M.setContentType("application/json");
         M.setCacert("bundle");
-        M.timeout = 15000; // 15 second timeout for nws
+        M.timeout = WEATHER_HTTP_TIMEOUT_MS;
         M.usePSRAM = true;
         M.responseDoc = &doc;
-        //M.filter = nullptr;
+        M.filter = &filterDoc;
         M.setExtraHeaders(extraHeaders.c_str());
 
         if (SendHTTPMessage(M)) {
@@ -646,10 +836,9 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
     M.setMethod("GET");
     M.setContentType("application/json");
     M.setCacert("bundle");
-    M.timeout = 15000; // 15 second timeout for nws
+    M.timeout = WEATHER_HTTP_TIMEOUT_SHORT_MS;
     M.usePSRAM = true;
     M.responseDoc = &doc;
-    //M.filter = nullptr;
     M.setExtraHeaders(extraHeaders.c_str());
 
     if (SendHTTPMessage(M)) {
@@ -695,127 +884,115 @@ bool WeatherInfoOptimized::updateWeather(uint16_t synctime) {
     return updateWeatherOptimized(synctime);
 }
 
-// get the index to the array based on the time (all times are local)
-int16_t WeatherInfoOptimized::getIndex(time_t targetTime) {
-    if (targetTime == 0) targetTime = I.currentTime;
-
-    // Midnight (year/month/day from global clock are in local not utc)
-    uint32_t midnightLocal = unixToLocal(makeUnixTime(year()-2000, month(), day(), 0, 0, 0, false));
-
-    // Hour offset from midnight
-    int16_t i = (targetTime - midnightLocal) / 3600;
-
-    // Validation: Ensure the index is within your array bounds
-    if (i >= 0 && i < NUMWTHRDAYS * 24) {
-        return (uint8_t)i;
-    }
-
-    return -120; // Not found/Out of bounds
-}
-
-
 int8_t WeatherInfoOptimized::getTemperature(uint32_t dt, bool wetbulb, bool asindex) {
     if (asindex) {
-        if (wetbulb) return this->wetBulbTemperature[dt];
-        
-        return this->temperature[dt];
+        if (dt >= NUM_HOURLY) return WEATHER_INVALID_TEMP;
+        if (wetbulb) return hourly[dt].wetBulb;
+        return hourly[dt].temperature;
     }
-    
-    if (dt==0) dt = I.currentTime;
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    
-    if (wetbulb) return this->wetBulbTemperature[i];
-    else return this->temperature[i];
+
+    if (dt == 0) dt = I.currentTime;
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+
+    if (wetbulb) return hourly[i].wetBulb;
+    return hourly[i].temperature;
 }
 
 int8_t WeatherInfoOptimized::getHumidity(uint32_t dt) {
-    if (dt==0) dt = I.currentTime;
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->humidity[i];
+    if (dt == 0) dt = I.currentTime;
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].humidity;
 }
 
 int16_t WeatherInfoOptimized::getWeatherID(uint32_t dt) {
-    if (dt==0) dt = I.currentTime;
-    int16_t i = getIndex(dt);
-    if (i<0) return -120; //999 is unknown weather
-    return this->weatherID[i];
+    if (dt == 0) dt = I.currentTime;
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].weatherID;
 }
 
 int8_t WeatherInfoOptimized::getPoP(uint32_t dt) {
-    if (dt==0) {
-        //cumulative probability of precipitation
-        double totalPOP=1;
-        for (uint16_t j=0;j<24;j++) {
-            double tmp = this->PoP[j];
-            if (tmp<0) tmp = 0;
-            totalPOP *= (1 - (tmp/100));
+    if (dt == 0) {
+        double totalPOP = 1;
+        int16_t start = hourSlot(I.currentTime);
+        if (start < 0) start = 0;
+        for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
+            double tmp = hourly[j].PoP;
+            if (tmp < 0) tmp = 0;
+            totalPOP *= (1 - (tmp / 100));
         }
-        return (uint8_t) ((1- totalPOP)*100);
+        return (int8_t)((1 - totalPOP) * 100);
     }
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->PoP[i];
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].PoP;
 }
 
 int16_t WeatherInfoOptimized::getRain(uint32_t dt) {
-    if (dt==0) {
+    if (dt == 0) {
         int16_t totalrain = 0;
-        for (uint16_t j=0;j<24;j++) {
-            int16_t tmp = this->rainmm[j];
-            if (tmp<0) tmp = 0;
-            totalrain+=tmp;
+        int16_t start = hourSlot(I.currentTime);
+        if (start < 0) start = 0;
+        for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
+            int16_t tmp = hourly[j].rainMm;
+            if (tmp < 0) tmp = 0;
+            totalrain += tmp;
         }
         return totalrain;
     }
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->rainmm[i];
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].rainMm;
 }
 
 int16_t WeatherInfoOptimized::getSnow(uint32_t dt) {
-    if (dt==0) {
+    if (dt == 0) {
         int16_t total = 0;
-        for (uint16_t j=0;j<24;j++) {
-            int16_t tmp = this->snowmm[j];
-            if (tmp<0) tmp = 0;
-            total+=tmp;
+        int16_t start = hourSlot(I.currentTime);
+        if (start < 0) start = 0;
+        for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
+            int16_t tmp = hourly[j].snowMm;
+            if (tmp < 0) tmp = 0;
+            total += tmp;
         }
         return total;
     }
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->snowmm[i];
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].snowMm;
 }
 
 int16_t WeatherInfoOptimized::getIce(uint32_t dt) {
-    if (dt==0) {
+    if (dt == 0) {
         int16_t total = 0;
-        for (uint16_t j=0;j<24;j++) {
-            int16_t tmp = this->icemm[j];
-            if (tmp<0) tmp = 0;
-            total+=tmp;
+        int16_t start = hourSlot(I.currentTime);
+        if (start < 0) start = 0;
+        for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
+            int16_t tmp = hourly[j].iceMm;
+            if (tmp < 0) tmp = 0;
+            total += tmp;
         }
         return total;
     }
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->icemm[i];
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].iceMm;
 }
 
 int8_t WeatherInfoOptimized::getDewPoint(uint32_t dt) {
-    if (dt==0) dt = I.currentTime;
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->dewPoint[i];
+    if (dt == 0) dt = I.currentTime;
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].dewPoint;
 }
 
 int16_t WeatherInfoOptimized::getWindSpeed(uint32_t dt) {
-    if (dt==0) dt = I.currentTime;
-    int16_t i = getIndex(dt);
-    if (i<0) return -120;
-    return this->windspeed[i];
+    if (dt == 0) dt = I.currentTime;
+    int16_t i = hourSlot(dt);
+    if (i < 0) return WEATHER_INVALID_TEMP;
+    return hourly[i].windSpeed;
 }
 
 
@@ -936,138 +1113,155 @@ bool WeatherInfoOptimized::nameWeatherIcon(uint16_t icon, char* weathername) {
 }
 
 
+void WeatherInfoOptimized::initHourlyForecastData() {
+    hourBase = 0;
+    for (uint16_t i = 0; i < NUM_HOURLY; i++) {
+        hourly[i].invalidate();
+    }
+}
+
+void WeatherInfoOptimized::initHourlyGridData() {
+    for (uint16_t i = 0; i < NUM_HOURLY; i++) {
+        hourly[i].wetBulb = WEATHER_INVALID_TEMP;
+        hourly[i].rainMm = WEATHER_INVALID_TEMP;
+        hourly[i].iceMm = WEATHER_INVALID_TEMP;
+        hourly[i].snowMm = WEATHER_INVALID_TEMP;
+    }
+    flag_rain = false;
+    flag_ice = false;
+    flag_snow = false;
+}
+
+void WeatherInfoOptimized::initDailyPeriodData() {
+    periodBaseStart = 0;
+    periodAnchorDayOffset = 0;
+    periodBaseIsDaytime = true;
+    firstFilledPeriod = 0;
+    for (uint16_t i = 0; i < NUM_PERIODS; i++) {
+        periods[i].invalidate();
+    }
+}
+
+void WeatherInfoOptimized::initSunTimes() {
+    sunrise = 0;
+    sunset = 0;
+}
+
 bool WeatherInfoOptimized::initWeather() {
-    for (uint16_t i=0; i < NUMWTHRDAYS * 24; i++) {
-        this->dT[i] = 0;
-        this->temperature[i] = -120; // Null temperature
-        this->humidity[i] = 0;
-        this->weatherID[i] = 999;    // Unknown weather
-        this->PoP[i] = 0;
-        this->dewPoint[i] = -120;
-        this->windspeed[i] = -120;
-        this->wetBulbTemperature[i] = -120;
-        this->rainmm[i] = -120;
-        this->icemm[i] = -120;
-        this->snowmm[i] = -120;
-    }
+    initHourlyForecastData();
+    initDailyPeriodData();
+    initSunTimes();
 
-    
-    for (uint16_t i=0;i<14;i++) {
-        this->daily_dT[i] = 0;
-        this->daily_tempMax[i] = -120;
-        this->daily_tempMin[i] = -120;
-        this->daily_weatherID[i] = 999;
-        this->daily_PoP[i] = 0;
-    }
-    
-    this->sunrise = 0;
-    this->sunset = 0;
-
-    this->flag_rain = false;
-    this->flag_ice = false;
-    this->flag_snow = false;
-    
-    this->lastUpdateT = 0;
-    this->lastUpdateAttempt = 0;
+    lastUpdateT = 0;
+    lastUpdateAttempt = 0;
+    fetchedAt = 0;
 
     return true;
 }
 
-// Implement remaining daily methods
 uint16_t WeatherInfoOptimized::getDailyRain(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
-    uint16_t totalrain = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
-            totalrain+=this->rainmm[j];
-        }
-    }
-    return totalrain;
+    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    return getDailyRain(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
 uint16_t WeatherInfoOptimized::getDailyRain(uint32_t starttime, uint32_t endtime) {
     uint16_t total = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= starttime && this->dT[j] < endtime) {
-            total+=this->rainmm[j];
+    if (!isHourlyValid()) return 0;
+    for (uint16_t j = 0; j < NUM_HOURLY; j++) {
+        time_t ht = hourTime((int16_t)j);
+        if (ht >= starttime && ht < endtime) {
+            int16_t tmp = hourly[j].rainMm;
+            if (tmp > 0) total += (uint16_t)tmp;
         }
     }
     return total;
 }
 
 uint16_t WeatherInfoOptimized::getDailySnow(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
-    uint16_t total = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
-            total+=this->snowmm[j];
-        }
-    }
-    return total;
+    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    return getDailySnow(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
 uint16_t WeatherInfoOptimized::getDailySnow(uint32_t starttime, uint32_t endtime) {
     uint16_t total = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= starttime && this->dT[j] < endtime) {
-            total+=this->snowmm[j];
+    if (!isHourlyValid()) return 0;
+    for (uint16_t j = 0; j < NUM_HOURLY; j++) {
+        time_t ht = hourTime((int16_t)j);
+        if (ht >= starttime && ht < endtime) {
+            int16_t tmp = hourly[j].snowMm;
+            if (tmp > 0) total += (uint16_t)tmp;
         }
     }
     return total;
 }
 
 uint16_t WeatherInfoOptimized::getDailyIce(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year()-2000,month(),day(),0,0,0,false));
-    uint16_t total = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= (MN0 + daysfromnow*86400) && this->dT[j] < (MN0 + daysfromnow*86400 + 86400)) {
-            total+=this->icemm[j];
-        }
-    }
-    return total;
+    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    return getDailyIce(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
 uint16_t WeatherInfoOptimized::getDailyIce(uint32_t starttime, uint32_t endtime) {
     uint16_t total = 0;
-    for (uint16_t j=0;j<NUMWTHRDAYS*24;j++) {
-        if (this->dT[j] >= starttime && this->dT[j] < endtime) {
-            total+=this->icemm[j];
+    if (!isHourlyValid()) return 0;
+    for (uint16_t j = 0; j < NUM_HOURLY; j++) {
+        time_t ht = hourTime((int16_t)j);
+        if (ht >= starttime && ht < endtime) {
+            int16_t tmp = hourly[j].iceMm;
+            if (tmp > 0) total += (uint16_t)tmp;
         }
     }
     return total;
 }
 
 uint8_t WeatherInfoOptimized::getDailyPoP(uint8_t daysfromnow, bool indays) {
-    if (daysfromnow >= 14) return 255;
-    
-    // We no longer need the 'indays' logic check here because 
-    // dayOffset in processDailyData has already aligned the data.
-    return this->daily_PoP[daysfromnow];
+    (void)indays;
+    if (daysfromnow >= NUMWTHRDAYS) return 255;
+
+    int16_t daySlot = getPeriodSlotForDaysFromToday(daysfromnow, true);
+    if (daySlot >= 0 && periods[daySlot].isValid()) {
+        return periods[daySlot].PoP;
+    }
+    int16_t nightSlot = getPeriodSlotForDaysFromToday(daysfromnow, false);
+    if (nightSlot >= 0 && periods[nightSlot].isValid()) {
+        return periods[nightSlot].PoP;
+    }
+    return 0;
 }
 
 int16_t WeatherInfoOptimized::getDailyWeatherID(uint8_t daysfromnow, bool indays) {
-    if (daysfromnow >= 14) return 255;
-    
-    return this->daily_weatherID[daysfromnow];
+    (void)indays;
+    if (daysfromnow >= NUMWTHRDAYS) return 255;
+
+    int16_t daySlot = getPeriodSlotForDaysFromToday(daysfromnow, true);
+    if (daySlot >= 0 && periods[daySlot].isValid()) {
+        return periods[daySlot].weatherID;
+    }
+    int16_t nightSlot = getPeriodSlotForDaysFromToday(daysfromnow, false);
+    if (nightSlot >= 0 && periods[nightSlot].isValid()) {
+        return periods[nightSlot].weatherID;
+    }
+    return WEATHER_UNKNOWN_ID;
 }
 
-
-
 void WeatherInfoOptimized::getDailyTemp(uint8_t daysfromnow, int8_t* temp) {
-    temp[0] = -120;
-    temp[1] = -120;
-    if (daysfromnow >= 14) {
+    temp[0] = WEATHER_INVALID_TEMP;
+    temp[1] = WEATHER_INVALID_TEMP;
+    if (daysfromnow >= NUMWTHRDAYS) {
         return;
     }
-    
-    // index 0 is High, index 1 is Low
-    temp[0] = this->daily_tempMax[daysfromnow];
-    temp[1] = this->daily_tempMin[daysfromnow];
 
-    // Optional: If it's late and High is 0 (unreported), 
-    // fall back to current temperature for the "High" slot
-    if (daysfromnow == 0 && temp[0] == -120) {
-        temp[0] = this->getTemperature(); 
+    int16_t daySlot = getPeriodSlotForDaysFromToday(daysfromnow, true);
+    int16_t nightSlot = getPeriodSlotForDaysFromToday(daysfromnow, false);
+
+    if (daySlot >= 0 && periods[daySlot].isValid()) {
+        temp[0] = periods[daySlot].temp;
+    }
+    if (nightSlot >= 0 && periods[nightSlot].isValid()) {
+        temp[1] = periods[nightSlot].temp;
+    }
+
+    if (daysfromnow == 0 && temp[0] == WEATHER_INVALID_TEMP) {
+        temp[0] = getTemperature(I.currentTime);
     }
 }
 
@@ -1266,34 +1460,18 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
         // NOAA Alerts endpoint by coordinates
         char url[128];
         snprintf(url, 127, "https://api.weather.gov/alerts/active?point=%.4f,%.4f", Prefs.LATITUDE, Prefs.LONGITUDE);
-        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
+        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\nAccept: application/geo+json\n";
         extraHeaders += "If-Modified-Since: " + String(this->lastAlertFetchTime) + "\n";
 
-
-        // Filter to only extract the features of interest from each alert 
-        JsonDocument filter;
-        filter.clear();
-        filter["features"][0]["properties"] = true;
-
-//        filter["features"][0]["properties"]["headline"] = true;
-//        filter["features"][0]["properties"]["event"] = true;
-//        filter["features"][0]["properties"]["description"] = true;
-//        filter["features"][0]["properties"]["severity"] = true;
-//        filter["features"][0]["properties"]["certainty"] = true;
-//        filter["features"][0]["properties"]["urgency"] = true;
-//        filter["features"][0]["properties"]["onset"] = true;
-//        filter["features"][0]["properties"]["ends"] = true;
-//        filter["features"][0]["properties"]["parameters"]["VTEC"] = true;
 
         HTTPMessage M;
         M.setUrl(url);
         M.setMethod("GET");
         M.setContentType("application/json");
         M.setCacert("bundle");
-        M.timeout = 15000; // 15 second timeout for nws
+        M.timeout = WEATHER_HTTP_TIMEOUT_MS;
         M.usePSRAM = true;
         M.responseDoc = &doc;
-        //M.filter = &filter;
         M.setExtraHeaders(extraHeaders.c_str());
 
         bool success = SendHTTPMessage(M);

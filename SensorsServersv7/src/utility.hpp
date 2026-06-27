@@ -17,14 +17,16 @@ extern STRUCT_GOOGLESHEET GSheetInfo;
 //setup functions
 void initI2C();
 bool initSystem();
+bool getEmbeddedFirmwareVersion(FirmwareVersion& out);
+void getLocalFirmware(FirmwareVersion& out);
+String firmwareJsonArray(const FirmwareVersion& fw);
 bool isI2CDeviceReady(byte address);
 int8_t initSDCard();
 bool loadSensorData();
 bool loadScreenFlags();
-void handleESPNOWPeriodicBroadcast(uint8_t interval);
 
 
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 bool retrieveSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, byte* N, uint32_t* t, double* v, uint8_t* f, uint32_t starttime, uint32_t endtime, bool forwardOrder);
 int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, uint8_t sensorID, uint32_t* averagedTimes, double* averagedValues, uint8_t averagedFlags[], uint32_t timeStart, uint32_t timeEnd, uint32_t windowSize, uint16_t numPointsX);
 bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID, uint32_t starttime, uint32_t endtime, uint32_t windowSize, uint16_t* numPointsX, double* averagedValues, uint32_t* averagedTimes, uint8_t* averagedFlags, bool forwardOrder);
@@ -57,13 +59,10 @@ bool tftPrint(String S, bool newline=true, uint16_t color=0xFFFF, byte fontType=
 bool SerialPrint(const char* S, bool newline=false, int8_t level=0);
 bool SerialPrint(String S, bool newline=false, int8_t level=0);
 
-// Legacy compatibility functions - these are now methods of the Devices_Sensors class
-// but we keep them as standalone functions for backward compatibility
 int8_t delete_all_core_data(bool flushPrefs = false, bool flushDevicesSensors = false);
 uint32_t deleteCoreStruct();
 uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet, bool deleteDevices);
 void failedToRegister();
-int16_t updateMyDevice();
 void initScreenFlags(bool completeInit = false);
 void storeCoreData(bool forceStore = true);
 void handleStoreCoreData();
@@ -73,46 +72,21 @@ String lastReset2String(bool addtime=true);
 String getRebootDebugInfo();
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot=true);
 int inArrayBytes(byte arr[], int N, byte value,bool returncount=false);
-int inArray(int arr[], int N, int value,bool returncount=false);
 bool inIndex(byte lookfor,byte used[],byte arraysize);
 void pushDoubleArray(double arr[], byte N, double value);
 float mapfloat(float x, float in_min, float in_max, float out_min, float out_max);
 void Byte2Bin(uint8_t value, char* output, bool invert = false);
 void uint16ToBin(uint16_t value, char* output, bool invert = false);
-char* strPad(char* str, char* pad, byte L);
-bool stringToLong(String s, uint32_t* val);
 bool stringToUInt64(String s, uint64_t* val, bool isHex);
-bool uint64ToString(uint64_t val, char* str, bool strHex);
-int16_t cumsum(int16_t * arr, int16_t ind1, int16_t ind2);
 String breakString(String *inputstr,String token,bool reduceOriginal=true);
-uint16_t countSubstr(String orig, String token);
-String enumErrorToName(ERRORCODES E);
 bool cycleIndex(int16_t& start, uint16_t arraysize, uint16_t origin, bool backwards=false);
 bool cycleByteIndex(byte& start, byte arraysize, byte origin, bool backwards=false);
 
-// Legacy sensor functions - these now delegate to the Devices_Sensors class
-bool isSensorInit(int i);
-bool isMACSet(byte *m, bool doReset=false);
-bool compareMAC(byte *MAC1,byte *MAC2);
-
-int16_t findDev(byte* macID, byte ardID, byte snsType, byte snsID,  bool oldest);
-int16_t findSnsOfType(byte snstype, bool newest = false);
 uint8_t countFlagged(int16_t snsType=0, uint16_t flagsthatmatter = 0b00000011, uint8_t flagsettings= 0b00000011, uint32_t MoreRecentThan=0, bool countCriticalExpired=false, bool countAnyExpired=false, uint16_t optionalsnsflags=0);
-uint8_t countDev();
 void checkHVAC(void);
-uint8_t findSensorByName(String snsname, uint8_t snsType=0, uint8_t snsID = 0);
-uint8_t find_sensor_count(String snsname,uint8_t snsType);
-void find_limit_sensortypes(String snsname, uint8_t snsType, uint8_t* snsIndexHigh, uint8_t* snsIndexLow);
 void initSensor(int k); //k is the index to sensor to init. use -256 [anything <-255] to clear all, and any number over 255 to clear expired (in which case the value of k is the max age in minutes)
-byte checkExpiration(int i, time_t t=0,bool onlycritical=true);
 
-
-// --- IP address conversion utilities ---
 String ArrayToString(const uint8_t* Arr, byte len, char separator= '.', bool asHex = false);
-
-uint64_t IPToMACID(IPAddress ip);
-uint64_t IPToMACID(byte* ip);
-uint32_t IPToUint32(IPAddress ip);
 
 // --- MAC address conversion utilities ---
 void uint64ToMAC(uint64_t mac64, byte* macArray);
@@ -124,15 +98,19 @@ String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //w
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
 void systemHousekeeping(bool fullHousekeeping=false);
-int16_t force_switch_ota_slot(int slot_number=-1);
+void updateWifiChannel(); // refresh I.WifiChannel from WiFi.channel() when valid
+int16_t force_switch_ota_slot(int slot_number=-1, String* failureDetail=nullptr);
 
-int compare_versions(const char* v1, const char* v2);
+int8_t otaPartitionSlotNumber(const esp_partition_t* partition);
+bool getOtaPartitionFirmwareVersion(const esp_partition_t* partition, FirmwareVersion& out);
+bool checkOtaSlotAtBoot();
 bool check_and_switch_to_newer_firmware(bool verbose=true,bool doswitch=false);
 
 uint8_t returnLiBatteryPercentage(double voltage);
 uint8_t returnPbBatteryPercentage(double voltage);
-#ifdef _USETFT
 void displaySetupProgress(bool success);
+
+#ifdef _USETFT
 void screenWiFiDown();
 void displayWiFiStatus(byte retries, bool success);
 void displayOTAProgress(unsigned int progress, unsigned int total);

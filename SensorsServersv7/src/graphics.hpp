@@ -1,4 +1,4 @@
-#if defined(_USETFT) && !defined(_ISPERIPHERAL)
+#if defined(_USETFT) && _IS_SERVER_HUB
 #ifndef GRAPHICS_HPP
 #define GRAPHICS_HPP
 
@@ -107,6 +107,8 @@ void fcnDrawStatusScreen(int16_t index);
 void fcnDrawStatusDelCoreConfirm(int16_t index);
 void fcnDrawStatusDelCore(int16_t index);
 void fcnDrawStatusReboot(int16_t index);
+void fcnDrawStatusResetWiFiConfirm(int16_t index);
+void fcnDrawStatusResetWiFi(int16_t index);
 void fcnDrawStatusText(int16_t index);
 void checkTouchScreen();
 

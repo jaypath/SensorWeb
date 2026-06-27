@@ -18,7 +18,7 @@ STRUCT_CORE I; //here, I is of type Screen (struct)
 STRUCT_PrefsH Prefs;
 
 
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
 uint32_t LAST_BAR_READ=0,LAST_BAT_READ=0;
 double batteryArray[48] = {0};
 double LAST_BAR=0;
@@ -27,7 +27,7 @@ double LAST_BAR=0;
 extern String WEBHTML;
 
 #ifdef _USETFT
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
     #include "graphics.hpp"
 #else
     #include "Clock480X480.hpp"

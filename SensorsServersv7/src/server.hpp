@@ -137,7 +137,7 @@ struct HTTPMessage {
   extern WeatherInfoOptimized WeatherData;
 #endif
 
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
   extern uint32_t LAST_BAR_READ;
   extern uint32_t LAST_BAT_READ;
   extern double batteryArray[48];
@@ -153,28 +153,55 @@ extern uint16_t TESTRUN;
 extern uint32_t WTHRFAIL;
 #endif
 
-void SerialWrite(String);
-int8_t CheckWifiStatus(bool trytoconnect=false);
-int16_t connectWiFi(uint8_t retryLimit=20);
+// Boot: 5 blocking tries × 45 s, then non-blocking AP. Runtime: no forced reconnect (autoreconnect + AP).
+static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 5;
+static constexpr uint16_t WIFI_BOOT_TRY_MS = 45000;
+static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 60;
+static constexpr uint16_t AP_ESP_NOW_STALE_PING_SEC = 60;
+static constexpr uint16_t AP_CHANNEL_SCAN_IDLE_SEC = 120;
+static constexpr uint16_t AP_CHANNEL_SCAN_STEP_MS = 100;
+static constexpr uint8_t AP_WIFI_CHANNEL_MIN = 1;
+static constexpr uint8_t AP_WIFI_CHANNEL_MAX = 13;
+static constexpr char AP_STATION_PASSWORD[] = "S3nsor.N3t!";
+
+enum WifiCheckMode : uint8_t {
+  WIFI_CHECK_NORMAL = 0,
+  WIFI_CHECK_BOOT = 1,
+};
+
+int8_t measureWifiLinkStatus();
+int8_t CheckWifiStatus(WifiCheckMode mode = WIFI_CHECK_NORMAL);
+// Single gate for HTTP/LAN/internet traffic (STA associated with router).
+bool wifiReadyForNetwork();
+void updateRSSI(bool forceUpdate = false);
+void syncDeviceIPFromWifi();
+void startWifiConnectAsync();
+void enterAPStationMode();
+void exitAPStationMode();
+void maybeExitAPStationMode();
+void syncInitialSetupState();
+void serviceAPStationMode();
+bool setWifiRfChannel(uint8_t channel);
+void noteApModeServerPingResponse(uint8_t wifiChannel);
+int16_t connectWiFi(uint8_t retryLimit=WIFI_BOOT_RETRY_LIMIT, uint16_t tryTimeoutMs=WIFI_BOOT_TRY_MS);
 bool closeUDP(bool returnStatus);
 bool connectUDP();
-int16_t tryWifi(uint16_t delayms = 250, bool checkCredentials = true);
+#ifdef _USEUDP
+void refreshIGMPMembership();
+void maybeRefreshIGMPMembership();
+#endif
+int16_t tryWifi(uint16_t delayms = WIFI_BOOT_TRY_MS, bool checkCredentials = true);
 void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
-void APStation_Mode();
 String WiFiEventtoString(WiFiEvent_t event);
 String urlEncode(const String& str);
-String getPublicIP();
+String getPublicIP(uint16_t timeoutMs = 10000);
 
-String getCert(String filename);
 bool SendHTTPMessage(HTTPMessage& M);
 // cacert: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" / "bundle" to use embedded CA bundle (requires sdkconfig.defaults)
 void handleReboot();
 void handleNotFound();
 
 void handleRoot(void);
-void handleSensorDetails(void);
-void handleALL(void);
-void handlerForRoot(bool allsensors=false);
 void appendStandardPageNav(bool includeWiFiConfig = false);
 void renderDeviceViewerPage();
 void handleREQUESTUPDATE();
@@ -198,11 +225,10 @@ void handleWeatherAddress();
 void handleCONFIG();
 void handleCONFIG_POST();
 void handleCONFIG_DELETE();
-void handleREADONLYCOREFLAGS();
-#ifndef _ISPERIPHERAL
+#if _IS_SERVER_HUB
 void handleSENSOR_OVERRIDE_UPDATE();
 #endif
-#ifdef _ISPERIPHERAL
+#if _HAS_LOCAL_SENSORS
 void handleSENSOR_UPDATE_POST();
 void handleSENSOR_READ_SEND_NOW();
 void handleSNS_CALIBRATION();
@@ -215,21 +241,19 @@ void handleGSHEET_SHARE_ALL();
 void handleGSHEET_DELETE_ALL();
 void handleREQUEST_BROADCAST();
 void handleSDCARD();
-void handleSDCARD_DELETE_DEVICES();
 void handleSDCARD_DELETE_SENSORS();
 void handleSDCARD_STORE_DEVICES();
-void handleSDCARD_DELETE_SCREENFLAGS();
-void handleSDCARD_DELETE_WEATHERDATA();
 void handleSDCARD_SAVE_SCREENFLAGS();
 void handleSDCARD_SAVE_WEATHERDATA();
-void handleSDCARD_TIMESTAMPS();
+void handleSDCARD_SYSTEMLOG();
 void handleERROR_LOG();
 void handleREBOOT_DEBUG();
-void handleSDCARD_DELETE_ERRORLOG();
-void handleSDCARD_DELETE_TIMESTAMPS();
-void handleSDCARD_DELETE_GSHEET();
+#ifdef _USESDCARD
 void handleSDCARD_UPLOAD();
 void handleSDCARD_UPLOADFile();
+#endif
+void handleSDCARD_DIR();
+void handleSDCARD_DOWNLOAD();
 void handleDeviceViewer();
 void handleDeviceViewerNext();
 void handleDeviceViewerPrev();
@@ -245,6 +269,12 @@ uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devNam
 bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize=0, const char* msgType="Unknown");
 bool receiveUDPMessage();
 void handlePost();
+void handlePostEnc();
+#ifdef _USE32
+void handlePostEncRaw();
+void absorbBinaryPostRaw(size_t maxLen);
+bool takeBinaryPostBody(uint8_t** out, size_t* outLen, size_t minLen, size_t maxLen);
+#endif
 void registerUDPMessage(IPAddress ip, const char* messageType);
 void registerUDPSend(IPAddress ip, const char* messageType);
 void registerHTTPSend(IPAddress ip, const char* messageType);
@@ -258,6 +288,10 @@ bool checkThisSensorTime(ArborysSnsType* S);
 bool isSensorSendTime(int16_t snsIndex);
 int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
 int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
+int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
+int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
+int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType);
+int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
 bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
 
@@ -269,15 +303,18 @@ int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
 //add json handlers
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);
 void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
-void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP);
+void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
+bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
+void wrapupSendDataList(const int16_t* snsIndices, uint8_t count);
 String JSONbuilder_sensorObject(ArborysSnsType* S);
 uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer);
 
 //json processors
 void processJSONMessage(String& postData, String& responseMsg);
-void processJSONMessage_ping(JsonObject root, String& responseMsg, bool isAck=false);
+void processJSONMessage_ping(JsonObject root, String& responseMsg);
 void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
+void processDeferredDataRequest();
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
 void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg);
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);

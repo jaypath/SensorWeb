@@ -1,3 +1,0 @@
-1. list master servers on some web page
-
-2. refactor the I.showtheseflags logic. Instead, simply use sensors that are labeled as monitored or critical.  User can configure which sensors and types to monitor. 
