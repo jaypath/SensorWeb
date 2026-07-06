@@ -48,7 +48,7 @@ void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
 
-  if (I.apModeActive) {
+  if (softApRunning()) {
     serviceAPStationMode();
   }
 
@@ -105,7 +105,7 @@ void systemHousekeeping(bool fullHousekeeping) {
   if (wifiReadyForNetwork()) {
     ArduinoOTA.handle();
   }
-  if (wifiReadyForNetwork() || I.apModeActive) {
+  if (wifiReadyForNetwork() || softApRunning()) {
     server.handleClient();
   }
 
@@ -345,7 +345,7 @@ bool initSystem() {
   syncDeviceIPFromWifi();
 
   tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-  if (!I.apModeActive) {
+  if (!softApRunning()) {
     server.begin();
   }
   tftPrint(" OK.", true, TFT_GREEN);
@@ -420,6 +420,9 @@ bool loadScreenFlags() {
   #endif
   bool sdread = readScreenInfoSD();
   displaySetupProgress( sdread);
+
+  // ScreenFlags.dat can be saved while AP provisioning was active; do not restore that runtime state.
+  reconcileWifiStateAfterCoreLoad();
 
   initScreenFlags();
 
@@ -828,6 +831,12 @@ void initScreenFlags(bool completeInit) {
   I.HTTP_LAST_OUTGOINGMSG_TO_IP = IPAddress(0,0,0,0);
   I.HTTP_INCOMING_ERRORS = 0;
   I.HTTP_OUTGOING_ERRORS = 0;
+
+  // RSSI min/max are since boot; do not carry over from ScreenFlags.dat
+  I.RSSIcurrent = -999;
+  I.RSSIlow = -999;
+  I.RSSIhigh = -999;
+  I.lastRSSItime = 0;
 
   I.lastResetTime=I.currentTime;
   I.ALIVESINCE=I.currentTime;

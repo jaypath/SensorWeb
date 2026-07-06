@@ -7,11 +7,6 @@
 #include "utility.hpp"
 #include "server.hpp"
 
-#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
-#include "NetworkMonitor.hpp"
-extern NetworkMonitor_type NetworkMonitor;
-#endif
-
 
 //for drawing sensors. The maximum number of sensors on a screen is 48.
 #define MAXALARMS 48
@@ -425,20 +420,63 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
       text_color = set_color(255-0,255-190,255-255);
     }
 
-    if (Sensors.isSensorOfType(sensor, "bat")) {
-      //bat
+    if (Sensors.isSensorOfType(sensor, "battery")) {
       box_text += (String) ((int) sensor->snsValue) + "%_";
-      box_border = set_color(200,200,200);
-      if (bitRead(sensor->Flags,0)==1) {        
+      box_border = set_color(180, 180, 190);
+      if (bitRead(sensor->Flags,0)==1) {
         box_border = set_color(255,20,20);
         box_fill = set_color(228, 70, 110);
-        text_color = set_color(0,0,0);
       } else {
-        box_fill = set_color(150,150,255);
-        text_color = set_color(0,0,0);
+        box_fill = set_color(170, 165, 210);
       }
+      text_color = convertColor565ToGrayscale(invert_color(box_fill));
     }
 
+    if (Sensors.isSensorOfType(sensor, "HVAC")) {
+      if (sensor->snsValue <= 0.5) box_text += "OFF_";
+      else box_text += "ON_";
+      box_border = set_color(180, 120, 40);
+      if (bitRead(sensor->Flags,0)==1) {
+        box_border = set_color(255,20,20);
+        if (bitRead(sensor->Flags,5)==1) {
+          box_fill = set_color(255, 150, 80);
+        } else {
+          box_fill = set_color(100, 110, 130);
+        }
+      } else {
+        box_fill = set_color(210, 175, 110);
+      }
+      text_color = convertColor565ToGrayscale(invert_color(box_fill));
+    }
+
+    if (Sensors.isSensorOfType(sensor, "network")) {
+      if (isnan(sensor->snsValue) || sensor->snsValue <= -999) {
+        box_text += "?_";
+        box_border = set_color(150, 150, 150);
+        box_fill = set_color(200, 200, 200);
+        text_color = set_color(55, 55, 55);
+      } else {
+        if (sensor->snsType == 89) {
+          snprintf(tempbuf, sizeof(tempbuf), "%.0fMb", sensor->snsValue);
+        } else {
+          snprintf(tempbuf, sizeof(tempbuf), "%.0f", sensor->snsValue);
+        }
+        box_text += tempbuf;
+        box_text += "_";
+        box_border = set_color(70, 85, 130);
+        if (bitRead(sensor->Flags,0)==1) {
+          box_border = set_color(255,20,20);
+          if (bitRead(sensor->Flags,5)==1) {
+            box_fill = set_color(130, 95, 165);
+          } else {
+            box_fill = set_color(55, 70, 105);
+          }
+        } else {
+          box_fill = set_color(115, 130, 175);
+        }
+        text_color = convertColor565ToGrayscale(invert_color(box_fill));
+      }
+    }
 
     if (Sensors.isSensorOfType(sensor, "pressure")) {
       //air pressure
@@ -742,7 +780,7 @@ byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFl
 //  byte alarms[rows*cols];
 //sensorflags uses the sensor flags to match sensors, for example 00000001 = flagged sensors
 //checktheseflags indicates which flags to check, for example 00000011 = flagged and monitored bits only
-//sensortypes must match the countFlagged criteria optionalsnsflags, a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 13 = everything else, 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
+//sensortypes must match the countFlagged criteria optionalsnsflags, a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 12 = network, 13 = everything else, 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
 
   if (GRAPHICS.alarmIndex >= NUMSENSORS) GRAPHICS.alarmIndex = 0;
   //init alarms
@@ -761,7 +799,7 @@ byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFl
   byte alarmArrayInd = 0;
   uint16_t snsTypeBitmask = 1; //starting at bit 1 , which is "all"
 
-  for (byte bitshift = 0; bitshift<12; bitshift++) {
+  for (byte bitshift = 0; bitshift < 13; bitshift++) {
     //check if sensortypes bitmasked with thissensortype is > 0
 
     uint16_t thisSensorType = snsTypeBitmask<<bitshift;
@@ -783,6 +821,125 @@ byte fcnGetAlarms(uint16_t sensorTypes, uint8_t checkTheseFlags,uint8_t sensorFl
   GRAPHICS.alarmIndex = SensorIndex;
 
   return alarmArrayInd; //return the number of alarms displayed
+}
+
+static byte fcnGetMainScreenAlarms(byte rows, byte cols, bool useOverrideFlags) {
+  if (GRAPHICS.alarmIndex >= NUMSENSORS) GRAPHICS.alarmIndex = 0;
+  for (byte k = 0; k < MAXALARMS; k++) {
+    alarms[k] = 255;
+  }
+
+  byte alarmsToDisplay = rows * cols;
+  if (alarmsToDisplay > MAXALARMS) alarmsToDisplay = MAXALARMS;
+
+  byte alarmArrayInd = 0;
+  byte sensorIndex = GRAPHICS.alarmIndex;
+
+  while (alarmArrayInd < alarmsToDisplay) {
+    if (Sensors.isSensorIndexInvalid(sensorIndex, false) == 0) {
+      if (Sensors.matchesMainScreenAlert(sensorIndex, useOverrideFlags)) {
+        if (inArrayBytes(alarms, alarmsToDisplay, sensorIndex, false) == -1) {
+          alarms[alarmArrayInd++] = sensorIndex;
+        }
+      }
+    }
+    if (!cycleByteIndex(sensorIndex, NUMSENSORS, GRAPHICS.alarmIndex)) break;
+  }
+  GRAPHICS.alarmIndex = sensorIndex;
+
+  return alarmArrayInd;
+}
+
+// Sensor summary page: every valid sensor, no type or flag filter (paginated via GRAPHICS.alarmIndex).
+static byte fcnFillAllSensorBoxes(byte rows, byte cols) {
+  if (GRAPHICS.alarmIndex >= NUMSENSORS) GRAPHICS.alarmIndex = 0;
+  for (byte k = 0; k < MAXALARMS; k++) {
+    alarms[k] = 255;
+  }
+
+  byte alarmsToDisplay = rows * cols;
+  if (alarmsToDisplay > MAXALARMS) alarmsToDisplay = MAXALARMS;
+
+  byte alarmArrayInd = 0;
+  byte sensorIndex = GRAPHICS.alarmIndex;
+
+  while (alarmArrayInd < alarmsToDisplay) {
+    if (Sensors.isSensorIndexInvalid(sensorIndex, false) == 0) {
+      if (inArrayBytes(alarms, alarmsToDisplay, sensorIndex, false) == -1) {
+        alarms[alarmArrayInd++] = sensorIndex;
+      }
+    }
+    if (!cycleByteIndex(sensorIndex, NUMSENSORS, GRAPHICS.alarmIndex)) break;
+  }
+  GRAPHICS.alarmIndex = sensorIndex;
+
+  return alarmArrayInd;
+}
+
+static void formatStatusSensorValue(const ArborysSnsType* sensor, char* buf, size_t bufLen) {
+  if (!sensor || !buf || bufLen == 0) return;
+  buf[0] = '\0';
+  if (sensor->expired) {
+    snprintf(buf, bufLen, "EXP");
+    return;
+  }
+  if (isnan(sensor->snsValue)) {
+    snprintf(buf, bufLen, "?");
+    return;
+  }
+  if (Sensors.isSensorOfType(sensor->snsType, "temperature")) {
+    snprintf(buf, bufLen, "%dF", (int)sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "humidity")) {
+    snprintf(buf, bufLen, "%d%%", (int)sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "pressure")) {
+    snprintf(buf, bufLen, "%dhPa", (int)sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "soil")) {
+    snprintf(buf, bufLen, "%d", (int)sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "battery")) {
+    snprintf(buf, bufLen, "%d%%", (int)sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "network")) {
+    if (sensor->snsType == 89) snprintf(buf, bufLen, "%.1fMb", sensor->snsValue);
+    else snprintf(buf, bufLen, "%.0f", sensor->snsValue);
+  } else if (Sensors.isSensorOfType(sensor->snsType, "HVAC") || Sensors.isSensorOfType(sensor->snsType, "binary")) {
+    snprintf(buf, bufLen, "%d", (int)sensor->snsValue);
+  } else {
+    snprintf(buf, bufLen, "%.0f", sensor->snsValue);
+  }
+}
+
+static void fcnDrawStatusSensorList() {
+  constexpr int16_t kMaxY = 405;
+  uint16_t skipped = 0;
+
+  tft.printf("Sensors (%u):\n", Sensors.getNumSensors());
+
+  for (int16_t i = 0; i < NUMSENSORS; ++i) {
+    if (Sensors.isSensorIndexInvalid(i, false) != 0) continue;
+
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
+    if (!sensor) continue;
+
+    if (tft.getCursorY() >= kMaxY) {
+      ++skipped;
+      continue;
+    }
+
+    char valBuf[14];
+    formatStatusSensorValue(sensor, valBuf, sizeof(valBuf));
+
+    const char* devName = "?";
+    ArborysDevType* device = Sensors.getDeviceByDevIndex(sensor->deviceIndex);
+    if (device && device->IsSet) devName = device->devName;
+
+    char line[52];
+    snprintf(line, sizeof(line), "%.8s %.11s %u:%u %s",
+        devName, sensor->snsName, sensor->snsType, sensor->snsID, valBuf);
+    tft.println(line);
+  }
+
+  if (skipped > 0) {
+    tft.printf("... +%u more\n", skipped);
+  }
 }
 
 void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { 
@@ -1414,15 +1571,7 @@ void fcnDrawMainScreen(int16_t index) {
       clearBit(GRAPHICS.StatusFlags,1); //clear bit 1 if weather event flag is not set
     }
 
-    uint8_t checkTheseFlags = 0;
-    setBit(checkTheseFlags,1); //monitored
-    setBit(checkTheseFlags,0); //flagged
-    uint16_t sensorTypes = 0;
-    setBit(sensorTypes,3); //soil
-    setBit(sensorTypes,8); //binary
-    setBit(sensorTypes,9); //leak
-    setBit(sensorTypes,10); //battery
-    GRAPHICS.alarmCount =  Sensors.countFlagged(-1000,checkTheseFlags,checkTheseFlags,0,true,false,sensorTypes);    
+    GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
     if (GRAPHICS.alarmCount>0) {
       if (isBit(GRAPHICS.StatusFlags,2)==false)         setBit(GRAPHICS.StatusFlagsChanged,2); //set bit 2 to 1 if alarm count is >0
       setBit(GRAPHICS.StatusFlags,2); //set bit 2 to 1 if alarm count is >0
@@ -1582,7 +1731,7 @@ void fcnDrawHeaderInfo(int16_t index) {
   //Order is: no wifi (or AP/NO WIFI alternate), then weather alerts, then cycle amongst [IP address, dawn/dusk info, last error msg within 2h]
   if (!wifiReadyForNetwork()) {
     setFont(2);
-    if (I.apModeActive) {
+    if (softApRunning()) {
       // Alternate NO WIFI and AP address (replaces dawn/dusk slot while provisioning)
       if (isBit(InfoFlags, 3) == false) {
         InfoFlags = 0;
@@ -1836,7 +1985,8 @@ void fcnDrawCurrentWeatherText(int16_t index) {
 }
 
 static bool isApProvisioningWithoutCredentials() {
-  return I.apModeActive && (!Prefs.HAVECREDENTIALS || Prefs.WIFISSID[0] == '\0');
+  if (!softApRunning() || wifiReadyForNetwork()) return false;
+  return !Prefs.HAVECREDENTIALS || Prefs.WIFISSID[0] == '\0';
 }
 
 // AP provisioning info in the 180x180 icon/alert slot
@@ -1865,7 +2015,11 @@ static void fcnDrawAPInfo(int16_t X, int16_t Y, int16_t W, int16_t H) {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setCursor(cx, cy);
   tft.print("SSID: ");
-  tft.print(WiFi.softAPSSID());
+  {
+    String apSsid = WiFi.softAPSSID();
+    if (apSsid.length() == 0) apSsid = generateAPSSID();
+    tft.print(apSsid);
+  }
   cy += fh + 2;
 
   tft.setCursor(cx, cy);
@@ -1910,7 +2064,7 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; // touch icon/alert area -> sensor screen (alert text is on temp pane)
 
   if (isBit(IconFlags,0)) {
-    if (GRAPHICS.alarmCount > 0 || I.apModeActive) {
+    if (GRAPHICS.alarmCount > 0 || (softApRunning() && !wifiReadyForNetwork())) {
       IconFlags = 2; //was showing icon, now showing sensor alerts or AP info
     }
     else {
@@ -1938,16 +2092,11 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
 
   if (IconFlags == 2)  { //show sensor alerts, or AP info when AP mode is active
     GRAPHICS.clearScreenArea(index);
-    if (I.apModeActive) {
+    if (softApRunning() && !wifiReadyForNetwork()) {
       fcnDrawAPInfo(GRAPHICS.SCREEN_DATA[index].X, GRAPHICS.SCREEN_DATA[index].Y,
                     GRAPHICS.SCREEN_DATA[index].W, GRAPHICS.SCREEN_DATA[index].H);
     } else {
-      uint8_t checkTheseFlags = 3; //bits 0 and 1 are set to 1
-      uint16_t sensorTypes = 0xFFFF; //set all bits to 1
-      clearBit(sensorTypes, 15); //do not exclude all sensor types
-      clearBit(sensorTypes, 14); //do not use a specific sensor type
-      clearBit(sensorTypes, 0); //no need to use 
-      byte alarmcount = fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,3,3);
+      byte alarmcount = fcnGetMainScreenAlarms(3, 3, true);
       if (alarmcount>0) {
         fcnDrawSensors(GRAPHICS.SCREEN_DATA[index].X,GRAPHICS.SCREEN_DATA[index].Y,3,3);
       }
@@ -2436,15 +2585,7 @@ void fcnDrawDailyDetailScreen(int16_t index) {
       clearBit(GRAPHICS.StatusFlags, 1);
     }
 
-    uint8_t checkTheseFlags = 0;
-    setBit(checkTheseFlags, 1);
-    setBit(checkTheseFlags, 0);
-    uint16_t sensorTypes = 0;
-    setBit(sensorTypes, 3);
-    setBit(sensorTypes, 8);
-    setBit(sensorTypes, 9);
-    setBit(sensorTypes, 10);
-    GRAPHICS.alarmCount = Sensors.countFlagged(-1000, checkTheseFlags, checkTheseFlags, 0, true, false, sensorTypes);
+    GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
     if (GRAPHICS.alarmCount > 0) {
       if (isBit(GRAPHICS.StatusFlags, 2) == false) setBit(GRAPHICS.StatusFlagsChanged, 2);
       setBit(GRAPHICS.StatusFlags, 2);
@@ -2774,22 +2915,17 @@ void fcnDrawSensorSummarySubcreen(int16_t index) {
   GRAPHICS.SCREEN_DATA[2].drawFunction(2);
   GRAPHICS.SCREEN_DATA[3].drawFunction(3);
 
-  uint8_t checkTheseFlags = 0; 
-  uint16_t sensorTypes = 0xFFFF; //set all bits to 1
-  clearBit(sensorTypes, 15); //do not exclude all sensor types
-  clearBit(sensorTypes, 14); //do not use a specific sensor type
-  clearBit(sensorTypes, 0); //no need to use 
-  //now we will check all sensortypes, but in order!
-
-  fcnGetAlarms(sensorTypes,checkTheseFlags,checkTheseFlags,8,6,false); //8 rows, 6 columns
-
+  fcnFillAllSensorBoxes(8, 6);
 
   int16_t FH = setFont(2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
   fcnDrawSensors(0,18,8,6);
   tft.setCursor(0,tft.height()-FH-62);
-  tft.printf("Devices: %d; Sensors: %d; Alarms: %d",Sensors.numDevices,Sensors.numSensors,I.isFlagged);
+  tft.printf("Dev: %u  Sns: %u  Alrm: %u  Exp: %u",
+      Sensors.numDevices, Sensors.numSensors,
+      Sensors.countMainScreenFlaggedAlerts(true),
+      Sensors.countMainScreenCriticalExpiredAlerts(true));
 
   return;
 }
@@ -2999,11 +3135,6 @@ void fcnDrawStatusText(int16_t index) {
   GRAPHICS.SCREEN_DATA[5].drawFunction(5);
   GRAPHICS.SCREEN_DATA[6].drawFunction(6);
 
-  #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
-  // Network monitor tests run on demand via sensors; no periodic update here.
-  #endif
-
-
   //draw config screen
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
@@ -3038,13 +3169,12 @@ void fcnDrawStatusText(int16_t index) {
   tft.printf("LAN Messages Sent today: %d\n",I.UDP_SENDS);
   tft.printf("HTTP Messages Received today: %d\n",I.HTTP_RECEIVES);
   tft.printf("HTTP Messages Sent today: %d\n",I.HTTP_SENDS);
-  tft.printf("UDP Messages Received today: %d\n",I.UDP_RECEIVES);    
-  tft.printf("UDP Messages Sent today: %d\n",I.UDP_SENDS);
   tft.printf("-----------------------\n");
     
   tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
-  tft.printf("Last Error: %s\n",I.lastError);
-  //print network monitor data
+  if (I.lastError[0] != '\0') {
+    tft.printf("Last Error: %.40s\n", I.lastError);
+  }
   tft.printf("-----------------------\n");
   tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
   {
@@ -3058,42 +3188,12 @@ void fcnDrawStatusText(int16_t index) {
     else tft.printf("RSSI: %d dBm (low %d, high %d)\n", rssi, I.RSSIlow, I.RSSIhigh);
     tft.setTextColor(FG_COLOR, BG_COLOR);
   }
-
-#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0) && _IS_SERVER_HUB && !_HAS_LOCAL_SENSORS
-  tft.printf("DNS Resolution Time: %d ms\n", NetworkMonitor.dns.resolutionMs);
-  tft.printf("Gateway Ping: %d ms, %d/%d lost, jitter %d ms\n",
-      NetworkMonitor.gatewayLatency.ping.avgRttMs,
-      NetworkMonitor.gatewayLatency.ping.packetsLost,
-      NetworkMonitor.gatewayLatency.ping.packetsSent,
-      NetworkMonitor.gatewayLatency.ping.jitterMs);
-  tft.printf("External Ping: %d ms, %d/%d lost, jitter %d ms (WAN)\n",
-      NetworkMonitor.externalPing.wan.avgRttMs,
-      NetworkMonitor.externalPing.wan.packetsLost,
-      NetworkMonitor.externalPing.wan.packetsSent,
-      NetworkMonitor.externalPing.wan.jitterMs);
-  if (NetworkMonitor.externalPing.gatewayChecked) {
-    tft.printf("Gateway Ping: %d ms, %d/%d lost (LAN)\n",
-        NetworkMonitor.externalPing.gateway.avgRttMs,
-        NetworkMonitor.externalPing.gateway.packetsLost,
-        NetworkMonitor.externalPing.gateway.packetsSent);
-  }
-  {
-    double speedMbps = -1;
-    NetworkMonitor.readSensorValue(89, speedMbps);
-    if (speedMbps < 0) {
-      tft.printf("CF Download: failed\n");
-    } else {
-      tft.printf("CF Download: %.2f Mbps (%lu ms, %lu bytes from %s)\n",
-          speedMbps,
-          (unsigned long)NetworkMonitor.download.durationMs,
-          (unsigned long)NetworkMonitor.download.downloadBytes,
-          NetworkMonitor.download.sourceIP.toString().c_str());
-    }
-  }
-#endif
+  tft.printf("-----------------------\n");
+  fcnDrawStatusSensorList();
 
   tft.printf("-----------------------\n");
   //list flag data
+  tft.printf("Main alerts: %u\n", Sensors.countMainScreenAlerts(true));
   tft.printf("Flagged sensors: %d\n",I.isFlagged);
   tft.printf("Expired sensors: %d\n",I.isExpired);
   tft.printf("-----------------------\n");
@@ -3103,19 +3203,6 @@ void fcnDrawStatusText(int16_t index) {
   if (Prefs.DST==1) tft.printf("Not active\n");
   else if (Prefs.DST==2) tft.printf("Active, offset %ld min\n",Prefs.DSTOffset/60);
   else tft.printf("Not used here\n");
-  if (Prefs.DST>=0) {
-    tft.printf("DST Start: %s\n", dateify(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn:ss"));
-    tft.printf("DST End: %s\n", dateify(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn:ss"));
-  }
-
-  tft.printf("-----------------------\n");
-  #ifdef _MONITOROUTDOORBATTERYSENSORS
-  tft.printf("Local Battery Index: %d\n",I.localBatteryIndex);
-  #endif
-  tft.printf("Have Outside Temperature Sensor: %s\n",I.haveOutsideTemperatureSensor?"Yes":"No");
-  tft.printf("Current Outside Temp: %s\n", formatDisplayTemp(I.currentOutsideTemp).c_str());
-  tft.printf("Current Outside Humidity: %d\n",I.currentOutsideHumidity);
-  tft.printf("Current Outside Pressure: %s hPa\n", formatDisplayPressure(I.currentOutsidePressure).c_str());
 
   return;
 }

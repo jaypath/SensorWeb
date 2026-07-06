@@ -767,14 +767,14 @@ void updateRSSI(bool forceUpdate) {
   }
 
   int16_t rssi = WiFi.RSSI();
-  if (rssi == 0) {
+  if (!isRssiValid(rssi)) {
     I.RSSIcurrent = -999;
   } else {
     I.RSSIcurrent = rssi;
-    if (I.RSSIlow == -999 || rssi < I.RSSIlow) {
+    if (!isRssiValid(I.RSSIlow) || rssi < I.RSSIlow) {
       I.RSSIlow = rssi;
     }
-    if (I.RSSIhigh == -999 || rssi > I.RSSIhigh) {
+    if (!isRssiValid(I.RSSIhigh) || rssi > I.RSSIhigh) {
       I.RSSIhigh = rssi;
     }
   }
@@ -830,6 +830,20 @@ void syncInitialSetupState() {
   }
 }
 
+void resetEphemeralCoreWifiState() {
+  I.initialSetupExitPending = false;
+  I.apModeEnteredTime = 0;
+  I.apLastClientActivity = 0;
+  I.apLastReconnectCheckTime = 0;
+  I.apLastChannelScanTime = 0;
+}
+
+void reconcileWifiStateAfterCoreLoad() {
+  resetEphemeralCoreWifiState();
+  syncInitialSetupState();
+  CheckWifiStatus(WIFI_CHECK_NORMAL);
+}
+
 int8_t CheckWifiStatus(WifiCheckMode mode) {
   const int8_t linkStatus = measureWifiLinkStatus();
   const bool connected = (linkStatus >= 1);
@@ -866,7 +880,7 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
 
   // Runtime: no forced reconnect — autoreconnect handles recovery.
   if (!haveWifiCredentials()) {
-    if (!I.apModeActive) {
+    if (!softApRunning()) {
       enterAPStationMode();
     }
     return linkStatus;
@@ -874,7 +888,7 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
 
   if (I.wifiDownSince && isTimeValid(I.currentTime)
       && (I.currentTime - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
-    if (!I.apModeActive) {
+    if (!softApRunning()) {
       SerialPrint("WiFi down > " + String(WIFI_DOWN_AP_THRESHOLD_SEC) + "s; entering AP mode", true);
       enterAPStationMode();
     }
@@ -885,6 +899,14 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
 
 bool wifiReadyForNetwork() {
   return measureWifiLinkStatus() == 1;
+}
+
+bool softApRunning() {
+  wifi_mode_t mode = WiFi.getMode();
+  if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) {
+    return false;
+  }
+  return WiFi.softAPIP() != IPAddress(0, 0, 0, 0);
 }
 
 int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
@@ -1118,7 +1140,7 @@ void noteApModeServerPingResponse(uint8_t wifiChannel) {
 }
 
 void enterAPStationMode() {
-  if (I.apModeActive) return;
+  if (softApRunning()) return;
 
   registerHTTPMessage("APStation");
   String wifiPWD;
@@ -1133,6 +1155,10 @@ void enterAPStationMode() {
   #endif
 
   connectSoftAP(&wifiID, &wifiPWD, &apIP);
+  if (!softApRunning()) {
+    SerialPrint("Failed to start soft AP", true);
+    return;
+  }
 
   if (initESPNOW() == 1) {
     SerialPrint("ESPNow initialized in AP mode", true);
@@ -1142,7 +1168,6 @@ void enterAPStationMode() {
 
   server.begin();
 
-  I.apModeActive = true;
   I.apLastReconnectCheckTime = 0;
   I.apLastClientActivity = 0;
   I.apLastChannelScanTime = 0;
@@ -1169,7 +1194,7 @@ void enterAPStationMode() {
 }
 
 void maybeExitAPStationMode() {
-  if (!I.apModeActive) return;
+  if (!softApRunning()) return;
   if (!I.initialSetupFinalized) return;
   if (!initialSetupRequirementsMet()) return;
 
@@ -1183,10 +1208,11 @@ void maybeExitAPStationMode() {
 }
 
 void exitAPStationMode() {
-  if (!I.apModeActive) return;
+  if (softApRunning()) {
+    WiFi.softAPdisconnect(true);
+    SerialPrint("exitAPStationMode: soft AP stopped, STA active", true);
+  }
 
-  WiFi.softAPdisconnect(true);
-  I.apModeActive = false;
   I.apLastReconnectCheckTime = 0;
   I.apLastClientActivity = 0;
   I.apModeEnteredTime = 0;
@@ -1194,7 +1220,6 @@ void exitAPStationMode() {
   s_apLastChannelScanMillis = 0;
   s_apChannelScanListen = false;
   s_apChannelScanGotResponse = false;
-  SerialPrint("exitAPStationMode: soft AP stopped, STA active", true);
 
   updateWifiChannel();
 
@@ -1206,10 +1231,10 @@ void exitAPStationMode() {
 }
 
 void serviceAPStationMode() {
-  if (!I.apModeActive) return;
+  if (!softApRunning()) return;
 
   maybeExitAPStationMode();
-  if (!I.apModeActive) return;
+  if (!softApRunning()) return;
 
   static uint32_t lastHttpActivitySeen = 0;
   if (I.HTTP_LAST_INCOMINGMSG_TIME != lastHttpActivitySeen) {
@@ -2629,12 +2654,10 @@ void handleSTATUS() {
     WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
     WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "<br>";
     WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
-    WEBHTML = WEBHTML + "<strong>Router Signal Strength:</strong> " + formatRssiHtml(WiFi.RSSI()) + "<br>";
     
   } else if (t == WIFI_MODE_STA) {
     WEBHTML = WEBHTML + "<strong>Station IP:</strong> " + WiFi.localIP().toString() + "<br>";
     WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
-    WEBHTML = WEBHTML + "<strong>Signal Strength:</strong> " + formatRssiHtml(WiFi.RSSI()) + "<br>";
   
   } else if (t == WIFI_MODE_AP) {
     WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + "<br>";
@@ -5705,10 +5728,12 @@ static void noteJsonPingAck(uint64_t fromMAC) {
   s_jsonPingGotAck = true;
 }
 
-static bool sendHTTPPingWithInlineAck(ArborysDevType* device) {
+static bool sendHTTPPingWithInlineAck(ArborysDevType* device, uint32_t* rttMsOut) {
+  if (rttMsOut) *rttMsOut = 0;
   if (!device) return false;
   if (!wifiReadyForNetwork()) return false;
 
+  const uint32_t start = millis();
   char jsonBuffer[512];
   JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), true, false);
   if (jsonBuffer[0] == '\0') return false;
@@ -5730,7 +5755,9 @@ static bool sendHTTPPingWithInlineAck(ArborysDevType* device) {
   registerHTTPSend(device->IP, "pingMsg");
 
   if (!M.payload || !M.payload.get()) return false;
-  return jsonPingAckMatches(String(M.payload.get()), device->MAC);
+  const bool ok = jsonPingAckMatches(String(M.payload.get()), device->MAC);
+  if (ok && rttMsOut) *rttMsOut = millis() - start;
+  return ok;
 }
 
 static bool decryptHttpCipherToPlain(const uint8_t* encBuf, uint16_t encLen, String& plainOut) {
@@ -5814,10 +5841,12 @@ static size_t readHttpEncResponseBody(HTTPClient& http, uint8_t* out, size_t out
   return 0;
 }
 
-static bool sendHTTPSPingWithInlineAck(ArborysDevType* device) {
+static bool sendHTTPSPingWithInlineAck(ArborysDevType* device, uint32_t* rttMsOut) {
+  if (rttMsOut) *rttMsOut = 0;
   if (!device || !isValidLMKKey()) return false;
   if (!wifiReadyForNetwork()) return false;
 
+  const uint32_t start = millis();
   char jsonBuffer[512];
   JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), false, false);
   if (jsonBuffer[0] == '\0') return false;
@@ -5876,10 +5905,12 @@ static bool sendHTTPSPingWithInlineAck(ArborysDevType* device) {
   }
 
   http.end();
+  if (ok && rttMsOut) *rttMsOut = millis() - start;
   return ok;
 }
 
-static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaHTTPS, uint16_t blockMs) {
+static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaHTTPS, uint16_t blockMs, uint32_t* rttMsOut) {
+  if (rttMsOut) *rttMsOut = 0;
   if (!device || !device->IsSet) return false;
   if (s_jsonPingActive) return false;
   if (blockMs == 0) blockMs = DEVICE_VIEWER_PING_TIMEOUT_MS;
@@ -5889,11 +5920,11 @@ static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaH
       storeError("Device viewer ping: LMK not configured for HTTPS");
       return false;
     }
-    return sendHTTPSPingWithInlineAck(device);
+    return sendHTTPSPingWithInlineAck(device, rttMsOut);
   }
 
   if (viaHTTP) {
-    return sendHTTPPingWithInlineAck(device);
+    return sendHTTPPingWithInlineAck(device, rttMsOut);
   }
 
   s_jsonPingActive = true;
@@ -5912,8 +5943,10 @@ static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaH
     esp_task_wdt_reset();
     if (s_jsonPingGotAck) {
       s_jsonPingActive = false;
+      const uint32_t rttMs = millis() - start;
+      if (rttMsOut) *rttMsOut = rttMs;
       SerialPrint("JSON ping ack from " + MACToString(device->MAC) +
-          " in " + String(millis() - start) + " ms", true);
+          " in " + String(rttMs) + " ms", true);
       return true;
     }
     #ifdef _USEUDP
@@ -5929,7 +5962,8 @@ static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaH
   return false;
 }
 
-static bool performDeviceViewerPing(ArborysDevType* device, const String& protocol, String& protocolLabel) {
+static bool performDeviceViewerPing(ArborysDevType* device, const String& protocol, String& protocolLabel, uint32_t& rttMs) {
+  rttMs = 0;
   if (!device) return false;
 
   String proto = protocol;
@@ -5937,23 +5971,23 @@ static bool performDeviceViewerPing(ArborysDevType* device, const String& protoc
 
   if (proto == "esplan") {
     protocolLabel = "ESPLAN";
-    return sendLANBlockingPing(device, 1, DEVICE_VIEWER_PING_TIMEOUT_MS);
+    return sendLANBlockingPing(device, 1, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
   }
   if (proto == "udplan") {
     protocolLabel = "UDPLAN";
-    return sendLANBlockingPing(device, 2, DEVICE_VIEWER_PING_TIMEOUT_MS);
+    return sendLANBlockingPing(device, 2, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
   }
   if (proto == "udp") {
     protocolLabel = "UDP";
-    return sendBlockingJsonPing(device, false, false, DEVICE_VIEWER_PING_TIMEOUT_MS);
+    return sendBlockingJsonPing(device, false, false, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
   }
   if (proto == "http") {
     protocolLabel = "HTTP";
-    return sendBlockingJsonPing(device, true, false, DEVICE_VIEWER_PING_TIMEOUT_MS);
+    return sendBlockingJsonPing(device, true, false, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
   }
   if (proto == "https") {
     protocolLabel = "HTTPS";
-    return sendBlockingJsonPing(device, false, true, DEVICE_VIEWER_PING_TIMEOUT_MS);
+    return sendBlockingJsonPing(device, false, true, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
   }
 
   protocolLabel = protocol;
@@ -5970,6 +6004,9 @@ static void appendDeviceViewerPingStatus() {
   if (pingStatus == "success") {
     WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
     WEBHTML = WEBHTML + "<strong>Success:</strong> Ping sent and Ack received from " + deviceName + " over " + protocol + ".";
+    if (server.hasArg("pingrtt")) {
+      WEBHTML = WEBHTML + " RTT: <strong>" + server.arg("pingrtt") + " ms</strong>.";
+    }
     WEBHTML = WEBHTML + "</div>";
   } else if (pingStatus == "failed") {
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
@@ -6307,12 +6344,16 @@ void handleDeviceViewerPing() {
 
     String protocol = server.hasArg("protocol") ? server.arg("protocol") : "esplan";
     String protocolLabel;
-    bool success = performDeviceViewerPing(device, protocol, protocolLabel);
+    uint32_t rttMs = 0;
+    bool success = performDeviceViewerPing(device, protocol, protocolLabel, rttMs);
     if (protocolLabel.length() == 0) protocolLabel = protocol;
 
     String loc = "/?ping=" + String(success ? "success" : "failed")
         + "&pingproto=" + urlEncode(protocolLabel)
         + "&pingdevice=" + urlEncode(String(device->devName));
+    if (success && rttMs > 0) {
+      loc += "&pingrtt=" + String(rttMs);
+    }
 
     server.sendHeader("Location", loc);
     server.send(302, "text/plain", success ? "Ping succeeded." : "Ping failed.");

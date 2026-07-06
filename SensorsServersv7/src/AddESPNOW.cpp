@@ -577,7 +577,7 @@ void processLANMessage(ESPNOW_type* msg) {
             s_serverPingSyncedLocalTime = pl.timestamp;
             s_serverPingTimeSyncReady = true;
         }
-        if (I.apModeActive && !wifiReadyForNetwork()) {
+        if (softApRunning() && !wifiReadyForNetwork()) {
             if (pl.wifiChannel >= AP_WIFI_CHANNEL_MIN && pl.wifiChannel <= AP_WIFI_CHANNEL_MAX) {
                 setWifiRfChannel(pl.wifiChannel);
             }
@@ -1068,8 +1068,9 @@ bool sendLANPingRequest(ArborysDevType* targetDevice, uint8_t tier, bool dataReq
     return ok;
 }
 
-bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t blockTimeMs) {
+bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t blockTimeMs, uint32_t* rttMsOut) {
     // tier: 1 = ESP-NOW, 2 = UDP, 3 = both (success if either responds)
+    if (rttMsOut) *rttMsOut = 0;
     if (!targetDevice || !targetDevice->IsSet) return false;
     if (tier < 1 || tier > 3) return false;
     if (s_blockingPingActive) {
@@ -1113,10 +1114,12 @@ bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t bl
         esp_task_wdt_reset();
         if (s_blockingPingGotResponse) {
             s_blockingPingActive = false;
+            const uint32_t rttMs = millis() - start;
+            if (rttMsOut) *rttMsOut = rttMs;
             snprintf(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD, 64, "Blocking ping OK from %s",
                 MACToString(targetDevice->MAC).c_str());
             SerialPrint("LAN: Blocking ping success from " + MACToString(targetDevice->MAC) +
-                " in " + String(millis() - start) + " ms", true);
+                " in " + String(rttMs) + " ms", true);
             return true;
         }
         #ifdef _USEUDP

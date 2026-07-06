@@ -1,7 +1,6 @@
 #ifdef _USELOWPOWER
 #ifndef LOWPOWER_HPP
 #define LOWPOWER_HPP
-#include "Devices.hpp"
 #include "globals.hpp"
 
 

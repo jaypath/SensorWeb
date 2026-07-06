@@ -1091,21 +1091,20 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     bool haveFirmware = findHighestSDFirmwareForDevice(deviceName.c_str(), bestVersion,
         bestPath, sizeof(bestPath), &crc, &size);
 
-    char json[320];
-    if (haveFirmware && bestVersion.compare(deviceFirmware) > 0) {
-        char verText[16];
-        bestVersion.toChar(verText, sizeof(verText));
-        logSystemEvent(String("FW offered to ") + deviceName + " v" + verText, EVENT_FIRMWARE_UPDATED);
-        snprintf(json, sizeof(json),
-            "{\"msgType\":\"FirmwareAvailable\",\"senderDeviceID\":\"%s\",\"senderIP\":\"%s\","
-            "\"newFirmware\":%s,\"newFirmwareCRC\":%u,\"newFirmwareSize\":%lu}",
-            MACToString(Prefs.PROCID).c_str(), WiFi.localIP().toString().c_str(),
-            firmwareJsonArray(bestVersion).c_str(), crc, (unsigned long)size);
-    } else {
-        snprintf(json, sizeof(json),
-            "{\"msgType\":\"FirmwareUnavailable\",\"senderDeviceID\":\"%s\",\"senderIP\":\"%s\"}",
-            MACToString(Prefs.PROCID).c_str(), WiFi.localIP().toString().c_str());
+    if (!haveFirmware || bestVersion.compare(deviceFirmware) <= 0) {
+        return;
     }
+
+    char verText[16];
+    bestVersion.toChar(verText, sizeof(verText));
+    logSystemEvent(String("FW offered to ") + deviceName + " v" + verText, EVENT_FIRMWARE_UPDATED);
+
+    char json[320];
+    snprintf(json, sizeof(json),
+        "{\"msgType\":\"FirmwareAvailable\",\"senderDeviceID\":\"%s\",\"senderIP\":\"%s\","
+        "\"newFirmware\":%s,\"newFirmwareCRC\":%u,\"newFirmwareSize\":%lu}",
+        MACToString(Prefs.PROCID).c_str(), WiFi.localIP().toString().c_str(),
+        firmwareJsonArray(bestVersion).c_str(), crc, (unsigned long)size);
 
     IPAddress ip = senderIP;
     int16_t rc = sendHTTPSJSON(ip, json, "fwResp");

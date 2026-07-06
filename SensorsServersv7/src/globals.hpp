@@ -264,7 +264,6 @@ typedef enum {
       time_t ALIVESINCE;
       uint8_t wifiFailCount; // consecutive minutes WiFi reconnect failed (reset when connected)
       time_t wifiDownSince;
-      bool apModeActive; // non-blocking soft-AP provisioning active
       bool initialSetupFinalized; // initial wizard submitted (or already configured at boot)
       bool initialSetupExitPending; // wait for provisioning client to leave AP before stopping soft-AP
       time_t apLastClientActivity; // last HTTP request while in AP mode (0 = none)

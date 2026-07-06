@@ -439,7 +439,15 @@ bool storeScreenInfoSD() {
     I.isUpToDate = true;
     I.lastStoreCoreDataTime = I.currentTime;
 
-    f.write((uint8_t*)&I,sizeof(STRUCT_CORE));
+    // AP session timing is runtime-only; never persist across reboots.
+    STRUCT_CORE snapshot = I;
+    snapshot.initialSetupExitPending = false;
+    snapshot.apModeEnteredTime = 0;
+    snapshot.apLastClientActivity = 0;
+    snapshot.apLastReconnectCheckTime = 0;
+    snapshot.apLastChannelScanTime = 0;
+
+    f.write((uint8_t*)&snapshot, sizeof(STRUCT_CORE));
 
     f.close();
     

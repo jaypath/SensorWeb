@@ -1,3 +1,7 @@
+#include "NetworkMonitor.hpp"
+
+#if _USENETWORKMONITOR > 0
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESP32Ping.h>
@@ -5,12 +9,9 @@
 #include <esp_task_wdt.h>
 #include "globals.hpp"
 #include "sensors.hpp"
-#include "NetworkMonitor.hpp"
 #ifdef _USEUDP
 #include "server.hpp"
 #endif
-
-#if _USENETWORKMONITOR > 0
 
 NetworkMonitor_type NetworkMonitor;
 

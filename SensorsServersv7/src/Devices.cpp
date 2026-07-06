@@ -632,10 +632,49 @@ bool Devices_Sensors::isSensorInit(int16_t index) {
 }
 
 void Devices_Sensors::initSensor(int16_t index) {
-    if (index >= 0 && index < NUMSENSORS ) {
+    if (index <= -256) {
+#if _HAS_LOCAL_SENSORS
+        // Clear local sensors before setupSensors() re-registers them (see initSensor(-256) in main).
+        const uint64_t myMac = (uint64_t)ESP.getEfuseMac();
+        const int16_t myDevIdx = findMyDeviceIndex();
+        for (int16_t i = 0; i < NUMSENSORS; i++) {
+            if (!sensors[i].IsSet) continue;
+            bool isMine = false;
+            if (myDevIdx >= 0) {
+                isMine = (sensors[i].deviceIndex == myDevIdx);
+            } else if (sensors[i].deviceIndex >= 0 && sensors[i].deviceIndex < NUMDEVICES
+                       && devices[sensors[i].deviceIndex].IsSet) {
+                isMine = (devices[sensors[i].deviceIndex].MAC == myMac);
+            }
+            if (!isMine) continue;
+            sensors[i].IsSet = 0;
+            sensors[i].expired = false;
+            sensors[i].deviceIndex = -1;
+        }
+        getNumSensors();
+#endif
+        return;
+    }
+
+    if (index > 255) {
+        const uint32_t maxAgeSec = (uint32_t)(index - 255) * 60UL;
+        const uint32_t cutoff = (I.currentTime > maxAgeSec) ? (I.currentTime - maxAgeSec) : 0;
+        for (int16_t i = 0; i < NUMSENSORS; i++) {
+            if (!sensors[i].IsSet || !sensors[i].expired) continue;
+            if (sensors[i].timeLogged > 0 && sensors[i].timeLogged >= cutoff) continue;
+            sensors[i].IsSet = 0;
+            sensors[i].expired = false;
+            sensors[i].deviceIndex = -1;
+        }
+        getNumSensors();
+        return;
+    }
+
+    if (index >= 0 && index < NUMSENSORS) {
         sensors[index].IsSet = 0;
         sensors[index].expired = false;
         sensors[index].deviceIndex = -1;
+        getNumSensors();
     }
 }
 
@@ -678,7 +717,7 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 //4. check if the sensor is within the time range
 //5. check if the sensor is within the flag settings
 //here snsIndex is the index of the sensor to check, and snsType is an explicit declaration of the sesnor type if optionalsnsflags is set to 14
-//optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, ..., 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
+//optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 12 = network, 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
 
 byte overrideFlags = 0;
 if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
@@ -708,7 +747,7 @@ if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
         if (isBit(optionalsnsflags, 15) == 0) { //do not exclude all sensor types
             isgood = false;
 
-            for (byte optionalsnsflagindex = 0; optionalsnsflagindex<11; optionalsnsflagindex++) {
+            for (byte optionalsnsflagindex = 0; optionalsnsflagindex < 13; optionalsnsflagindex++) {
                 if (isBit(optionalsnsflags, optionalsnsflagindex) ) {
                     isgood = isSensorOfType(snsIndex, getSensorTypeFlaggedString(optionalsnsflagindex));
                     if (isgood) break; //regardless of how many types, if we hit even one then we are good
@@ -717,7 +756,7 @@ if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
         }
         else {
             isgood = true;
-            for (byte optionalsnsflagindex = 0; optionalsnsflagindex<11; optionalsnsflagindex++) {
+            for (byte optionalsnsflagindex = 0; optionalsnsflagindex < 13; optionalsnsflagindex++) {
                 if (isBit(optionalsnsflags, optionalsnsflagindex) ) {
                     isgood = !isSensorOfType(snsIndex, getSensorTypeFlaggedString(optionalsnsflagindex));
                     if (isgood==false) break; //regardless of how many types, if we fail anywhere we are done
@@ -754,6 +793,58 @@ if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
 
 }
 
+bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride) {
+    if (isSensorIndexInvalid(snsIndex, false) != 0) return false;
+
+    constexpr uint16_t kAllTypes = 1; // optionalsnsflags bit 0 = all sensor types
+
+    // Monitored + flagged (remote OverrideFlags respected when respectRemoteOverride).
+    if (isSensorFlagged(snsIndex, kAllTypes, 3, 3, 0, false, false, 0, respectRemoteOverride) == 1) {
+        return true;
+    }
+
+    // Monitored + critical + expired.
+    if (isSensorFlagged(snsIndex, kAllTypes, 0, 0, 0, true, false, 0, respectRemoteOverride) != 2) {
+        return false;
+    }
+    return isSensorFlagged(snsIndex, kAllTypes, 2, 2, 0, false, false, 0, respectRemoteOverride) == 1;
+}
+
+uint16_t Devices_Sensors::countMainScreenAlerts(bool respectRemoteOverride) {
+    uint16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; ++i) {
+        if (matchesMainScreenAlert(i, respectRemoteOverride)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint16_t Devices_Sensors::countMainScreenFlaggedAlerts(bool respectRemoteOverride) {
+    constexpr uint16_t kAllTypes = 1;
+    uint16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; ++i) {
+        if (isSensorIndexInvalid(i, false) != 0) continue;
+        if (isSensorFlagged(i, kAllTypes, 3, 3, 0, false, false, 0, respectRemoteOverride) == 1) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint16_t Devices_Sensors::countMainScreenCriticalExpiredAlerts(bool respectRemoteOverride) {
+    constexpr uint16_t kAllTypes = 1;
+    uint16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; ++i) {
+        if (isSensorIndexInvalid(i, false) != 0) continue;
+        if (isSensorFlagged(i, kAllTypes, 0, 0, 0, true, false, 0, respectRemoteOverride) != 2) continue;
+        if (isSensorFlagged(i, kAllTypes, 2, 2, 0, false, false, 0, respectRemoteOverride) == 1) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags) { 
      //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
      //if snstype is 1-200 then count all sensors of that type (meeting the flagsthatmatter criteria)
@@ -769,12 +860,13 @@ int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, 
     //if snsType is -9, then count all leak sensors (meeting the flag criteria)
     //if snsType is -10, then count all battery sensors (meeting the flag criteria)
     //if snsType is -11, then count all human sensors (meeting the flag criteria)
+    //if snsType is -12, then count all network sensors (meeting the flag criteria)
 
     //if snsType is =-1000 then use then use optionalsnsflags to determine sensor types to count (along with flagsthatmatter and flagsettings)
     //if snsType is <-1000 then count all sensors EXCEPT the specified types in optionalsnsflags (meeting the flagsthatmatter criteria)
     //optionalsnsflags is a bitmask of the sensor types to count: 
     //0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 
-    //12 = TBD, 13 = TBD, 
+    //12 = network, 13 = everything else, 
     //14 = use specified sensor type
     //15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
     
@@ -794,7 +886,7 @@ int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, 
     else if (snsType == -1000) {
         clearBit(optionalsnsflags, 15); //do not exclude all sensor types
     }
-    else if (snsType <0 && snsType >= -11) {
+    else if (snsType <0 && snsType >= -12) {
         //convert to explicit sensor group
         optionalsnsflags = 0;
         if (snsType == -1) setBit(optionalsnsflags, 1); //temperature
@@ -808,6 +900,7 @@ int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, 
         else if (snsType == -9) setBit(optionalsnsflags, 9); //leak
         else if (snsType == -10) setBit(optionalsnsflags, 10); //battery
         else if (snsType == -11) setBit(optionalsnsflags, 11); //human
+        else if (snsType == -12) setBit(optionalsnsflags, 12); //network
     }
 
 
@@ -834,8 +927,8 @@ String Devices_Sensors::getSensorTypeFlaggedString(byte snstypeindex) {
     else if (snstypeindex == 8) return "binary";
     else if (snstypeindex == 9) return "leak";
     else if (snstypeindex == 10) return "battery";
-    else if (snstypeindex == 11) return "human";    
-
+    else if (snstypeindex == 11) return "human";
+    else if (snstypeindex == 12) return "network";
 
     return "";
 }
@@ -896,6 +989,7 @@ int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t
     //if snstype is "binary", then find a binary sensor
     //if snstype is "battery", then find a battery sensor
     //if snstype is "battery_li", then find a weather sensor
+    //if snstype is "network", then find a network monitor sensor (types 80-89)
 
     if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
@@ -924,6 +1018,7 @@ int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t
 
 
 int16_t Devices_Sensors::findSnsOfType(uint8_t snstype, bool newest, int16_t startIndex) {
+    // Exact snsType match; use 80-89 for individual network monitor sensors, or findSnsOfType("network", ...) for any.
     if (startIndex == -1) startIndex = 0;
     int16_t targetIndex = -1;
     uint32_t targetTime = newest ? 0 : 0xFFFFFFFF;
@@ -1225,6 +1320,7 @@ String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
     if (snsType == 11 || snsType == 16) return "altitude";
     if (snsType == 98) return "clock";
     if (snsType == 71) return "binary";
+    if (snsType >= 80 && snsType <= 89) return "network";
     if (snsType >= 100) return "server";
     return "unknown";
 }
@@ -1234,6 +1330,11 @@ bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
 }
 
 bool Devices_Sensors::isSensorOfType(ArborysSnsType* sensor, String type) {
+    if (sensor == NULL) return false;
+    return isSensorOfType(sensor->snsType, type);
+}
+
+bool Devices_Sensors::isSensorOfType(const ArborysSnsType* sensor, String type) {
     if (sensor == NULL) return false;
     return isSensorOfType(sensor->snsType, type);
 }
@@ -1270,8 +1371,8 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "human") {//human
         return (snsType == 8);
     }
-    if (type == "distance") {//binary
-        return (snsType == 7 );
+    if (type == "dist" || type == "distance") {//distance
+        return (snsType == 7);
     }
     if (type == "weather") {//weather
         return (snsType == 12);
@@ -1282,8 +1383,11 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "clock") {//clock
         return (snsType == 98);
     }
-    if (type == "network") {//network monitor
-        return (snsType >= 81 && snsType <= 89);
+    if (type == "network") {//network monitor (RSSI + network tests)
+        return (snsType >= 80 && snsType <= 89);
+    }
+    if (type == "server") {//server-side sensor slot
+        return (snsType >= 100);
     }
     if (type == "binary") {//binary
         return (snsType == 71);

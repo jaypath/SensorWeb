@@ -173,6 +173,7 @@ int8_t measureWifiLinkStatus();
 int8_t CheckWifiStatus(WifiCheckMode mode = WIFI_CHECK_NORMAL);
 // Single gate for HTTP/LAN/internet traffic (STA associated with router).
 bool wifiReadyForNetwork();
+bool softApRunning();
 void updateRSSI(bool forceUpdate = false);
 void syncDeviceIPFromWifi();
 void startWifiConnectAsync();
@@ -180,6 +181,8 @@ void enterAPStationMode();
 void exitAPStationMode();
 void maybeExitAPStationMode();
 void syncInitialSetupState();
+void resetEphemeralCoreWifiState();
+void reconcileWifiStateAfterCoreLoad();
 void serviceAPStationMode();
 bool setWifiRfChannel(uint8_t channel);
 void noteApModeServerPingResponse(uint8_t wifiChannel);

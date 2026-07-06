@@ -131,6 +131,10 @@ public:
     int16_t findOldestDevice();
     int16_t findOldestSensor();
     int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0, bool useOverrideFlags=true);
+    bool matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride = true);
+    uint16_t countMainScreenAlerts(bool respectRemoteOverride = true);
+    uint16_t countMainScreenFlaggedAlerts(bool respectRemoteOverride = true);
+    uint16_t countMainScreenCriticalExpiredAlerts(bool respectRemoteOverride = true);
     int8_t countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags); 
     String getSensorTypeFlaggedString(byte snstypeindex);
 
@@ -165,6 +169,7 @@ public:
     uint16_t isSensorIndexInvalid(int16_t index, bool checkExpired=false);
     bool isSensorOfType(int16_t index, String type);
     bool isSensorOfType(ArborysSnsType* sensor, String type);
+    bool isSensorOfType(const ArborysSnsType* sensor, String type);
     bool isSensorOfType(uint8_t snsType, String type);
     String sensorIsOfType(int16_t index);
     String sensorIsOfType(ArborysSnsType* sensor);

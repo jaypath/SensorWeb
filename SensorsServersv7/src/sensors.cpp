@@ -3,8 +3,8 @@
 #include "globals.hpp"
 #include "sensors.hpp"
 
-#ifdef _USENETWORKMONITOR
-#include "NetworkMonitor.hpp" 
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+#include "NetworkMonitor.hpp"
 #endif
 #ifdef _USEUDP
 #include "server.hpp"
