@@ -705,6 +705,11 @@ void handleFirmwareBlock() {
             sent += (size_t)n;
             esp_task_wdt_reset();
         }
+        if (sent == got && blockIndex + 1 == totalBlocks) {
+            char verText[16];
+            version.toChar(verText, sizeof(verText));
+            logSystemEvent(String("FW chunk OK ") + senderDevice + " v" + verText, EVENT_FIRMWARE_UPDATED);
+        }
     }
     free(buf);
 }

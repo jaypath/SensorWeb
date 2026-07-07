@@ -876,72 +876,6 @@ static byte fcnFillAllSensorBoxes(byte rows, byte cols) {
   return alarmArrayInd;
 }
 
-static void formatStatusSensorValue(const ArborysSnsType* sensor, char* buf, size_t bufLen) {
-  if (!sensor || !buf || bufLen == 0) return;
-  buf[0] = '\0';
-  if (sensor->expired) {
-    snprintf(buf, bufLen, "EXP");
-    return;
-  }
-  if (isnan(sensor->snsValue)) {
-    snprintf(buf, bufLen, "?");
-    return;
-  }
-  if (Sensors.isSensorOfType(sensor->snsType, "temperature")) {
-    snprintf(buf, bufLen, "%dF", (int)sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "humidity")) {
-    snprintf(buf, bufLen, "%d%%", (int)sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "pressure")) {
-    snprintf(buf, bufLen, "%dhPa", (int)sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "soil")) {
-    snprintf(buf, bufLen, "%d", (int)sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "battery")) {
-    snprintf(buf, bufLen, "%d%%", (int)sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "network")) {
-    if (sensor->snsType == 89) snprintf(buf, bufLen, "%.1fMb", sensor->snsValue);
-    else snprintf(buf, bufLen, "%.0f", sensor->snsValue);
-  } else if (Sensors.isSensorOfType(sensor->snsType, "HVAC") || Sensors.isSensorOfType(sensor->snsType, "binary")) {
-    snprintf(buf, bufLen, "%d", (int)sensor->snsValue);
-  } else {
-    snprintf(buf, bufLen, "%.0f", sensor->snsValue);
-  }
-}
-
-static void fcnDrawStatusSensorList() {
-  constexpr int16_t kMaxY = 405;
-  uint16_t skipped = 0;
-
-  tft.printf("Sensors (%u):\n", Sensors.getNumSensors());
-
-  for (int16_t i = 0; i < NUMSENSORS; ++i) {
-    if (Sensors.isSensorIndexInvalid(i, false) != 0) continue;
-
-    ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
-    if (!sensor) continue;
-
-    if (tft.getCursorY() >= kMaxY) {
-      ++skipped;
-      continue;
-    }
-
-    char valBuf[14];
-    formatStatusSensorValue(sensor, valBuf, sizeof(valBuf));
-
-    const char* devName = "?";
-    ArborysDevType* device = Sensors.getDeviceByDevIndex(sensor->deviceIndex);
-    if (device && device->IsSet) devName = device->devName;
-
-    char line[52];
-    snprintf(line, sizeof(line), "%.8s %.11s %u:%u %s",
-        devName, sensor->snsName, sensor->snsType, sensor->snsID, valBuf);
-    tft.println(line);
-  }
-
-  if (skipped > 0) {
-    tft.printf("... +%u more\n", skipped);
-  }
-}
-
 void fcnDrawSensors(int X,int Y, uint8_t rows, uint8_t cols) { 
     /*
     going to show rowsxcols flagged sensors (so up to rows*cols)
@@ -3189,13 +3123,10 @@ void fcnDrawStatusText(int16_t index) {
     tft.setTextColor(FG_COLOR, BG_COLOR);
   }
   tft.printf("-----------------------\n");
-  fcnDrawStatusSensorList();
-
-  tft.printf("-----------------------\n");
-  //list flag data
-  tft.printf("Main alerts: %u\n", Sensors.countMainScreenAlerts(true));
-  tft.printf("Flagged sensors: %d\n",I.isFlagged);
-  tft.printf("Expired sensors: %d\n",I.isExpired);
+  tft.printf("Sensors total: %u\n", Sensors.getNumSensors());
+  tft.printf("Monitored: %u\n", countFlagged(0, 0b00000010, 0b00000010, 0));
+  tft.printf("Flagged: %u\n", Sensors.countMainScreenFlaggedAlerts(true));
+  tft.printf("Expired: %u\n", Sensors.countMainScreenCriticalExpiredAlerts(true));
   tft.printf("-----------------------\n");
   tft.printf("Timezone: %ld \n", Prefs.TimeZoneOffset);
   //if DST is enabled, print the DST offset and date of DST start and end
