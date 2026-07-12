@@ -34,5 +34,7 @@ void handleFirmwareEnc();
 #ifdef _USE32
 void handleFirmwareEncRaw();
 #endif
+/** Empty when no OTA download is in progress; else ", received packet N/M for x.y.z from a.b.c.d" */
+String getFirmwareReceiveProgressSuffix();
 
 #endif

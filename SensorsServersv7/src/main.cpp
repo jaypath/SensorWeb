@@ -53,6 +53,7 @@
 
 
 #include "globals.hpp"
+#include "utility.hpp"
 #include "firmwareUpdate.hpp"
 #include <esp_task_wdt.h>
 
@@ -114,7 +115,9 @@ void initOTA() {
     tftPrint("Connecting ArduinoOTA... ", false);
     ArduinoOTA.setHostname("WeatherStation");
     ArduinoOTA.setPassword("12345678");
-    ArduinoOTA.onStart([]() { 
+    ArduinoOTA.setTimeout(30000);
+    ArduinoOTA.onStart([]() {
+        beginArduinoOtaFocus();
         #ifdef _USETFT
         displayOTAProgress(0, 100); 
         #endif
@@ -137,6 +140,7 @@ void initOTA() {
         tftPrint("OTA End.\nRebooting.", true, TFT_GREEN, 4, 1, false, 0, 200);
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        notifyArduinoOtaProgress(progress, total);
         #ifdef _USESERIAL
           Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
         #endif
@@ -165,9 +169,15 @@ void initOTA() {
     
     
     #ifdef _USETFT
-    ArduinoOTA.onError([](ota_error_t error) { displayOTAError(error); });
+    ArduinoOTA.onError([](ota_error_t error) {
+        notifyArduinoOtaError();
+        displayOTAError(error);
+    });
     #else
-    ArduinoOTA.onError([](ota_error_t error) { SerialPrint("OTA error: " + String((int)error), true); });
+    ArduinoOTA.onError([](ota_error_t error) {
+        notifyArduinoOtaError();
+        SerialPrint("OTA error: " + String((int)error), true);
+    });
     #endif
     ArduinoOTA.begin();
 
@@ -407,6 +417,10 @@ void setup() {
 
 // --- Main Loop ---
 void loop() {
+
+    #ifndef _USELOWPOWER
+    if (serviceArduinoOtaFocusMode()) return;
+    #endif
 
     systemHousekeeping();
 

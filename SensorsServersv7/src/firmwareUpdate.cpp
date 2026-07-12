@@ -578,6 +578,16 @@ static void touchServerFwTrack(const char* deviceName, const FirmwareVersion& ve
     if (isTimeValid(I.currentTime)) s_serverFwTracks[slot].lastActivity = I.currentTime;
 }
 
+static void logFwServerBlockEvent(const char* verb, const char* deviceName, uint32_t blockIndex,
+    uint32_t totalBlocks, const FirmwareVersion& version) {
+    char verText[16];
+    version.toChar(verText, sizeof(verText));
+    char msg[96];
+    snprintf(msg, sizeof(msg), "FW %s %s block %lu/%lu v%s",
+        verb, deviceName, (unsigned long)blockIndex, (unsigned long)totalBlocks, verText);
+    logSystemEvent(msg, EVENT_FIRMWARE_UPDATED);
+}
+
 static bool serverShouldIgnoreFirmwareDiscovery(const char* deviceName) {
     int slot = findServerFwTrackSlot(deviceName, false);
     if (slot < 0) return false;
@@ -661,6 +671,8 @@ void handleFirmwareBlock() {
         return;
     }
 
+    logFwServerBlockEvent("recv", senderDevice, blockIndex, totalBlocks, version);
+
     const uint32_t offset = blockIndex * blockSize;
     const uint32_t toRead = (offset + blockSize > fileSize) ? (fileSize - offset) : blockSize;
     if (!f.seek(offset)) {
@@ -705,10 +717,8 @@ void handleFirmwareBlock() {
             sent += (size_t)n;
             esp_task_wdt_reset();
         }
-        if (sent == got && blockIndex + 1 == totalBlocks) {
-            char verText[16];
-            version.toChar(verText, sizeof(verText));
-            logSystemEvent(String("FW chunk OK ") + senderDevice + " v" + verText, EVENT_FIRMWARE_UPDATED);
+        if (sent == got) {
+            logFwServerBlockEvent("sent", senderDevice, blockIndex, totalBlocks, version);
         }
     }
     free(buf);
@@ -863,6 +873,16 @@ static bool requestOneFirmwareBlock() {
         (unsigned long)s_chunk.currentBlockIndex, (unsigned)FW_CHUNK_BLOCK_SIZE,
         (unsigned)FW_CHUNK_NEXT_REQUEST_MINUTES);
 
+    {
+        char reqMsg[96];
+        char verText[16];
+        s_chunk.version.toChar(verText, sizeof(verText));
+        snprintf(reqMsg, sizeof(reqMsg), "FW req block %lu/%lu v%s to %s",
+            (unsigned long)s_chunk.currentBlockIndex, (unsigned long)s_chunk.totalBlocks,
+            verText, s_chunk.serverIP.toString().c_str());
+        logSystemEvent(reqMsg, EVENT_FIRMWARE_UPDATED);
+    }
+
     WiFiClient client;
     client.setTimeout(20000);
     if (!client.connect(s_chunk.serverIP, 80)) {
@@ -943,8 +963,14 @@ static bool requestOneFirmwareBlock() {
     s_chunk.currentBlockIndex++;
     s_chunk.lastSuccessTime = I.currentTime;
 
-    SerialPrint("FW chunk " + String(s_chunk.currentBlockIndex) + "/" + String(s_chunk.totalBlocks)
-        + " from " + s_chunk.serverIP.toString(), true);
+    char progressMsg[96];
+    char verText[16];
+    s_chunk.version.toChar(verText, sizeof(verText));
+    snprintf(progressMsg, sizeof(progressMsg), "FW recv block %lu/%lu v%s from %s",
+        (unsigned long)s_chunk.currentBlockIndex, (unsigned long)s_chunk.totalBlocks,
+        verText, s_chunk.serverIP.toString().c_str());
+    SerialPrint(String(progressMsg), true);
+    logSystemEvent(progressMsg, EVENT_FIRMWARE_UPDATED);
 
     if (s_chunk.currentBlockIndex >= s_chunk.totalBlocks) {
         return finalizeChunkSession();
@@ -1042,6 +1068,12 @@ void peripheralFirmwareHourlyCheck() {
         "{\"msgType\":\"FirmwareRequest\",\"senderDeviceName\":\"%s\",\"senderIP\":\"%s\",\"senderFirmware\":%s}",
         Prefs.DEVICENAME, WiFi.localIP().toString().c_str(), firmwareJsonArray(localFw).c_str());
 
+    {
+        char verText[16];
+        localFw.toChar(verText, sizeof(verText));
+        logSystemEvent(String("FW inquiry sent v") + verText + " via UDP", EVENT_FIRMWARE_UPDATED);
+    }
+
     sendUDPMessage((uint8_t*)json, IPAddress(0, 0, 0, 0), (uint16_t)strlen(json), "fwReq");
 
     uint32_t start = millis();
@@ -1082,10 +1114,17 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
 
     if (deviceName.length() == 0 || senderIP == IPAddress(0, 0, 0, 0)) {
         responseMsg = "Missing firmware request fields";
+        logSystemEvent("FW inquiry rejected (missing fields)", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
+    char curVerText[16];
+    deviceFirmware.toChar(curVerText, sizeof(curVerText));
+    logSystemEvent(String("FW inquiry from ") + deviceName + " v" + curVerText + " @ "
+        + senderIP.toString(), EVENT_FIRMWARE_UPDATED);
+
     if (serverShouldIgnoreFirmwareDiscovery(deviceName.c_str())) {
+        logSystemEvent(String("FW inquiry ") + deviceName + " ignored (cooldown)", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
@@ -1096,13 +1135,23 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     bool haveFirmware = findHighestSDFirmwareForDevice(deviceName.c_str(), bestVersion,
         bestPath, sizeof(bestPath), &crc, &size);
 
-    if (!haveFirmware || bestVersion.compare(deviceFirmware) <= 0) {
+    if (!haveFirmware) {
+        logSystemEvent(String("FW inquiry ") + deviceName + " no image on SD", EVENT_FIRMWARE_UPDATED);
+        return;
+    }
+    if (bestVersion.compare(deviceFirmware) <= 0) {
+        logSystemEvent(String("FW inquiry ") + deviceName + " up to date", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
     char verText[16];
     bestVersion.toChar(verText, sizeof(verText));
-    logSystemEvent(String("FW offered to ") + deviceName + " v" + verText, EVENT_FIRMWARE_UPDATED);
+    const uint32_t totalBlocks = (size + FW_CHUNK_BLOCK_SIZE - 1) / FW_CHUNK_BLOCK_SIZE;
+    char offerMsg[96];
+    snprintf(offerMsg, sizeof(offerMsg), "FW offered %s v%s (%lu blocks)",
+        deviceName.c_str(), verText, (unsigned long)totalBlocks);
+    logSystemEvent(offerMsg, EVENT_FIRMWARE_UPDATED);
+    touchServerFwTrack(deviceName.c_str(), bestVersion, FW_CHUNK_NEXT_REQUEST_MINUTES);
 
     char json[320];
     snprintf(json, sizeof(json),
@@ -1224,4 +1273,19 @@ void handleFirmwareEnc() {
         logSystemEvent(String("FW transfer OK ") + deviceName + " v" + verText, EVENT_FIRMWARE_UPDATED);
     }
     #endif
+}
+
+String getFirmwareReceiveProgressSuffix() {
+#if _HAS_LOCAL_SENSORS
+    if (!s_chunk.active || s_chunk.totalBlocks == 0) return "";
+    char verText[16];
+    s_chunk.version.toChar(verText, sizeof(verText));
+    char buf[96];
+    snprintf(buf, sizeof(buf), ", received packet %lu/%lu for %s from %s",
+        (unsigned long)s_chunk.currentBlockIndex, (unsigned long)s_chunk.totalBlocks,
+        verText, s_chunk.serverIP.toString().c_str());
+    return String(buf);
+#else
+    return "";
+#endif
 }

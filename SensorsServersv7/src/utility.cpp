@@ -44,6 +44,87 @@ void updateWifiChannel() {
   }
 }
 
+#ifndef _USELOWPOWER
+static struct {
+  bool active = false;
+  uint32_t startMs = 0;
+  uint32_t lastProgressMs = 0;
+} s_arduinoOtaFocus;
+
+static constexpr uint32_t ARDUINO_OTA_MAX_MS = 600000;
+static constexpr uint32_t ARDUINO_OTA_STALL_MS = 90000;
+
+void beginArduinoOtaFocus() {
+  s_arduinoOtaFocus.active = true;
+  s_arduinoOtaFocus.startMs = millis();
+  s_arduinoOtaFocus.lastProgressMs = s_arduinoOtaFocus.startMs;
+  SerialPrint("Arduino OTA focus mode started", true);
+  logSystemEvent("Arduino OTA focus mode", EVENT_FIRMWARE_UPDATED);
+}
+
+static void endArduinoOtaFocus(const char* reason) {
+  if (!s_arduinoOtaFocus.active) return;
+  s_arduinoOtaFocus.active = false;
+  if (reason && reason[0]) {
+    SerialPrint(String("Arduino OTA focus ended: ") + reason, true);
+    logSystemEvent(String("Arduino OTA ended: ") + reason, EVENT_FIRMWARE_UPDATED);
+  }
+}
+
+static bool arduinoOtaFocusTimedOut() {
+  if (!s_arduinoOtaFocus.active) return false;
+  const uint32_t now = millis();
+  if (now - s_arduinoOtaFocus.startMs > ARDUINO_OTA_MAX_MS) return true;
+  if (now - s_arduinoOtaFocus.lastProgressMs > ARDUINO_OTA_STALL_MS) return true;
+  return false;
+}
+
+static void abortArduinoOtaFocus(const char* reason) {
+  if (Update.isRunning()) Update.abort();
+  endArduinoOtaFocus(reason);
+  storeError(String("Arduino OTA aborted: ") + reason, ERROR_UNDEFINED, true);
+}
+
+void notifyArduinoOtaProgress(unsigned int progress, unsigned int total) {
+  (void)progress;
+  (void)total;
+  s_arduinoOtaFocus.lastProgressMs = millis();
+  esp_task_wdt_reset();
+  if (arduinoOtaFocusTimedOut()) {
+    abortArduinoOtaFocus("timeout");
+  }
+}
+
+void notifyArduinoOtaError() {
+  endArduinoOtaFocus("error");
+}
+
+bool serviceArduinoOtaFocusMode() {
+  if (!wifiReadyForNetwork()) return false;
+
+  ArduinoOTA.handle();
+  // Auth success sets OTA_RUNUPDATE; run transfer immediately without other loop work.
+  if (wifiReadyForNetwork() && !Update.isRunning()) {
+    ArduinoOTA.handle();
+  }
+
+  if (!s_arduinoOtaFocus.active && !Update.isRunning()) return false;
+
+  while (s_arduinoOtaFocus.active || Update.isRunning()) {
+    esp_task_wdt_reset();
+    if (arduinoOtaFocusTimedOut()) {
+      abortArduinoOtaFocus("timeout");
+      break;
+    }
+    if (wifiReadyForNetwork()) {
+      ArduinoOTA.handle();
+    }
+    if (!s_arduinoOtaFocus.active && !Update.isRunning()) break;
+  }
+  return true;
+}
+#endif
+
 void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
@@ -102,9 +183,6 @@ void systemHousekeeping(bool fullHousekeeping) {
 
   }
 
-  if (wifiReadyForNetwork()) {
-    ArduinoOTA.handle();
-  }
   if (wifiReadyForNetwork() || softApRunning()) {
     server.handleClient();
   }

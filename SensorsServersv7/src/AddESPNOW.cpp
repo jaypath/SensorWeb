@@ -845,11 +845,12 @@ bool broadcastServerPresence(bool broadcastPeripheral, uint8_t method) {
     I.makeBroadcast = false;
     #endif
 
-    // Send via ESPNow with ESPNOW message type (will be encrypted since msgType > 0)
-    msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
-    bool ok = sendLANmsg_ESPNOW(msg, false);
-
-    if (wifiReadyForNetwork()) {
+    bool ok = false;
+    if (method == 0 || method == 2) {
+      msg.msgType = ESPNOW_MSG_BROADCAST_ALIVE_ENCRYPTED;
+      ok = sendLANmsg_ESPNOW(msg, false);
+    }
+    if ((method == 1 || method == 2) && wifiReadyForNetwork()) {
       msg.msgType = UDP_MSG_BROADCAST_ALIVE_ENCRYPTED;
       ok |= sendLANmsg_UDP(msg, IPAddress(0, 0, 0, 0), false);
     }

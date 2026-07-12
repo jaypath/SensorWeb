@@ -98,6 +98,14 @@ String MACToString(const uint8_t* mac, char separator=':', bool asHex=true); //w
 uint8_t getPROCIDByte(uint64_t procid, uint8_t byteIndex);
 
 void systemHousekeeping(bool fullHousekeeping=false);
+
+#ifndef _USELOWPOWER
+void beginArduinoOtaFocus();
+void notifyArduinoOtaProgress(unsigned int progress, unsigned int total);
+void notifyArduinoOtaError();
+/** Run ArduinoOTA exclusively; returns true when normal loop work should be skipped this tick. */
+bool serviceArduinoOtaFocusMode();
+#endif
 void updateWifiChannel(); // refresh I.WifiChannel from WiFi.channel() when valid
 int16_t force_switch_ota_slot(int slot_number=-1, String* failureDetail=nullptr);
 
