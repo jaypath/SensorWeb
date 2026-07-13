@@ -40,9 +40,17 @@
 #include <lwip/tcpip.h>
 
 extern WiFiUDP LAN_UDP;
+//server
+String WEBHTML;
+byte CURRENT_DEVICEVIEWER_DEVINDEX = 0;  // Track current device index in device viewer
+byte CURRENT_DEVICEVIEWER_DEVNUMBER = 0; // track the number of devices, which may not align with the index
+
+extern STRUCT_PrefsH Prefs;
+//extern bool requestWiFiPassword(const uint8_t* serverMAC);
+
 
 namespace {
-  constexpr uint32_t IGMP_REFRESH_INTERVAL_SEC = 300;
+  constexpr uint32_t IGMP_REFRESH_INTERVAL_SEC = 60;
   constexpr uint32_t IGMP_STALE_UDP_SEC = 120;
   time_t s_lastIgmpRefreshTime = 0;
 }
@@ -135,6 +143,100 @@ static String formatRssiHtml(int32_t rssi, const char* suffix = " dBm") {
   String val = String(rssi) + suffix;
   if (!color) return val;
   return String("<span style=\"color:") + color + ";font-weight:bold;\">" + val + "</span>";
+}
+
+static String formatCommTime(uint32_t t) {
+  return (t > 0) ? dateify(t, "mm/dd/yyyy hh:nn:ss") : String("???");
+}
+
+static void appendCommTableRow(const char* label, const String& value) {
+  WEBHTML += "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">";
+  WEBHTML += label;
+  WEBHTML += "</td><td style=\"padding: 8px; border: 1px solid #ddd;\">";
+  WEBHTML += value;
+  WEBHTML += "</td></tr>";
+}
+
+static void appendBroadcastForm(const char* action, const char* label, const char* color = "#2196F3") {
+  WEBHTML += "<form action=\"";
+  WEBHTML += action;
+  WEBHTML += "\" method=\"post\" style=\"margin: 10px 0;\">";
+  WEBHTML += "<button type=\"submit\" style=\"padding:8px 16px; background-color:";
+  WEBHTML += color;
+  WEBHTML += "; color:white; border:none; border-radius:4px; font-size:14px; cursor:pointer;\">";
+  WEBHTML += label;
+  WEBHTML += "</button></form>";
+}
+
+static void appendCommunicationsSection() {
+  WEBHTML += "<h3>Communications</h3>";
+  appendBroadcastForm("/REQUEST_BROADCAST", "Broadcast Now (ESPLan + UDPLan)");
+
+  WEBHTML += "<h4>ESPLan</h4>";
+  appendBroadcastForm("/REQUEST_BROADCAST_ESP", "Broadcast ESPLan", "#4CAF50");
+  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
+  {
+    String sender = MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC);
+    if (I.ESPNOW_LAST_INCOMINGMSG_FROM_IP != IPAddress(0, 0, 0, 0)) {
+      sender += " / " + I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString();
+    }
+    appendCommTableRow("Last incoming time", formatCommTime(I.ESPNOW_LAST_INCOMINGMSG_TIME));
+    appendCommTableRow("Last incoming type", String(I.ESPNOW_LAST_INCOMINGMSG_TYPE));
+    appendCommTableRow("Last incoming sender", sender);
+    appendCommTableRow("Total incoming today", String(I.ESPNOW_RECEIVES));
+    appendCommTableRow("Last outgoing time", formatCommTime(I.ESPNOW_LAST_OUTGOINGMSG_TIME));
+    appendCommTableRow("Last outgoing type", String(I.ESPNOW_LAST_OUTGOINGMSG_TYPE));
+    appendCommTableRow("Last outgoing target", MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC));
+    appendCommTableRow("Total outgoing today", String(I.ESPNOW_SENDS));
+  }
+  WEBHTML += "</table>";
+
+  #ifdef _USEUDP
+  WEBHTML += "<h4>UDPLan</h4>";
+  appendBroadcastForm("/REQUEST_BROADCAST_UDP", "Broadcast UDPLan", "#FF9800");
+  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
+  appendCommTableRow("Last incoming time", formatCommTime(I.UDP_LAST_INCOMINGMSG_TIME));
+  appendCommTableRow("Last incoming type", String(I.UDP_LAST_INCOMINGMSG_TYPE));
+  appendCommTableRow("Last incoming sender IP", I.UDP_LAST_INCOMINGMSG_FROM_IP.toString());
+  appendCommTableRow("Total incoming today", String(I.UDP_RECEIVES));
+  appendCommTableRow("Last outgoing time", formatCommTime(I.UDP_LAST_OUTGOINGMSG_TIME));
+  appendCommTableRow("Last outgoing type", String(I.UDP_LAST_OUTGOINGMSG_TYPE));
+  appendCommTableRow("Last outgoing target IP", I.UDP_LAST_OUTGOINGMSG_TO_IP.toString());
+  appendCommTableRow("Total outgoing today", String(I.UDP_SENDS));
+  WEBHTML += "</table>";
+  #endif
+
+  WEBHTML += "<h4>HTTP</h4>";
+  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
+  appendCommTableRow("Last incoming time", formatCommTime(I.HTTP_LAST_INCOMINGMSG_TIME));
+  appendCommTableRow("Last incoming type", String(I.HTTP_LAST_INCOMINGMSG_TYPE));
+  appendCommTableRow("Last incoming sender IP", I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString());
+  appendCommTableRow("Total incoming today", String(I.HTTP_RECEIVES));
+  appendCommTableRow("Last outgoing time", formatCommTime(I.HTTP_LAST_OUTGOINGMSG_TIME));
+  appendCommTableRow("Last outgoing type", String(I.HTTP_LAST_OUTGOINGMSG_TYPE));
+  appendCommTableRow("Last outgoing target IP", I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString());
+  appendCommTableRow("Total outgoing today", String(I.HTTP_SENDS));
+  WEBHTML += "</table>";
+}
+
+static bool isHttpUiBrowseMessage(const char* messageType) {
+  if (!messageType || messageType[0] == '\0') return true;
+  static const char* kUiBrowseTypes[] = {
+    "MainPage", "DeviceViewer", "DVNext", "DVPrev", "DVPing", "DVDelete",
+    "DataHx", "AvgHx",
+    "CONFIG", "ConfigIn", "ConfigDel", "ConfigOtaSwitch",
+    "GSHEET", "GSHEETOut", "GSHEETUp", "GSHEETShare", "GSHEETDelete",
+    "Weather", "WthrLoc", "WthrRef", "WthrZip", "WthrAddr", "WTHRREQ", "TIMEUPD",
+    "SDCard", "SDDir", "SDDownload", "SDUp", "SDDelSns", "SDStoreDev",
+    "SDSaveScr", "SDSaveWthr", "SDSysLog",
+    "ErrorLog", "RebootDebug", "REBOOT",
+    "404", "Broadcast", "STATUS",
+    "SnsOvrd", "SnsUpd", "ReadReq", "API_SNS_READ_NOW",
+  };
+  for (const char* uiType : kUiBrowseTypes) {
+    if (strcmp(messageType, uiType) == 0) return true;
+  }
+  return false;
 }
 
 //wifi event registration 
@@ -241,13 +343,6 @@ String WiFiEventtoString(WiFiEvent_t event) {
 
 
 
-//server
-String WEBHTML;
-byte CURRENT_DEVICEVIEWER_DEVINDEX = 0;  // Track current device index in device viewer
-byte CURRENT_DEVICEVIEWER_DEVNUMBER = 0; // track the number of devices, which may not align with the index
-
-extern STRUCT_PrefsH Prefs;
-//extern bool requestWiFiPassword(const uint8_t* serverMAC);
 
 
 // Helper function to format bytes into human-readable format
@@ -878,7 +973,8 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
     return linkStatus;
   }
 
-  // Runtime: no forced reconnect — autoreconnect handles recovery.
+  // Runtime: ESP-IDF auto-reconnect handles brief STA drops. After WIFI_DOWN_AP_THRESHOLD_SEC
+  // of continuous failure, open soft-AP so credentials can be updated; keep AP up until STA recovers.
   if (!haveWifiCredentials()) {
     if (!softApRunning()) {
       enterAPStationMode();
@@ -987,12 +1083,33 @@ int16_t connectWiFi(uint8_t retryLimit, uint16_t tryTimeoutMs) {
 
 void startWifiConnectAsync() {
   if (!haveWifiCredentials()) return;
+  // Already associated / usable — do not re-issue WiFi.begin (can bounce soft-AP in APSTA).
+  if (wifiReadyForNetwork()) return;
+  // Time-debounce begin(); do NOT gate on WL_IDLE_STATUS — on Arduino-ESP32 3.x that
+  // means associated-without-IP / lost-IP, not "still negotiating", and blocking on it
+  // left devices stuck in soft-AP after prolonged outages.
+  static uint32_t s_lastBeginMs = 0;
+  const uint32_t nowMs = millis();
+  if (s_lastBeginMs != 0
+      && (nowMs - s_lastBeginMs) < (WIFI_AP_STA_RECONNECT_SEC * 1000UL)) {
+    return;
+  }
+
   #ifdef _USE32
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
   #endif
+  // Preserve AP+STA if soft-AP is already up; never force a mode flip here.
+  if (softApRunning()) {
+    if (WiFi.getMode() != WIFI_MODE_APSTA) {
+      WiFi.mode(WIFI_MODE_APSTA);
+    }
+  } else if (WiFi.getMode() != WIFI_MODE_STA && WiFi.getMode() != WIFI_MODE_APSTA) {
+    WiFi.mode(WIFI_MODE_STA);
+  }
   WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD);
   WiFi.setSleep(WIFI_PS_NONE);
+  s_lastBeginMs = nowMs;
   SerialPrint("startWifiConnectAsync: non-blocking STA reconnect started", true);
 }
 
@@ -1103,6 +1220,10 @@ namespace {
 
   bool shouldRunApChannelScan() {
     if (wifiReadyForNetwork()) return false;
+    // With known STA credentials, prioritize router rejoin: RF channel hops in APSTA
+    // interrupt association/DHCP and can wedge reconnect. ESP-NOW scan is only useful
+    // when there are no credentials to recover with.
+    if (haveWifiCredentials()) return false;
     if (!apEspNowStaleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
     if (!apClientIdleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
 
@@ -1168,15 +1289,17 @@ void enterAPStationMode() {
 
   server.begin();
 
-  I.apLastReconnectCheckTime = 0;
   I.apLastClientActivity = 0;
   I.apLastChannelScanTime = 0;
   s_apLastChannelScanMillis = 0;
   s_apEnterMillis = millis();
   if (isTimeValid(I.currentTime)) {
     I.apModeEnteredTime = I.currentTime;
+    // Defer first STA reconnect so soft-AP can stabilize (WiFi.begin can bounce AP briefly).
+    I.apLastReconnectCheckTime = I.currentTime;
   } else {
     I.apModeEnteredTime = 0;
+    I.apLastReconnectCheckTime = 0;
   }
 
   SerialPrint("AP Station ID: ", false);
@@ -1195,6 +1318,10 @@ void enterAPStationMode() {
 
 void maybeExitAPStationMode() {
   if (!softApRunning()) return;
+  // Soft-AP is the recovery surface while router STA is down — only tear it down
+  // once STA is actually usable. (Previously this exited whenever setup was finalized,
+  // which caused AP start/stop thrashing every loop while WiFi was failed.)
+  if (!wifiReadyForNetwork()) return;
   if (!I.initialSetupFinalized) return;
   if (!initialSetupRequirementsMet()) return;
 
@@ -1253,7 +1380,7 @@ void serviceAPStationMode() {
   const bool firstCheck = (I.apLastReconnectCheckTime == 0);
   const bool due = firstCheck
       || (isTimeValid(I.currentTime)
-          && I.currentTime - I.apLastReconnectCheckTime >= WIFI_DOWN_AP_THRESHOLD_SEC);
+          && I.currentTime - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
   if (!due) return;
 
   const bool clientActiveSinceLastCheck = !firstCheck
@@ -1264,6 +1391,7 @@ void serviceAPStationMode() {
     I.apLastReconnectCheckTime = I.currentTime;
   }
 
+  // Retry known credentials periodically; keep soft-AP up until STA recovers.
   if (!clientActiveSinceLastCheck) {
     startWifiConnectAsync();
   }
@@ -2715,74 +2843,8 @@ void handleSTATUS() {
   #endif
 
   WEBHTML = WEBHTML + "---------------------<br>";
-  WEBHTML = WEBHTML + "<h3>HTTP Incoming</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME > 0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Receives:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_RECEIVES + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Incoming From IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-  WEBHTML = WEBHTML + R"===(
-    <form action="/REQUEST_BROADCAST" method="post" style="margin: 15px 0;">
-      <button type="submit" style="padding:10px 20px; background-color:#2196F3; color:white; border:none; border-radius:4px; font-size:16px; cursor:pointer;">
-        Broadcast Now
-      </button>
-    </form>
-  )===";
-
-  #ifdef _USEDETAILEDSTATUSWEBHTML
-  WEBHTML = WEBHTML + "---------------------<br>";      
-  #ifdef _USEUDP  
-  //in this section we will show incoming and then outgoing UDP message traffic info  
-  WEBHTML = WEBHTML + "<h3>UDP Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.UDP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message target IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Outgoing Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_OUTGOING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_SENDS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.UDP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.UDP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last UDP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.UDP_RECEIVES + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-  WEBHTML = WEBHTML + "---------------------<br>";       
-  #endif
-//in this section show HTTP traffic info
-  WEBHTML = WEBHTML + "<h3>HTTP Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_OUTGOINGMSG_TIME>0 ? dateify(I.HTTP_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message To IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_OUTGOING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_SENDS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message Received at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.HTTP_LAST_INCOMINGMSG_TIME>0 ? dateify(I.HTTP_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message from IP:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString() + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last HTTP Incoming Message:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.HTTP_RECEIVES + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-  WEBHTML = WEBHTML + "---------------------<br>";       
-
-  //in this section we will show incoming and then outgoing ESPNOW message traffic info  
-  WEBHTML = WEBHTML + "<h3>LocalLAN Message Traffic</h3>";
-  WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_OUTGOINGMSG_TIME ? dateify(I.ESPNOW_LAST_OUTGOINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message To MAC:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC) + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Outgoing Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_OUTGOINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNOW Outgoing Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_OUTGOING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Messages Sent today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_SENDS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Sent at:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) (I.ESPNOW_LAST_INCOMINGMSG_TIME ? dateify(I.ESPNOW_LAST_INCOMINGMSG_TIME,"mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Sender:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC) + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last ESPNOW Incoming Message Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_LAST_INCOMINGMSG_TYPE + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNOW Incoming Errors:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_INCOMING_ERRORS + "</td></tr>";
-  WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">LAN Messages Received today:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + (String) I.ESPNOW_RECEIVES + "</td></tr>";
-  WEBHTML = WEBHTML + "</table>";
-
-  #endif
+  appendCommunicationsSection();
+  WEBHTML = WEBHTML + "---------------------<br>";
   #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "---------------------<br>";      
   WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
@@ -2891,7 +2953,7 @@ void serverTextHeader(String pagename) {
   ArborysDevType* myDev = nullptr;
   uint16_t myDeviceIndex = Sensors.findMyDeviceIndex();
   if (myDeviceIndex != (uint16_t)-1) myDev = Sensors.getDeviceByDevIndex(myDeviceIndex);
-  WEBHTML += "<h3>Current version: " + formatArborysDeviceFirmware(myDev) + "</h3>";
+  WEBHTML += "<h3>Current Version: " + formatArborysDeviceFirmware(myDev) + getFirmwareReceiveProgressSuffix() + "</h3>";
   WEBHTML += "<h3>Device IP: " + (String) WiFi.localIP().toString() + "</h3>";  
 }
 
@@ -3646,18 +3708,24 @@ void handleGSHEET_DELETE_ALL() {
 }
 
 void handleREQUEST_BROADCAST() {
-  registerHTTPMessage("Broadcast");
-  
-  // Trigger broadcast by calling the broadcastServerPresence function
-  bool result = broadcastServerPresence(true,2);
-  
-  String msg = "Broadcast triggered. Result: " + String(result ? "Success" : "Failed");
-  SerialPrint(msg, true);
-  
-  // Redirect back to the status page
+  bool result = broadcastServerPresence(true, 2);
+  SerialPrint("Broadcast (ESPLan+UDPLan): " + String(result ? "Success" : "Failed"), true);
   server.sendHeader("Location", "/STATUS");
-  server.send(302, "text/plain", (result)?"Success":"Failed");
-  
+  server.send(302, "text/plain", result ? "Success" : "Failed");
+}
+
+void handleREQUEST_BROADCAST_ESP() {
+  bool result = broadcastServerPresence(true, 0);
+  SerialPrint("Broadcast ESPLan: " + String(result ? "Success" : "Failed"), true);
+  server.sendHeader("Location", "/STATUS");
+  server.send(302, "text/plain", result ? "Success" : "Failed");
+}
+
+void handleREQUEST_BROADCAST_UDP() {
+  bool result = broadcastServerPresence(true, 1);
+  SerialPrint("Broadcast UDPLan: " + String(result ? "Success" : "Failed"), true);
+  server.sendHeader("Location", "/STATUS");
+  server.send(302, "text/plain", result ? "Success" : "Failed");
 }
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last MAC in hex
@@ -5695,16 +5763,34 @@ static void popJsonPingReplyContext() {
   s_jsonPingReplyUdpIp = s_jsonPingReplyUdpIpStack[prev];
 }
 
-static void registerHttpMsgTypeFromJson(const String& postData) {
+static void truncateMsgTypeToBuffer(const String& msgType, char* out, size_t outLen) {
+  if (outLen == 0) return;
+  String mt = msgType;
+  if (mt.length() == 0) mt = "snsData";
+  if (mt.length() >= outLen) mt = mt.substring(0, outLen - 1);
+  snprintf(out, outLen, "%s", mt.c_str());
+}
+
+static void parseJsonMsgType(const String& postData, char* out, size_t outLen) {
+  if (outLen == 0) return;
   StaticJsonDocument<384> doc;
   if (deserializeJson(doc, postData) != DeserializationError::Ok) {
-    registerHTTPMessage("JSON?");
+    snprintf(out, outLen, "JSON?");
     return;
   }
-  String msgType = doc["msgType"] | "snsData";
-  if (msgType.length() == 0) msgType = "snsData";
-  if (msgType.length() > 9) msgType = msgType.substring(0, 9);
-  registerHTTPMessage(msgType.c_str());
+  truncateMsgTypeToBuffer(String(doc["msgType"] | "snsData"), out, outLen);
+}
+
+static void registerHttpMsgTypeFromJson(const String& postData) {
+  char msgType[10];
+  parseJsonMsgType(postData, msgType, sizeof(msgType));
+  registerHTTPMessage(msgType);
+}
+
+static void registerUdpMsgTypeFromJson(const String& postData, IPAddress remoteIP) {
+  char msgType[10];
+  parseJsonMsgType(postData, msgType, sizeof(msgType));
+  registerUDPMessage(remoteIP, msgType);
 }
 
 static bool jsonPingAckMatches(const String& jsonBody, uint64_t expectedMac) {
@@ -6451,8 +6537,10 @@ void setupServerRoutes() {
     server.on("/GSHEET_SHARE_ALL", HTTP_POST, handleGSHEET_SHARE_ALL);
     server.on("/GSHEET_DELETE_ALL", HTTP_POST, handleGSHEET_DELETE_ALL);
     
-    // ESP-NOW Broadcast route
+    // LAN broadcast routes (presence / alive)
     server.on("/REQUEST_BROADCAST", HTTP_POST, handleREQUEST_BROADCAST);
+    server.on("/REQUEST_BROADCAST_ESP", HTTP_POST, handleREQUEST_BROADCAST_ESP);
+    server.on("/REQUEST_BROADCAST_UDP", HTTP_POST, handleREQUEST_BROADCAST_UDP);
     
     // New API routes for streamlined setup
     server.on("/api/wifi", HTTP_POST, apiConnectToWiFi);
@@ -8159,8 +8247,7 @@ bool receiveUDPMessage() {
       buffer[packetSize] = '\0';  // ensure null termination for String
       String responseMsg = "OK";
       String postData = (String)buffer;
-      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "JSON");
-      registerHttpMsgTypeFromJson(postData);
+      registerUdpMsgTypeFromJson(postData, remoteIP);
       pushJsonPingReplyContext(JSON_PING_REPLY_UDP, remoteIP);
       processJSONMessage(postData, responseMsg);
       popJsonPingReplyContext();
@@ -8246,8 +8333,9 @@ void registerUDPSend(IPAddress ip, const char* messageType) {
 }
 
 void registerHTTPMessage(const char* messageType) {
+  if (isHttpUiBrowseMessage(messageType)) return;
   I.HTTP_LAST_INCOMINGMSG_TIME = I.currentTime;
-  snprintf(I.HTTP_LAST_INCOMINGMSG_TYPE, sizeof(I.HTTP_LAST_INCOMINGMSG_TYPE), messageType);
+  snprintf(I.HTTP_LAST_INCOMINGMSG_TYPE, sizeof(I.HTTP_LAST_INCOMINGMSG_TYPE), "%s", messageType);
   I.HTTP_LAST_INCOMINGMSG_FROM_IP = server.client().remoteIP();
   I.HTTP_RECEIVES++;
 }

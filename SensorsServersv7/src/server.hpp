@@ -153,10 +153,15 @@ extern uint16_t TESTRUN;
 extern uint32_t WTHRFAIL;
 #endif
 
-// Boot: 5 blocking tries × 45 s, then non-blocking AP. Runtime: no forced reconnect (autoreconnect + AP).
+// Boot: 5 blocking tries × 45 s, then non-blocking AP.
+// Runtime: wait WIFI_DOWN_AP_THRESHOLD_SEC before opening soft-AP for credential recovery;
+// while AP is up, retry known STA credentials every WIFI_AP_STA_RECONNECT_SEC (time-debounced
+// WiFi.begin; do not gate on WL_IDLE_STATUS). Soft-AP stays up until STA is usable.
+// AP-mode ESP-NOW channel scans run only when credentials are missing (avoid RF hops during STA retry).
 static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 5;
 static constexpr uint16_t WIFI_BOOT_TRY_MS = 45000;
-static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 60;
+static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 300; // 5 minutes of continuous STA failure → enter AP+STA
+static constexpr uint16_t WIFI_AP_STA_RECONNECT_SEC = 60;   // while in AP+STA, retry known SSID this often
 static constexpr uint16_t AP_ESP_NOW_STALE_PING_SEC = 60;
 static constexpr uint16_t AP_CHANNEL_SCAN_IDLE_SEC = 120;
 static constexpr uint16_t AP_CHANNEL_SCAN_STEP_MS = 100;
@@ -243,6 +248,8 @@ void handleGSHEET_UPLOAD_NOW();
 void handleGSHEET_SHARE_ALL();
 void handleGSHEET_DELETE_ALL();
 void handleREQUEST_BROADCAST();
+void handleREQUEST_BROADCAST_ESP();
+void handleREQUEST_BROADCAST_UDP();
 void handleSDCARD();
 void handleSDCARD_DELETE_SENSORS();
 void handleSDCARD_STORE_DEVICES();
