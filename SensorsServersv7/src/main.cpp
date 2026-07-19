@@ -675,38 +675,41 @@ void loop() {
             sendAllSensors(false, -1, true);
             #endif
             #if _IS_SERVER_HUB
-            // Hub: ping expired peripheral devices
-            int16_t startIndex = -1;
-            while (startIndex < NUMDEVICES) {
-                ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
-                if (!device) break;
-                if (device->devType >= 100) continue; //don't send a ping to servers
-                if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
-                if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
-                SerialPrint("Sensor expired: Sending sensor data request to " + String(device->devName),true);
+            // Hub: once per minute, ping each expired critical sensor that has not been pinged in the last 5 minutes
+            static uint32_t s_lastExpiredSensorPing[NUMSENSORS] = {0};
+            constexpr uint32_t EXPIRED_SENSOR_PING_INTERVAL_SEC = 300; // 5 minutes per sensor
+            for (int16_t si = 0; si < NUMSENSORS; ++si) {
+                ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+                if (!S || !S->IsSet || !S->expired || S->SendingInt == 0) continue;
+                if (!bitRead(S->Flags, 7)) continue; // only critical sensors (matches checkExpirationAllSensors above)
+                if (s_lastExpiredSensorPing[si] != 0 &&
+                    s_lastExpiredSensorPing[si] + EXPIRED_SENSOR_PING_INTERVAL_SEC > I.currentTime) {
+                    continue; // this sensor was pinged too recently
+                }
 
-                // Escalate by how long sensors have been expired (threshold: timeLogged + 1.25 × SendingInt)
+                ArborysDevType* device = Sensors.getDeviceBySnsIndex(si);
+                if (!device || !device->IsSet) continue;
+                if (device->devType >= 100) continue; // don't send a ping to servers
+
+                SerialPrint("Sensor expired: Sending sensor data request for " + String(S->snsName) +
+                            " on " + String(device->devName), true);
+
+                // Escalate by how long this sensor has been expired (threshold: timeLogged + 1.25 × SendingInt)
                 uint32_t secondsExpired = 0;
-                int16_t devIdx = Sensors.findDevice(device->MAC);
-                for (int16_t si = 0; si < NUMSENSORS; ++si) {
-                    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
-                    if (!S || !S->IsSet || S->deviceIndex != devIdx || !S->expired || S->SendingInt == 0) continue;
-                    uint32_t expiredAt = sensorExpirationTime(S->timeLogged, S->SendingInt);
-                    if (I.currentTime > expiredAt) {
-                        uint32_t sec = I.currentTime - expiredAt;
-                        if (sec > secondsExpired) secondsExpired = sec;
-                    }
+                uint32_t expiredAt = sensorExpirationTime(S->timeLogged, S->SendingInt);
+                if (I.currentTime > expiredAt) {
+                    secondsExpired = I.currentTime - expiredAt;
                 }
 
                 if (secondsExpired <= 120) {
-                    sendMSG_DataRequest(device, -1, false); // UDP JSON data request
+                    sendMSG_DataRequest(device, si, false); // UDP JSON data request
                 } else if (secondsExpired <= 240) {
-                    sendMSG_DataRequest(device, -1, true); // HTTP data request
-                }
-                else {
+                    sendMSG_DataRequest(device, si, true); // HTTP data request
+                } else {
                     sendLANSensorDataRequest(device, 3); // ESP-NOW + UDP LAN types 7/107
                 }
 
+                s_lastExpiredSensorPing[si] = I.currentTime;
                 device->dataSent = I.currentTime;
                 delayWithNetwork(10,25);
             }
