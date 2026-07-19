@@ -3,7 +3,7 @@
 // Independent compile-time device roles (not mutually exclusive).
 //
 // _HAS_LOCAL_SENSORS — local sensor subsystem: sensors.cpp, ReadData, SNS prefs, send upstream
-// _IS_SERVER_HUB     — hub: collect all remote device/sensor data, ping expired sensors (5 min per sensor), broadcast presence
+// _IS_SERVER_HUB     — hub: collect all remote device/sensor data, ping expired sensors (5 min check / 10 min per sensor), broadcast presence
 //                       non-hub nodes store server devices (devType>=100) only, not remote sensors
 //
 // Every env must set at least one to 1. Typical configs:
