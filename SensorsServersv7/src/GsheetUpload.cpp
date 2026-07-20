@@ -687,6 +687,10 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     }
 
     
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("GSheet upload...", TFT_YELLOW, TFT_BLACK, 300);
+    #endif
+
     bool gReady = GSheet.ready();
     if (gReady==false) {
         SerialPrint("ERROR: GSheet not ready",true);

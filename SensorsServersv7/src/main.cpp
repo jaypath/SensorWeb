@@ -469,16 +469,21 @@ void loop() {
         if (Sensors.getNumDevices() ==1) I.makeBroadcast = true; //if there is only one device (including  me), broadcast my presence
         
         #if _HAS_LOCAL_SENSORS
-        // Push local sensor data to servers that have not received it recently
-        for (int16_t i=0; i<NUMDEVICES ; i++) {
-          ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-          if (!d || !d->IsSet || d->devType < 100) continue;
-          if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
-            int16_t deviceIndex = Sensors.findDevice(d->MAC);
-            sendAllSensors(true,deviceIndex,false); //http message to server
+        // Force a send cycle if any server is overdue (UDP broadcast + HTTP/HTTPS for low UDP-rate servers)
+        {
+          bool anyServerOverdue = false;
+          for (int16_t i = 0; i < NUMDEVICES; i++) {
+            ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+            if (!d || !d->IsSet || d->devType < 100) continue;
+            if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
+              anyServerOverdue = true;
+              break;
+            }
+          }
+          if (anyServerOverdue) {
+            sendAllSensors(true, -1, true);
           }
         }
-        
         #endif
 
         #ifdef _USEWEATHER
@@ -631,6 +636,7 @@ void loop() {
         I.HTTP_INCOMING_ERRORS = 0;
         I.HTTP_OUTGOING_ERRORS = 0;
         I.rebootsToday = 0;
+        Sensors.resetDailyPingCounters();
 
         #ifdef _REBOOTDAILY
         SerialPrint("Rebooting daily...",true);
@@ -668,53 +674,56 @@ void loop() {
         #endif
 
         if (I.MyRandomSecond == second()) {
-            // once per minute at a random second: check critical sensor expiry (timeLogged + 1.25 × SendingInt)
-            I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true, 0, true);
-
+            // Send first so local timeLogged/timeRead clocks refresh before expiry evaluation.
             #if _HAS_LOCAL_SENSORS
             sendAllSensors(false, -1, true);
             #endif
+            // once per minute at a random second: check critical sensor expiry
+            // (local: timeRead + 1.25×SendingInt; remote: timeLogged + 1.25×SendingInt)
+            I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true, 0, true);
+
             #if _IS_SERVER_HUB
-            // Hub: ping expired peripheral devices
+            // Hub: request data from expired peripherals (UDP if UDP ping rate >50%, else HTTP/HTTPS)
             int16_t startIndex = -1;
+            #ifdef _USE_HEADER_INFO_ALERT
+            bool headerAlertActive = false;
+            #endif
             while (startIndex < NUMDEVICES) {
                 ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
                 if (!device) break;
                 if (device->devType >= 100) continue; //don't send a ping to servers
                 if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
                 if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
-                SerialPrint("Sensor expired: Sending sensor data request to " + String(device->devName),true);
 
-                // Escalate by how long sensors have been expired (threshold: timeLogged + 1.25 × SendingInt)
-                uint32_t secondsExpired = 0;
-                int16_t devIdx = Sensors.findDevice(device->MAC);
-                for (int16_t si = 0; si < NUMSENSORS; ++si) {
-                    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
-                    if (!S || !S->IsSet || S->deviceIndex != devIdx || !S->expired || S->SendingInt == 0) continue;
-                    uint32_t expiredAt = sensorExpirationTime(S->timeLogged, S->SendingInt);
-                    if (I.currentTime > expiredAt) {
-                        uint32_t sec = I.currentTime - expiredAt;
-                        if (sec > secondsExpired) secondsExpired = sec;
-                    }
+                #ifdef _USE_HEADER_INFO_ALERT
+                if (!headerAlertActive) {
+                    HeaderInfoAlert("Req sensors...", TFT_YELLOW, TFT_BLACK, 120);
+                    headerAlertActive = true;
                 }
+                #endif
 
-                if (secondsExpired <= 120) {
-                    sendMSG_DataRequest(device, -1, false); // UDP JSON data request
-                } else if (secondsExpired <= 240) {
-                    sendMSG_DataRequest(device, -1, true); // HTTP data request
-                }
-                else {
-                    sendLANSensorDataRequest(device, 3); // ESP-NOW + UDP LAN types 7/107
-                }
+                const bool useUdp = deviceUdpPingRateAbove50(device);
+                SerialPrint("Sensor expired: data request to " + String(device->devName) +
+                    " via " + String(useUdp ? "UDP" : "HTTP/HTTPS") +
+                    " (UDP rate " + String(udpPingSuccessRatePercent(device)) + "%)", true);
+
+                sendMSG_DataRequest(device, -1, !useUdp);
 
                 device->dataSent = I.currentTime;
                 delayWithNetwork(10,25);
             }
+            #ifdef _USE_HEADER_INFO_ALERT
+            if (headerAlertActive) HeaderInfoAlert("");
+            #endif
             if (I.makeBroadcast) { //broadcast every 10 minutes, at some random second within the 10th minute
                 broadcastServerPresence(true, 2);
             }
             #endif
+
         }
+
+        // Connectivity pings (response-required): start every 10 minutes; service one device/sec
+        serviceDeviceConnectivityPings(minute() % 10 == 0 && I.MyRandomSecond == second());
     }
 
 }

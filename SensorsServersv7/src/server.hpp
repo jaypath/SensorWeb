@@ -162,6 +162,10 @@ static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 5;
 static constexpr uint16_t WIFI_BOOT_TRY_MS = 45000;
 static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 300; // 5 minutes of continuous STA failure → enter AP+STA
 static constexpr uint16_t WIFI_AP_STA_RECONNECT_SEC = 60;   // while in AP+STA, retry known SSID this often
+// Prefer strongest BSSID for the configured SSID at connect time; re-evaluate periodically.
+// Chosen BSSID is never persisted — only the best AP at the moment of selection.
+static constexpr uint16_t WIFI_BSSID_OPTIMIZE_INTERVAL_SEC = 1800; // 30 minutes
+static constexpr int8_t WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB = 6;    // hysteresis to avoid AP flapping
 static constexpr uint16_t AP_ESP_NOW_STALE_PING_SEC = 60;
 static constexpr uint16_t AP_CHANNEL_SCAN_IDLE_SEC = 120;
 static constexpr uint16_t AP_CHANNEL_SCAN_STEP_MS = 100;
@@ -182,6 +186,7 @@ bool softApRunning();
 void updateRSSI(bool forceUpdate = false);
 void syncDeviceIPFromWifi();
 void startWifiConnectAsync();
+void maybeOptimizeWifiBssid();
 void enterAPStationMode();
 void exitAPStationMode();
 void maybeExitAPStationMode();
@@ -223,6 +228,8 @@ void handleSETWIFI();
 void handleSTATUS();
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
 void serverTextHeader(String pagename);
+void serverTextStreamBegin(int htmlcode=200, bool asHTML=true);
+void serverTextFlush(bool force=false);
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 // Weather configuration handlers
 void handleWeather();
@@ -269,6 +276,8 @@ void handleDeviceViewerNext();
 void handleDeviceViewerPrev();
 void handleDeviceViewerPing();
 void handleDeviceViewerDelete();
+void handleREGISTER_DEVICE();
+void handleREGISTER_DEVICE_POST();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 
 void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks);
@@ -309,6 +318,10 @@ bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
 int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
+
+// Connectivity ping metrics: ESPNow + UDP every ~10 min; HTTP only if both fail.
+// Pass startCycle=true on the 10-minute mark; call every second while a cycle is active.
+void serviceDeviceConnectivityPings(bool startCycle = false);
 
 //add json handlers
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);

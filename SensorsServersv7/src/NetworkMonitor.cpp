@@ -430,6 +430,10 @@ void NetworkMonitor_GatewayLatency() {
     NetworkMonitor.gatewayLatency.success = false;
     NetworkMonitor.gatewayLatency.ping = NmPingResult();
 
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("GW lat...", TFT_YELLOW, TFT_BLACK, 60);
+    #endif
+
     const uint32_t deadlineMs = millis() + NM_PING_MAX_DURATION_MS;
     if (!runLocalPing(NetworkMonitor.gatewayLatency.ping, deadlineMs)) {
         NetworkMonitor.gatewayLatency.ping.packetsLost = NM_PING_BURST_COUNT;
@@ -451,6 +455,10 @@ void NetworkMonitor_PingTest() {
         NetworkMonitor.externalPing.wan.packetsLost = NM_PING_BURST_COUNT;
         return;
     }
+
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("WAN lat...", TFT_YELLOW, TFT_BLACK, 60);
+    #endif
 
     const uint32_t deadlineMs = millis() + NM_PING_MAX_DURATION_MS;
     uint8_t primaryLoss = 0;
@@ -492,6 +500,10 @@ void NetworkMonitor_DownloadTest() {
     NetworkMonitor.download.lastRunTime = I.currentTime;
     return;
 #else
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("Speed test...", TFT_YELLOW, TFT_BLACK, 120);
+    #endif
+
     if (!resolveHostIPv4("speed.cloudflare.com", NetworkMonitor.download.sourceIP)) {
         NetworkMonitor.download.lastRunTime = I.currentTime;
         return;

@@ -170,6 +170,8 @@ void systemHousekeeping(bool fullHousekeeping) {
 
     updateWifiChannel();
 
+    maybeOptimizeWifiBssid();
+
     ensureESPNOW(); // router not required; retry if init failed earlier
 
     #ifdef _USEUDP

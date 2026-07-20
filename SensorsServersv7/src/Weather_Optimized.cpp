@@ -234,6 +234,10 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
         SerialPrint("Weather update: WiFi not available", true);
         return 0;
     }
+
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("Wthr update", TFT_YELLOW, TFT_BLACK, 300);
+    #endif
     
     SerialPrint("Weather update optimized starting...",true);
     esp_task_wdt_reset();
@@ -1063,14 +1067,19 @@ int16_t WeatherInfoOptimized::breakIconLink(String icon, TimeInterval ti) {
     }
     
     if (icon.indexOf("dust",0)>-1) return 761;
+    if (icon.indexOf("smoke",0)>-1) return 761;
+    if (icon.indexOf("haze",0)>-1) return 761;
+
     if (icon.indexOf("hot",0)>-1) return 702;
     if (icon.indexOf("cold",0)>-1) return 701;
     
-    if (icon.indexOf("ovc",0)>-1) return 804;
-    if (icon.indexOf("bkn",0)>-1) return 803;
-    if (icon.indexOf("sct",0)>-1) return 801;
-    if (icon.indexOf("few",0)>-1) return 802;
-    if (icon.indexOf("skc",0)>-1) return 800;
+    if (icon.indexOf("ovc",0)>-1) return 804; //8/8
+    if (icon.indexOf("bkn",0)>-1) return 803; //5-7/8
+    if (icon.indexOf("sct",0)>-1) return 802; //3-4/8
+    if (icon.indexOf("few",0)>-1) return 801; //1-2/8
+    if (icon.indexOf("skc",0)>-1) return 800; //0/8
+    if (icon.indexOf("clr",0)>-1) return 800;
+
     if (icon.indexOf("fog",0)>-1) return 741;
     
     return 999;

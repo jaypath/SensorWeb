@@ -1,6 +1,8 @@
 # OTA success record - managed by ota_all.bat
 # Format: env_name|ip|version|yyyy-mm-dd HH:MM:SS
 # One line per PlatformIO OTA environment. Do not edit while ota_all.bat is running.
-wthrbase_OTA_BACKUPSERVER|192.168.1.166|9.4.9|2026-07-10 10:17:24
-wthrbase_OTA_MainServer|192.168.1.216|9.4.9|2026-07-10 10:19:21
-MastBR_OTA|192.168.1.225|9.4.9|2026-07-10 10:50:50
+wthrbase_OTA_BACKUPSERVER|192.168.1.166|9.4.10|2026-07-15 15:09:14
+wthrbase_OTA_MainServer|192.168.1.216|9.4.12|2026-07-16 11:04:20
+MastBR_OTA|192.168.1.225|9.4.12|2026-07-16 11:17:27
+LivRm_OTA|192.168.1.10|9.4.12|2026-07-16 11:19:11
+DiningRm_OTA|192.168.1.9|9.4.12|2026-07-16 11:21:05

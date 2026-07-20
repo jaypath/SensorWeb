@@ -1080,6 +1080,10 @@ bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t bl
     }
     if (blockTimeMs == 0) blockTimeMs = ESPNOW_BLOCKING_PING_DEFAULT_MS;
 
+    #ifdef _USE_HEADER_INFO_ALERT
+    HeaderInfoAlertGuard headerAlert("Pinging...", TFT_YELLOW, TFT_BLACK, 60);
+    #endif
+
     uint32_t requestId = millis();
     ESPNOW_type msg = {};
     bool sent = false;

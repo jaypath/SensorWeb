@@ -89,6 +89,12 @@ Devices_Sensors::Devices_Sensors() {
         devices[i].IsSet = 0;
         devices[i].expired = false;
         devices[i].firmware.clear();
+        devices[i].ping_att_ESPNow = 0;
+        devices[i].ping_success_ESPNow = 0;
+        devices[i].ping_att_UDP = 0;
+        devices[i].ping_success_UDP = 0;
+        devices[i].ping_att_HTTP = 0;
+        devices[i].ping_success_HTTP = 0;
     }
     
     for (int i = 0; i < NUMSENSORS; i++) {
@@ -177,6 +183,12 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             devices[i].expired = false;
             devices[i].devType = devType;
             devices[i].firmware.clear();
+            devices[i].ping_att_ESPNow = 0;
+            devices[i].ping_success_ESPNow = 0;
+            devices[i].ping_att_UDP = 0;
+            devices[i].ping_success_UDP = 0;
+            devices[i].ping_att_HTTP = 0;
+            devices[i].ping_success_HTTP = 0;
             applyDeviceFirmware(&devices[i], MAC, firmware);
             
             numDevices++;
@@ -1238,11 +1250,23 @@ void Devices_Sensors::checkDeviceFlags() {
     }
 }
 
+void Devices_Sensors::resetDailyPingCounters() {
+    for (int16_t i = 0; i < NUMDEVICES; i++) {
+        devices[i].ping_att_ESPNow = 0;
+        devices[i].ping_success_ESPNow = 0;
+        devices[i].ping_att_UDP = 0;
+        devices[i].ping_success_UDP = 0;
+        devices[i].ping_att_HTTP = 0;
+        devices[i].ping_success_HTTP = 0;
+    }
+}
+
 //there are two ways to check expiration of device:
-//1. check if any sensors are expired at timeLogged + 1.25 × SendingInt; may also label the device expired
+//1. check if any sensors are expired at freshness + 1.25 × SendingInt; may also label the device expired
+//   (local sensors use timeRead; remotes use timeLogged). Sticky expired is cleared when within grace.
 //1a. call checkExpirationAllSensors(currentTime, onlyCritical, multiplier, expireDevice)
 //1b. then call any device expiration checker function, such as checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
-//2. check the devie directly, assuming that sendingInt has been registered as the shortest sending interval of all attached sensors. If the last read was multiplier x the sending interval ago then label the device expired. This is simpler and faster, but may miss a sensor if others are present.
+//2. check the device directly, assuming that sendingInt has been registered as the shortest sending interval of all attached sensors. If the last read was multiplier x the sending interval ago then label the device expired. This is simpler and faster, but may miss a sensor if others are present.
 //2a. call checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
 int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier) {
 
@@ -1262,6 +1286,12 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
 
 byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
     byte count = 0;
+    // Recompute device.expired from sensors so recovered devices do not stay sticky.
+    if (expireDevice) {
+        for (int16_t i = 0; i < NUMDEVICES; i++) {
+            if (devices[i].IsSet) devices[i].expired = false;
+        }
+    }
     for (int16_t i = 0; i < NUMSENSORS; i++) {
         if (checkExpirationSensor(i, currentTime, onlyCritical, multiplier, expireDevice) == 1)    count++;
         
@@ -1279,7 +1309,18 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
 
     uint16_t sendint = sensors[index].SendingInt;
     if (sendint==0) return -10;
-    uint32_t expirationTime = sensorExpirationTime(sensors[index].timeLogged, sendint);
+
+    const bool isMine = isMySensor(index);
+    // Local sensors: last successful read. Remotes: last logged/received update.
+    const uint32_t freshnessTime = isMine ? sensors[index].timeRead : sensors[index].timeLogged;
+
+    // Local sensor that has never been read yet should not be treated as expired.
+    if (isMine && freshnessTime == 0) {
+        sensors[index].expired = false;
+        return 0;
+    }
+
+    uint32_t expirationTime = sensorExpirationTime(freshnessTime, sendint);
 
     if (currentTime > expirationTime) {
         if (expireDevice) devices[sensors[index].deviceIndex].expired = true;
@@ -1287,6 +1328,8 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
         return 1;
     }
 
+    // Within grace: clear sticky expired flag after recovery.
+    sensors[index].expired = false;
     return 0;
 }
 

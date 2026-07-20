@@ -48,6 +48,11 @@ bool initGraphics() {
   GRAPHICS.touchX = 0;
   GRAPHICS.touchY = 0;
   GRAPHICS.alarmIndex = 0;
+  GRAPHICS.headerInfoAlert[0] = '\0';
+  GRAPHICS.headerInfoAlertFg = TFT_RED;
+  GRAPHICS.headerInfoAlertBg = TFT_BLACK;
+  GRAPHICS.headerInfoAlertStartMs = 0;
+  GRAPHICS.headerInfoAlertTtlMs = 0;
   GRAPHICS.Screen_Now = SCREEN_NONE;
   GRAPHICS.Screen_Next = SCREEN_MAIN;
   GRAPHICS.SubScreen_Now = -1; //this ensures a redraw
@@ -1591,36 +1596,26 @@ void fcnDrawHeader(int16_t index) {
   tft.drawString(st,x,y);
   x += tft.textWidth(st)+10;
 
+  // Shared trailing slot (within 0-180): ALARM/FLAG takes priority over HVAC
+  clearBit(HeaderFlags,1);
+  clearBit(HeaderFlags,2);
   FH = setFont(2);
-
-  
-  clearBit(HeaderFlags,1); //clear bit 1 (flags)
   tft.setTextFont(2);
-  if(isBit(GRAPHICS.StatusFlags,2)) { //alarm flag
-    tft.setTextColor(TFT_BLACK,TFT_RED); //without second arg it is transparent background
+  if (isBit(GRAPHICS.StatusFlags,2)) { // alarm flag
+    tft.setTextColor(TFT_BLACK,TFT_RED);
     tft.drawString("ALARM",x,y+2);
-    setBit(HeaderFlags,1); //set bit 1 to 1
-  }
-  else if (isBit(GRAPHICS.StatusFlags,0)) {
-    tft.setTextColor(TFT_ORANGE,BG_COLOR); //without second arg it is transparent background
+    setBit(HeaderFlags,1);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  } else if (isBit(GRAPHICS.StatusFlags,0)) {
+    tft.setTextColor(TFT_ORANGE,BG_COLOR);
     tft.drawString("FLAG",x,y+2);
-    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
-    //set bit 1 in headerflags
-    setBit(HeaderFlags,1); //set bit 1 to 1
-  }
-  x += tft.textWidth("ALARM")+4;
-
-
-  clearBit(HeaderFlags,2); //clear bit 2
-  //check if I have an HVAC sensor
-  if (Sensors.findSnsOfType("HVAC", false, -1) != -1) {
-    //set bit 2 in headerflags
-    setBit(HeaderFlags,2); //set bit 2 to 1
+    setBit(HeaderFlags,1);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  } else if (Sensors.findSnsOfType("HVAC", false, -1) != -1) {
+    setBit(HeaderFlags,2);
     setFont(0);
     fcnPrintTxtHeatingCooling(x,5);
-    st = "XX XX XX "; //placeholder to find new X position
-    x += tft.textWidth(st)+4;
-    tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
+    tft.setTextColor(FG_COLOR,BG_COLOR);
   }
 
   GRAPHICS.SCREEN_DATA[index].Local_Code = (int16_t) HeaderFlags; //save the header flags
@@ -1644,6 +1639,41 @@ void fcnDrawHeaderInfo(int16_t index) {
   if (GRAPHICS.GRAPHICS_TIMERS.Timers[timernum]  > 0) return; 
 
   GRAPHICS.StatusFlagsChanged = 0; //reset since we have checked all flags
+
+  // Acute banner: expire, or draw and hold (blocks IP/dawn cycling until clear/TTL)
+  if (GRAPHICS.headerInfoAlert[0] != '\0') {
+    if (GRAPHICS.headerInfoAlertTtlMs > 0
+        && (uint32_t)(millis() - GRAPHICS.headerInfoAlertStartMs) >= GRAPHICS.headerInfoAlertTtlMs) {
+      GRAPHICS.headerInfoAlert[0] = '\0';
+      GRAPHICS.headerInfoAlertTtlMs = 0;
+    } else {
+      uint16_t x = GRAPHICS.SCREEN_DATA[index].X;
+      uint16_t y = GRAPHICS.SCREEN_DATA[index].Y;
+      uint16_t w = GRAPHICS.SCREEN_DATA[index].W;
+      uint16_t h = GRAPHICS.SCREEN_DATA[index].H;
+      uint16_t fg = GRAPHICS.headerInfoAlertFg;
+      uint16_t bg = GRAPHICS.headerInfoAlertBg;
+
+      tft.fillRect(x, y, w, h, bg);
+      tft.setTextDatum(TL_DATUM);
+      uint32_t FH = setFont(2);
+      String st = String(GRAPHICS.headerInfoAlert);
+      uint16_t textWidth = tft.textWidth(st);
+      if (textWidth > w - 4) {
+        FH = setFont(1);
+        textWidth = tft.textWidth(st);
+      }
+      tft.setTextColor(fg, bg);
+      int16_t drawX = (int16_t)tft.width() - (int16_t)textWidth - 4;
+      if (drawX < (int16_t)x) drawX = x;
+      int16_t drawY = y + (int16_t)((h > FH) ? (h - FH) / 2 : 0);
+      tft.drawString(st, drawX, drawY);
+      tft.setTextColor(FG_COLOR, BG_COLOR);
+      tft.fillRect(0, 25, tft.width(), 5, FG_COLOR);
+      GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
+      return;
+    }
+  }
 
   //clear the header info area
   GRAPHICS.clearScreenArea(index);
@@ -1722,9 +1752,9 @@ void fcnDrawHeaderInfo(int16_t index) {
         if (isBit(InfoFlags,3)==false) {
           InfoFlags =0;
           setBit(InfoFlags,3); //set bit 3 to 1
-          //show IP address
+          //show IP address (no "My IP:" prefix — keeps text within the right header tile)
           FH = setFont(2);
-          st = "My IP: " + Sensors.getMyDeviceIP().toString();
+          st = Sensors.getMyDeviceIP().toString();
           textWidth = tft.textWidth(st);
           tft.drawString(st,tft.width()-textWidth-4,y+2);
     
@@ -1763,6 +1793,33 @@ void fcnDrawHeaderInfo(int16_t index) {
   
 
   return;
+}
+
+void HeaderInfoAlert(const String& msg, uint16_t fgColor, uint16_t bgColor, uint32_t ttlSec) {
+  HeaderInfoAlert(msg.c_str(), fgColor, bgColor, ttlSec);
+}
+
+void HeaderInfoAlert(const char* msg, uint16_t fgColor, uint16_t bgColor, uint32_t ttlSec) {
+  if (msg == nullptr || msg[0] == '\0') {
+    GRAPHICS.headerInfoAlert[0] = '\0';
+    GRAPHICS.headerInfoAlertTtlMs = 0;
+  } else {
+    strncpy(GRAPHICS.headerInfoAlert, msg, HEADER_INFO_ALERT_MAXLEN - 1);
+    GRAPHICS.headerInfoAlert[HEADER_INFO_ALERT_MAXLEN - 1] = '\0';
+    GRAPHICS.headerInfoAlertFg = fgColor;
+    GRAPHICS.headerInfoAlertBg = bgColor;
+    GRAPHICS.headerInfoAlertStartMs = millis();
+    GRAPHICS.headerInfoAlertTtlMs = (ttlSec == 0) ? 0 : ttlSec * 1000UL;
+  }
+
+  int8_t index = helper_findIndex(&fcnDrawHeaderInfo);
+  if (index < 0) {
+    // Header info tile not bound (wrong screen); state is set for the next time it is.
+    return;
+  }
+
+  GRAPHICS.GRAPHICS_TIMERS.Timers[GRAPHICS.SCREEN_DATA[index].TimerIndex] = 0;
+  fcnDrawHeaderInfo(index);
 }
 
 
@@ -3086,7 +3143,6 @@ void fcnDrawStatusText(int16_t index) {
   tft.printf("-----------------------\n");
   tft.printf("Report Time: %s\n",(I.currentTime>20000)?dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"):"???");
   tft.printf("Alive Since: %s\n",(I.ALIVESINCE!=0)?dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"):"???");
-  tft.printf("Last Reset Time: %s\n",(I.lastResetTime!=0)?dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"):"???");
   tft.printf("Reboots today: %d\n", I.rebootsToday);
   tft.printf("Device Name: %s\n",Prefs.DEVICENAME);
   //print memory usage
@@ -3099,18 +3155,6 @@ void fcnDrawStatusText(int16_t index) {
   tft.printf("Num Weather Events: %d\n",WeatherData.NumWeatherEvents);
   tft.printf("Last weather update: %s\n",(WeatherData.lastUpdateT!=0)?dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss"):"???");
   tft.printf("-----------------------\n");
-  tft.printf("LAN Messages Received today: %d\n",I.UDP_RECEIVES);    
-  tft.printf("LAN Messages Sent today: %d\n",I.UDP_SENDS);
-  tft.printf("HTTP Messages Received today: %d\n",I.HTTP_RECEIVES);
-  tft.printf("HTTP Messages Sent today: %d\n",I.HTTP_SENDS);
-  tft.printf("-----------------------\n");
-    
-  tft.printf("Last Error Time: %s\n",(I.lastErrorTime!=0)?dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"):"???");
-  if (I.lastError[0] != '\0') {
-    tft.printf("Last Error: %.40s\n", I.lastError);
-  }
-  tft.printf("-----------------------\n");
-  tft.printf("Wifi fail count : %d\n",I.wifiFailCount);
   {
     int16_t rssi = I.RSSIcurrent;
     uint16_t rssiColor = FG_COLOR;

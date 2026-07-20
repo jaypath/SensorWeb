@@ -578,13 +578,10 @@ static void touchServerFwTrack(const char* deviceName, const FirmwareVersion& ve
     if (isTimeValid(I.currentTime)) s_serverFwTracks[slot].lastActivity = I.currentTime;
 }
 
-static void logFwServerBlockEvent(const char* verb, const char* deviceName, uint32_t blockIndex,
-    uint32_t totalBlocks, const FirmwareVersion& version) {
-    char verText[16];
-    version.toChar(verText, sizeof(verText));
+static void logFwServerBlockSent(const char* deviceName, uint32_t blockIndex, uint32_t totalBlocks) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "FW %s %s block %lu/%lu v%s",
-        verb, deviceName, (unsigned long)blockIndex, (unsigned long)totalBlocks, verText);
+    snprintf(msg, sizeof(msg), "FWreq: %s,  %lu/%lu",
+        deviceName, (unsigned long)blockIndex, (unsigned long)totalBlocks);
     logSystemEvent(msg, EVENT_FIRMWARE_UPDATED);
 }
 
@@ -671,8 +668,6 @@ void handleFirmwareBlock() {
         return;
     }
 
-    logFwServerBlockEvent("recv", senderDevice, blockIndex, totalBlocks, version);
-
     const uint32_t offset = blockIndex * blockSize;
     const uint32_t toRead = (offset + blockSize > fileSize) ? (fileSize - offset) : blockSize;
     if (!f.seek(offset)) {
@@ -718,7 +713,7 @@ void handleFirmwareBlock() {
             esp_task_wdt_reset();
         }
         if (sent == got) {
-            logFwServerBlockEvent("sent", senderDevice, blockIndex, totalBlocks, version);
+            logFwServerBlockSent(senderDevice, blockIndex, totalBlocks);
         }
     }
     free(buf);
@@ -1104,27 +1099,24 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
 
     String deviceName;
     FirmwareVersion deviceFirmware;
+    deviceFirmware.clear();
     IPAddress senderIP(0, 0, 0, 0);
+    bool haveDeviceFirmware = false;
 
     if (root["senderDeviceName"].is<const char*>()) deviceName = root["senderDeviceName"].as<String>();
     if (root["senderFirmware"].is<JsonVariantConst>()) {
-        parseFirmwareFromJson(root["senderFirmware"], deviceFirmware);
+        haveDeviceFirmware = parseFirmwareFromJson(root["senderFirmware"], deviceFirmware);
     }
     if (root["senderIP"].is<const char*>()) senderIP.fromString(root["senderIP"].as<String>());
 
-    if (deviceName.length() == 0 || senderIP == IPAddress(0, 0, 0, 0)) {
+    if (deviceName.length() == 0 || senderIP == IPAddress(0, 0, 0, 0) || !haveDeviceFirmware) {
         responseMsg = "Missing firmware request fields";
-        logSystemEvent("FW inquiry rejected (missing fields)", EVENT_FIRMWARE_UPDATED);
+        logSystemEvent("FWreq: rejected (missing fields)", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
-    char curVerText[16];
-    deviceFirmware.toChar(curVerText, sizeof(curVerText));
-    logSystemEvent(String("FW inquiry from ") + deviceName + " v" + curVerText + " @ "
-        + senderIP.toString(), EVENT_FIRMWARE_UPDATED);
-
     if (serverShouldIgnoreFirmwareDiscovery(deviceName.c_str())) {
-        logSystemEvent(String("FW inquiry ") + deviceName + " ignored (cooldown)", EVENT_FIRMWARE_UPDATED);
+        logSystemEvent(String("FWreq: ") + deviceName + ",  cooldown", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
@@ -1136,21 +1128,16 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
         bestPath, sizeof(bestPath), &crc, &size);
 
     if (!haveFirmware) {
-        logSystemEvent(String("FW inquiry ") + deviceName + " no image on SD", EVENT_FIRMWARE_UPDATED);
+        logSystemEvent(String("FWreq: ") + deviceName + ",  no image", EVENT_FIRMWARE_UPDATED);
         return;
     }
     if (bestVersion.compare(deviceFirmware) <= 0) {
-        logSystemEvent(String("FW inquiry ") + deviceName + " up to date", EVENT_FIRMWARE_UPDATED);
+        logSystemEvent(String("FWreq: ") + deviceName + ",  up to date", EVENT_FIRMWARE_UPDATED);
         return;
     }
 
     char verText[16];
     bestVersion.toChar(verText, sizeof(verText));
-    const uint32_t totalBlocks = (size + FW_CHUNK_BLOCK_SIZE - 1) / FW_CHUNK_BLOCK_SIZE;
-    char offerMsg[96];
-    snprintf(offerMsg, sizeof(offerMsg), "FW offered %s v%s (%lu blocks)",
-        deviceName.c_str(), verText, (unsigned long)totalBlocks);
-    logSystemEvent(offerMsg, EVENT_FIRMWARE_UPDATED);
     touchServerFwTrack(deviceName.c_str(), bestVersion, FW_CHUNK_NEXT_REQUEST_MINUTES);
 
     char json[320];
@@ -1163,7 +1150,9 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     IPAddress ip = senderIP;
     int16_t rc = sendHTTPSJSON(ip, json, "fwResp");
     if (rc < 200 || rc >= 400) {
-        logSystemEvent(String("FW offer send failed to ") + deviceName + " httpCode=" + String(rc), EVENT_FIRMWARE_UPDATED);
+        logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offer failed", EVENT_FIRMWARE_UPDATED);
+    } else {
+        logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offered", EVENT_FIRMWARE_UPDATED);
     }
 }
 #else

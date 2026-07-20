@@ -18,12 +18,13 @@ struct STRUCT_CORE;
 102 - support analysis server with persistent storage
 */
 
-// Expiration: timeLogged + 1.25 × SendingInt (integer math: SendingInt + SendingInt/4)
+// Expiration grace: 1.25 × SendingInt (integer math: SendingInt + SendingInt/4).
+// Remotes use timeLogged (last received/logged update); local sensors use timeRead.
 inline uint32_t sensorExpiryGraceSec(uint32_t sendingInt) {
     return sendingInt + sendingInt / 4;
 }
-inline uint32_t sensorExpirationTime(uint32_t timeLogged, uint32_t sendingInt) {
-    return timeLogged + sensorExpiryGraceSec(sendingInt);
+inline uint32_t sensorExpirationTime(uint32_t freshnessTime, uint32_t sendingInt) {
+    return freshnessTime + sensorExpiryGraceSec(sendingInt);
 }
 
 
@@ -40,7 +41,29 @@ struct ArborysDevType {
     uint8_t Flags;          // Device flags
     uint32_t SendingInt;    // Sending interval
     bool expired;           // Whether device has expired
+    // Daily ping-response metrics (reset at midnight; not used for broadcasts)
+    uint8_t ping_att_ESPNow;     // ESPNow ping attempts to this device today
+    uint8_t ping_success_ESPNow; // ESPNow ping successes with this device today
+    uint8_t ping_att_UDP;        // UDP ping attempts to this device today
+    uint8_t ping_success_UDP;    // UDP ping successes with this device today
+    uint8_t ping_att_HTTP;       // HTTP ping attempts to this device today
+    uint8_t ping_success_HTTP;   // HTTP ping successes with this device today
 };
+
+// Success rate percent for a modality; 0 when no attempts yet.
+inline uint8_t pingSuccessRatePercent(uint8_t success, uint8_t attempts) {
+    if (attempts == 0) return 0;
+    return (uint8_t)((100u * (uint16_t)success) / (uint16_t)attempts);
+}
+// UDP routing rate: with no attempts yet, assume 100% so HTTP is not used until UDP is proven weak.
+inline uint8_t udpPingSuccessRatePercent(const ArborysDevType* d) {
+    if (!d) return 0;
+    if (d->ping_att_UDP == 0) return 100;
+    return pingSuccessRatePercent(d->ping_success_UDP, d->ping_att_UDP);
+}
+inline bool deviceUdpPingRateAbove50(const ArborysDevType* d) {
+    return d && udpPingSuccessRatePercent(d) > 50;
+}
 
 // Sensor structure
 struct ArborysSnsType {
@@ -144,6 +167,7 @@ public:
     int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
     int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     void checkDeviceFlags();
+    void resetDailyPingCounters();
     uint8_t returnBatteryPercentage(ArborysSnsType* P);
 
     // Search functions

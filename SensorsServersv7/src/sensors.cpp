@@ -251,8 +251,10 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     const int16_t sensorPin = isVirtualSensor ? (int16_t)-9999 : snsPins[i];
     const int16_t sensorPowerPin = isVirtualSensor ? (int16_t)-9999 : powerPins[i];
 
-    //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case. 
-    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, 0, 0, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, sensorPin, sensorPowerPin);
+    //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case.
+    // Seed timeRead/timeLogged so local sensors are not immediately expired before the first read/send cycle.
+    const uint32_t seedTime = I.currentTime;
+    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, seedTime, seedTime, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, sensorPin, sensorPowerPin);
     //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
     SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
@@ -365,8 +367,11 @@ int8_t readAllSensors(bool forceRead) {
       } else if (readResult >0) { //success
         numGood++;
       }
-                      
-      delay(20);
+
+      // Only settle the bus after an actual hardware read (skip when poll interval not due).
+      if (readResult != 0) {
+        delay(20);
+      }
     }
   }
   return numGood;
@@ -1086,6 +1091,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     //check if this is a soil sensor
     if (Sensors.isSensorOfType(P, "soil")) LEDs.LED_set_color_soil(P);
   #endif
+
+  // Successful local read refreshes the expiry clock; clear sticky expired.
+  P->expired = false;
 
   return 1;
 }

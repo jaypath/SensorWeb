@@ -16,6 +16,8 @@ class Devices_Sensors;
 class WeatherInfoOptimized;
 
 #define MAXSCREENELEMENTS 8
+#define HEADER_INFO_ALERT_MAXLEN 48
+#define HEADER_INFO_ALERT_TTL_SEC 300 // acute header messages auto-clear after 5 minutes
 
 
 #ifdef _USEGSHEET
@@ -78,6 +80,31 @@ void fcnDrawAlertText(int16_t index);
 void fcnDrawMainScreen(int16_t index);
 void fcnDrawHeader(int16_t index);
 void fcnDrawHeaderInfo(int16_t index);
+#define _USE_HEADER_INFO_ALERT 1
+
+/** Show an acute right-header message (or clear with empty string) and redraw immediately. ttlSec defaults to 5 minutes; 0 = hold until cleared. */
+void HeaderInfoAlert(const char* msg, uint16_t fgColor = TFT_RED, uint16_t bgColor = TFT_BLACK, uint32_t ttlSec = HEADER_INFO_ALERT_TTL_SEC);
+void HeaderInfoAlert(const String& msg, uint16_t fgColor = TFT_RED, uint16_t bgColor = TFT_BLACK, uint32_t ttlSec = HEADER_INFO_ALERT_TTL_SEC);
+
+/** RAII helper: shows HeaderInfoAlert on construct, clears it on destroy (all return paths). */
+class HeaderInfoAlertGuard {
+public:
+  explicit HeaderInfoAlertGuard(const char* msg,
+      uint16_t fgColor = TFT_YELLOW,
+      uint16_t bgColor = TFT_BLACK,
+      uint32_t ttlSec = HEADER_INFO_ALERT_TTL_SEC)
+    : active_(msg != nullptr && msg[0] != '\0') {
+    if (active_) HeaderInfoAlert(msg, fgColor, bgColor, ttlSec);
+  }
+  ~HeaderInfoAlertGuard() {
+    if (active_) HeaderInfoAlert("");
+  }
+  HeaderInfoAlertGuard(const HeaderInfoAlertGuard&) = delete;
+  HeaderInfoAlertGuard& operator=(const HeaderInfoAlertGuard&) = delete;
+private:
+  bool active_;
+};
+
 void fcnDrawClock(int16_t index);
 void fcnDrawCurrentWeatherText(int16_t index);
 void fcnDrawCurrentWeatherIconOrAlert(int16_t index);
@@ -309,7 +336,13 @@ extern LGFX tft;
     uint8_t IconSet=0; //using this icon set
     uint8_t StatusFlags=0; //bit 0 - sensors currently flagged (ack for sensor flags), bit 1 = weather alert flag ack. These are set and stay until main flag is cleared.
     uint8_t StatusFlagsChanged=0; //bit 0 - sensors changed, bit 1 = weather alert flag changed, bit 2 = HVAC changed. If any action is taken based on these, they will be cleared.
-    
+
+    // Acute right-header banner (HeaderInfoAlert). Non-empty text overrides IP/dawn cycling until cleared or TTL expires.
+    char headerInfoAlert[HEADER_INFO_ALERT_MAXLEN] = {0};
+    uint16_t headerInfoAlertFg = TFT_RED;
+    uint16_t headerInfoAlertBg = TFT_BLACK;
+    uint32_t headerInfoAlertStartMs = 0;
+    uint32_t headerInfoAlertTtlMs = 0; // 0 = inactive / no timed expiry
     
     uint8_t IntervalHourlyWeatherDisplay = 2; //hours between daily weather display
     
