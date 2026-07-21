@@ -351,6 +351,37 @@ int16_t Devices_Sensors::nextServerIndex(int16_t startIndex, bool weatherServers
     return -1;
 }
 
+bool Devices_Sensors::hasLiveServer(time_t currentTime) {
+    if (currentTime == 0) currentTime = I.currentTime;
+
+    uint8_t serverCount = 0;
+    uint8_t liveCount = 0;
+
+    for (int16_t i = 0; i < NUMDEVICES; i++) {
+        if (!devices[i].IsSet || devices[i].devType < 100) continue;
+        serverCount++;
+
+        // Without valid time, keep known servers "live" so we do not thrash APSTA on clock glitches.
+        if (!isTimeValid((uint32_t)currentTime)) {
+            liveCount++;
+            continue;
+        }
+
+        uint32_t grace = sensorExpiryGraceSec(devices[i].SendingInt ? devices[i].SendingInt : PERIPH_SERVER_STALE_SEC);
+        if (grace > PERIPH_SERVER_STALE_SEC) grace = PERIPH_SERVER_STALE_SEC;
+
+        if (devices[i].dataReceived != 0
+            && (uint32_t)currentTime <= devices[i].dataReceived + grace) {
+            devices[i].expired = false;
+            liveCount++;
+        } else {
+            devices[i].expired = true;
+        }
+    }
+
+    return liveCount > 0;
+}
+
 
 uint8_t Devices_Sensors::countDev(uint8_t devType) {
     //returns the number of devices of the given type
@@ -1225,9 +1256,11 @@ ArborysDevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
         ArborysDevType* device = &devices[i];
         if (!device->IsSet) continue;
         if (device->expired) {
+            startIndex = i; // advance past this device on the next call
             return device;
         }
     }
+    startIndex = NUMDEVICES;
     return NULL;
 }
 
@@ -1272,16 +1305,25 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
 
     ArborysDevType* device = &devices[index];
     if (!device->IsSet) return 0;
+    (void)onlyCritical;
+    (void)multiplier;
 
     if (currentTime == 0) currentTime = I.currentTime;
 
+    uint32_t grace = sensorExpiryGraceSec(device->SendingInt ? device->SendingInt : PERIPH_SERVER_STALE_SEC);
+    // Cap server stale window so default 86400 SendingInt does not delay recovery for ~30h.
+    if (device->devType >= 100 && grace > PERIPH_SERVER_STALE_SEC) {
+        grace = PERIPH_SERVER_STALE_SEC;
+    }
 
-    if (device->dataReceived + sensorExpiryGraceSec(device->SendingInt) < (uint32_t)currentTime) {
+    if (device->dataReceived == 0
+        || device->dataReceived + grace < (uint32_t)currentTime) {
         device->expired = true;
         return 1;
     }
 
-    return 0;    
+    device->expired = false;
+    return 0;
 }
 
 byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {

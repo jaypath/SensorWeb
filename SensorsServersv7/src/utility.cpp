@@ -168,6 +168,18 @@ void systemHousekeeping(bool fullHousekeeping) {
 
     CheckWifiStatus(WIFI_CHECK_NORMAL);
 
+    #if _MYTYPE < 100
+    // Peripheral: APSTA while no live server so AP portal stays available for debug.
+    servicePeripheralServerApMode();
+    #endif
+
+#ifdef _USEWEATHER
+    serviceWeatherPackagePush(true);
+#endif
+#ifdef _USEWEATHERLITE
+    serviceWeatherLite(true);
+#endif
+
     updateWifiChannel();
 
     maybeOptimizeWifiBssid();
@@ -386,8 +398,9 @@ bool initSystem() {
     check_and_switch_to_newer_firmware(false, true);
   }
 
-  tftPrint("Init Wifi... \n", true);
-  SerialPrint("Init Wifi... ",true,5);
+  String wifiSsid = Prefs.WIFISSID[0] ? String((char*)Prefs.WIFISSID) : String("(none)");
+  tftPrint("Attempt Wifi: " + wifiSsid, true);
+  SerialPrint("Attempt Wifi: " + wifiSsid, true, 5);
   setupServerRoutes();
   WiFi.onEvent(WiFiEvent); //register the WiFi event handler
 
@@ -399,10 +412,6 @@ bool initSystem() {
     SerialPrint("Failed to connect to UDP",true,5);
     storeError("Failed to connect to UDP");
   }
-  #endif
-
-  #ifdef _USETFT
-  displaySetupProgress(true);
   #endif
 
   if (wifiReadyForNetwork()) {
@@ -1720,7 +1729,7 @@ void displaySetupProgress(bool success) {
   #ifdef _USETFT
   if (success) {
     tft.setTextColor(TFT_GREEN);
-    tft.println("OK.\n");
+    tft.println("OK.");
     tft.setTextColor(FG_COLOR,BG_COLOR);
   } else {
     tft.setTextColor(TFT_RED);

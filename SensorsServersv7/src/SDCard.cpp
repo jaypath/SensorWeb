@@ -9,7 +9,7 @@
 #include "Devices.hpp"
 #include "GsheetUpload.hpp"
 
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 #include "Weather_Optimized.hpp"
 
 extern WeatherInfoOptimized WeatherData;

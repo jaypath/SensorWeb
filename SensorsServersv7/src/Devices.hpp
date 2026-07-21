@@ -27,6 +27,12 @@ inline uint32_t sensorExpirationTime(uint32_t freshnessTime, uint32_t sendingInt
     return freshnessTime + sensorExpiryGraceSec(sendingInt);
 }
 
+// Peripherals: servers typically broadcast ~every 10 min. Cap "live server" grace so a
+// default SendingInt of 86400 does not delay APSTA debug access for ~30 hours.
+#ifndef PERIPH_SERVER_STALE_SEC
+#define PERIPH_SERVER_STALE_SEC 1800u // 30 minutes without contact → treat server as expired
+#endif
+
 
 // Device structure
 struct ArborysDevType {
@@ -123,6 +129,9 @@ public:
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countServers(); // count the servers
     int16_t nextServerIndex(int16_t startIndex=0, bool weatherServersOnly=false); // get the index of the next server
+    // True if at least one non-expired server (devType>=100) has been heard from recently.
+    // Also refreshes server.expired flags. Used by peripherals to keep APSTA for debug access.
+    bool hasLiveServer(time_t currentTime = 0);
     bool isOutsideSensor(int16_t index);
     bool hasOutsideSensors(String parameter="all");
     int16_t findOutsideSensorByType(String parameter="all");

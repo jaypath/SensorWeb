@@ -1,19 +1,20 @@
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 #ifndef WEATHER_OPTIMIZED_HPP
 #define WEATHER_OPTIMIZED_HPP
 
 
 #include "globals.hpp"
+#ifdef _USEWEATHER
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <functional>
-
+#endif
 
 #ifdef _USESDCARD
-
 #include "SDCard.hpp"
 #endif
+#include "WeatherPkg.hpp"
 
 
 #define NUMWTHRDAYS 6
@@ -23,10 +24,27 @@
 #define MAX_RETRY_ATTEMPTS 3
 #define WEATHER_HTTP_TIMEOUT_MS 60000
 #define WEATHER_HTTP_TIMEOUT_SHORT_MS 30000
-#define WEATHER_STORE_VERSION 3
+#define WEATHER_STORE_VERSION 4
 #define WEATHER_INVALID_TEMP -120
 #define WEATHER_UNKNOWN_ID 999
+#define WEATHER_STALE_RETRY_SEC 180 // retry every 3 minutes when component data is stale
 //#define PARALLEL_REQUESTS_ENABLED 1
+
+enum WeatherComponent : uint8_t {
+    WC_GRID = 0,
+    WC_HOURLY,
+    WC_GRIDFCST,
+    WC_DAILY,
+    WC_ALERTS,
+    WC_SUN,
+    WC_COUNT
+};
+
+struct WeatherComponentStatus {
+    uint32_t lastAttemptT = 0;
+    uint16_t failRetrySec = 0; // mirrors WEATHER_STALE_RETRY_SEC on failure (for UI / SD)
+    bool lastSucceeded = false;
+};
 
 struct HourlySlot {
     int8_t temperature = WEATHER_INVALID_TEMP;
@@ -305,7 +323,15 @@ private:
     time_t hourTime(int16_t slot) const;
     int16_t periodSlotForDayDiff(int32_t dayDiff, bool wantDaytime) const;
     void setupPeriodAnchor(time_t firstPeriodStart, bool firstIsDaytime);
-    bool fetchGridCoordinates();
+    bool hasUsableGrid() const;
+    bool hasHourlyCoverage(uint16_t hoursNeeded) const;
+    bool hasHourWindow(uint16_t hoursNeeded) const;
+    bool isDailyDayDataFresh(uint8_t daysfromnow) const;
+    bool isTodayWeatherFresh() const;
+    bool isForwardDailyFresh(uint8_t numDays) const;
+    bool isSunDataFresh() const;
+
+#ifdef _USEWEATHER
     bool fetchGridCoordinatesHelper();
     bool fetchHourlyForecast();
     bool fetchGridForecast();
@@ -313,13 +339,12 @@ private:
     bool fetchSunriseSunset();
     bool fetchWeatherAlerts();
 
-    
     // Caching methods
     bool isGridCoordinatesValid();
     void updateGridCoordinatesCache();
     bool loadFromCache();
     void saveToCache();
-    
+
     // Data processing optimizations
     bool processHourlyData(JsonObject& properties);
     bool processGridData(JsonObject& properties);
@@ -327,21 +352,24 @@ private:
     enum class PrecipField : uint8_t { Rain, Ice, Snow };
     void processPrecipitationData(JsonObject& properties, const char* field_name,
                                  PrecipField field, bool& flag);
-    
+
     // Error handling and recovery
     bool handleApiError(const String& operation, int httpCode);
     bool retryWithBackoff(const String& operation, std::function<bool()> request_func);
-    
+    bool isComponentDue(WeatherComponent c, uint16_t synctime, bool forceStaleRefresh = false) const;
+    void recordComponentAttempt(WeatherComponent c, bool ok);
+
     // Memory optimization
     void optimizeJsonDocument(JsonDocument& doc);
     void clearUnusedData();
 
     bool filterAlerts(const char* phenomenon);
+    bool parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end);
+    time_t vtecTimeToUnix(const char* vtecPart);
+#endif
     WeatherSeverity parseSeverity(const char* s);
     WeatherCertainty parseCertainty(const char* s);
     WeatherUrgency parseUrgency(const char* s);
-    bool parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end);
-    time_t vtecTimeToUnix(const char* vtecPart);
 public:
     WeatherAlertSummary alertInfo;
     uint8_t NumWeatherEvents=0;
@@ -349,9 +377,9 @@ public:
     uint32_t lastAlertUpdateTime = 0;
 
     uint32_t lastUpdateT = 0;
-    uint32_t lastUpdateAttempt = 0;
     uint32_t lastUpdateError = 0;
     uint32_t fetchedAt = 0;
+    WeatherComponentStatus componentStatus[WC_COUNT];
     uint32_t sunrise;
     uint32_t sunset;
     bool flag_rain;
@@ -391,36 +419,46 @@ public:
     uint16_t getDailyIce(uint32_t starttime, uint32_t endtime);
     String getGrid(uint8_t fc=0);
 
+#ifdef _USEWEATHER
     TimeInterval parseNOAAInterval(String tm);
     int16_t breakIconLink(String icon, TimeInterval ti);
+    bool updateWeather(uint16_t synctime = 3600);
+    byte updateWeatherOptimized(uint16_t synctime = 3600, bool setupProgress = false, bool forceStaleRefresh = false);
+    void getPerformanceStats(uint32_t& total_calls, uint32_t& failed_calls, uint32_t& avg_response_time);
+#endif
     bool nameWeatherIcon(uint16_t icon, char* weathername);
     String nameWeatherIcon(uint16_t icon);
-    bool updateWeather(uint16_t synctime = 3600);
     bool initWeather();
-    
-    // New optimization methods
-    byte updateWeatherOptimized(uint16_t synctime = 3600, bool setupProgress = false);
-    void getPerformanceStats(uint32_t& total_calls, uint32_t& failed_calls, uint32_t& avg_response_time);
+
+    bool isComponentDataFresh(WeatherComponent c) const;
+    bool anyWeatherComponentStale() const;
     bool clearCache();
     bool isCacheValid();
-    
+
     // Memory management
     void optimizeMemoryUsage();
     size_t getMemoryUsage();
 
     String getAlertName(const char* phenomenon = nullptr);
     bool loadNextWeatherAlert();
-    
-    
+
     // Grid coordinates access (for compatibility)
     int16_t getGridX() const { return Grid_x; }
     int16_t getGridY() const { return Grid_y; }
     const char* getGridId() const { return Grid_id; }
-    
-    
+
+    // Present on both full and lite builds so sizeof(WeatherInfoOptimized) matches (package ABI).
+    uint32_t lastWeatherPackageGeneratedAt = 0;
+#ifdef _USEWEATHER
+    // Weather package (streamed to SD; plain HTTP distribution — see WeatherPkg.hpp)
+    bool buildWeatherPackageFile(bool forceRebuild = false);
+    bool weatherPackageFileExists() const;
+    // Ensure /Data/weatherdata.pkg exists (build if missing). Returns true if file ready.
+    bool ensureWeatherPackageFile();
+#endif
 };
 
 extern String WEBHTML;
 
-#endif 
+#endif
 #endif

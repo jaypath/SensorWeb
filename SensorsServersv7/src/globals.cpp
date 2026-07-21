@@ -1,11 +1,9 @@
 #include <globals.hpp>
 #include "Devices.hpp"
 
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 #include "Weather_Optimized.hpp"
-//weather
-WeatherInfoOptimized WeatherData;  // Optimized weather class
-
+WeatherInfoOptimized WeatherData;
 #endif
 
 

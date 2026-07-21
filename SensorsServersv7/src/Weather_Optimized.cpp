@@ -1,11 +1,14 @@
 #include "globals.hpp"
 
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 
 #include "Weather_Optimized.hpp"
 #include "timesetup.hpp"
+#ifdef _USEWEATHER
 #include "server.hpp"
+#endif
 
+#ifdef _USEWEATHER
 namespace {
 
 void buildHourlyJsonFilter(JsonDocument& filterDoc) {
@@ -66,10 +69,6 @@ void weatherSetupStepEnd(bool ok, bool setupProgress) {
 
 } // namespace
 
-
-
-
-
 // determine noaa timestamp intervals
 TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
     TimeInterval ti = {0, 3600}; // Default to 1 hour duration
@@ -98,6 +97,7 @@ TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
 
     return ti;
 }
+#endif // _USEWEATHER
 
 uint32_t WeatherInfoOptimized::localMidnightToday() {
     time_t localNow = I.currentTime;
@@ -202,33 +202,16 @@ WeatherInfoOptimized::WeatherInfoOptimized() {
     initWeather();
 }
 
+#ifdef _USEWEATHER
 // Optimized updateWeather method
-byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupProgress) {
-    //returns 3 if data is still fresh, 2 if too soon to retry, 1 if update was needed and successful, 0 if update failed
-
-    // Check if update is needed
-    if (this->lastUpdateT>0 && this->lastUpdateT + synctime > I.currentTime) {
-        if (setupProgress) {
-            SerialPrint("Weather setup: data still fresh, skipping NOAA fetch.", true);
-            #ifdef _USETFT
-            tftPrint("Weather data still fresh.", true, TFT_GREEN);
-            #endif
-        }
-        return 3; // Data is still fresh
-    }
-    
-    // Check retry logic
-    if ((uint32_t) this->lastUpdateAttempt>0 && this->lastUpdateAttempt + 600 > I.currentTime) {
-        if (setupProgress) {
-            SerialPrint("Weather setup: too soon to retry NOAA fetch.", true);
-            #ifdef _USETFT
-            tftPrint("Weather retry cooldown.", true, TFT_YELLOW);
-            #endif
-        }
-        return 2; // Too soon to retry
-    }
-
-    this->lastUpdateAttempt = I.currentTime;
+byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupProgress, bool forceStaleRefresh) {
+    // returns:
+    //   3 if nothing due and all content-fresh
+    //   2 if nothing due but one or more components are content-stale (retry backoff)
+    //   1 if attempted updates succeeded
+    //   0 if any attempted update failed
+    // forceStaleRefresh (boot): content-stale components are always due, ignoring retry backoff
+    // and without treating a recent fetch timestamp as "fresh".
 
     if (!wifiReadyForNetwork()) {
         SerialPrint("Weather update: WiFi not available", true);
@@ -238,80 +221,244 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
     #ifdef _USE_HEADER_INFO_ALERT
     HeaderInfoAlertGuard headerAlert("Wthr update", TFT_YELLOW, TFT_BLACK, 300);
     #endif
-    
-    SerialPrint("Weather update optimized starting...",true);
+
+    bool anyDue = false;
+    bool anyFailed = false;
+    bool hourlyOk = componentStatus[WC_HOURLY].lastSucceeded;
+    bool gridOk = componentStatus[WC_GRIDFCST].lastSucceeded;
+    bool dailyOk = componentStatus[WC_DAILY].lastSucceeded;
+    bool alertsOk = componentStatus[WC_ALERTS].lastSucceeded;
+    bool sunOk = componentStatus[WC_SUN].lastSucceeded;
+
+    auto runComponent = [&](WeatherComponent c, const char* label, bool needsGrid, std::function<bool()> fetchFn) -> bool {
+        if (!isComponentDue(c, synctime, forceStaleRefresh)) return componentStatus[c].lastSucceeded;
+        anyDue = true;
+
+        if (needsGrid && !hasUsableGrid()) {
+            SerialPrint((String("Weather: ") + label + " skipped (grid coords unavailable)").c_str(), true);
+            anyFailed = true;
+            return false;
+        }
+
+        weatherSetupStepBegin(label, setupProgress);
+        esp_task_wdt_reset();
+        bool ok = fetchFn();
+        recordComponentAttempt(c, ok);
+        weatherSetupStepEnd(ok, setupProgress);
+        if (!ok) anyFailed = true;
+        return ok;
+    };
+
+    SerialPrint("Weather update optimized starting...", true);
     esp_task_wdt_reset();
 
-    weatherSetupStepBegin("Grid coords", setupProgress);
-    bool gridCoordsOk = loadFromCache() || fetchGridCoordinates();
-    if (gridCoordsOk) {
-        SerialPrint("Grid coordinates ready", true);
+    // Grid coords: required for NOAA forecast URLs, but stored after first success so
+    // dependents can still run if a later grid refresh fails.
+    if (isComponentDue(WC_GRID, synctime, forceStaleRefresh) || !hasUsableGrid()) {
+        anyDue = true;
+        weatherSetupStepBegin("Grid coords", setupProgress);
+        esp_task_wdt_reset();
+        bool ok = false;
+        if (!hasUsableGrid()) ok = loadFromCache();
+        if (!ok) ok = retryWithBackoff("grid coordinates",
+            std::bind(&WeatherInfoOptimized::fetchGridCoordinatesHelper, this));
+        recordComponentAttempt(WC_GRID, ok);
+        weatherSetupStepEnd(ok, setupProgress);
+        if (!ok) anyFailed = true;
     }
-    weatherSetupStepEnd(gridCoordsOk, setupProgress);
-    esp_task_wdt_reset();
 
     uint32_t start_time = millis();
 
-    // Each fetch clears only its own domain inside the processor (on new data).
-    // Failed fetches leave other domains (e.g. SD-loaded daily) intact.
-    weatherSetupStepBegin("Hourly forecast", setupProgress);
-    bool hourlyOk = fetchHourlyForecast();
-    weatherSetupStepEnd(hourlyOk, setupProgress);
-    esp_task_wdt_reset();
+    hourlyOk = runComponent(WC_HOURLY, "Hourly forecast", true,
+        [this]() { return fetchHourlyForecast(); });
+    gridOk = runComponent(WC_GRIDFCST, "Grid forecast", true,
+        [this]() { return fetchGridForecast(); });
+    dailyOk = runComponent(WC_DAILY, "Daily forecast", true,
+        [this]() { return fetchDailyForecast(); });
+    alertsOk = runComponent(WC_ALERTS, "Weather alerts", false,
+        [this]() { return fetchWeatherAlerts(); });
+    sunOk = runComponent(WC_SUN, "Sunrise/sunset", false,
+        [this]() { return fetchSunriseSunset(); });
 
-    weatherSetupStepBegin("Grid forecast", setupProgress);
-    bool gridOk = fetchGridForecast();
-    weatherSetupStepEnd(gridOk, setupProgress);
-    esp_task_wdt_reset();
+    if (!anyDue) {
+        const bool stale = anyWeatherComponentStale();
+        if (setupProgress) {
+            if (stale) {
+                SerialPrint("Weather setup: content stale, waiting for retry window.", true);
+                #ifdef _USETFT
+                tftPrint("Weather data stale (waiting).", true, TFT_YELLOW);
+                #endif
+            } else {
+                SerialPrint("Weather setup: all components still fresh.", true);
+                #ifdef _USETFT
+                tftPrint("Weather data still fresh.", true, TFT_GREEN);
+                #endif
+            }
+        }
+        return stale ? 2 : 3;
+    }
 
-    weatherSetupStepBegin("Daily forecast", setupProgress);
-    bool dailyOk = fetchDailyForecast();
-    weatherSetupStepEnd(dailyOk, setupProgress);
-    esp_task_wdt_reset();
-
-    weatherSetupStepBegin("Weather alerts", setupProgress);
-    bool alertsOk = fetchWeatherAlerts();
-    weatherSetupStepEnd(alertsOk, setupProgress);
-    esp_task_wdt_reset();
-
-    weatherSetupStepBegin("Sunrise/sunset", setupProgress);
-    bool sunOk = fetchSunriseSunset();
-    weatherSetupStepEnd(sunOk, setupProgress);
-    esp_task_wdt_reset();
-
-    bool forecastUpdated = hourlyOk || gridOk || dailyOk;
-    bool fullSuccess = hourlyOk && gridOk && dailyOk && alertsOk && sunOk;
+    bool fullSuccess = hasUsableGrid() && hourlyOk && gridOk && dailyOk && alertsOk && sunOk;
 
     SerialPrint(("Weather fetch results: hourly=" + String(hourlyOk) + " grid=" + String(gridOk) +
         " daily=" + String(dailyOk) + " alerts=" + String(alertsOk) + " sun=" + String(sunOk)).c_str(), true);
 
-    if (forecastUpdated) {
-        #ifdef _USESDCARD
-        storeWeatherDataSD();
-        #endif
-    }
+    // Persist whenever we attempted anything so per-component retry state survives reboot
+    #ifdef _USESDCARD
+    storeWeatherDataSD();
+    #endif
 
     if (fullSuccess) {
         this->lastUpdateT = I.currentTime;
         this->fetchedAt = I.currentTime;
-
         saveToCache();
 
         uint32_t response_time = millis() - start_time;
         average_response_time = (average_response_time + response_time) / 2;
         total_api_calls++;
 
-        SerialPrint(("Weather update completed in " + String(response_time) + " ms").c_str(),true);
-    } else {
+        SerialPrint(("Weather update completed in " + String(response_time) + " ms").c_str(), true);
+    } else if (anyFailed) {
         failed_api_calls++;
-        if (forecastUpdated) {
-            SerialPrint("Weather update partially succeeded (some fetches failed)", true);
-        } else {
-            SerialPrint("Weather update failed for the " + (String) failed_api_calls + "th time", true);
-        }
+        SerialPrint("Weather update incomplete (one or more components failed)", true);
     }
 
-    return fullSuccess ? 1 : 0;
+    return anyFailed ? 0 : 1;
+}
+#endif // _USEWEATHER
+
+bool WeatherInfoOptimized::hasUsableGrid() const {
+    return Grid_id[0] != '\0' && Grid_x != 0 && Grid_y != 0;
+}
+
+bool WeatherInfoOptimized::hasHourWindow(uint16_t hoursNeeded) const {
+    if (!isHourlyValid() || hoursNeeded == 0) return false;
+    time_t nowHour = floorToHour((time_t)I.currentTime);
+    for (uint16_t h = 0; h < hoursNeeded; h++) {
+        if (hourSlot(nowHour + (time_t)h * 3600) < 0) return false;
+    }
+    return true;
+}
+
+bool WeatherInfoOptimized::hasHourlyCoverage(uint16_t hoursNeeded) const {
+    if (!isHourlyValid() || hoursNeeded == 0) return false;
+    time_t nowHour = floorToHour((time_t)I.currentTime);
+    for (uint16_t h = 0; h < hoursNeeded; h++) {
+        int16_t idx = hourSlot(nowHour + (time_t)h * 3600);
+        if (idx < 0 || !hourly[idx].isValid()) return false;
+    }
+    return true;
+}
+
+bool WeatherInfoOptimized::isDailyDayDataFresh(uint8_t daysfromnow) const {
+    if (daysfromnow >= NUMWTHRDAYS || periodBaseStart == 0) return false;
+
+    int16_t daySlot = getPeriodSlotForDaysFromToday(daysfromnow, true);
+    int16_t nightSlot = getPeriodSlotForDaysFromToday(daysfromnow, false);
+
+    auto periodValuesOk = [&](int16_t slot) -> bool {
+        if (slot < 0 || !periods[slot].isValid()) return false;
+        if (periods[slot].temp == WEATHER_INVALID_TEMP) return false;
+        if (periods[slot].weatherID == WEATHER_UNKNOWN_ID) return false;
+        return true;
+    };
+
+    uint32_t dayStart = localMidnightToday() + (uint32_t)daysfromnow * 86400UL;
+    uint32_t dayEnd = dayStart + 86400UL;
+
+    auto overlapsDay = [&](int16_t slot) -> bool {
+        if (slot < 0 || !periods[slot].isValid()) return false;
+        uint32_t pend = periods[slot].end ? periods[slot].end : (periods[slot].start + 43200UL);
+        return periods[slot].start < dayEnd && pend > dayStart;
+    };
+
+    bool dayOk = periodValuesOk(daySlot) && overlapsDay(daySlot);
+    bool nightOk = periodValuesOk(nightSlot) && overlapsDay(nightSlot);
+    return dayOk || nightOk;
+}
+
+bool WeatherInfoOptimized::isTodayWeatherFresh() const {
+    return isDailyDayDataFresh(0);
+}
+
+bool WeatherInfoOptimized::isForwardDailyFresh(uint8_t numDays) const {
+    if (numDays == 0) return false;
+    for (uint8_t d = 0; d < numDays; d++) {
+        if (!isDailyDayDataFresh(d)) return false;
+    }
+    return true;
+}
+
+bool WeatherInfoOptimized::isSunDataFresh() const {
+    // Fresh when the next sunrise or sunset (whichever comes first) is still in the future.
+    uint32_t nextEvent = 0;
+    if (sunrise > I.currentTime) nextEvent = sunrise;
+    if (sunset > I.currentTime && (nextEvent == 0 || sunset < nextEvent)) nextEvent = sunset;
+    return nextEvent != 0;
+}
+
+bool WeatherInfoOptimized::isComponentDataFresh(WeatherComponent c) const {
+    switch (c) {
+        case WC_GRID:
+            return hasUsableGrid();
+        case WC_HOURLY:
+            // Hourly weather: valid values for the next 24 hours
+            return hasHourlyCoverage(24);
+        case WC_GRIDFCST:
+            // Grid forecast fills hourly precip/WBGT; require the same forward hour window
+            // and a prior successful fetch (NOAA may omit WBGT/precip values).
+            return componentStatus[WC_GRIDFCST].lastSucceeded && hasHourWindow(24);
+        case WC_DAILY:
+            // Today weather + daily for the next 3 days (days 0..2). Days 4+ optional.
+            return isTodayWeatherFresh() && isForwardDailyFresh(3);
+        case WC_ALERTS:
+            // No content-based definition; keep last fetch success as freshness.
+            return componentStatus[WC_ALERTS].lastSucceeded;
+        case WC_SUN:
+            return isSunDataFresh();
+        default:
+            return false;
+    }
+}
+
+bool WeatherInfoOptimized::anyWeatherComponentStale() const {
+    for (uint8_t i = 0; i < WC_COUNT; i++) {
+        if (!isComponentDataFresh((WeatherComponent)i)) return true;
+    }
+    return false;
+}
+
+#ifdef _USEWEATHER
+bool WeatherInfoOptimized::isComponentDue(WeatherComponent c, uint16_t synctime, bool forceStaleRefresh) const {
+    if (c >= WC_COUNT) return false;
+    if (synctime == 0) return true; // forced refresh
+
+    const bool fresh = isComponentDataFresh(c);
+    // Boot / forceStaleRefresh: never treat a recent fetch as fresh if content fails checks
+    // (e.g. hourly must still cover the next 24 hours).
+    if (!fresh && forceStaleRefresh) return true;
+
+    const WeatherComponentStatus& st = componentStatus[c];
+    if (st.lastAttemptT == 0) return true;
+
+    // Fresh → keep current cadence (synctime, typically 1 hour).
+    // Stale → retry every 3 minutes.
+    uint32_t waitSec = fresh ? (uint32_t)synctime : (uint32_t)WEATHER_STALE_RETRY_SEC;
+    if (waitSec == 0) waitSec = fresh ? 3600UL : (uint32_t)WEATHER_STALE_RETRY_SEC;
+    return I.currentTime >= st.lastAttemptT + waitSec;
+}
+
+void WeatherInfoOptimized::recordComponentAttempt(WeatherComponent c, bool ok) {
+    if (c >= WC_COUNT) return;
+    WeatherComponentStatus& st = componentStatus[c];
+    st.lastAttemptT = I.currentTime;
+    st.lastSucceeded = ok;
+    if (ok) {
+        st.failRetrySec = 0;
+    } else {
+        st.failRetrySec = WEATHER_STALE_RETRY_SEC;
+        this->lastUpdateError = I.currentTime;
+    }
 }
 
 
@@ -347,17 +494,6 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
     }
     return false;
 }
-
-// Optimized grid coordinates fetching with caching
-bool WeatherInfoOptimized::fetchGridCoordinates() {
-    if (isGridCoordinatesValid()) {
-        return true; // Use cached coordinates
-    }
-    
-    return retryWithBackoff("grid coordinates", std::bind(&WeatherInfoOptimized::fetchGridCoordinatesHelper, this));
-}
-
-
 
 // Optimized data processing methods
 bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
@@ -660,14 +796,14 @@ bool WeatherInfoOptimized::retryWithBackoff(const String& operation, std::functi
     return false;
 }
 
-// Performance monitoring
 void WeatherInfoOptimized::getPerformanceStats(uint32_t& total_calls, uint32_t& failed_calls, uint32_t& avg_response_time) {
     total_calls = this->total_api_calls;
     failed_calls = this->failed_api_calls;
     avg_response_time = this->average_response_time;
 }
+#endif // _USEWEATHER (fetch helpers through getPerformanceStats)
 
-// Memory optimization
+// Memory optimization (full + lite)
 void WeatherInfoOptimized::optimizeMemoryUsage() {
     // Clear unused cache entries
     for (int i = 0; i < WEATHER_CACHE_SIZE; i++) {
@@ -683,6 +819,7 @@ size_t WeatherInfoOptimized::getMemoryUsage() {
     return base_size + cache_size;
 }
 
+#ifdef _USEWEATHER
 // Implement remaining methods from original interface
 bool WeatherInfoOptimized::fetchHourlyForecast() {
     return retryWithBackoff("hourly forecast", [this]() {
@@ -826,67 +963,86 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
 }
 
 bool WeatherInfoOptimized::fetchSunriseSunset() {
-    char cbuf[100];
-    snprintf(cbuf, 99, "https://api.sunrisesunset.io/json?lat=%f&lng=%f", Prefs.LATITUDE, Prefs.LONGITUDE);
-    String url = String(cbuf);
-    
-    JsonDocument doc;
-    
-    String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
+    auto requestSunForDate = [&](const char* dateYmd) -> bool {
+        char cbuf[128];
+        if (dateYmd && dateYmd[0]) {
+            snprintf(cbuf, sizeof(cbuf), "https://api.sunrisesunset.io/json?lat=%f&lng=%f&date=%s",
+                     Prefs.LATITUDE, Prefs.LONGITUDE, dateYmd);
+        } else {
+            snprintf(cbuf, sizeof(cbuf), "https://api.sunrisesunset.io/json?lat=%f&lng=%f",
+                     Prefs.LATITUDE, Prefs.LONGITUDE);
+        }
 
+        JsonDocument doc;
+        String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\n";
 
-    HTTPMessage M;
-    M.setUrl(url.c_str());
-    M.setMethod("GET");
-    M.setContentType("application/json");
-    M.setCacert("bundle");
-    M.timeout = WEATHER_HTTP_TIMEOUT_SHORT_MS;
-    M.usePSRAM = true;
-    M.responseDoc = &doc;
-    M.setExtraHeaders(extraHeaders.c_str());
+        HTTPMessage M;
+        M.setUrl(cbuf);
+        M.setMethod("GET");
+        M.setContentType("application/json");
+        M.setCacert("bundle");
+        M.timeout = WEATHER_HTTP_TIMEOUT_SHORT_MS;
+        M.usePSRAM = true;
+        M.responseDoc = &doc;
+        M.setExtraHeaders(extraHeaders.c_str());
 
-    if (SendHTTPMessage(M)) {
-        // Check specifically for the properties object
+        if (!SendHTTPMessage(M)) {
+            SerialPrint("Sunrise Sunset request failed", true);
+            SerialPrint("HTTP Code: " + String(M.httpCode), true);
+            storeError("Sunrise Sunset request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE, true);
+            this->lastUpdateError = I.currentTime;
+            return false;
+        }
 
         if (M.httpCode == 304) {
             SerialPrint("fetchSunriseSunset: data is not modified", true);
         }
 
-        if (doc["results"].is<JsonVariantConst>()) {
-            JsonObject results = doc["results"];
-            const char* srise = results["sunrise"];
-            const char* sset = results["sunset"];
-            const char* sdat = results["date"];
-
-            
-            String sun = String(sdat) + " " + String(srise);
-            this->sunrise = convertStrTime(sun,true); //false, was reported in local time so do not try to convert from UTC to local
-            this->sunrise = unixToLocal(this->sunrise);
-
-            sun = String(sdat) + " " + String(sset);
-            this->sunset = convertStrTime(sun,true); //false, was reported in local time so do not try to convert from UTC to local
-            this->sunset = unixToLocal(this->sunset);
-            return true;
-        } else {
+        if (!doc["results"].is<JsonVariantConst>()) {
             SerialPrint("Sunrise Sunset Json had incorrect format", true);
-            storeError("Sunrise Sunset Json had incorrect format", ERROR_JSON_SUNRISE,true);
+            storeError("Sunrise Sunset Json had incorrect format", ERROR_JSON_SUNRISE, true);
             this->lastUpdateError = I.currentTime;
+            return false;
         }
-    } else {
-        SerialPrint("Sunrise Sunset request failed",true);
-        SerialPrint("HTTP Code: " + String(M.httpCode),true);
-        storeError("Sunrise Sunset request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
-        this->lastUpdateError = I.currentTime;
-    }
 
+        JsonObject results = doc["results"];
+        const char* srise = results["sunrise"];
+        const char* sset = results["sunset"];
+        const char* sdat = results["date"];
+        if (!srise || !sset || !sdat) {
+            SerialPrint("Sunrise Sunset Json missing fields", true);
+            storeError("Sunrise Sunset Json missing fields", ERROR_JSON_SUNRISE, true);
+            this->lastUpdateError = I.currentTime;
+            return false;
+        }
 
-    return false;
+        String sun = String(sdat) + " " + String(srise);
+        this->sunrise = convertStrTime(sun, true);
+        this->sunrise = unixToLocal(this->sunrise);
+
+        sun = String(sdat) + " " + String(sset);
+        this->sunset = convertStrTime(sun, true);
+        this->sunset = unixToLocal(this->sunset);
+        return true;
+    };
+
+    // Prefer today's times; if both events are already past, load tomorrow so
+    // the next sunrise/sunset remains in the future.
+    if (!requestSunForDate(nullptr)) return false;
+    if (isSunDataFresh()) return true;
+
+    char tomorrowDate[11];
+    strncpy(tomorrowDate, dateify(I.currentTime + 86400UL, "yyyy-mm-dd"), sizeof(tomorrowDate) - 1);
+    tomorrowDate[sizeof(tomorrowDate) - 1] = '\0';
+    SerialPrint(("Sunrise/sunset for today already past; fetching " + String(tomorrowDate)).c_str(), true);
+    return requestSunForDate(tomorrowDate);
 }
 
 // Forward compatibility - implement original interface methods
 bool WeatherInfoOptimized::updateWeather(uint16_t synctime) {
     return updateWeatherOptimized(synctime);
 }
+#endif // _USEWEATHER
 
 int8_t WeatherInfoOptimized::getTemperature(uint32_t dt, bool wetbulb, bool asindex) {
     if (asindex) {
@@ -1000,6 +1156,7 @@ int16_t WeatherInfoOptimized::getWindSpeed(uint32_t dt) {
 }
 
 
+#ifdef _USEWEATHER
 int16_t WeatherInfoOptimized::breakIconLink(String icon, TimeInterval ti) {
     // Same implementation as original Weather.cpp
     if (icon.indexOf("hurricane",0)>-1) return 504;
@@ -1084,6 +1241,7 @@ int16_t WeatherInfoOptimized::breakIconLink(String icon, TimeInterval ti) {
     
     return 999;
 }
+#endif // _USEWEATHER (breakIconLink)
 
 String WeatherInfoOptimized::nameWeatherIcon(uint16_t icon) {
     char weathername[50];
@@ -1162,8 +1320,11 @@ bool WeatherInfoOptimized::initWeather() {
     initSunTimes();
 
     lastUpdateT = 0;
-    lastUpdateAttempt = 0;
+    lastUpdateError = 0;
     fetchedAt = 0;
+    for (uint8_t i = 0; i < WC_COUNT; i++) {
+        componentStatus[i] = WeatherComponentStatus{};
+    }
 
     return true;
 }
@@ -1305,6 +1466,7 @@ bool WeatherInfoOptimized::isCacheValid() {
 }
 
 
+#ifdef _USEWEATHER
 bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
     // Accept any phenomenon we have a name for. getAlertName() is the single source of truth
     // for the full NWS P-VTEC code set (land, winter, tropical, coastal, and marine), so the
@@ -1312,6 +1474,7 @@ bool WeatherInfoOptimized::filterAlerts(const char* phenomenon) {
     if (phenomenon == nullptr) return false;
     return !getAlertName(phenomenon).equals("Unknown");
 }
+#endif
 
 String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
     if (phenomenon == nullptr) {
@@ -1404,6 +1567,7 @@ String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
     return "Unknown";
 }
 
+#ifdef _USEWEATHER
 bool WeatherInfoOptimized::parseVTEC(const char* vtec, char* office, char* phenomenon, char* significance, char* etn, time_t* start, time_t* end) {
     // 1. Check Product Class (must be /O for Operational)
     // Format: /O.NEW.KBOX.WS.W.0004.260221T1800Z-260222T1200Z/
@@ -1609,6 +1773,7 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
         return false;
     });
 }
+#endif // _USEWEATHER (parseVTEC / fetchWeatherAlerts)
 
 bool WeatherInfoOptimized::loadNextWeatherAlert() {
 //load the next weather event into the this->alertInfo struct
@@ -1661,5 +1826,179 @@ WeatherUrgency WeatherInfoOptimized::parseUrgency(const char* s) {
     return WeatherUrgency::INDETERMINATE;
 }
 
+#ifdef _USEWEATHER
+bool WeatherInfoOptimized::weatherPackageFileExists() const {
+    return FileOrDirectoryExists(WEATHER_PKG_PATH);
+}
 
-#endif
+bool WeatherInfoOptimized::ensureWeatherPackageFile() {
+    if (weatherPackageFileExists()) return true;
+    return buildWeatherPackageFile(true);
+}
+
+bool WeatherInfoOptimized::buildWeatherPackageFile(bool forceRebuild) {
+    if (!forceRebuild && weatherPackageFileExists() && lastWeatherPackageGeneratedAt != 0) {
+        return true;
+    }
+
+    // Count event files present on SD (exclude daily detail bins — unused by graphics).
+    WeatherPkgSectionEnt sections[WEATHER_PKG_MAX_SECTIONS];
+    uint8_t sectionCount = 0;
+    uint16_t eventNumbers[WEATHER_PKG_MAX_SECTIONS];
+    uint8_t eventCount = 0;
+
+    for (uint16_t n = 1; n < WEATHER_PKG_MAX_SECTIONS && eventCount < (WEATHER_PKG_MAX_SECTIONS - 1); n++) {
+        char evPath[32];
+        snprintf(evPath, sizeof(evPath), "/Data/Events/%d.txt", n);
+        if (!FileOrDirectoryExists(evPath)) {
+            if (n > NumWeatherEvents && n > 8) break;
+            continue;
+        }
+        eventNumbers[eventCount++] = n;
+    }
+
+    sdDeleteFile(WEATHER_PKG_TMP_PATH);
+    File out = SD.open(WEATHER_PKG_TMP_PATH, FILE_WRITE);
+    if (!out) {
+        storeError("buildWeatherPackageFile: cannot create temp pkg", ERROR_SD_WEATHERDATAWRITE, true);
+        return false;
+    }
+
+    // Reserve fixed header (streamed; never buffer whole package).
+    uint8_t zeroChunk[64];
+    memset(zeroChunk, 0, sizeof(zeroChunk));
+    uint16_t remaining = WEATHER_PKG_HEADER_BYTES;
+    while (remaining > 0) {
+        uint16_t n = remaining > sizeof(zeroChunk) ? sizeof(zeroChunk) : remaining;
+        if (out.write(zeroChunk, n) != n) {
+            out.close();
+            sdDeleteFile(WEATHER_PKG_TMP_PATH);
+            return false;
+        }
+        remaining = (uint16_t)(remaining - n);
+    }
+
+    // Section 0: WeatherData object
+    sections[sectionCount].start = WEATHER_PKG_HEADER_BYTES;
+    sections[sectionCount].type = WPKG_SEC_WEATHERDATA;
+    sectionCount++;
+    const uint8_t* wd = reinterpret_cast<const uint8_t*>(this);
+    const uint32_t wdSize = (uint32_t)sizeof(WeatherInfoOptimized);
+    uint32_t left = wdSize;
+    uint32_t off = 0;
+    while (left > 0) {
+        uint32_t n = left > 512 ? 512 : left;
+        if (out.write(wd + off, n) != n) {
+            out.close();
+            sdDeleteFile(WEATHER_PKG_TMP_PATH);
+            return false;
+        }
+        off += n;
+        left -= n;
+    }
+
+    // Event sections: stream each file from SD
+    for (uint8_t i = 0; i < eventCount && sectionCount < WEATHER_PKG_MAX_SECTIONS; i++) {
+        char evPath[32];
+        snprintf(evPath, sizeof(evPath), "/Data/Events/%u.txt", (unsigned)eventNumbers[i]);
+        File ef = SD.open(evPath, FILE_READ);
+        if (!ef) continue;
+        uint32_t start = (uint32_t)out.position();
+        uint8_t buf[256];
+        while (ef.available()) {
+            int r = ef.read(buf, sizeof(buf));
+            if (r <= 0) break;
+            if (out.write(buf, (size_t)r) != (size_t)r) {
+                ef.close();
+                out.close();
+                sdDeleteFile(WEATHER_PKG_TMP_PATH);
+                return false;
+            }
+        }
+        ef.close();
+        if ((uint32_t)out.position() > WEATHER_PKG_MAX_BYTES) {
+            out.close();
+            sdDeleteFile(WEATHER_PKG_TMP_PATH);
+            storeError("buildWeatherPackageFile: exceeds 50KB max", ERROR_SD_WEATHERDATAWRITE, true);
+            return false;
+        }
+        sections[sectionCount].start = start;
+        sections[sectionCount].type = WPKG_SEC_EVENT;
+        sectionCount++;
+    }
+
+    uint32_t totalSize = (uint32_t)out.position();
+    if (totalSize > WEATHER_PKG_MAX_BYTES) {
+        out.close();
+        sdDeleteFile(WEATHER_PKG_TMP_PATH);
+        return false;
+    }
+
+    // Write header at start
+    out.seek(0);
+    uint8_t header[WEATHER_PKG_HEADER_BYTES];
+    memset(header, 0, sizeof(header));
+    header[0] = WEATHER_PKG_VER_MAJOR;
+    header[1] = WEATHER_PKG_VER_MINOR;
+    uint16_t hdrBytes = WEATHER_PKG_HEADER_BYTES;
+    memcpy(header + 2, &hdrBytes, sizeof(hdrBytes));
+
+    uint32_t packagedAt = isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : 0;
+    memcpy(header + 4, &packagedAt, 4);
+    memcpy(header + 8, &totalSize, 4);
+    uint16_t storeVer = WEATHER_STORE_VERSION;
+    uint16_t objSize = (uint16_t)sizeof(WeatherInfoOptimized);
+    memcpy(header + 12, &storeVer, 2);
+    memcpy(header + 14, &objSize, 2);
+    header[16] = sectionCount;
+    uint8_t flags = 0;
+    if (anyWeatherComponentStale() || lastUpdateT == 0 ||
+        (isTimeValid(I.currentTime) && lastUpdateT + 7200 < (uint32_t)I.currentTime)) {
+        flags |= WPKG_FLAG_DATA_STALE;
+    }
+    header[17] = flags;
+    // header[18..19] reserved
+    memcpy(header + WEATHER_PKG_HEADER_CORE,
+           sections,
+           sectionCount * sizeof(WeatherPkgSectionEnt));
+
+    if (out.write(header, WEATHER_PKG_HEADER_BYTES) != WEATHER_PKG_HEADER_BYTES) {
+        out.close();
+        sdDeleteFile(WEATHER_PKG_TMP_PATH);
+        return false;
+    }
+    out.close();
+
+    sdDeleteFile(WEATHER_PKG_PATH);
+    // Atomic replace: rename via delete+... SD.h may not have rename; copy stream
+    File src = SD.open(WEATHER_PKG_TMP_PATH, FILE_READ);
+    File dst = SD.open(WEATHER_PKG_PATH, FILE_WRITE);
+    if (!src || !dst) {
+        if (src) src.close();
+        if (dst) dst.close();
+        sdDeleteFile(WEATHER_PKG_TMP_PATH);
+        return false;
+    }
+    uint8_t copyBuf[512];
+    while (src.available()) {
+        int r = src.read(copyBuf, sizeof(copyBuf));
+        if (r <= 0) break;
+        if (dst.write(copyBuf, (size_t)r) != (size_t)r) {
+            src.close();
+            dst.close();
+            sdDeleteFile(WEATHER_PKG_PATH);
+            sdDeleteFile(WEATHER_PKG_TMP_PATH);
+            return false;
+        }
+    }
+    src.close();
+    dst.close();
+    sdDeleteFile(WEATHER_PKG_TMP_PATH);
+
+    lastWeatherPackageGeneratedAt = packagedAt;
+    SerialPrint("Weather package built: " + String(totalSize) + " bytes, sections=" + String(sectionCount), true);
+    return true;
+}
+#endif // _USEWEATHER package
+
+#endif // _USEWEATHER || _USEWEATHERLITE

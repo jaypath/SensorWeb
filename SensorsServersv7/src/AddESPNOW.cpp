@@ -1081,7 +1081,16 @@ bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t bl
     if (blockTimeMs == 0) blockTimeMs = ESPNOW_BLOCKING_PING_DEFAULT_MS;
 
     #ifdef _USE_HEADER_INFO_ALERT
-    HeaderInfoAlertGuard headerAlert("Pinging...", TFT_YELLOW, TFT_BLACK, 60);
+    char pingBanner[16];
+    char shortName[11];
+    strncpy(shortName, targetDevice->devName, 10);
+    shortName[10] = '\0';
+    if (shortName[0] == '\0') {
+      strncpy(shortName, "device", sizeof(shortName) - 1);
+      shortName[sizeof(shortName) - 1] = '\0';
+    }
+    snprintf(pingBanner, sizeof(pingBanner), "Png %s", shortName);
+    HeaderInfoAlertGuard headerAlert(pingBanner, TFT_YELLOW, TFT_BLACK, 60);
     #endif
 
     uint32_t requestId = millis();

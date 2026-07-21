@@ -24,3 +24,14 @@
 #if !_HAS_LOCAL_SENSORS && !_IS_SERVER_HUB
 #error "Define _HAS_LOCAL_SENSORS=1 and/or _IS_SERVER_HUB=1 in platformio build_flags"
 #endif
+
+// Weather roles (mutually exclusive). Full NOAA fetch vs package consumer.
+#if defined(_USEWEATHER) && defined(_USEWEATHERLITE)
+#error "Define only one of _USEWEATHER or _USEWEATHERLITE"
+#endif
+#if defined(_USEWEATHER) && !defined(_USESDCARD)
+#error "_USEWEATHER requires _USESDCARD (weather package + Events on SD)"
+#endif
+#if defined(_USEWEATHERLITE) && !defined(_USESDCARD)
+#error "_USEWEATHERLITE requires _USESDCARD (receive/unpack weather package on SD)"
+#endif

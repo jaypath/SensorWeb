@@ -133,8 +133,18 @@ struct HTTPMessage {
 };
 
 
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
   extern WeatherInfoOptimized WeatherData;
+void handleWEATHERPKG();
+#endif
+#ifdef _USEWEATHER
+// Plain HTTP weather package: GET serves /Data/weatherdata.pkg; producers push via POST to peers.
+// SECURITY: unencrypted LAN transfer — see WeatherPkg.hpp.
+bool sendWeatherPackageHttp(IPAddress ip);
+void serviceWeatherPackagePush(bool minuteTick);
+#endif
+#ifdef _USEWEATHERLITE
+void handleWEATHERPKG_raw();
 #endif
 
 #if _IS_SERVER_HUB
@@ -157,6 +167,8 @@ extern uint32_t WTHRFAIL;
 // Runtime: wait WIFI_DOWN_AP_THRESHOLD_SEC before opening soft-AP for credential recovery;
 // while AP is up, retry known STA credentials every WIFI_AP_STA_RECONNECT_SEC (time-debounced
 // WiFi.begin; do not gate on WL_IDLE_STATUS). Soft-AP stays up until STA is usable.
+// Peripherals (_MYTYPE < 100): also enter/stay in APSTA when no live server is known
+// (none registered, or all servers expired / stale) so users can debug via 192.168.4.1.
 // AP-mode ESP-NOW channel scans run only when credentials are missing (avoid RF hops during STA retry).
 static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 5;
 static constexpr uint16_t WIFI_BOOT_TRY_MS = 45000;
@@ -190,6 +202,10 @@ void maybeOptimizeWifiBssid();
 void enterAPStationMode();
 void exitAPStationMode();
 void maybeExitAPStationMode();
+#if _MYTYPE < 100
+// Peripheral: enter/stay in APSTA when no live server (for AP debug portal).
+void servicePeripheralServerApMode();
+#endif
 void syncInitialSetupState();
 void resetEphemeralCoreWifiState();
 void reconcileWifiStateAfterCoreLoad();
@@ -305,23 +321,30 @@ void wrapupSendData(ArborysSnsType* S);
 bool isDeviceSendTime(ArborysDevType* D, bool forceSend);
 bool checkThisSensorTime(ArborysSnsType* S);
 bool isSensorSendTime(int16_t snsIndex);
-int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
-int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
-int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType);
-int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType);
-int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType);
-int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType);
+int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs = 0);
+int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs = 0);
+int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs = 0);
+int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs = 0);
+int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType, uint16_t timeoutMs = 0);
+int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType, uint16_t timeoutMs = 0);
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP);
 bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=-1, bool useUDP=false);
 
 //send json messages
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
+// Data request: UDP is fire-and-forget; HTTP/HTTPS is queued to a worker (non-blocking).
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
 int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
 
 // Connectivity ping metrics: ESPNow + UDP every ~10 min; HTTP only if both fail.
 // Pass startCycle=true on the 10-minute mark; call every second while a cycle is active.
 void serviceDeviceConnectivityPings(bool startCycle = false);
+
+#if _IS_SERVER_HUB
+// Hub: request data from expired peripherals. Pass startCycle=true after expiry check;
+// call every second; processes one eligible device per call (no delayWithNetwork).
+void serviceExpiredDeviceDataRequests(bool startCycle = false);
+#endif
 
 //add json handlers
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);

@@ -82,8 +82,7 @@ extern String WEBHTML;
 extern STRUCT_GOOGLESHEET GSheetInfo;
 #endif
 
-#ifdef _USEWEATHER
-//extern uint8_t OldTime[4];
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 extern WeatherInfoOptimized WeatherData;
 #endif
 
@@ -338,20 +337,27 @@ void setup() {
 
         tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
         esp_task_wdt_reset();
-    //load weather data from SD card
+    //load weather data from SD card; forceStaleRefresh applies content freshness
+    //(e.g. hourly needs 24h coverage) rather than trusting a recent fetch timestamp.
         if (readWeatherDataSD()) {
-        
-            if (WeatherData.updateWeatherOptimized(3600, true)>0) {
-                SerialPrint("Weather data loaded from SD card",true);
+            byte weatherBoot = WeatherData.updateWeatherOptimized(3600, true, true);
+            if (weatherBoot == 3) {
+                SerialPrint("Weather data loaded from SD card (content fresh)", true);
                 tftPrint("Weather data on SD card ok.", true, TFT_GREEN);
+            } else if (weatherBoot == 2) {
+                SerialPrint("Weather data on SD is stale; retry window not open yet.", true);
+                tftPrint("Weather data stale.", true, TFT_YELLOW);
+            } else if (weatherBoot > 0) {
+                SerialPrint("Weather data loaded from SD card and refreshed from NOAA.", true);
+                tftPrint("Weather data updated.", true, TFT_GREEN);
             } else {
-                SerialPrint("Weather data loaded from SD card, but data is stale. Trying to update from NOAA.",true);                
-                tftPrint("Expired.", true, TFT_YELLOW);                
+                SerialPrint("Weather data loaded from SD card, but update failed/stale. Retrying NOAA.", true);
+                tftPrint("Expired.", true, TFT_YELLOW);
                 tftPrint("Weather data on SD card stale.", true, TFT_YELLOW);
                 tftPrint("Weather data updating from NOAA.", true, TFT_YELLOW);
                 tftPrint("This may take several minutes.", true, TFT_YELLOW);
                 esp_task_wdt_reset();
-                WeatherData.updateWeatherOptimized(3600, true);    
+                WeatherData.updateWeatherOptimized(3600, true, true);
             }
 
         } else {
@@ -360,7 +366,7 @@ void setup() {
             tftPrint("Weather data not on SD. Updating from NOAA.", true, TFT_YELLOW);
             tftPrint("This may take several minutes.", true, TFT_YELLOW);
             esp_task_wdt_reset();
-            WeatherData.updateWeatherOptimized(3600, true);
+            WeatherData.updateWeatherOptimized(3600, true, true);
         }
         esp_task_wdt_reset();
 
@@ -373,6 +379,21 @@ void setup() {
         tftPrint("Setup OK.", true, TFT_GREEN);
 
     #endif //_USEWEATHER
+
+    #ifdef _USEWEATHERLITE
+    {
+      SerialPrint("Weather lite: loading local weather cache...", true);
+      if (FileOrDirectoryExists(WEATHER_PKG_PATH)) {
+        weatherLiteUnpackFile(WEATHER_PKG_PATH);
+      } else if (readWeatherDataSD()) {
+        weatherLiteApplyIFlagsFromPackage();
+        SerialPrint("Weather lite: loaded WeatherData.dat (no package yet)", true);
+      } else {
+        SerialPrint("Weather lite: no local weather; will request from type-100 server", true);
+      }
+      weatherLiteRequestFromAnyWeatherServer();
+    }
+    #endif
 
 
 
@@ -489,20 +510,20 @@ void loop() {
         #ifdef _USEWEATHER
         // WEATHER OPTIMIZATION - Use optimized weather update method
         byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
-        if (weatherResult > 3) {
-            SerialPrint("Weather data has an unknown status",true);
-        } else if (weatherResult == 1) {
+        if (weatherResult == 1) {
             SerialPrint("Weather updated successfully",true);
-        } else if (weatherResult == 2) {
-            SerialPrint("Weather update: too soon to retry",true);
         } else if (weatherResult == 3) {
             SerialPrint("Weather update: data is still fresh",true);    
+        } else if (weatherResult == 2) {
+            SerialPrint("Weather update: data is stale (waiting for retry window)", true);
+        } else if (weatherResult == 0) {
+            SerialPrint("Weather update: one or more components failed",true);
         } else {
             SerialPrint("Weather update: error code " + (String) weatherResult,true);
         }
 
         static uint32_t lastWeatherTimeoutErrorT = 0;
-        if (WeatherData.lastUpdateAttempt > WeatherData.lastUpdateT + 3600
+        if ((WeatherData.lastUpdateT == 0 || I.currentTime > WeatherData.lastUpdateT + 3600)
             && I.currentTime - I.ALIVESINCE > 10800
             && I.currentTime - lastWeatherTimeoutErrorT > 3600) {
             storeError("Weather failed >60 minutes", ERROR_WEATHER_TIMEOUT, true);
@@ -683,44 +704,19 @@ void loop() {
             I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true, 0, true);
 
             #if _IS_SERVER_HUB
-            // Hub: request data from expired peripherals (UDP if UDP ping rate >50%, else HTTP/HTTPS)
-            int16_t startIndex = -1;
-            #ifdef _USE_HEADER_INFO_ALERT
-            bool headerAlertActive = false;
-            #endif
-            while (startIndex < NUMDEVICES) {
-                ArborysDevType* device = Sensors.getNextExpiredDevice(startIndex);
-                if (!device) break;
-                if (device->devType >= 100) continue; //don't send a ping to servers
-                if (device->dataSent > I.currentTime - 120) continue; //don't send a ping to devices that we have sent a ping to too recently
-                if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue; //don't send a ping to devices that have no sensors
-
-                #ifdef _USE_HEADER_INFO_ALERT
-                if (!headerAlertActive) {
-                    HeaderInfoAlert("Req sensors...", TFT_YELLOW, TFT_BLACK, 120);
-                    headerAlertActive = true;
-                }
-                #endif
-
-                const bool useUdp = deviceUdpPingRateAbove50(device);
-                SerialPrint("Sensor expired: data request to " + String(device->devName) +
-                    " via " + String(useUdp ? "UDP" : "HTTP/HTTPS") +
-                    " (UDP rate " + String(udpPingSuccessRatePercent(device)) + "%)", true);
-
-                sendMSG_DataRequest(device, -1, !useUdp);
-
-                device->dataSent = I.currentTime;
-                delayWithNetwork(10,25);
-            }
-            #ifdef _USE_HEADER_INFO_ALERT
-            if (headerAlertActive) HeaderInfoAlert("");
-            #endif
+            // Hub: start expired-peripheral data-request cycle (one device per second below)
+            serviceExpiredDeviceDataRequests(true);
             if (I.makeBroadcast) { //broadcast every 10 minutes, at some random second within the 10th minute
                 broadcastServerPresence(true, 2);
             }
             #endif
 
         }
+
+        #if _IS_SERVER_HUB
+        // Expired data requests: one device per second; HTTP path is async (queued worker)
+        serviceExpiredDeviceDataRequests(false);
+        #endif
 
         // Connectivity pings (response-required): start every 10 minutes; service one device/sec
         serviceDeviceConnectivityPings(minute() % 10 == 0 && I.MyRandomSecond == second());

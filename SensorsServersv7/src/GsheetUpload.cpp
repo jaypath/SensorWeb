@@ -665,28 +665,67 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     return success;
 }
   
+  // Retry delay (seconds) based on last upload status.
+  // 1/0 use configured interval; failures use fixed cooldowns. -4/-6 also require wifi/time restored.
+  static uint32_t gsheetRetryIntervalSec(int8_t lastStatus) {
+    switch (lastStatus) {
+      case 1:
+      case 0:
+        return (uint32_t)GSheetInfo.uploadGsheetIntervalMinutes * 60UL;
+      case -1:
+      case -3:
+      case -5:
+        return 10UL * 60UL;
+      case -2:
+        return 20UL * 60UL;
+      case -4:
+      case -6:
+        return 60UL;
+      default:
+        return (uint32_t)GSheetInfo.uploadGsheetIntervalMinutes * 60UL;
+    }
+  }
+
   int8_t Gsheet_uploadData() {
     //wrapper function to check upload status here.
+    if (GSheetInfo.useGsheet == false ) {
+        SerialPrint("Gsheet_uploadData... Gsheet is not enabled",true);
+        return 0; //everything is ok, just not using Gsheet!
+    }
+
+    // Do not attempt when WiFi is down or time is invalid; register status for cooldown.
     if (!wifiReadyForNetwork()) {
         SerialPrint("ERROR: GSheet not ready - no Wifi",true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet not ready - no Wifi");
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
         GSheetInfo.lastErrorTime = I.currentTime;
-        GSheetInfo.lastGsheetUploadSuccess = -4;    
-        return -4; //no Wifi
+        GSheetInfo.lastGsheetUploadSuccess = -4;
+        GSheetInfo.lastGsheetUploadTime = I.currentTime;
+        return -4;
+    }
+    if (!isTimeValid(I.currentTime)) {
+        SerialPrint("ERROR: GSheet not ready - invalid time",true);
+        snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet invalid time");
+        snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
+        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadSuccess = -6;
+        GSheetInfo.lastGsheetUploadTime = I.currentTime;
+        return -6;
+    }
+
+    // Status-specific reattempt interval (success and failure modes).
+    if (GSheetInfo.lastGsheetUploadTime > 0) {
+        const uint32_t intervalSec = gsheetRetryIntervalSec(GSheetInfo.lastGsheetUploadSuccess);
+        if ((uint32_t)(I.currentTime - GSheetInfo.lastGsheetUploadTime) < intervalSec) {
+            SerialPrint("Gsheet_uploadData... Not time to upload (status "
+                + String(GSheetInfo.lastGsheetUploadSuccess) + ", wait "
+                + String(intervalSec) + "s)", true);
+            return 0;
+        }
     }
 
     SerialPrint("Gsheet_uploadData... ");
-    if (GSheetInfo.useGsheet == false ) {
-        SerialPrint("Gsheet is not enabled",true);
-        return 0; //everything is ok, just not using Gsheet!
-    }
-    if ((GSheetInfo.lastGsheetUploadSuccess>0 && GSheetInfo.lastGsheetUploadTime>0 && I.currentTime-GSheetInfo.lastGsheetUploadTime<(GSheetInfo.uploadGsheetIntervalMinutes*60))) {
-        SerialPrint("Not time to upload",true);
-        return 0; //everything is ok, just not time to upload!
-    }
 
-    
     #ifdef _USE_HEADER_INFO_ALERT
     HeaderInfoAlertGuard headerAlert("GSheet upload...", TFT_YELLOW, TFT_BLACK, 300);
     #endif
@@ -697,25 +736,27 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet not ready");
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
         GSheetInfo.lastErrorTime = I.currentTime;
-        GSheetInfo.lastGsheetUploadSuccess = -1;    
+        GSheetInfo.lastGsheetUploadSuccess = -1;
+        GSheetInfo.uploadGsheetFailCount++;
     } else {
-        
         if (Gsheet_uploadSensorDataFunction()==false) {
-            snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet upload failed");
-            snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
+            // Preserve specific codes set inside (-4/-5/-6/-2); only force -2 if unset
+            if (GSheetInfo.lastGsheetUploadSuccess >= 0) {
+                snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: Gsheet upload failed");
+                snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
+                GSheetInfo.lastGsheetUploadSuccess = -2;
+            }
             GSheetInfo.lastErrorTime = I.currentTime;
-            GSheetInfo.lastGsheetUploadSuccess=-2;
-            GSheetInfo.uploadGsheetFailCount++; //an actual error prevented upload!
+            GSheetInfo.uploadGsheetFailCount++;
         } else {
-            GSheetInfo.lastGsheetUploadSuccess=1;
-            GSheetInfo.lastGsheetUploadTime = I.currentTime;
-            GSheetInfo.uploadGsheetFailCount=0; //upload success!
-
-            storeGsheetInfoSD();       
+            GSheetInfo.lastGsheetUploadSuccess = 1;
+            GSheetInfo.uploadGsheetFailCount = 0;
+            storeGsheetInfoSD();
         }
     }
-    SerialPrint(" (1=OK, otherwise=ERROR): " + (String) GSheetInfo.lastGsheetUploadSuccess,true);        
-    return GSheetInfo.lastGsheetUploadSuccess; 
+    GSheetInfo.lastGsheetUploadTime = I.currentTime;
+    SerialPrint(" (1=OK, otherwise=ERROR): " + (String) GSheetInfo.lastGsheetUploadSuccess,true);
+    return GSheetInfo.lastGsheetUploadSuccess;
 }
 
   void tokenStatusCallback(TokenInfo info)

@@ -17,7 +17,9 @@ struct STRUCT_GRAPHICS GRAPHICS;
 
 LGFX tft;
 
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 extern WeatherInfoOptimized WeatherData;
+#endif
 extern double LAST_BAR;
 extern STRUCT_PrefsH Prefs;
 extern Devices_Sensors Sensors;
@@ -1563,6 +1565,8 @@ void fcnDrawMainScreen(int16_t index) {
 }
 
 //redraw header --------------------------------------------------------
+static void forceClockRedrawAfterHeaderAlert();
+
 void fcnDrawHeader(int16_t index) { 
   int16_t timernum = helper_runScreenElementFunction(index, false); 
   if (timernum<0) return; //this is an error condition
@@ -1646,6 +1650,7 @@ void fcnDrawHeaderInfo(int16_t index) {
         && (uint32_t)(millis() - GRAPHICS.headerInfoAlertStartMs) >= GRAPHICS.headerInfoAlertTtlMs) {
       GRAPHICS.headerInfoAlert[0] = '\0';
       GRAPHICS.headerInfoAlertTtlMs = 0;
+      forceClockRedrawAfterHeaderAlert();
     } else {
       uint16_t x = GRAPHICS.SCREEN_DATA[index].X;
       uint16_t y = GRAPHICS.SCREEN_DATA[index].Y;
@@ -1677,22 +1682,23 @@ void fcnDrawHeaderInfo(int16_t index) {
 
   //clear the header info area
   GRAPHICS.clearScreenArea(index);
-  //  uint8_t InfoFlags = 0; //bit 0 - showing wifi out, bit 1 =  showing weather alerts, bit 2 = last error msg within 2h, bit 3 = IP in header, bit 4 = dawn/dusk info
+  // bit 0 - wifi out, bit 1 - weather alerts, bit 2 - last error, bit 3 - IP, bit 4 - dawn/dusk, bit 5 - weather stale
 
 
  
   String st = "";
   tft.setTextDatum(TL_DATUM);
 
-  uint16_t x = GRAPHICS.SCREEN_DATA[index].X,y=GRAPHICS.SCREEN_DATA[index].Y;
+  uint16_t x = GRAPHICS.SCREEN_DATA[index].X, y = GRAPHICS.SCREEN_DATA[index].Y;
+  uint16_t w = GRAPHICS.SCREEN_DATA[index].W, h = GRAPHICS.SCREEN_DATA[index].H;
   uint32_t FH = setFont(2);
   tft.setCursor(x,y);
   tft.setTextColor(FG_COLOR,BG_COLOR); //without second arg it is transparent background
 
-  uint8_t InfoFlags = GRAPHICS.SCREEN_DATA[index].Local_Code; //bit 0 - showing wifi out, bit 1 =  showing weather alerts, bit 2 = last error msg within 2h, bit 3 = IP in header, bit 4 = dawn/dusk info
+  uint8_t InfoFlags = GRAPHICS.SCREEN_DATA[index].Local_Code; //bit 0 - wifi out, bit 1 - weather alerts, bit 2 - last error, bit 3 - IP, bit 4 - dawn/dusk, bit 5 - weather stale
   uint16_t textWidth = 0;
 
-  //Order is: no wifi (or AP/NO WIFI alternate), then weather alerts, then cycle amongst [IP address, dawn/dusk info, last error msg within 2h]
+  //Order is: no wifi (or AP/NO WIFI alternate), then weather alerts, then cycle amongst [IP address, dawn/dusk info, Wthr Stale if present]
   if (!wifiReadyForNetwork()) {
     setFont(2);
     if (softApRunning()) {
@@ -1746,34 +1752,68 @@ void fcnDrawHeaderInfo(int16_t index) {
         st = String(I.lastError);
         tft.drawString(st,x,y+FH + 4);
       } else {
-        tft.setTextColor(TFT_LIGHTGREY,BG_COLOR);
+        #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
+        const bool weatherStale = WeatherData.anyWeatherComponentStale();
+        #else
+        const bool weatherStale = false;
+        #endif
 
-        //display my IP address if dawn/dusk info was showing
-        if (isBit(InfoFlags,3)==false) {
-          InfoFlags =0;
-          setBit(InfoFlags,3); //set bit 3 to 1
-          //show IP address (no "My IP:" prefix — keeps text within the right header tile)
+        // Cycle: IP -> dawn/dusk -> (Wthr Stale if present) -> IP ...
+        if (isBit(InfoFlags, 5) && weatherStale) {
+          // Was showing stale -> IP next
+          InfoFlags = 0;
+          setBit(InfoFlags, 3);
           FH = setFont(2);
+          tft.setTextColor(TFT_LIGHTGREY, BG_COLOR);
           st = Sensors.getMyDeviceIP().toString();
           textWidth = tft.textWidth(st);
-          tft.drawString(st,tft.width()-textWidth-4,y+2);
-    
-        } else {
-          //show dawn/dusk info
-          FH = setFont(4);
-
-          InfoFlags =0;
-          setBit(InfoFlags,4); //set bit 4 to 1
-
-          if (WeatherData.sunrise > I.currentTime) {          
-            st = "Dawn: " + String(dateify(WeatherData.sunrise,"hh:nn"));
+          tft.drawString(st, tft.width() - textWidth - 4, y + 2);
+        } else if (isBit(InfoFlags, 4)) {
+          // Was showing dawn/dusk -> stale (if any) or IP
+          if (weatherStale) {
+            InfoFlags = 0;
+            setBit(InfoFlags, 5);
+            FH = setFont(2);
+            tft.fillRect(x, y, w, (h > 0) ? h : 30, TFT_BLUE);
+            tft.setTextColor(TFT_RED, TFT_BLUE);
+            st = "Wthr Stale";
             textWidth = tft.textWidth(st);
+            tft.drawString(st, tft.width() - textWidth - 4, y + 2);
           } else {
-            st = "Dusk: " + String(dateify(WeatherData.sunset,"hh:nn"));
+            InfoFlags = 0;
+            setBit(InfoFlags, 3);
+            FH = setFont(2);
+            tft.setTextColor(TFT_LIGHTGREY, BG_COLOR);
+            st = Sensors.getMyDeviceIP().toString();
             textWidth = tft.textWidth(st);
+            tft.drawString(st, tft.width() - textWidth - 4, y + 2);
           }
-          tft.drawString(st,tft.width()-textWidth-4,y+2);          
-
+        } else if (isBit(InfoFlags, 3)) {
+          // Was showing IP -> dawn/dusk
+          InfoFlags = 0;
+          setBit(InfoFlags, 4);
+          FH = setFont(4);
+          tft.setTextColor(TFT_LIGHTGREY, BG_COLOR);
+          #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
+          if (WeatherData.sunrise > I.currentTime) {
+            st = "Dawn: " + String(dateify(WeatherData.sunrise, "hh:nn"));
+          } else {
+            st = "Dusk: " + String(dateify(WeatherData.sunset, "hh:nn"));
+          }
+          #else
+          st = "";
+          #endif
+          textWidth = tft.textWidth(st);
+          tft.drawString(st, tft.width() - textWidth - 4, y + 2);
+        } else {
+          // Default / first entry -> IP
+          InfoFlags = 0;
+          setBit(InfoFlags, 3);
+          FH = setFont(2);
+          tft.setTextColor(TFT_LIGHTGREY, BG_COLOR);
+          st = Sensors.getMyDeviceIP().toString();
+          textWidth = tft.textWidth(st);
+          tft.drawString(st, tft.width() - textWidth - 4, y + 2);
         }
       }
     }
@@ -1799,8 +1839,20 @@ void HeaderInfoAlert(const String& msg, uint16_t fgColor, uint16_t bgColor, uint
   HeaderInfoAlert(msg.c_str(), fgColor, bgColor, ttlSec);
 }
 
+static void forceClockRedrawAfterHeaderAlert() {
+  int8_t clockIdx = helper_findIndex(&fcnDrawClock);
+  if (clockIdx < 0) return;
+  GRAPHICS.GRAPHICS_TIMERS.Timers[GRAPHICS.SCREEN_DATA[clockIdx].TimerIndex] = 0;
+  if (GRAPHICS.Screen_Now == SCREEN_MAIN) {
+    fcnDrawClock(clockIdx);
+  }
+}
+
 void HeaderInfoAlert(const char* msg, uint16_t fgColor, uint16_t bgColor, uint32_t ttlSec) {
-  if (msg == nullptr || msg[0] == '\0') {
+  const bool clearing = (msg == nullptr || msg[0] == '\0');
+  const bool wasActive = (GRAPHICS.headerInfoAlert[0] != '\0');
+
+  if (clearing) {
     GRAPHICS.headerInfoAlert[0] = '\0';
     GRAPHICS.headerInfoAlertTtlMs = 0;
   } else {
@@ -1815,11 +1867,14 @@ void HeaderInfoAlert(const char* msg, uint16_t fgColor, uint16_t bgColor, uint32
   int8_t index = helper_findIndex(&fcnDrawHeaderInfo);
   if (index < 0) {
     // Header info tile not bound (wrong screen); state is set for the next time it is.
+    if (clearing && wasActive) forceClockRedrawAfterHeaderAlert();
     return;
   }
 
   GRAPHICS.GRAPHICS_TIMERS.Timers[GRAPHICS.SCREEN_DATA[index].TimerIndex] = 0;
   fcnDrawHeaderInfo(index);
+
+  if (clearing && wasActive) forceClockRedrawAfterHeaderAlert();
 }
 
 
@@ -3030,6 +3085,7 @@ void fcnDrawStatusWeatherUpdate(int16_t index) {
   tft.setTextFont(2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
+#ifdef _USEWEATHER
   tft.println("Weather update in progress...");
   bool success = WeatherData.updateWeather(0);
   if (success) {
@@ -3037,11 +3093,24 @@ void fcnDrawStatusWeatherUpdate(int16_t index) {
   } else {
     tft.println("Weather update failed");
   }
+#elif defined(_USEWEATHERLITE)
+  tft.println("Requesting weather package...");
+  bool success = weatherLiteRequestFromAnyWeatherServer();
+  if (success) {
+    tft.println("Weather package received");
+  } else {
+    tft.println("Weather package request failed");
+  }
+#else
+  tft.println("Weather not enabled");
+#endif
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
   if (WeatherData.lastUpdateT != 0) {
     tft.printf("Last update: %s\n",dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss"));
   } else {
     tft.println("No prior successful update time");
   }
+#endif
   tft.println("Touch anywhere to\nreturn to main screen");
 
   //set the timer to a smaller amount

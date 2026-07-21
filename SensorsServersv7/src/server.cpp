@@ -31,6 +31,11 @@
 #include <string.h> // For memset
 #include <esp_task_wdt.h>
 #include <esp_ota_ops.h>
+#ifdef _USE32
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#endif
 
 
 #ifdef _USEUDP
@@ -1019,15 +1024,21 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
     }
     for (uint8_t attempt = 1; attempt <= WIFI_BOOT_RETRY_LIMIT; ++attempt) {
       #ifdef _USETFT
-      tftPrint("WiFi attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT) + ", please wait",
-          true, TFT_WHITE, 2, 1, false, -1, -1);
+      tftPrint("WiFi Attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT) + "...",
+          false, TFT_WHITE, 2, 1, false, -1, -1);
       #endif
       SerialPrint("Boot WiFi attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT), true);
       if (tryWifi(WIFI_BOOT_TRY_MS, true) == 1) {
+        #ifdef _USETFT
+        tftPrint(" OK", true, TFT_GREEN);
+        #endif
         syncWifiDownFlags(true);
         syncDeviceIPFromWifi();
         return measureWifiLinkStatus();
       }
+      #ifdef _USETFT
+      tftPrint(" Fail", true, TFT_RED);
+      #endif
     }
     SerialPrint("Boot WiFi failed after " + String(WIFI_BOOT_RETRY_LIMIT) + " attempts; entering AP mode", true);
     enterAPStationMode();
@@ -1116,8 +1127,6 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
       return 1; 
 
     } else {
-      tftPrint("Failed WiFi", true);
-
       return -1; 
     }
 
@@ -1443,6 +1452,12 @@ void maybeExitAPStationMode() {
   if (!I.initialSetupFinalized) return;
   if (!initialSetupRequirementsMet()) return;
 
+  #if _MYTYPE < 100
+  // Peripherals keep APSTA while no live server so users can reach the debug portal
+  // even when STA WiFi is fine but hubs are unreachable / all expired.
+  if (!Sensors.hasLiveServer(I.currentTime)) return;
+  #endif
+
   if (I.initialSetupExitPending) {
     if (WiFi.softAPgetStationNum() > 0) return;
     if (!apClientIdleFor(3)) return;
@@ -1451,6 +1466,21 @@ void maybeExitAPStationMode() {
 
   exitAPStationMode();
 }
+
+#if _MYTYPE < 100
+void servicePeripheralServerApMode() {
+  const bool liveServer = Sensors.hasLiveServer(I.currentTime);
+  if (!liveServer) {
+    if (!softApRunning()) {
+      SerialPrint("No live server (none registered or all expired); entering APSTA for debug access", true);
+      enterAPStationMode();
+    }
+    return;
+  }
+  // Server contact restored — drop soft-AP if STA/setup otherwise allow it.
+  maybeExitAPStationMode();
+}
+#endif
 
 void exitAPStationMode() {
   if (softApRunning()) {
@@ -2143,69 +2173,45 @@ void handleInitialSetup() {
 </style>
 
 <body>
+)===";
+  // Allow navigation to Main/Status/etc. for intentional no-WiFi (ESP-NOW) operation.
+  appendStandardPageNav();
+  WEBHTML += R"===(
 <div class="setup-container">
   <p>Welcome! Let's configure your system.</p>
   )===";
   serverTextFlush(true);
 
-  //insert what is missing/ why we got to initial setup
-  //possible choices include no wifi, no timezone, no location (if using weather), or user reset
-
-  //is there no wifi?
   CheckWifiStatus(WIFI_CHECK_NORMAL);
-  WEBHTML += "<p>";
-  WEBHTML += "Credentials present: " + String(Prefs.HAVECREDENTIALS ? "true" : "false") + "<br>";    
-  WEBHTML += "WiFi connection status: "; 
-  if (I.WiFiStatus == 2) {
-    WEBHTML += "Connected by all measures, but wifi.status() != WL_CONNECTED";
-  } else if (I.WiFiStatus == 1) {
-    WEBHTML += "Connected";
-  } else if (I.WiFiStatus == 0) {
-    WEBHTML += "Unknown";
-  } else if (I.WiFiStatus == -1) {
-    WEBHTML += "No valid IP address";
-  } else if (I.WiFiStatus == -2) {
-    WEBHTML += "No valid RSSI range";
-  } else if (I.WiFiStatus == -3) {
-    WEBHTML += "No valid SSID";
-  } else if (I.WiFiStatus == -4) {
-    WEBHTML += "No valid gateway";
-  } else {
-    WEBHTML += "Unknown";
-  }
-  WEBHTML += "<br>";
-  if (I.WiFiStatus >= 1) {
-    WEBHTML += "Currently connected to WiFi network: " + WiFi.SSID() + "<br>";
-    WEBHTML += "Current IP address: " + WiFi.localIP().toString() + "<br>";
-    WEBHTML += "Current RSSI: " + formatRssiHtml(WiFi.RSSI()) + "<br>";
-  } else {
-    WEBHTML += "Not connected to WiFi<br>";
-  }
-  WEBHTML += "Last WiFi event: " + WiFiEventtoString(I.WiFiLastEvent) + "<br>";
-  WEBHTML += "</p>";
-  WEBHTML += R"===(<button class="btn btn-secondary" onclick="clearWiFiCredentials()" style="margin-top: 10px; padding: 8px 16px; font-size: 14px; background-color: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear WiFi Credentials</button>)===";
+  {
+    const wifi_mode_t mode = WiFi.getMode();
+    const char* modeLabel = "OFF";
+    if (mode == WIFI_MODE_STA) modeLabel = "STA mode";
+    else if (mode == WIFI_MODE_AP) modeLabel = "AP mode";
+    else if (mode == WIFI_MODE_APSTA) modeLabel = "AP+STA mode";
 
-  //is there no timezone?
-  if (Prefs.TimeZoneOffset > 50400) { //UTC cannot be greater than this
-    WEBHTML += R"===(
-    <p>Timezone not found and required to continue.</p>
-    )===";
-  } else {
-    WEBHTML += "<p>Timezone: " + String(Prefs.TimeZoneOffset) + "</p>";
-  }
+    String ssid = WiFi.SSID();
+    if (ssid.length() == 0 && Prefs.WIFISSID[0] != 0) ssid = (const char*)Prefs.WIFISSID;
 
-  #ifdef _USEWEATHER
-  //is there no location?
-  if (Prefs.LATITUDE == 0 || Prefs.LONGITUDE == 0) {
-    WEBHTML += R"===(
-    <p>Location not found and required for weather data (leave blank if not using weather).</p>
-    )===";
-  } else {
-    WEBHTML += "<p>LAT, LON: " + String(Prefs.LATITUDE, 6) + ", " + String(Prefs.LONGITUDE, 6) + "</p>";
-  }
-  #endif
+    const IPAddress ip = wifiReadyForNetwork() ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
 
-  WEBHTML += R"===(  
+    WEBHTML += "<p>WiFi: ";
+    WEBHTML += modeLabel;
+    WEBHTML += "<br>SSID: ";
+    WEBHTML += ssid;
+    WEBHTML += "<br>IP: ";
+    WEBHTML += ip.toString();
+    WEBHTML += "<br>RSSI: ";
+    WEBHTML += formatRssiHtml(WiFi.RSSI());
+    WEBHTML += "<br>Location: ";
+    WEBHTML += (Prefs.LATITUDE != 0 || Prefs.LONGITUDE != 0) ? "saved" : "none";
+    WEBHTML += "<br>Timezone: ";
+    WEBHTML += (Prefs.TimeZoneOffset <= 50400) ? "saved" : "not set";
+    WEBHTML += "</p>";
+  }
+  WEBHTML += "<button class=\"btn btn-danger\" onclick=\"clearWiFiCredentials()\">Clear credentials</button>";
+
+  WEBHTML += R"===( 
   <!-- Step 1: WiFi Configuration -->
   <div class="setup-step" id="step1">
     <div class="step-header" onclick="toggleStep('step1')">
@@ -2783,8 +2789,173 @@ void handleREQUESTUPDATE() {
 }
 
 
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
+#include "WeatherPkg.hpp"
+#ifdef _USEWEATHERLITE
+#include "Weather_Optimized_lite.hpp"
+
+static File s_weatherPkgRawFile;
+static uint32_t s_weatherPkgRawWritten = 0;
+
+void handleWEATHERPKG_raw() {
+  // Stream POST body to SD — never hold the full package in RAM.
+  HTTPRaw& raw = server.raw();
+  if (raw.status == RAW_START) {
+    s_weatherPkgRawWritten = 0;
+    if (s_weatherPkgRawFile) s_weatherPkgRawFile.close();
+    int cl = server.clientContentLength();
+    if (cl < (int)WEATHER_PKG_HEADER_CORE || (size_t)cl > WEATHER_PKG_MAX_BYTES) return;
+    sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+    s_weatherPkgRawFile = SD.open(WEATHER_PKG_RECV_TMP_PATH, FILE_WRITE);
+    return;
+  }
+  if (raw.status == RAW_WRITE) {
+    if (!s_weatherPkgRawFile) return;
+    if (s_weatherPkgRawWritten + raw.currentSize > WEATHER_PKG_MAX_BYTES) return;
+    s_weatherPkgRawFile.write(raw.buf, raw.currentSize);
+    s_weatherPkgRawWritten += raw.currentSize;
+    return;
+  }
+  if (raw.status == RAW_END) {
+    if (s_weatherPkgRawFile) s_weatherPkgRawFile.close();
+    return;
+  }
+  if (raw.status == RAW_ABORTED) {
+    if (s_weatherPkgRawFile) s_weatherPkgRawFile.close();
+    sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+    s_weatherPkgRawWritten = 0;
+  }
+}
+#endif
+
+void handleWEATHERPKG() {
+  // SECURITY: plain HTTP weather package on LAN — see WeatherPkg.hpp.
+  registerHTTPMessage("WTHRPKG");
+
+#ifdef _USEWEATHER
+  if (server.method() == HTTP_GET) {
+    if (!WeatherData.ensureWeatherPackageFile()) {
+      server.send(503, "text/plain", "Weather package unavailable");
+      return;
+    }
+    File f = SD.open(WEATHER_PKG_PATH, FILE_READ);
+    if (!f) {
+      server.send(404, "text/plain", "Package not found");
+      return;
+    }
+    server.streamFile(f, "application/octet-stream");
+    f.close();
+    return;
+  }
+  server.send(405, "text/plain", "GET only on weather producer");
+  return;
+#endif
+
+#ifdef _USEWEATHERLITE
+  if (server.method() == HTTP_POST) {
+    if (!FileOrDirectoryExists(WEATHER_PKG_RECV_TMP_PATH)) {
+      server.send(400, "text/plain", "No package body");
+      return;
+    }
+    if (weatherLiteUnpackFile(WEATHER_PKG_RECV_TMP_PATH)) {
+      // Promote recv tmp to canonical package path (already unpacked into WeatherData/Events)
+      sdDeleteFile(WEATHER_PKG_PATH);
+      File src = SD.open(WEATHER_PKG_RECV_TMP_PATH, FILE_READ);
+      File dst = SD.open(WEATHER_PKG_PATH, FILE_WRITE);
+      if (src && dst) {
+        uint8_t buf[512];
+        while (src.available()) {
+          int r = src.read(buf, sizeof(buf));
+          if (r <= 0) break;
+          dst.write(buf, (size_t)r);
+        }
+      }
+      if (src) src.close();
+      if (dst) dst.close();
+      sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+      WeatherLite.lastRequestAttemptAt =
+          isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : WeatherLite.lastRequestAttemptAt;
+      server.send(200, "text/plain", "OK");
+      return;
+    }
+    sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+    server.send(400, "text/plain", "Unpack failed");
+    return;
+  }
+  server.send(405, "text/plain", "POST only on weather lite");
+#endif
+}
+#endif
+
+#ifdef _USEWEATHER
+bool sendWeatherPackageHttp(IPAddress ip) {
+  if (!wifiReadyForNetwork()) return false;
+  if (!WeatherData.ensureWeatherPackageFile()) return false;
+
+  File f = SD.open(WEATHER_PKG_PATH, FILE_READ);
+  if (!f) return false;
+  const size_t sz = f.size();
+  if (sz == 0 || sz > WEATHER_PKG_MAX_BYTES) {
+    f.close();
+    return false;
+  }
+
+  char url[64];
+  snprintf(url, sizeof(url), "http://%s/WEATHERPKG", ip.toString().c_str());
+  WiFiClient client;
+  HTTPClient http;
+  client.setTimeout(15000);
+  if (!http.begin(client, url)) {
+    f.close();
+    return false;
+  }
+  http.setTimeout(15000);
+  http.addHeader("Content-Type", "application/octet-stream");
+  esp_task_wdt_reset();
+  int code = http.sendRequest("POST", &f, sz);
+  esp_task_wdt_reset();
+  f.close();
+  http.end();
+  SerialPrint("sendWeatherPackageHttp to " + ip.toString() + " code=" + String(code), true);
+  return code >= 200 && code < 300;
+}
+
+void serviceWeatherPackagePush(bool minuteTick) {
+  if (!minuteTick) return;
+  if (!wifiReadyForNetwork()) return;
+  if (!isTimeValid(I.currentTime)) return;
+
+  static uint32_t nextPushDue = 0;
+  static int16_t pushDevIndex = -1; // -1 idle, else scanning devices
+
+  if (pushDevIndex < 0) {
+    if (nextPushDue == 0) {
+      nextPushDue = (uint32_t)I.currentTime + 55u * 60u + (uint32_t)random(1, 16) * 60u;
+    }
+    if ((uint32_t)I.currentTime < nextPushDue) return;
+    if (!WeatherData.buildWeatherPackageFile(true)) {
+      nextPushDue = (uint32_t)I.currentTime + 10u * 60u; // retry sooner on failure
+      return;
+    }
+    pushDevIndex = 0;
+  }
+
+  while (pushDevIndex < NUMDEVICES) {
+    int16_t di = pushDevIndex++;
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d || !d->IsSet || d->devType != 101) continue;
+    if (d->IP == IPAddress(0, 0, 0, 0)) continue;
+    sendWeatherPackageHttp(d->IP);
+    return; // one device per minute tick
+  }
+
+  pushDevIndex = -1;
+  nextPushDue = (uint32_t)I.currentTime + 55u * 60u + (uint32_t)random(1, 16) * 60u;
+}
+#endif
+
 void handleREQUESTWEATHER() {
-  #ifdef _USEWEATHER
+  #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
   registerHTTPMessage("WTHRREQ");
 //if no parameters passed, return current temp, max, min, today weather ID, pop, and snow amount
 //otherwise, return the index value for the requested value
@@ -2983,8 +3154,16 @@ void handleSTATUS() {
 
 void handleRoot(void) {
   registerHTTPMessage("MainPage");
-  if (!haveWifiCredentials()) {
-    SerialPrint("No stored WiFi credentials, redirecting root to InitialSetup", true);
+  // Bare "/" defaults to WiFi setup when credentials are missing or STA has no usable IP
+  // (e.g. 0.0.0.0 after a failed reconnect). "/?main" bypasses that for intentional
+  // no-WiFi / ESP-NOW use from the header nav.
+  const bool forceMain = server.hasArg("main");
+  if (!forceMain && (!haveWifiCredentials() || !wifiReadyForNetwork())) {
+    SerialPrint(
+      !haveWifiCredentials()
+        ? "No stored WiFi credentials, redirecting root to InitialSetup"
+        : "WiFi not ready (no usable IP), redirecting root to InitialSetup",
+      true);
     server.sendHeader("Location", "/InitialSetup");
     server.send(302, "text/plain", "Redirecting to setup...");
     return;
@@ -2994,7 +3173,7 @@ void handleRoot(void) {
 
 void appendStandardPageNav(bool includeWiFiConfig) {
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
-  WEBHTML = WEBHTML + "<a href=\"/\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/?main\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a> ";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
   WEBHTML = WEBHTML + "<a href=\"/REGISTER_DEVICE\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #009688; color: white; text-decoration: none; border-radius: 4px;\">Register Device</a> ";
   #ifdef _USESDCARD
@@ -4380,9 +4559,22 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Update Time</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateT) ? dateify(WeatherData.lastUpdateT) : "???") + "</td></tr>";
 
-  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Update Attempt Time</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateAttempt) ? dateify(WeatherData.lastUpdateAttempt) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Failure Time</strong></td>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateError) ? dateify(WeatherData.lastUpdateError) : "???") + "</td></tr>";
 
+  {
+    static const char* kCompNames[] = {"Grid", "Hourly", "GridFcst", "Daily", "Alerts", "Sun"};
+    for (uint8_t ci = 0; ci < WC_COUNT; ci++) {
+      const WeatherComponentStatus& st = WeatherData.componentStatus[ci];
+      const bool fresh = WeatherData.isComponentDataFresh((WeatherComponent)ci);
+      String val = st.lastAttemptT ? String(dateify(st.lastAttemptT)) : String("never");
+      val += st.lastSucceeded ? " OK" : " FAIL";
+      val += fresh ? " fresh" : " stale";
+      if (!fresh) val += " (retry 3m)";
+      WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>" + String(kCompNames[ci]) + " status</strong></td>";
+      WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + val + "</td></tr>";
+    }
+  }
 
   // Basic weather data
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Latitude</strong></td>";
@@ -4535,10 +4727,7 @@ void handleWeather_POST() {
 void handleWeatherRefresh() {
   registerHTTPMessage("WthrRef");
   #ifdef _USEWEATHER
-  
-  // Force immediate weather update
   bool updateResult = WeatherData.updateWeather(0);
-  
   if (updateResult) {
     server.sendHeader("Location", "/WEATHER");
     server.send(302, "text/plain", "Weather data refreshed successfully.");
@@ -4546,11 +4735,19 @@ void handleWeatherRefresh() {
     server.sendHeader("Location", "/WEATHER");
     server.send(302, "text/plain", "Weather update failed. Please try again.");
   }
-
+  #elif defined(_USEWEATHERLITE)
+  bool updateResult = weatherLiteRequestFromAnyWeatherServer();
+  if (updateResult) {
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain", "Weather package received.");
+  } else {
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain", "Weather package request failed.");
+  }
   #else
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Weather not enabled on this device.");
-  #endif
+#endif
 }
 
 void handleWeatherZip() {
@@ -6174,7 +6371,16 @@ static bool sendBlockingJsonPing(ArborysDevType* device, bool viaHTTP, bool viaH
   if (blockMs == 0) blockMs = DEVICE_VIEWER_PING_TIMEOUT_MS;
 
   #ifdef _USE_HEADER_INFO_ALERT
-  HeaderInfoAlertGuard headerAlert("Pinging...", TFT_YELLOW, TFT_BLACK, 60);
+  char pingBanner[16];
+  char shortName[11];
+  strncpy(shortName, device->devName, 10);
+  shortName[10] = '\0';
+  if (shortName[0] == '\0') {
+    strncpy(shortName, "device", sizeof(shortName) - 1);
+    shortName[sizeof(shortName) - 1] = '\0';
+  }
+  snprintf(pingBanner, sizeof(pingBanner), "Png %s", shortName);
+  HeaderInfoAlertGuard headerAlert(pingBanner, TFT_YELLOW, TFT_BLACK, 60);
   #endif
 
   if (viaHTTPS) {
@@ -6328,6 +6534,53 @@ void serviceDeviceConnectivityPings(bool startCycle) {
 
   s_pingDevIndex = -1;
 }
+
+#if _IS_SERVER_HUB
+// Hub: request data from expired peripherals. One eligible device per call (no delayWithNetwork).
+void serviceExpiredDeviceDataRequests(bool startCycle) {
+  static int16_t s_scanIndex = -1; // -1 = idle
+  #ifdef _USE_HEADER_INFO_ALERT
+  static bool s_headerActive = false;
+  #endif
+
+  if (startCycle && s_scanIndex < 0) {
+    s_scanIndex = 0;
+  }
+  if (s_scanIndex < 0) return;
+
+  while (s_scanIndex < NUMDEVICES) {
+    int16_t di = s_scanIndex++;
+    ArborysDevType* device = Sensors.getDeviceByDevIndex(di);
+    if (!device || !device->IsSet || !device->expired) continue;
+    if (device->devType >= 100) continue; // don't request from servers
+    if (device->dataSent > I.currentTime - 120) continue; // recently requested
+    if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue;
+
+    #ifdef _USE_HEADER_INFO_ALERT
+    if (!s_headerActive) {
+      HeaderInfoAlert("Req sensors...", TFT_YELLOW, TFT_BLACK, 120);
+      s_headerActive = true;
+    }
+    #endif
+
+    const bool useUdp = deviceUdpPingRateAbove50(device);
+    SerialPrint("Sensor expired: data request to " + String(device->devName) +
+        " via " + String(useUdp ? "UDP" : "HTTP/HTTPS") +
+        " (UDP rate " + String(udpPingSuccessRatePercent(device)) + "%)", true);
+
+    sendMSG_DataRequest(device, -1, !useUdp);
+    return; // one device per call
+  }
+
+  #ifdef _USE_HEADER_INFO_ALERT
+  if (s_headerActive) {
+    HeaderInfoAlert("");
+    s_headerActive = false;
+  }
+  #endif
+  s_scanIndex = -1;
+}
+#endif
 
 static void appendDeviceViewerPingStatus() {
   if (!server.hasArg("ping")) return;
@@ -7006,6 +7259,12 @@ void setupServerRoutes() {
     server.on("/CLEARSENSOR", handleCLEARSENSOR);
     server.on("/TIMEUPDATE", handleTIMEUPDATE);
     server.on("/REQUESTWEATHER", handleREQUESTWEATHER);
+#ifdef _USEWEATHER
+    server.on("/WEATHERPKG", HTTP_GET, handleWEATHERPKG);
+#endif
+#ifdef _USEWEATHERLITE
+    server.on("/WEATHERPKG", HTTP_POST, handleWEATHERPKG, handleWEATHERPKG_raw);
+#endif
     server.on("/REBOOT", handleReboot);
     
     server.on("/STATUS", handleSTATUS);
@@ -8047,13 +8306,13 @@ void wrapupSendDataList(const int16_t* snsIndices, uint8_t count) {
   }
 }
 
-int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
+int16_t sendHTTPJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs) {
   ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002; //device not found
-  return sendHTTPJSON(d->IP, jsonBuffer, msgType);
+  return sendHTTPJSON(d->IP, jsonBuffer, msgType, timeoutMs);
 }
 
-int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
+int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs) {
   //http method
 
   if (!wifiReadyForNetwork()) {
@@ -8069,6 +8328,7 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType)
   M.setMethod("POST");
   M.setContentType("application/x-www-form-urlencoded");
   M.setBody(jsonBuffer);
+  if (timeoutMs > 0) M.timeout = timeoutMs;
   if (SendHTTPMessage(M)) {
     registerHTTPSend(ip, msgType);
     return M.httpCode;
@@ -8077,7 +8337,7 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType)
   return -1000; //failed to send message
 }
 
-static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, uint16_t payloadLen, const char* msgType) {
+static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, uint16_t payloadLen, const char* msgType, uint16_t timeoutMs = 0) {
   if (!payload || payloadLen == 0) return -1002;
   if (payloadLen > LMK_HTTP_MAX_PLAINTEXT) return -1005;
   if (!isValidLMKKey()) {
@@ -8114,11 +8374,13 @@ static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, u
   static char urlBuffer[64];
   snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST_ENC", ip.toString().c_str());
 
+  const uint32_t clientTimeoutMs = (timeoutMs > 0) ? timeoutMs : 20000;
+
   WiFiClient client;
   HTTPClient http;
-  client.setTimeout(20000);
+  client.setTimeout(clientTimeoutMs);
   http.begin(client, urlBuffer);
-  http.setTimeout(20000);
+  http.setTimeout(clientTimeoutMs);
   http.addHeader("Content-Type", "application/octet-stream");
   esp_task_wdt_reset();
   int httpCode = http.POST(encBuf, encLen);
@@ -8150,40 +8412,40 @@ static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, u
   return (int16_t)httpCode;
 }
 
-int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType) {
+int16_t sendHTTPSJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs) {
   if (!jsonBuffer) return -1002;
   uint16_t len = (uint16_t)strlen(jsonBuffer);
-  return sendHTTPEncryptedPayload(ip, (const uint8_t*)jsonBuffer, len, msgType);
+  return sendHTTPEncryptedPayload(ip, (const uint8_t*)jsonBuffer, len, msgType, timeoutMs);
 }
 
-int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType) {
+int16_t sendHTTPSJSON(int16_t deviceIndex, const char* jsonBuffer, const char* msgType, uint16_t timeoutMs) {
   ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002;
-  return sendHTTPSJSON(d->IP, jsonBuffer, msgType);
+  return sendHTTPSJSON(d->IP, jsonBuffer, msgType, timeoutMs);
 }
 
-int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType) {
-  return sendHTTPEncryptedPayload(ip, data, dataLen, msgType);
+int16_t sendHTTPSBinary(IPAddress& ip, const uint8_t* data, uint16_t dataLen, const char* msgType, uint16_t timeoutMs) {
+  return sendHTTPEncryptedPayload(ip, data, dataLen, msgType, timeoutMs);
 }
 
-int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType) {
+int16_t sendHTTPSBinary(int16_t deviceIndex, const uint8_t* data, uint16_t dataLen, const char* msgType, uint16_t timeoutMs) {
   ArborysDevType* d = Sensors.getDeviceByDevIndex(deviceIndex);
   if (!d) return -1002;
-  return sendHTTPSBinary(d->IP, data, dataLen, msgType);
+  return sendHTTPSBinary(d->IP, data, dataLen, msgType, timeoutMs);
 }
 
 // Prefer encrypted POST_ENC when LMK is available; otherwise (or on failure) plain HTTP.
-static bool sendJsonViaPreferredHttp(IPAddress ip, const char* rawJson, const char* msgType) {
+static bool sendJsonViaPreferredHttp(IPAddress ip, const char* rawJson, const char* msgType, uint16_t timeoutMs = 0) {
   if (!rawJson || rawJson[0] == '\0') return false;
 
   if (isValidLMKKey()) {
-    int16_t code = sendHTTPSJSON(ip, rawJson, msgType);
+    int16_t code = sendHTTPSJSON(ip, rawJson, msgType, timeoutMs);
     if (code >= 200 && code < 400) return true;
   }
 
   String httpBody = String(rawJson);
   JSONbuilder_encodeHTTP(httpBody);
-  return sendHTTPJSON(ip, httpBody.c_str(), msgType) == 200;
+  return sendHTTPJSON(ip, httpBody.c_str(), msgType, timeoutMs) == 200;
 }
 
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
@@ -8515,6 +8777,60 @@ int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP)
   return sendMSG_DataRequest(d, snsIndex, viaHTTP);
 }
 
+// Async HTTP/HTTPS snsReq: queue to a worker so the main loop never waits on SendHTTPMessage.
+#if defined(_USE32)
+static constexpr uint16_t SNSREQ_HTTP_TIMEOUT_MS = 2500;
+static constexpr UBaseType_t SNSREQ_QUEUE_DEPTH = 4;
+
+struct SnsReqHttpJob {
+  uint32_t ipAddr;
+  char json[512];
+};
+
+static QueueHandle_t s_snsReqQueue = nullptr;
+static TaskHandle_t s_snsReqTask = nullptr;
+
+static void snsReqHttpWorkerTask(void* /*arg*/) {
+  SnsReqHttpJob job;
+  for (;;) {
+    if (xQueueReceive(s_snsReqQueue, &job, portMAX_DELAY) != pdTRUE) continue;
+    IPAddress ip(job.ipAddr);
+    SerialPrint("snsReq worker: HTTP/HTTPS to " + ip.toString(), true);
+    sendJsonViaPreferredHttp(ip, job.json, "snsReq", SNSREQ_HTTP_TIMEOUT_MS);
+  }
+}
+
+static bool ensureSnsReqHttpWorker() {
+  if (s_snsReqQueue) return true;
+  s_snsReqQueue = xQueueCreate(SNSREQ_QUEUE_DEPTH, sizeof(SnsReqHttpJob));
+  if (!s_snsReqQueue) return false;
+  // Pin to Arduino core (1) at low priority so WiFi/HTTP stay coherent with the main loop.
+  BaseType_t ok = xTaskCreatePinnedToCore(
+      snsReqHttpWorkerTask, "snsReqHttp", 12288, nullptr, 1, &s_snsReqTask, 1);
+  if (ok != pdPASS) {
+    vQueueDelete(s_snsReqQueue);
+    s_snsReqQueue = nullptr;
+    s_snsReqTask = nullptr;
+    return false;
+  }
+  return true;
+}
+
+static bool queueSnsReqHttp(IPAddress ip, const char* json) {
+  if (!json || json[0] == '\0') return false;
+  if (!ensureSnsReqHttpWorker()) return false;
+  SnsReqHttpJob job = {};
+  job.ipAddr = (uint32_t)ip;
+  strncpy(job.json, json, sizeof(job.json) - 1);
+  job.json[sizeof(job.json) - 1] = '\0';
+  if (xQueueSend(s_snsReqQueue, &job, 0) != pdTRUE) {
+    SerialPrint("snsReq worker: queue full, dropping request to " + ip.toString(), true);
+    return false;
+  }
+  return true;
+}
+#endif
+
 int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP) { //snsindex is which sensor we want, or -1 for all sensors
   if (!d) {
     SerialPrint("sendMSG_DataRequest: Device not found", true);
@@ -8533,12 +8849,23 @@ int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP) {
   SerialPrint("sendMSG_DataRequest sent to: " + String(d->IP.toString()), true);
   d->dataSent = I.currentTime;
   if (viaHTTP) {
-    if (sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsReq")) {
+    #if defined(_USE32)
+    if (queueSnsReqHttp(d->IP, jsonBuffer)) {
+      return 1; // queued async
+    }
+    // Fallback: short sync send if the worker/queue is unavailable.
+    if (sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsReq", SNSREQ_HTTP_TIMEOUT_MS)) {
       return 200;
     }
     return -1000;
+    #else
+    if (sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsReq", 2500)) {
+      return 200;
+    }
+    return -1000;
+    #endif
   }
-  return sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsReq");
+  return sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsReq") ? 1 : -1000;
 }
 
 //___________________END OF HTTP SEND HANDLERS___________________
@@ -8793,7 +9120,8 @@ bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, c
   //return true if successful, false if failed
   #ifdef _USEUDP
   SerialPrint("Buffer contains: " + String((char*)buffer),true);
-  if (I.UDP_LAST_OUTGOINGMSG_TIME == I.currentTime) delay(500); //wait if the last message was sent within the last second
+  // No inter-send delay: UDP is fire-and-forget; callers that need pacing do so themselves
+  // (e.g. serviceExpiredDeviceDataRequests: one device per second).
   
   // Calculate buffer size if not provided
   if (bufferSize == 0) {

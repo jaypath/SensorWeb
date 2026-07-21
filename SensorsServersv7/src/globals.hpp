@@ -289,7 +289,7 @@ typedef enum {
       uint8_t currentMinute; //current minute of the day, used to ensure clock is drawn correctly
 
   
-      #ifdef _USEWEATHER
+      #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
       bool haveOutsideTemperatureSensor;
       int8_t currentOutsideTemp;
       int8_t currentOutsideHumidity;
@@ -474,8 +474,11 @@ class LGFX;
 #include "SDCard.hpp"
 #endif
 
-#ifdef _USEWEATHER
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 #include "Weather_Optimized.hpp"
+#endif
+#ifdef _USEWEATHERLITE
+#include "Weather_Optimized_lite.hpp"
 #endif
 
 #ifdef _USETFT
