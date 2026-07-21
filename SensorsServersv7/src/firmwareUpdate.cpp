@@ -543,64 +543,14 @@ static bool parseFwBlockHttpResponse(WiFiClient& client, FwBlockHttpMeta& meta, 
 }
 
 #if defined(_USESDCARD) && _IS_SERVER_HUB
-#define FW_SERVER_TRACK_SLOTS 12
-
-struct ServerFwChunkTrack {
-    char deviceName[30];
-    FirmwareVersion version;
-    time_t lastActivity;
-    uint8_t nextRequestMinutes;
-};
-
-static ServerFwChunkTrack s_serverFwTracks[FW_SERVER_TRACK_SLOTS];
-
-static int findServerFwTrackSlot(const char* deviceName, bool alloc) {
-    int empty = -1;
-    for (int i = 0; i < FW_SERVER_TRACK_SLOTS; i++) {
-        if (s_serverFwTracks[i].deviceName[0] == '\0') {
-            if (empty < 0) empty = i;
-            continue;
-        }
-        if (strcmp(s_serverFwTracks[i].deviceName, deviceName) == 0) return i;
-    }
-    if (!alloc) return -1;
-    int slot = empty >= 0 ? empty : 0;
-    memset(&s_serverFwTracks[slot], 0, sizeof(s_serverFwTracks[slot]));
-    strncpy(s_serverFwTracks[slot].deviceName, deviceName, sizeof(s_serverFwTracks[slot].deviceName) - 1);
-    return slot;
-}
-
-static void touchServerFwTrack(const char* deviceName, const FirmwareVersion& version, uint8_t nextRequestMinutes) {
-    int slot = findServerFwTrackSlot(deviceName, true);
-    if (slot < 0) return;
-    s_serverFwTracks[slot].version = version;
-    s_serverFwTracks[slot].nextRequestMinutes = nextRequestMinutes;
-    if (isTimeValid(I.currentTime)) s_serverFwTracks[slot].lastActivity = I.currentTime;
-}
+// Server is intentionally ambiguous: any hub may offer firmware and will serve whatever
+// block the client requests. No tracking of client progress or completion.
 
 static void logFwServerBlockSent(const char* deviceName, uint32_t blockIndex, uint32_t totalBlocks) {
     char msg[96];
     snprintf(msg, sizeof(msg), "FWreq: %s,  %lu/%lu",
         deviceName, (unsigned long)blockIndex, (unsigned long)totalBlocks);
     logSystemEvent(msg, EVENT_FIRMWARE_UPDATED);
-}
-
-static bool serverShouldIgnoreFirmwareDiscovery(const char* deviceName) {
-    int slot = findServerFwTrackSlot(deviceName, false);
-    if (slot < 0) return false;
-    if (!isTimeValid(I.currentTime) || !isTimeValid(s_serverFwTracks[slot].lastActivity)) return false;
-    time_t ignoreSec = (time_t)s_serverFwTracks[slot].nextRequestMinutes
-        * FW_CHUNK_DISCOVERY_IGNORE_MULTIPLIER * 60;
-    return (I.currentTime - s_serverFwTracks[slot].lastActivity) < ignoreSec;
-}
-
-static bool serverFwVersionConflict(const char* deviceName, const FirmwareVersion& version) {
-    int slot = findServerFwTrackSlot(deviceName, false);
-    if (slot < 0) return false;
-    if (!isTimeValid(I.currentTime) || !isTimeValid(s_serverFwTracks[slot].lastActivity)) return false;
-    time_t activeSec = (time_t)FW_CHUNK_SESSION_MAX_SEC;
-    if ((I.currentTime - s_serverFwTracks[slot].lastActivity) > activeSec) return false;
-    return s_serverFwTracks[slot].version.compare(version) != 0;
 }
 
 void handleFirmwareBlock() {
@@ -637,14 +587,8 @@ void handleFirmwareBlock() {
 
     uint32_t blockIndex = doc["blockIndex"] | 0;
     uint32_t blockSize = doc["blockSize"] | (uint32_t)FW_CHUNK_BLOCK_SIZE;
-    uint8_t nextRequestMinutes = doc["nextRequestMinutes"] | (uint8_t)FW_CHUNK_NEXT_REQUEST_MINUTES;
     if (blockSize == 0 || blockSize > FW_CHUNK_BLOCK_SIZE) {
         server.send(400, "text/plain", "Invalid block size");
-        return;
-    }
-
-    if (serverFwVersionConflict(senderDevice, version)) {
-        server.send(409, "text/plain", "Firmware version conflict");
         return;
     }
 
@@ -691,9 +635,11 @@ void handleFirmwareBlock() {
     }
 
     const uint16_t blockCrc = computeBufferCRC(buf, got);
-    touchServerFwTrack(senderDevice, version, nextRequestMinutes);
 
-    server.sendHeader("Connection", "close");
+    // Keep-alive so the client can request subsequent blocks on the same TCP socket.
+    // (If the WebServer closes anyway, the client reconnects and resumes.)
+    server.sendHeader("Connection", "keep-alive");
+    server.sendHeader("Keep-Alive", "timeout=30, max=200");
     server.sendHeader("X-Block-Index", String(blockIndex));
     server.sendHeader("X-Block-Length", String((unsigned)got));
     server.sendHeader("X-Block-Crc", String(blockCrc));
@@ -729,6 +675,7 @@ static uint8_t fwCheckMinute = 255;
 static uint8_t fwCheckHourDone = 255;
 static bool fwResponseReceived = false;
 
+// Note: do not memset this struct — WiFiClient must be stopped explicitly.
 struct FwChunkSession {
     bool active = false;
     IPAddress serverIP;
@@ -742,39 +689,79 @@ struct FwChunkSession {
     const esp_partition_t* updatePartition = nullptr;
     time_t sessionStartTime = 0;
     time_t lastSuccessTime = 0;
-    time_t nextRequestDue = 0;
-    bool inRetryMode = false;
+    time_t nextRetryDue = 0;
+    uint8_t reconnectFailures = 0;
+    WiFiClient client;
 };
 
 static FwChunkSession s_chunk;
 
-static void abortChunkSession(const char* errMsg) {
+static void closeChunkClient() {
+    if (s_chunk.client.connected()) s_chunk.client.stop();
+}
+
+static void resetChunkSessionState() {
+    closeChunkClient();
     if (s_chunk.otaHandle) {
         esp_ota_abort(s_chunk.otaHandle);
+        s_chunk.otaHandle = 0;
     }
-    memset(&s_chunk, 0, sizeof(s_chunk));
+    s_chunk.active = false;
+    s_chunk.serverIP = IPAddress(0, 0, 0, 0);
+    s_chunk.version.clear();
+    s_chunk.expectedSize = 0;
+    s_chunk.expectedFullCrc = 0;
+    s_chunk.totalBlocks = 0;
+    s_chunk.currentBlockIndex = 0;
+    s_chunk.runningFullCrc = 0;
+    s_chunk.updatePartition = nullptr;
+    s_chunk.sessionStartTime = 0;
+    s_chunk.lastSuccessTime = 0;
+    s_chunk.nextRetryDue = 0;
+    s_chunk.reconnectFailures = 0;
     fwResponseReceived = false;
+}
+
+static void abortChunkSession(const char* errMsg) {
     if (errMsg && errMsg[0]) {
         storeError(errMsg, ERROR_UNDEFINED, true);
         logSystemEvent(String(errMsg), EVENT_FIRMWARE_UPDATED);
     }
+    resetChunkSessionState();
 }
 
 static uint32_t chunkStallTimeoutSec() {
-    if (s_chunk.totalBlocks == 0) return 3600;
-    return s_chunk.totalBlocks * FW_CHUNK_NEXT_REQUEST_MINUTES * 60 * FW_CHUNK_TIMEOUT_MULTIPLIER;
-}
-
-static void scheduleChunkAfterSuccess() {
-    if (!isTimeValid(I.currentTime)) return;
-    s_chunk.inRetryMode = false;
-    s_chunk.nextRequestDue = I.currentTime + (time_t)(FW_CHUNK_NEXT_REQUEST_MINUTES * 60);
+    // Allow roughly 2x expected time if pulling ~1 block/sec worst case, floor 10 minutes.
+    if (s_chunk.totalBlocks == 0) return 600;
+    uint32_t sec = s_chunk.totalBlocks * FW_CHUNK_TIMEOUT_MULTIPLIER;
+    if (sec < 600) sec = 600;
+    return sec;
 }
 
 static void scheduleChunkRetry() {
     if (!isTimeValid(I.currentTime)) return;
-    s_chunk.inRetryMode = true;
-    s_chunk.nextRequestDue = I.currentTime + (time_t)(FW_CHUNK_RETRY_MINUTES * 60);
+    s_chunk.nextRetryDue = I.currentTime + (time_t)FW_CHUNK_RETRY_SEC;
+}
+
+static bool ensureChunkClientConnected() {
+    if (s_chunk.client.connected()) return true;
+    closeChunkClient();
+    s_chunk.client.setTimeout(20000);
+    if (!s_chunk.client.connect(s_chunk.serverIP, 80)) {
+        s_chunk.reconnectFailures++;
+        char err[80];
+        snprintf(err, sizeof(err), "FW chunk connect fail blk %lu try %u",
+            (unsigned long)s_chunk.currentBlockIndex, (unsigned)s_chunk.reconnectFailures);
+        storeError(err, ERROR_UNDEFINED, false);
+        if (s_chunk.reconnectFailures >= FW_CHUNK_RECONNECT_MAX) {
+            abortChunkSession("FW chunk reconnect limit");
+            return false;
+        }
+        scheduleChunkRetry();
+        return false;
+    }
+    s_chunk.reconnectFailures = 0;
+    return true;
 }
 
 static bool finalizeChunkSession() {
@@ -782,6 +769,7 @@ static bool finalizeChunkSession() {
         abortChunkSession("FW chunk image CRC fail");
         return false;
     }
+    closeChunkClient();
     esp_err_t endErr = esp_ota_end(s_chunk.otaHandle);
     s_chunk.otaHandle = 0;
     if (endErr != ESP_OK) {
@@ -810,7 +798,7 @@ static bool finalizeChunkSession() {
     installedFw.toChar(verText, sizeof(verText));
     SerialPrint("FW chunk installed " + String(verText) + ", rebooting", true);
     logSystemEvent("FW chunk OK v" + String(verText), EVENT_FIRMWARE_UPDATED);
-    memset(&s_chunk, 0, sizeof(s_chunk));
+    resetChunkSessionState();
     controlledReboot("Network firmware update", RESET_OTA, true);
     return true;
 }
@@ -825,6 +813,9 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
         return false;
     }
 
+    // Clear any prior session before beginning a new OTA write handle.
+    resetChunkSessionState();
+
     esp_ota_handle_t handle = 0;
     esp_err_t beginErr = esp_ota_begin(part, expectedSize, &handle);
     if (beginErr != ESP_OK) {
@@ -832,7 +823,6 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
         return false;
     }
 
-    memset(&s_chunk, 0, sizeof(s_chunk));
     s_chunk.active = true;
     s_chunk.serverIP = serverIP;
     s_chunk.version = version;
@@ -840,33 +830,38 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
     s_chunk.expectedFullCrc = expectedCrc;
     s_chunk.totalBlocks = (expectedSize + FW_CHUNK_BLOCK_SIZE - 1) / FW_CHUNK_BLOCK_SIZE;
     s_chunk.currentBlockIndex = 0;
+    s_chunk.runningFullCrc = 0;
     s_chunk.otaHandle = handle;
     s_chunk.updatePartition = part;
+    s_chunk.reconnectFailures = 0;
+    s_chunk.nextRetryDue = 0;
     if (isTimeValid(I.currentTime)) {
         s_chunk.sessionStartTime = I.currentTime;
         s_chunk.lastSuccessTime = I.currentTime;
-        s_chunk.nextRequestDue = I.currentTime + (time_t)(FW_CHUNK_NEXT_REQUEST_MINUTES * 60);
+        s_chunk.nextRetryDue = I.currentTime; // pull immediately
     }
+    fwResponseReceived = true;
 
     char verText[16];
     version.toChar(verText, sizeof(verText));
-    logSystemEvent(String("FW chunk start v") + verText + " from " + serverIP.toString(), EVENT_FIRMWARE_UPDATED);
+    logSystemEvent(String("FW keep-alive pull start v") + verText + " from " + serverIP.toString(),
+        EVENT_FIRMWARE_UPDATED);
     return true;
 }
 
 static bool requestOneFirmwareBlock() {
     if (!s_chunk.active || !wifiReadyForNetwork()) return false;
     if (!isTimeValid(I.currentTime)) return false;
+    if (!ensureChunkClientConnected()) return false;
 
-    char json[320];
+    char json[280];
     snprintf(json, sizeof(json),
         "{\"msgType\":\"FirmwareBlockRequest\",\"targetDeviceName\":\"%s\","
         "\"senderDeviceName\":\"%s\",\"senderIP\":\"%s\",\"firmware\":%s,"
-        "\"blockIndex\":%lu,\"blockSize\":%u,\"nextRequestMinutes\":%u}",
+        "\"blockIndex\":%lu,\"blockSize\":%u}",
         Prefs.DEVICENAME, Prefs.DEVICENAME, WiFi.localIP().toString().c_str(),
         firmwareJsonArray(s_chunk.version).c_str(),
-        (unsigned long)s_chunk.currentBlockIndex, (unsigned)FW_CHUNK_BLOCK_SIZE,
-        (unsigned)FW_CHUNK_NEXT_REQUEST_MINUTES);
+        (unsigned long)s_chunk.currentBlockIndex, (unsigned)FW_CHUNK_BLOCK_SIZE);
 
     {
         char reqMsg[96];
@@ -878,37 +873,32 @@ static bool requestOneFirmwareBlock() {
         logSystemEvent(reqMsg, EVENT_FIRMWARE_UPDATED);
     }
 
-    WiFiClient client;
-    client.setTimeout(20000);
-    if (!client.connect(s_chunk.serverIP, 80)) {
-        char err[72];
-        snprintf(err, sizeof(err), "FW chunk no conn blk %lu srv %s",
-            (unsigned long)s_chunk.currentBlockIndex, s_chunk.serverIP.toString().c_str());
-        storeError(err, ERROR_UNDEFINED, false);
-        scheduleChunkRetry();
-        return false;
-    }
-
     String req = String("POST /FIRMWARE_BLOCK HTTP/1.1\r\nHost: ")
         + s_chunk.serverIP.toString()
         + "\r\nContent-Type: application/json\r\nContent-Length: "
-        + String(strlen(json)) + "\r\nConnection: close\r\n\r\n" + json;
-    client.print(req);
+        + String(strlen(json))
+        + "\r\nConnection: keep-alive\r\n\r\n" + json;
+
+    if (s_chunk.client.print(req) != (int)req.length()) {
+        closeChunkClient();
+        scheduleChunkRetry();
+        return false;
+    }
     esp_task_wdt_reset();
 
     uint8_t* body = (uint8_t*)malloc(FW_CHUNK_BLOCK_SIZE);
     if (!body) {
-        client.stop();
+        closeChunkClient();
         scheduleChunkRetry();
         return false;
     }
 
     FwBlockHttpMeta meta;
-    bool ok = parseFwBlockHttpResponse(client, meta, body, FW_CHUNK_BLOCK_SIZE, 20000);
-    client.stop();
+    bool ok = parseFwBlockHttpResponse(s_chunk.client, meta, body, FW_CHUNK_BLOCK_SIZE, 20000);
 
     if (!ok || meta.httpCode != 200) {
         free(body);
+        closeChunkClient();
         char err[72];
         snprintf(err, sizeof(err), "FW chunk HTTP fail blk %lu code %d",
             (unsigned long)s_chunk.currentBlockIndex, meta.httpCode);
@@ -919,11 +909,13 @@ static bool requestOneFirmwareBlock() {
 
     if (meta.blockIndex != s_chunk.currentBlockIndex) {
         free(body);
+        closeChunkClient();
         scheduleChunkRetry();
         return false;
     }
     if (meta.blockLength == 0 || meta.blockLength > FW_CHUNK_BLOCK_SIZE) {
         free(body);
+        closeChunkClient();
         scheduleChunkRetry();
         return false;
     }
@@ -943,6 +935,7 @@ static bool requestOneFirmwareBlock() {
     const uint16_t gotCrc = computeBufferCRC(body, meta.blockLength);
     if (gotCrc != meta.blockCrc) {
         free(body);
+        closeChunkClient();
         scheduleChunkRetry();
         return false;
     }
@@ -957,6 +950,8 @@ static bool requestOneFirmwareBlock() {
     free(body);
     s_chunk.currentBlockIndex++;
     s_chunk.lastSuccessTime = I.currentTime;
+    s_chunk.nextRetryDue = 0;
+    s_chunk.reconnectFailures = 0;
 
     char progressMsg[96];
     char verText[16];
@@ -970,7 +965,6 @@ static bool requestOneFirmwareBlock() {
     if (s_chunk.currentBlockIndex >= s_chunk.totalBlocks) {
         return finalizeChunkSession();
     }
-    scheduleChunkAfterSuccess();
     return true;
 }
 
@@ -994,10 +988,15 @@ void processChunkFirmwareTick() {
         abortChunkSession(err);
         return;
     }
-    if (now < s_chunk.nextRequestDue) return;
+    if (s_chunk.nextRetryDue != 0 && now < s_chunk.nextRetryDue) return;
 
-    requestOneFirmwareBlock();
-    esp_task_wdt_reset();
+    // Pull as many blocks as budget allows on the keep-alive socket, then yield.
+    const uint32_t startMs = millis();
+    while (s_chunk.active && s_chunk.currentBlockIndex < s_chunk.totalBlocks) {
+        if (!requestOneFirmwareBlock()) break;
+        esp_task_wdt_reset();
+        if ((millis() - startMs) >= FW_CHUNK_PULL_BUDGET_MS) break;
+    }
 }
 
 void processJSONMessage_FirmwareAvailable(JsonObject root, String& responseMsg) {
@@ -1069,6 +1068,7 @@ void peripheralFirmwareHourlyCheck() {
         logSystemEvent(String("FW inquiry sent v") + verText + " via UDP", EVENT_FIRMWARE_UPDATED);
     }
 
+    // Broadcast to all servers; first FirmwareAvailable wins (others ignored while active/received).
     sendUDPMessage((uint8_t*)json, IPAddress(0, 0, 0, 0), (uint16_t)strlen(json), "fwReq");
 
     uint32_t start = millis();
@@ -1115,11 +1115,7 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
         return;
     }
 
-    if (serverShouldIgnoreFirmwareDiscovery(deviceName.c_str())) {
-        logSystemEvent(String("FWreq: ") + deviceName + ",  cooldown", EVENT_FIRMWARE_UPDATED);
-        return;
-    }
-
+    // No server-side session/cooldown: any hub may answer; client decides whom to pull from.
     FirmwareVersion bestVersion;
     char bestPath[96];
     uint16_t crc = 0;
@@ -1138,7 +1134,6 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
 
     char verText[16];
     bestVersion.toChar(verText, sizeof(verText));
-    touchServerFwTrack(deviceName.c_str(), bestVersion, FW_CHUNK_NEXT_REQUEST_MINUTES);
 
     char json[320];
     snprintf(json, sizeof(json),

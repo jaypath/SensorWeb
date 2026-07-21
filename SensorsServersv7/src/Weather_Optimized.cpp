@@ -428,6 +428,44 @@ bool WeatherInfoOptimized::anyWeatherComponentStale() const {
     return false;
 }
 
+void updateCurrentOutsideConditions() {
+    // Always re-evaluate; do not keep a stale haveOutsideTemperatureSensor from ScreenFlags.dat.
+    I.haveOutsideTemperatureSensor = false;
+
+    if (Sensors.hasOutsideSensors("temperature")) {
+        I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", I.currentTime - 900);
+        if (isTempValid(I.currentOutsideTemp)) I.haveOutsideTemperatureSensor = true;
+    }
+    if (Sensors.hasOutsideSensors("humidity")) {
+        I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", I.currentTime - 300);
+    }
+    if (Sensors.hasOutsideSensors("pressure")) {
+        I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 300);
+    }
+
+    const int8_t forecastTemp = WeatherData.getTemperature(I.currentTime);
+    if (!I.haveOutsideTemperatureSensor || !isTempValid(I.currentOutsideTemp)) {
+        I.currentOutsideTemp = forecastTemp;
+        I.haveOutsideTemperatureSensor = false;
+    } else if (isTempValid(forecastTemp) &&
+               (double)abs((int)I.currentOutsideTemp - (int)forecastTemp) > 15.0) {
+        // >15°F vs forecast is unlikely; prefer forecast
+        I.currentOutsideTemp = forecastTemp;
+        I.haveOutsideTemperatureSensor = false;
+    }
+
+#ifdef _MONITOROUTDOORBATTERYSENSORS
+    I.localBatteryIndex = 255;
+    int16_t batteryIndex = Sensors.findOutsideSensorByType("battery_li");
+    if (batteryIndex >= 0 && batteryIndex < 255) {
+        ArborysSnsType* sensor = Sensors.snsIndexToPointer(batteryIndex);
+        if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > I.currentTime) {
+            I.localBatteryIndex = batteryIndex;
+        }
+    }
+#endif
+}
+
 #ifdef _USEWEATHER
 bool WeatherInfoOptimized::isComponentDue(WeatherComponent c, uint16_t synctime, bool forceStaleRefresh) const {
     if (c >= WC_COUNT) return false;

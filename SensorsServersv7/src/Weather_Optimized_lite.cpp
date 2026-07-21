@@ -181,8 +181,10 @@ bool weatherLiteUnpackFile(const char* path) {
     WeatherLite.lastPackageReceivedAt = isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : packagedAt;
     WeatherLite.lastPackageMarkedStale = (flags & WPKG_FLAG_DATA_STALE) != 0;
     weatherLiteApplyIFlagsFromPackage();
+    updateCurrentOutsideConditions();
 
     SerialPrint("weatherLiteUnpack: OK packagedAt=" + String(packagedAt) +
+        " lastUpdateT=" + String(WeatherData.lastUpdateT) +
         " staleFlag=" + String(WeatherLite.lastPackageMarkedStale ? 1 : 0) +
         " events=" + String(eventCount), true);
     return true;
@@ -301,19 +303,31 @@ void serviceWeatherLite(bool minuteTick) {
     const uint32_t now = (uint32_t)I.currentTime;
     if (WeatherLite.lastRequestAttemptAt != 0 &&
         now < WeatherLite.lastRequestAttemptAt + WEATHER_LITE_MIN_REQUEST_SEC) {
-        return; // rate limit (also covers "producer packed but data still stale")
+        return; // rate limit (failed or still-stale producer packages)
     }
 
+    // Freshness is NOAA lastUpdateT inside WeatherData (already packaged), not packagedAt.
+    // packagedAt only reflects when the producer rebuilt the file and can be "fresh" with stale NOAA.
     bool need = false;
-    if (WeatherLite.lastPackagePackagedAt == 0) {
+    const char* reason = nullptr;
+
+    if (WeatherData.lastUpdateT == 0) {
         need = true;
-    } else if (now > WeatherLite.lastPackagePackagedAt + WEATHER_LITE_STALE_SEC) {
+        reason = "no lastUpdateT";
+    } else if (now > WeatherData.lastUpdateT + WEATHER_LITE_STALE_SEC) {
         need = true;
+        reason = "lastUpdateT age";
+    } else if (WeatherLite.lastPackageMarkedStale) {
+        need = true;
+        reason = "producer stale flag";
+    } else if (WeatherData.anyWeatherComponentStale()) {
+        need = true;
+        reason = "component stale";
     }
 
     if (!need) return;
 
-    SerialPrint("weatherLite: requesting package (packagedAt age check)", true);
+    SerialPrint(String("weatherLite: requesting package (") + reason + ")", true);
     weatherLiteRequestFromAnyWeatherServer();
 }
 

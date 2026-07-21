@@ -387,6 +387,7 @@ void setup() {
         weatherLiteUnpackFile(WEATHER_PKG_PATH);
       } else if (readWeatherDataSD()) {
         weatherLiteApplyIFlagsFromPackage();
+        updateCurrentOutsideConditions();
         SerialPrint("Weather lite: loaded WeatherData.dat (no package yet)", true);
       } else {
         SerialPrint("Weather lite: no local weather; will request from type-100 server", true);
@@ -508,12 +509,12 @@ void loop() {
         #endif
 
         #ifdef _USEWEATHER
-        // WEATHER OPTIMIZATION - Use optimized weather update method
-        byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // Optimized weather update with a sync interval of 3600 sec = 1 hr
+        // Full weather station: fetch/process NOAA locally
+        byte weatherResult = WeatherData.updateWeatherOptimized(3600);  // sync interval 3600 sec = 1 hr
         if (weatherResult == 1) {
             SerialPrint("Weather updated successfully",true);
         } else if (weatherResult == 3) {
-            SerialPrint("Weather update: data is still fresh",true);    
+            SerialPrint("Weather update: data is still fresh",true);
         } else if (weatherResult == 2) {
             SerialPrint("Weather update: data is stale (waiting for retry window)", true);
         } else if (weatherResult == 0) {
@@ -521,52 +522,23 @@ void loop() {
         } else {
             SerialPrint("Weather update: error code " + (String) weatherResult,true);
         }
+        #endif
 
+        #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
         static uint32_t lastWeatherTimeoutErrorT = 0;
         if ((WeatherData.lastUpdateT == 0 || I.currentTime > WeatherData.lastUpdateT + 3600)
             && I.currentTime - I.ALIVESINCE > 10800
             && I.currentTime - lastWeatherTimeoutErrorT > 3600) {
+            #ifdef _USEWEATHERLITE
+            storeError("Weather package stale >60 minutes", ERROR_WEATHER_TIMEOUT, true);
+            #else
             storeError("Weather failed >60 minutes", ERROR_WEATHER_TIMEOUT, true);
+            #endif
             lastWeatherTimeoutErrorT = I.currentTime;
         }
 
-
-        //see if we have local weather
-        if (Sensors.hasOutsideSensors("temperature")) {
-            I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", I.currentTime - 900);
-            if (isTempValid(I.currentOutsideTemp)==true) I.haveOutsideTemperatureSensor = true;
-            else I.haveOutsideTemperatureSensor = false;
-        }
-        if (Sensors.hasOutsideSensors("humidity")) {
-            I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", I.currentTime - 300);
-        }
-        if (Sensors.hasOutsideSensors("pressure")) {
-            I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 300);
-        }
-        
-        int8_t currentInternetTemp = WeatherData.getTemperature(I.currentTime);
-        if (I.haveOutsideTemperatureSensor==false || isTempValid(I.currentOutsideTemp)==false) {
-            I.currentOutsideTemp = currentInternetTemp;
-            I.haveOutsideTemperatureSensor = false;
-        } else {
-            if (isTempValid(currentInternetTemp)==true) {
-                if ((double) abs(I.currentOutsideTemp-currentInternetTemp)>15) { //hard to believe a greater than 15 degree difference is possible, ignore local temp
-                    I.currentOutsideTemp = currentInternetTemp;
-                    I.haveOutsideTemperatureSensor = false;
-                }        
-            }
-        }
-
-        #ifdef _MONITOROUTDOORBATTERYSENSORS
-        I.localBatteryIndex = 255;
-        int16_t batteryIndex = Sensors.findOutsideSensorByType("battery_li");
-        if (batteryIndex >= 0 && batteryIndex < 255) {
-            ArborysSnsType* sensor = Sensors.snsIndexToPointer(batteryIndex);
-            if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > I.currentTime) {
-                I.localBatteryIndex = batteryIndex;
-            }
-        }
-        #endif
+        // Display current conditions: outside sensors when available, else packaged/NOAA forecast
+        updateCurrentOutsideConditions();
         #endif
 
         

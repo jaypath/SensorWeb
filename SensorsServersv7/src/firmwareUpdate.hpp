@@ -5,13 +5,13 @@
 #include <ArduinoJson.h>
 #include "globals.hpp"
 
-// Chunked network OTA (peripheral pulls 8 KB blocks from server SD).
+// Chunked network OTA: peripheral discovers via UDP, then pulls 8 KB blocks over one keep-alive HTTP client.
 #define FW_CHUNK_BLOCK_SIZE 8192
-#define FW_CHUNK_NEXT_REQUEST_MINUTES 5
-#define FW_CHUNK_RETRY_MINUTES 1
+#define FW_CHUNK_RETRY_SEC 30
 #define FW_CHUNK_TIMEOUT_MULTIPLIER 2
 #define FW_CHUNK_SESSION_MAX_SEC 86400
-#define FW_CHUNK_DISCOVERY_IGNORE_MULTIPLIER 4
+#define FW_CHUNK_PULL_BUDGET_MS 4000   // yield to main loop after this much pull work per tick
+#define FW_CHUNK_RECONNECT_MAX 8
 
 bool parseFirmwareFromJson(JsonVariantConst variant, FirmwareVersion& out);
 // Parses "<devicename>-<major>.<minor>.<patch>.bin" (version is after the last hyphen).

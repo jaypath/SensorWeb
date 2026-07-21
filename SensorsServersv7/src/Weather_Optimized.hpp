@@ -458,6 +458,10 @@ public:
 #endif
 };
 
+// Shared by full (_USEWEATHER) and lite (_USEWEATHERLITE): prefer live outside sensors,
+// else NOAA hourly forecast via getTemperature(I.currentTime).
+void updateCurrentOutsideConditions();
+
 extern String WEBHTML;
 
 #endif
