@@ -6557,8 +6557,14 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
     if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue;
 
     #ifdef _USE_HEADER_INFO_ALERT
-    if (!s_headerActive) {
-      HeaderInfoAlert("Req sensors...", TFT_YELLOW, TFT_BLACK, 120);
+    {
+      // Request is for all sensors on this device (-1 below); show device name.
+      char name10[11] = "";
+      strncpy(name10, device->devName, 10);
+      name10[10] = '\0';
+      char banner[24];
+      snprintf(banner, sizeof(banner), "req [%s]", name10[0] ? name10 : "device");
+      HeaderInfoAlert(banner, TFT_YELLOW, TFT_BLACK, 120);
       s_headerActive = true;
     }
     #endif
