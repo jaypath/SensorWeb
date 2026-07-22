@@ -128,6 +128,7 @@ bool serviceArduinoOtaFocusMode() {
 void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
+  serviceESPNOWRecvQueue();
 
   if (softApRunning()) {
     serviceAPStationMode();

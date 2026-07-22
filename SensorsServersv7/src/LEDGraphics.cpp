@@ -356,15 +356,19 @@ void Animation_type::LED_choose_animation_style(String style) {
 }
 
 
-void Animation_type::LED_animation_defaults(byte anim) {
+void Animation_type::LED_animation_defaults(byte anim, bool resetState) {
   this->animation_style = anim;
-  
-  // Initialize LED_BASE and LED_TIMING arrays to prevent garbage values
-  for (byte i = 0; i < _USELED_SIZE; i++) {
-    this->LED_BASE[i] = 0; // Initialize to black
-    this->LED_TIMING[i] = 0; // Initialize timing array
+
+  // Only clear active LED cycles on true init. Sensor-driven color updates must
+  // leave LED_BASE / LED_TIMING alone so in-flight sparkles finish with their
+  // old color and fade out; new peaks then pick from the updated palette.
+  if (resetState) {
+    for (byte i = 0; i < _USELED_SIZE; i++) {
+      this->LED_BASE[i] = 0;
+      this->LED_TIMING[i] = 0;
+    }
   }
-  
+
   switch (anim) {
     case 1: //wave clockwise
       this->sin_T = 1500; //in other words, T, ms to move through one wavelength
@@ -405,7 +409,7 @@ Animation_type LEDs;
 void initLEDs() {
   #ifdef _USELED
   FastLED.addLeds<WS2813, _USELED, GRB>(LEDARRAY, _USELED_SIZE).setCorrection(TypicalLEDStrip);
-  LEDs.LED_animation_defaults(1);
+  LEDs.LED_animation_defaults(1, true); // hard reset only at boot
   LEDs.LEDredrawRefreshMS = 20;
   LEDs.LED_set_color(255, 255, 255, 255, 255, 255); // default is white
   #ifdef _USESERIAL

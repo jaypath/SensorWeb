@@ -148,6 +148,7 @@ String ESPNowError(esp_err_t result) ;
 // --- ESPNow Core Functions ---
 int8_t initESPNOW();
 bool ensureESPNOW(); // init if needed; does not require router connection
+void serviceESPNOWRecvQueue(); // drain RX queue; call from main loop / wait paths
 esp_err_t addESPNOWPeer(uint8_t* macad);
 esp_err_t delESPNOWPeer(uint8_t* macad);
 esp_err_t delESPNOWPeer(uint64_t macad);

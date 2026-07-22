@@ -33,6 +33,9 @@ Messages will use the ESPNOW_type struct for their transmission
 #include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
 #include "utility.hpp"
 #include "Devices.hpp"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <esp_task_wdt.h>
 
 uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
 
@@ -188,9 +191,14 @@ namespace {
     #endif
 }
 
-// Store last sent MAC for callback (workaround for ESP32 core 3.3.5 API changes)
-static uint8_t lastSentTargetMAC[6] = {0};
 static bool s_espNowInitialized = false;
+
+// Serialize ESP-NOW TX: one in-flight send; peer deleted in send CB (or on sync failure).
+static volatile bool s_espNowSendPending = false;
+static uint8_t s_pendingSendMAC[6] = {0};
+static constexpr uint32_t ESPNOW_SEND_WAIT_MS = 200;
+static constexpr uint8_t ESPNOW_RX_QUEUE_DEPTH = 8;
+static QueueHandle_t s_espNowRxQueue = nullptr;
 
 // One in-flight blocking ping (type 8) at a time; completed by type 9 in processLANMessage.
 static volatile bool s_blockingPingActive = false;
@@ -202,6 +210,24 @@ static uint8_t s_blockingPingTier = 0; // 1=ESP-NOW only, 2=UDP only, 3=either
 static volatile bool s_serverPingTimeSyncActive = false;
 static volatile bool s_serverPingTimeSyncReady = false;
 static volatile uint32_t s_serverPingSyncedLocalTime = 0;
+
+static bool waitEspNowSendIdle(uint32_t timeoutMs) {
+    const uint32_t start = millis();
+    while (s_espNowSendPending) {
+        if ((millis() - start) >= timeoutMs) return false;
+        delay(1);
+        yield();
+    }
+    return true;
+}
+
+static void copySendDoneMac(const wifi_tx_info_t* tx_info, uint8_t outMac[6]) {
+    if (tx_info && tx_info->des_addr) {
+        memcpy(outMac, tx_info->des_addr, 6);
+    } else {
+        memcpy(outMac, s_pendingSendMAC, 6);
+    }
+}
 
 static void noteBlockingPingResponse(uint64_t fromMAC, uint32_t requestId, bool viaUDP) {
     if (!s_blockingPingActive) return;
@@ -285,11 +311,21 @@ int8_t initESPNOW() {
         return -1;
     }
     esp_now_deinit(); //call this to reset the espnow state prior to reinitialization
+    s_espNowSendPending = false;
+    memset(s_pendingSendMAC, 0, sizeof(s_pendingSendMAC));
     esp_err_t result = esp_now_init();
     if (result != ESP_OK) {
         s_espNowInitialized = false;
         storeError("ESPNow: initialize failed " + ESPNowError(result));
         return -2;
+    }
+    if (s_espNowRxQueue == nullptr) {
+        s_espNowRxQueue = xQueueCreate(ESPNOW_RX_QUEUE_DEPTH, sizeof(ESPNOW_type));
+        if (s_espNowRxQueue == nullptr) {
+            s_espNowInitialized = false;
+            storeError("ESPNow: RX queue alloc failed", ERROR_ESPNOW_GENERAL);
+            return -3;
+        }
     }
     uint8_t MACB[6] = {0};
     memset(MACB,255,6);
@@ -299,8 +335,14 @@ int8_t initESPNOW() {
         addESPNOWPeer(MACB);
     }
 
-    esp_now_register_send_cb(OnESPNOWDataSent);
-    esp_now_register_recv_cb(OnDataRecv);
+    esp_err_t sendCb = esp_now_register_send_cb(OnESPNOWDataSent);
+    esp_err_t recvCb = esp_now_register_recv_cb(OnDataRecv);
+    if (sendCb != ESP_OK || recvCb != ESP_OK) {
+        s_espNowInitialized = false;
+        storeError("ESPNow: callback register failed send=" + String(sendCb) + " recv=" + String(recvCb),
+            ERROR_ESPNOW_GENERAL);
+        return -4;
+    }
 
     s_espNowInitialized = true;
     return 1;
@@ -322,9 +364,11 @@ esp_err_t addESPNOWPeer(uint8_t* macad) {
 
     peerInfo.channel = 0;  // use the wifi channel, and 0 defines auto-channel selection
     peerInfo.encrypt = false;
+    peerInfo.ifidx = WIFI_IF_STA;
             
     
     esp_err_t result = esp_now_add_peer(&peerInfo);
+    if (result == ESP_ERR_ESPNOW_EXIST) return ESP_OK;
     
     if (result != ESP_OK) {
         String errormsg = "Failed to add ESPNow peer: " + MACToString(macad) + " Error: " + String(result);
@@ -353,8 +397,8 @@ bool sendLANmsg_ESPNOW(ESPNOW_type msg,bool forceencrypt) {
         return false;
     }
 
-    bool isBroadcast = true;
-    bool espnowSuccess = false;
+    const bool isBroadcast = isBroadcastMAC(msg.targetMAC);
+    bool addedUnicastPeer = false;
 
     uint64ToMAC(Prefs.PROCID, msg.senderMAC);
 
@@ -362,38 +406,49 @@ bool sendLANmsg_ESPNOW(ESPNOW_type msg,bool forceencrypt) {
     I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
     #endif
 
-    if (!isBroadcastMAC(msg.targetMAC)) {
+    // One in-flight send at a time so send-CB peer delete cannot race.
+    if (!waitEspNowSendIdle(ESPNOW_SEND_WAIT_MS)) {
+        if (!isBroadcastMAC(s_pendingSendMAC)) {
+            delESPNOWPeer(s_pendingSendMAC);
+        }
+        s_espNowSendPending = false;
+        storeError("ESPNow: prior send still pending", ERROR_ESPNOW_SEND);
+    }
 
-      isBroadcast = false;
-      
-        // Add peer 
-        addESPNOWPeer(msg.targetMAC);
+    if (!isBroadcast) {
+        if (addESPNOWPeer(msg.targetMAC) != ESP_OK) {
+            I.ESPNOW_OUTGOING_ERRORS++;
+            return false;
+        }
+        addedUnicastPeer = true;
     }
 
     if (lanMsgIsEncrypted(msg.msgType) || forceencrypt) {
         if (encryptLANMessage(msg, LAN_ENCRYPT_MSG_LEN)==false) {
             I.ESPNOW_OUTGOING_ERRORS++;
+            if (addedUnicastPeer) delESPNOWPeer(msg.targetMAC);
             return false;
         }
     }
 
-    // Store target MAC for callback (ESP32 core 3.3.5 workaround)
-    memcpy(lastSentTargetMAC, msg.targetMAC, 6);
-    
+    memcpy(s_pendingSendMAC, msg.targetMAC, 6);
+    s_espNowSendPending = true;
+
     esp_err_t result = esp_now_send(msg.targetMAC, (const uint8_t*) &msg, sizeof(ESPNOW_type));
     if (result != ESP_OK) {
+        s_espNowSendPending = false;
+        if (addedUnicastPeer) delESPNOWPeer(msg.targetMAC);
         String error = "SendESPNow: Error" + (String) result + ", to " + MACToString(msg.targetMAC);
         SerialPrint(error,true,4);
         storeError(error.c_str(),ERROR_ESPNOW_SEND);
-        espnowSuccess = false;
-    } else {
-        espnowSuccess = true;
-        I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
-        I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
-        SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true,1);
+        I.ESPNOW_OUTGOING_ERRORS++;
+        return false;
     }
 
-    return espnowSuccess;
+    I.ESPNOW_LAST_OUTGOINGMSG_TYPE = msg.msgType;
+    I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(msg.targetMAC);
+    SerialPrint((String) "ESPNow sent to " + MACToString(msg.targetMAC) + " result: " + result,true,1);
+    return true;
 }
 
 
@@ -420,43 +475,60 @@ String ESPNowError(esp_err_t result) {
 
 // --- ESPNow Send Callback ---
 void OnESPNOWDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+    uint8_t doneMac[6] = {0};
+    copySendDoneMac(tx_info, doneMac);
+
     if (status == ESP_NOW_SEND_SUCCESS) {
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
-        // Use stored MAC (workaround for ESP32 core 3.3.5 - wifi_tx_info_t field structure unclear)
-        I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(lastSentTargetMAC);        
+        I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC = MACToUint64(doneMac);
         I.ESPNOW_SENDS++;
         I.isUpToDate = false;
     } else {
         I.ESPNOW_OUTGOING_ERRORS++;
         I.ESPNOW_LAST_OUTGOINGMSG_TIME = I.currentTime;
-        String err = "ESPNow: Failed to send data to " + MACToString(lastSentTargetMAC);
+        String err = "ESPNow: Failed to send data to " + MACToString(doneMac);
         SerialPrint(err, true, 4);
         storeError(err.c_str(), ERROR_ESPNOW_SEND);
     }
 
     // Transient unicast peers must outlive the async send; remove after callback.
-    if (!isBroadcastMAC(lastSentTargetMAC)) {
-        delESPNOWPeer(lastSentTargetMAC);
+    if (!isBroadcastMAC(doneMac)) {
+        delESPNOWPeer(doneMac);
     }
+    s_espNowSendPending = false;
 }
 
 // --- ESPNow Receive Callback ---
+// Keep this light: queue only. processLANMessage (decrypt/reply/send) runs on the main path.
 void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len) {
     I.ESPNOW_LAST_INCOMINGMSG_TIME = I.currentTime;
     if (len < static_cast<int>(sizeof(ESPNOW_type))) {
-        storeError("ESPNow: Received message too short");
         I.ESPNOW_INCOMING_ERRORS++;
         return;
     }
-    ESPNOW_type msg;
+    if (s_espNowRxQueue == nullptr) {
+        I.ESPNOW_INCOMING_ERRORS++;
+        return;
+    }
 
+    ESPNOW_type msg;
     memcpy(&msg, incomingData, sizeof(msg));
     I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC = MACToUint64(msg.senderMAC);
     I.ESPNOW_LAST_INCOMINGMSG_TYPE = msg.msgType;
     I.ESPNOW_RECEIVES++;
     I.isUpToDate = false;
 
-    processLANMessage(&msg);
+    if (xQueueSend(s_espNowRxQueue, &msg, 0) != pdTRUE) {
+        I.ESPNOW_INCOMING_ERRORS++;
+    }
+}
+
+void serviceESPNOWRecvQueue() {
+    if (s_espNowRxQueue == nullptr) return;
+    ESPNOW_type msg;
+    while (xQueueReceive(s_espNowRxQueue, &msg, 0) == pdTRUE) {
+        processLANMessage(&msg);
+    }
 }
 
 uint8_t registerLANSensorData(ESPNOW_type* msg) {
@@ -939,8 +1011,7 @@ bool requestWiFiPassword(const uint8_t* serverMAC, const uint8_t* nonce) {
         for (int16_t i = 0; i < Sensors.getNumDevices(); ++i) {
             ArborysDevType* dev = Sensors.getDeviceByDevIndex(i);
             if (dev && dev->IsSet && dev->devType >= 100) {
-                for (int j = 0; j < 6; ++j)
-                    destMAC[5-j] = (dev->MAC >> (8*j)) & 0xFF;
+                uint64ToMAC(dev->MAC, destMAC);
                 found = true;
                 break;
             }
@@ -1126,6 +1197,7 @@ bool sendLANBlockingPing(ArborysDevType* targetDevice, uint8_t tier, uint16_t bl
     const uint32_t start = millis();
     while ((millis() - start) < blockTimeMs) {
         esp_task_wdt_reset();
+        serviceESPNOWRecvQueue();
         if (s_blockingPingGotResponse) {
             s_blockingPingActive = false;
             const uint32_t rttMs = millis() - start;

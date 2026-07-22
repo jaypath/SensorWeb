@@ -19,9 +19,9 @@ public:
     CRGB color1; //current color start
     CRGB color2; //current color end //color will be a random uniformly distributed value between color 1 and 2
     uint32_t  LED_TIMING[_USELED_SIZE]; //keeps track of the time of each LED in animations where each LED is in a different cycle (like sparkling gaussians, type 5)
-    uint32_t  LED_BASE[_USELED_SIZE]; //keeps track of the base color of each LED (generated as a random between color1 and color2), necessary where LEDs are cycling independently. In other cases, LED[0] will be the base color. Note this resets when LED completes a cycle
+    uint32_t  LED_BASE[_USELED_SIZE]; // base color per LED (random between color1/color2). Cleared only on init; sensor updates leave in-flight cycles alone so old colors fade out naturally.
     
-    void LED_animation_defaults(uint8_t style);
+    void LED_animation_defaults(uint8_t style, bool resetState = false);
     uint32_t LED_choose_color(uint8_t brightness);
     uint32_t LED_scale_brightness(CRGB colorin, uint8_t brightness);
     uint32_t LED_setLED(byte j, double L1, double T1, int8_t DIR, uint32_t m);

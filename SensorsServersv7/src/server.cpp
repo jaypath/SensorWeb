@@ -9208,6 +9208,7 @@ void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks) {
 //do not delay a highspeed device, such as a TFLuna, as it will lock out wifi
   for (uint8_t i=0; i<maxChecks; i++) {
     delay(delayTime);
+    serviceESPNOWRecvQueue();
     receiveUDPMessage();
     server.handleClient();
   }
