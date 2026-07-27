@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <math.h>
 
 struct STRUCT_CORE;
 
@@ -92,6 +93,10 @@ struct ArborysSnsType {
     int16_t snsPin = -9999;    // local sensor pin; -9999 = none / remote sensor
     int16_t powerPin = -9999;
     uint8_t OverrideFlags = 0; // hub override for remote sensor flags
+    // Alarm band (hubs store remotes'; peripherals also mirror Prefs here for JSON send).
+    // NaN = not set / unknown.
+    float limitHigh = NAN;
+    float limitLow = NAN;
 };
 
 // Devices_Sensors class
@@ -150,7 +155,12 @@ public:
     // Sensor management
     int16_t addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                      const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0, int16_t snsPin = -9999, int16_t powerPin = -9999);
+                     uint32_t sendingInt, uint8_t flags, const char* devName = "", uint8_t devType = 0,
+                     int16_t snsPin = -9999, int16_t powerPin = -9999,
+                     float limitHigh = NAN, float limitLow = NAN,
+                     bool updateLimitHigh = false, bool updateLimitLow = false);
+    /** Set/clear alarm limits (NaN clears). */
+    bool setSensorLimits(int16_t snsIndex, float limitHigh, float limitLow, bool setHigh = true, bool setLow = true);
     int16_t findSensor(uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(IPAddress deviceIP, uint8_t snsType, uint8_t snsID);
     int16_t findSensor(int16_t deviceIndex, uint8_t snsType, uint8_t snsID);

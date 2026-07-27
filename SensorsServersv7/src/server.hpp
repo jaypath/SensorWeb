@@ -5,6 +5,7 @@
 
 
 #include <Arduino.h>
+#include <math.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 struct STRUCT_CORE;
@@ -309,7 +310,7 @@ void handleREGISTER_DEVICE_POST();
 bool handlerForWeatherAddress(String street, String city, String state, String zipCode);
 
 void delayWithNetwork(uint16_t delayTime, uint8_t maxChecks);
-uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
+uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags, float limitHigh = NAN, float limitLow = NAN, bool updateLimitHigh = false, bool updateLimitLow = false);
 
 
 //raw send/receiving data

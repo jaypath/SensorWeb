@@ -129,6 +129,8 @@ Devices_Sensors::Devices_Sensors() {
         sensors[i].IsSet = 0;
         sensors[i].expired = false;
         sensors[i].deviceIndex = -1;
+        sensors[i].limitHigh = NAN;
+        sensors[i].limitLow = NAN;
     }
 }
 
@@ -480,7 +482,9 @@ int16_t  Devices_Sensors::initDevice(int16_t index) {
 // Sensor management functions
 int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8_t snsType, uint8_t snsID, 
                                   const char* snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, 
-                                  uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType, int16_t snsPin, int16_t powerPin) {
+                                  uint32_t sendingInt, uint8_t flags, const char* devName, uint8_t devType,
+                                  int16_t snsPin, int16_t powerPin,
+                                  float limitHigh, float limitLow, bool updateLimitHigh, bool updateLimitLow) {
     //returns -2 if sensor could not be created, -1 if no space available, otherwise the index to the sensor
 
     if (!shouldAcceptRemoteSensor(deviceMAC)) {
@@ -524,6 +528,10 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensor->snsPin = snsPin;
             sensor->powerPin = powerPin;
         }
+        // Only touch limits when the caller explicitly provided them (JSON path).
+        // Binary LAN/ESPNOW omits limits — preserve previously stored values.
+        if (updateLimitHigh) sensor->limitHigh = limitHigh;
+        if (updateLimitLow) sensor->limitLow = limitLow;
         return existingIndex;
     } 
     
@@ -550,6 +558,8 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].snsPin = snsPin;
             sensors[i].powerPin = powerPin;
             sensors[i].OverrideFlags = 0;
+            sensors[i].limitHigh = updateLimitHigh ? limitHigh : NAN;
+            sensors[i].limitLow = updateLimitLow ? limitLow : NAN;
             numSensors++;
             Sensors.lastUpdatedTime = I.currentTime;
             return i;
@@ -558,6 +568,13 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
     
     storeError("No space for sensor",ERROR_SENSOR_ADD);
     return -1; // No space available
+}
+
+bool Devices_Sensors::setSensorLimits(int16_t snsIndex, float limitHigh, float limitLow, bool setHigh, bool setLow) {
+    if (isSensorIndexInvalid(snsIndex, false) != 0) return false;
+    if (setHigh) sensors[snsIndex].limitHigh = limitHigh;
+    if (setLow) sensors[snsIndex].limitLow = limitLow;
+    return true;
 }
 
 

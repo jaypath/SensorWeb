@@ -30,15 +30,12 @@ Messages will use the ESPNOW_type struct for their transmission
 */
 
 #include "AddESPNOW.hpp"
-#include "globals.hpp"  // Add this include to access Prefs.KEYS.ESPNOW_KEY
+#include "globals.hpp"  // Prefs + server.hpp (registerSensorData)
 #include "utility.hpp"
 #include "Devices.hpp"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <esp_task_wdt.h>
-
-uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags);
-
 
 #ifdef _USEUDP
 WiFiUDP LAN_UDP;

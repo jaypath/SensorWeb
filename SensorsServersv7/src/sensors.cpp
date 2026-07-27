@@ -254,7 +254,12 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case.
     // Seed timeRead/timeLogged so local sensors are not immediately expired before the first read/send cycle.
     const uint32_t seedTime = I.currentTime;
-    SensorHistory.sensorIndex[i] = Sensors.addSensor(ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID, String(myname + "_" + String(sensornames[i])).c_str(), 0, seedTime, seedTime, Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE, sensorPin, sensorPowerPin);
+    SensorHistory.sensorIndex[i] = Sensors.addSensor(
+        ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID,
+        String(myname + "_" + String(sensornames[i])).c_str(), 0, seedTime, seedTime,
+        Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE,
+        sensorPin, sensorPowerPin,
+        (float)Prefs.SNS_LIMIT_MAX[i], (float)Prefs.SNS_LIMIT_MIN[i], true, true);
     //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
     SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
     SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
@@ -1071,6 +1076,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
     double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
     double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
+    if (prefs_index >= 0) {
+      P->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefs_index];
+      P->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefs_index];
+    }
 
     if (P->snsValue>limitUpper || P->snsValue<limitLower) {
       bitWrite(P->Flags,0,1); //flagged

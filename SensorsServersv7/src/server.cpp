@@ -4496,10 +4496,12 @@ void handleSENSOR_UPDATE_POST() {
   }
   Prefs.SNS_FLAGS[prefsIndex] = flags;
   
-  // Also update the sensor's flags in the Sensors array
+  // Also update the sensor's flags/limits in the Sensors array
   if (sensor) {
     sensor->Flags = flags;
     sensor->SendingInt = Prefs.SNS_INTERVAL_SEND[prefsIndex];
+    sensor->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefsIndex];
+    sensor->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefsIndex];
   }
   
   // Mark Prefs as needing to be saved
@@ -7578,7 +7580,27 @@ String JSONbuilder_sensorData(ArborysSnsType* S) {
   return sensorJSON;
 }
 
+#if _HAS_LOCAL_SENSORS
+/** Mirror Prefs alarm band onto a local sensor (Prefs remain canonical on peripherals). */
+static void syncLocalSensorLimitsFromPrefs(int16_t snsIndex) {
+  if (Sensors.isSensorIndexInvalid(snsIndex, false) != 0) return;
+  if (!Sensors.isMySensor(snsIndex)) return;
+  ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndex);
+  if (!S) return;
+  const int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+  if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) return;
+  S->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefsIndex];
+  S->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefsIndex];
+}
+#endif
+
 String JSONbuilder_sensorObject(ArborysSnsType* S) {
+  if (!S) return "{}";
+#if _HAS_LOCAL_SENSORS
+  // Peripherals keep canonical limits in Prefs; mirror into the struct for this send.
+  syncLocalSensorLimitsFromPrefs(Sensors.findSensorByPointer(S));
+#endif
+
   String sensorJSON = "{\"type\":";
   sensorJSON += S->snsType;
   sensorJSON += ",\"id\":";
@@ -7594,6 +7616,12 @@ String JSONbuilder_sensorObject(ArborysSnsType* S) {
   sensorJSON += S->SendingInt;
   sensorJSON += ",\"flags\":";
   sensorJSON += S->Flags;
+  sensorJSON += ",\"limitHigh\":";
+  if (isnan(S->limitHigh)) sensorJSON += "null";
+  else sensorJSON += String(S->limitHigh, 4);
+  sensorJSON += ",\"limitLow\":";
+  if (isnan(S->limitLow)) sensorJSON += "null";
+  else sensorJSON += String(S->limitLow, 4);
   sensorJSON += "}";
   return sensorJSON;
 }
@@ -8145,23 +8173,14 @@ void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg) {
 // Keep alarmsAck under LMK plaintext budget (~8 KB) when returned via POST_ENC.
 static constexpr uint16_t ALARMS_ACK_MAX_JSON_BYTES = 7000;
 
-static bool lookupLocalSensorLimits(int16_t snsIndex, double& limitHigh, double& limitLow) {
-#if _HAS_LOCAL_SENSORS
-  if (!Sensors.isMySensor(snsIndex)) return false;
-  const int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
-  if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) return false;
-  limitHigh = Prefs.SNS_LIMIT_MAX[prefsIndex];
-  limitLow = Prefs.SNS_LIMIT_MIN[prefsIndex];
-  return true;
-#else
-  (void)snsIndex;
-  (void)limitHigh;
-  (void)limitLow;
-  return false;
-#endif
-}
-
 static void appendAlarmedSensorJson(String& out, int16_t snsIndex, ArborysSnsType* S, ArborysDevType* D) {
+  // Limits always come from ArborysSnsType:
+  // - local sensors: refresh from Prefs first (canonical on the owning device)
+  // - remote sensors (hub): use values stored from inbound JSON snsData (NaN if never received)
+#if _HAS_LOCAL_SENSORS
+  syncLocalSensorLimitsFromPrefs(snsIndex);
+#endif
+
   out += "{\"name\":\"";
   out += String(S->snsName);
   out += "\",\"mac\":\"";
@@ -8174,15 +8193,11 @@ static void appendAlarmedSensorJson(String& out, int16_t snsIndex, ArborysSnsTyp
   if (isnan(S->snsValue)) out += "null";
   else out += String(S->snsValue, 4);
   out += ",\"limitHigh\":";
-  double limitHigh = 0;
-  double limitLow = 0;
-  if (lookupLocalSensorLimits(snsIndex, limitHigh, limitLow)) {
-    out += String(limitHigh, 4);
-    out += ",\"limitLow\":";
-    out += String(limitLow, 4);
-  } else {
-    out += "null,\"limitLow\":null";
-  }
+  if (isnan(S->limitHigh)) out += "null";
+  else out += String(S->limitHigh, 4);
+  out += ",\"limitLow\":";
+  if (isnan(S->limitLow)) out += "null";
+  else out += String(S->limitLow, 4);
   out += ",\"timeLogged\":";
   out += String((uint32_t)S->timeLogged);
   out += ",\"expired\":";
@@ -8271,16 +8286,29 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
   uint32_t sendingInt = sensor["sendingInt"] | 3600;
   uint8_t flags       = sensor["flags"]      | 0;
 
+  // Limits: key present → update (null clears to NaN). Missing key → leave prior value.
+  const bool updateLimitHigh = sensor.containsKey("limitHigh");
+  const bool updateLimitLow = sensor.containsKey("limitLow");
+  float limitHigh = NAN;
+  float limitLow = NAN;
+  if (updateLimitHigh && !sensor["limitHigh"].isNull()) {
+    limitHigh = sensor["limitHigh"].as<float>();
+  }
+  if (updateLimitLow && !sensor["limitLow"].isNull()) {
+    limitLow = sensor["limitLow"].as<float>();
+  }
+
   uint8_t ret = registerSensorData(
       dev->MAC, dev->IP, dev->devName, dev->devType, dev->Flags,
-      snsType, snsID, snsName, value, timeRead, I.currentTime, sendingInt, flags
+      snsType, snsID, snsName, value, timeRead, I.currentTime, sendingInt, flags,
+      limitHigh, limitLow, updateLimitHigh, updateLimitLow
   );
 
   if (ret == 0) responseMsg = "Failed to add sensor";
 
 }
 
- uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags) {
+ uint8_t registerSensorData(uint64_t deviceMAC, IPAddress deviceIP, String devName, uint8_t devType, uint8_t devFlags, uint8_t snsType, uint8_t snsID, String snsName, double snsValue, uint32_t timeRead, uint32_t timeLogged, uint32_t sendingInt, uint8_t flags, float limitHigh, float limitLow, bool updateLimitHigh, bool updateLimitLow) {
    //returns 0 if failed to add sensor, 1 if sensor was added, 2 if sensor was already in the database and is updated
  
    uint8_t ret = 0;
@@ -8317,7 +8345,8 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
      // Add sensor to Devices_Sensors class
      sensorIndex = Sensors.addSensor(deviceMAC, deviceIP, snsType, snsID, 
                                            snsName.c_str(), snsValue, 
-                                           timeRead, timeLogged, sendingInt, flags, devName.c_str(), devType);
+                                           timeRead, timeLogged, sendingInt, flags, devName.c_str(), devType,
+                                           -9999, -9999, limitHigh, limitLow, updateLimitHigh, updateLimitLow);
  
      if (sensorIndex < 0) {
        SerialPrint("Failed to add sensor",true);

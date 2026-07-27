@@ -102,7 +102,9 @@ struct LAN_device_reg_payload_t {
 #pragma pack(pop)
 static_assert(sizeof(LAN_device_reg_payload_t) == 49, "LAN_device_reg_payload_t must be 49 bytes");
 
-// Single-sensor LAN payload (76 bytes plaintext; fits 80-byte encrypt limit)
+// Single-sensor LAN payload (76 bytes plaintext; fits 80-byte encrypt limit).
+// Only 4 bytes free under LAN_PLAINTEXT_MAX — alarm limitHigh/limitLow (+8) do not fit.
+// Limits travel on JSON snsData (UDP/HTTP) only; binary ESPNOW/UDP preserve prior hub limits.
 constexpr uint8_t LAN_SENSOR_DEVNAME_LEN = 19;
 constexpr uint8_t LAN_SENSOR_SNSNAME_LEN = 30;
 #pragma pack(push, 1)
