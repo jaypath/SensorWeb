@@ -690,6 +690,10 @@ struct FwChunkSession {
     time_t sessionStartTime = 0;
     time_t lastSuccessTime = 0;
     time_t nextRetryDue = 0;
+    // Millis timeline used when wall clock is unavailable (e.g. LP without NTP).
+    uint32_t sessionStartMs = 0;
+    uint32_t lastSuccessMs = 0;
+    uint32_t nextRetryDueMs = 0;
     uint8_t reconnectFailures = 0;
     WiFiClient client;
 };
@@ -718,6 +722,9 @@ static void resetChunkSessionState() {
     s_chunk.sessionStartTime = 0;
     s_chunk.lastSuccessTime = 0;
     s_chunk.nextRetryDue = 0;
+    s_chunk.sessionStartMs = 0;
+    s_chunk.lastSuccessMs = 0;
+    s_chunk.nextRetryDueMs = 0;
     s_chunk.reconnectFailures = 0;
     fwResponseReceived = false;
 }
@@ -739,8 +746,13 @@ static uint32_t chunkStallTimeoutSec() {
 }
 
 static void scheduleChunkRetry() {
-    if (!isTimeValid(I.currentTime)) return;
-    s_chunk.nextRetryDue = I.currentTime + (time_t)FW_CHUNK_RETRY_SEC;
+    const uint32_t dueMs = millis() + (FW_CHUNK_RETRY_SEC * 1000UL);
+    s_chunk.nextRetryDueMs = dueMs;
+    if (isTimeValid(I.currentTime)) {
+        s_chunk.nextRetryDue = I.currentTime + (time_t)FW_CHUNK_RETRY_SEC;
+    } else {
+        s_chunk.nextRetryDue = 0;
+    }
 }
 
 static bool ensureChunkClientConnected() {
@@ -835,10 +847,18 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
     s_chunk.updatePartition = part;
     s_chunk.reconnectFailures = 0;
     s_chunk.nextRetryDue = 0;
+    const uint32_t nowMs = millis();
+    s_chunk.sessionStartMs = nowMs;
+    s_chunk.lastSuccessMs = nowMs;
+    s_chunk.nextRetryDueMs = nowMs; // pull immediately
     if (isTimeValid(I.currentTime)) {
         s_chunk.sessionStartTime = I.currentTime;
         s_chunk.lastSuccessTime = I.currentTime;
         s_chunk.nextRetryDue = I.currentTime; // pull immediately
+    } else {
+        s_chunk.sessionStartTime = 0;
+        s_chunk.lastSuccessTime = 0;
+        s_chunk.nextRetryDue = 0;
     }
     fwResponseReceived = true;
 
@@ -851,7 +871,6 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
 
 static bool requestOneFirmwareBlock() {
     if (!s_chunk.active || !wifiReadyForNetwork()) return false;
-    if (!isTimeValid(I.currentTime)) return false;
     if (!ensureChunkClientConnected()) return false;
 
     char json[280];
@@ -949,8 +968,12 @@ static bool requestOneFirmwareBlock() {
     updateRunningCRC(&s_chunk.runningFullCrc, body, (uint16_t)meta.blockLength);
     free(body);
     s_chunk.currentBlockIndex++;
-    s_chunk.lastSuccessTime = I.currentTime;
-    s_chunk.nextRetryDue = 0;
+    s_chunk.lastSuccessMs = millis();
+    s_chunk.nextRetryDueMs = 0;
+    if (isTimeValid(I.currentTime)) {
+        s_chunk.lastSuccessTime = I.currentTime;
+        s_chunk.nextRetryDue = 0;
+    }
     s_chunk.reconnectFailures = 0;
 
     char progressMsg[96];
@@ -970,17 +993,34 @@ static bool requestOneFirmwareBlock() {
 
 void processChunkFirmwareTick() {
     if (!s_chunk.active) return;
-    if (!wifiReadyForNetwork() || !isTimeValid(I.currentTime)) return;
+    if (!wifiReadyForNetwork()) return;
 
-    const time_t now = I.currentTime;
-    if ((now - s_chunk.sessionStartTime) > (time_t)FW_CHUNK_SESSION_MAX_SEC) {
+    const uint32_t nowMs = millis();
+    const bool haveClock = isTimeValid(I.currentTime);
+    const time_t now = haveClock ? I.currentTime : 0;
+
+    // Prefer wall clock when session was stamped with it; otherwise use millis.
+    bool sessionExpired = false;
+    if (haveClock && s_chunk.sessionStartTime != 0) {
+        sessionExpired = (now - s_chunk.sessionStartTime) > (time_t)FW_CHUNK_SESSION_MAX_SEC;
+    } else if (s_chunk.sessionStartMs != 0) {
+        sessionExpired = (nowMs - s_chunk.sessionStartMs) > (FW_CHUNK_SESSION_MAX_SEC * 1000UL);
+    }
+    if (sessionExpired) {
         char err[72];
         snprintf(err, sizeof(err), "FW chunk session max age blk %lu/%lu",
             (unsigned long)s_chunk.currentBlockIndex, (unsigned long)s_chunk.totalBlocks);
         abortChunkSession(err);
         return;
     }
-    if ((now - s_chunk.lastSuccessTime) > (time_t)chunkStallTimeoutSec()) {
+
+    bool stalled = false;
+    if (haveClock && s_chunk.lastSuccessTime != 0) {
+        stalled = (now - s_chunk.lastSuccessTime) > (time_t)chunkStallTimeoutSec();
+    } else if (s_chunk.lastSuccessMs != 0) {
+        stalled = (nowMs - s_chunk.lastSuccessMs) > (chunkStallTimeoutSec() * 1000UL);
+    }
+    if (stalled) {
         char err[72];
         snprintf(err, sizeof(err), "FW chunk timeout blk %lu/%lu srv %s",
             (unsigned long)s_chunk.currentBlockIndex, (unsigned long)s_chunk.totalBlocks,
@@ -988,7 +1028,10 @@ void processChunkFirmwareTick() {
         abortChunkSession(err);
         return;
     }
-    if (s_chunk.nextRetryDue != 0 && now < s_chunk.nextRetryDue) return;
+
+    if (haveClock && s_chunk.nextRetryDue != 0 && now < s_chunk.nextRetryDue) return;
+    if ((!haveClock || s_chunk.nextRetryDue == 0) && s_chunk.nextRetryDueMs != 0
+        && (int32_t)(nowMs - s_chunk.nextRetryDueMs) < 0) return;
 
     // Pull as many blocks as budget allows on the keep-alive socket, then yield.
     const uint32_t startMs = millis();
@@ -1038,8 +1081,123 @@ void processJSONMessage_FirmwareAvailable(JsonObject root, String& responseMsg) 
 }
 
 void processJSONMessage_FirmwareUnavailable(JsonObject root, String& responseMsg) {
-    (void)root;
     responseMsg = "OK";
+    fwResponseReceived = true;
+    const char* reason = "none";
+    if (root["reason"].is<const char*>()) reason = root["reason"].as<const char*>();
+    logSystemEvent(String("FW unavailable (") + reason + ")", EVENT_FIRMWARE_UPDATED);
+}
+
+static int8_t applyFirmwareCheckReply(JsonObject root, bool startDownload) {
+    const char* msgType = root["msgType"] | "";
+    if (strcmp(msgType, "FirmwareUnavailable") == 0) {
+        fwResponseReceived = true;
+        const char* reason = root["reason"] | "none";
+        logSystemEvent(String("FW check: no (") + reason + ")", EVENT_FIRMWARE_UPDATED);
+        return 0;
+    }
+    if (strcmp(msgType, "FirmwareAvailable") != 0) return -1;
+
+    FirmwareVersion newVersion;
+    if (!parseFirmwareFromJson(root["newFirmware"], newVersion)) return -1;
+
+    FirmwareVersion localFw;
+    getLocalFirmware(localFw);
+    if (newVersion.compare(localFw) <= 0) {
+        fwResponseReceived = true;
+        logSystemEvent("FW check: offered version not newer", EVENT_FIRMWARE_UPDATED);
+        return 0;
+    }
+
+    uint16_t expectedCRC = 0;
+    if (root["newFirmwareCRC"].is<uint16_t>()) expectedCRC = root["newFirmwareCRC"];
+    else if (root["newFirmWareCRC"].is<uint16_t>()) expectedCRC = root["newFirmWareCRC"];
+
+    uint32_t expectedSize = 0;
+    if (root["newFirmwareSize"].is<uint32_t>()) expectedSize = root["newFirmwareSize"];
+    else if (root["newFirmwareSize"].is<unsigned long>()) expectedSize = (uint32_t)root["newFirmwareSize"].as<unsigned long>();
+    if (expectedSize == 0) return -1;
+
+    IPAddress serverIP(0, 0, 0, 0);
+    if (root["senderIP"].is<const char*>()) serverIP.fromString(root["senderIP"].as<String>());
+    if (serverIP == IPAddress(0, 0, 0, 0)) return -1;
+
+    char verText[16];
+    newVersion.toChar(verText, sizeof(verText));
+    logSystemEvent(String("FW check: yes v") + verText + " from " + serverIP.toString(), EVENT_FIRMWARE_UPDATED);
+
+    fwResponseReceived = true;
+    if (startDownload) {
+        if (!startChunkSession(serverIP, newVersion, expectedCRC, expectedSize)) {
+            fwResponseReceived = false;
+            return -1;
+        }
+    }
+    return 1;
+}
+
+int8_t sendMSG_FirmwareRequest(IPAddress& serverIP, bool startDownload, uint16_t timeoutMs) {
+    if (serverIP == IPAddress(0, 0, 0, 0) || !wifiReadyForNetwork()) return -1;
+    if (s_chunk.active) return 1;
+
+    FirmwareVersion localFw;
+    getLocalFirmware(localFw);
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"msgType\":\"FirmwareRequest\",\"senderDeviceName\":\"%s\",\"senderIP\":\"%s\",\"senderFirmware\":%s}",
+        Prefs.DEVICENAME, WiFi.localIP().toString().c_str(), firmwareJsonArray(localFw).c_str());
+
+    String httpBody = String(json);
+    JSONbuilder_encodeHTTP(httpBody);
+
+    char urlBuffer[64];
+    snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", serverIP.toString().c_str());
+
+    HTTPMessage M;
+    M.setUrl(urlBuffer);
+    M.setMethod("POST");
+    M.setContentType("application/x-www-form-urlencoded");
+    M.setBody(httpBody.c_str());
+    M.timeout = timeoutMs;
+    if (!M.initPayload(512)) return -1;
+
+    if (!SendHTTPMessage(M)) {
+        I.HTTP_OUTGOING_ERRORS++;
+        return -1;
+    }
+    registerHTTPSend(serverIP, "fwReq");
+
+    if (!M.payload || !M.payload.get() || M.payload.get()[0] != '{') return -1;
+
+    StaticJsonDocument<384> doc;
+    if (deserializeJson(doc, M.payload.get()) != DeserializationError::Ok) return -1;
+    return applyFirmwareCheckReply(doc.as<JsonObject>(), startDownload);
+}
+
+int8_t checkFirmwareFromServersHTTP(bool startDownload, uint16_t timeoutMs) {
+    if (s_chunk.active) return 1;
+    if (!wifiReadyForNetwork()) return -1;
+    if (Sensors.countServers() == 0) return -1;
+
+    bool sawNo = false;
+    bool sawError = false;
+    for (int16_t di = Sensors.nextServerIndex(0, false); di >= 0; di = Sensors.nextServerIndex(di + 1, false)) {
+        ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+        if (!d || !d->IsSet || d->IP == IPAddress(0, 0, 0, 0)) continue;
+        IPAddress ip = d->IP;
+        int8_t rc = sendMSG_FirmwareRequest(ip, startDownload, timeoutMs);
+        if (rc == 1) return 1;
+        if (rc == 0) sawNo = true;
+        else sawError = true;
+        if (s_chunk.active) return 1;
+    }
+    if (sawNo) return 0;
+    (void)sawError;
+    return -1;
+}
+
+bool isFirmwareChunkSessionActive() {
+    return s_chunk.active;
 }
 
 void peripheralFirmwareHourlyCheck() {
@@ -1055,6 +1213,10 @@ void peripheralFirmwareHourlyCheck() {
     fwCheckMinute = (uint8_t)random(0, 60);
     fwResponseReceived = false;
 
+    // Prefer HTTP: sync yes/no from known servers (fast path for low-power-style checks).
+    int8_t httpRc = checkFirmwareFromServersHTTP(true, 5000);
+    if (httpRc == 1 || httpRc == 0) return;
+
     FirmwareVersion localFw;
     getLocalFirmware(localFw);
     char json[256];
@@ -1068,7 +1230,7 @@ void peripheralFirmwareHourlyCheck() {
         logSystemEvent(String("FW inquiry sent v") + verText + " via UDP", EVENT_FIRMWARE_UPDATED);
     }
 
-    // Broadcast to all servers; first FirmwareAvailable wins (others ignored while active/received).
+    // Fallback broadcast; first FirmwareAvailable wins (others ignored while active/received).
     sendUDPMessage((uint8_t*)json, IPAddress(0, 0, 0, 0), (uint16_t)strlen(json), "fwReq");
 
     uint32_t start = millis();
@@ -1076,6 +1238,7 @@ void peripheralFirmwareHourlyCheck() {
         receiveUDPMessage();
         server.handleClient();
         esp_task_wdt_reset();
+        if (fwResponseReceived || s_chunk.active) break;
         delay(10);
     }
 }
@@ -1090,12 +1253,32 @@ void processJSONMessage_FirmwareUnavailable(JsonObject root, String& responseMsg
 }
 void peripheralFirmwareHourlyCheck() {}
 void processChunkFirmwareTick() {}
+bool isFirmwareChunkSessionActive() { return false; }
+int8_t sendMSG_FirmwareRequest(IPAddress& serverIP, bool startDownload, uint16_t timeoutMs) {
+    (void)serverIP; (void)startDownload; (void)timeoutMs;
+    return -1;
+}
+int8_t checkFirmwareFromServersHTTP(bool startDownload, uint16_t timeoutMs) {
+    (void)startDownload; (void)timeoutMs;
+    return -1;
+}
 #endif
 
 #if defined(_USESDCARD) && _IS_SERVER_HUB
+static void buildFirmwareUnavailableJson(char* out, size_t outLen, const char* reason) {
+    snprintf(out, outLen,
+        "{\"msgType\":\"FirmwareUnavailable\",\"senderIP\":\"%s\",\"reason\":\"%s\"}",
+        WiFi.localIP().toString().c_str(), reason ? reason : "none");
+}
+
 void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
-    responseMsg = "OK";
-    if (_MYTYPE < 100) return;
+    char reply[320];
+    buildFirmwareUnavailableJson(reply, sizeof(reply), "notHub");
+
+    if (_MYTYPE < 100) {
+        responseMsg = reply;
+        return;
+    }
 
     String deviceName;
     FirmwareVersion deviceFirmware;
@@ -1110,8 +1293,12 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     if (root["senderIP"].is<const char*>()) senderIP.fromString(root["senderIP"].as<String>());
 
     if (deviceName.length() == 0 || senderIP == IPAddress(0, 0, 0, 0) || !haveDeviceFirmware) {
-        responseMsg = "Missing firmware request fields";
+        buildFirmwareUnavailableJson(reply, sizeof(reply), "missingFields");
+        responseMsg = reply;
         logSystemEvent("FWreq: rejected (missing fields)", EVENT_FIRMWARE_UPDATED);
+        if (!isJsonInlineHttpReply() && senderIP != IPAddress(0, 0, 0, 0)) {
+            sendUDPMessage((uint8_t*)reply, senderIP, (uint16_t)strlen(reply), "fwResp");
+        }
         return;
     }
 
@@ -1124,28 +1311,49 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
         bestPath, sizeof(bestPath), &crc, &size);
 
     if (!haveFirmware) {
+        buildFirmwareUnavailableJson(reply, sizeof(reply), "noImage");
+        responseMsg = reply;
         logSystemEvent(String("FWreq: ") + deviceName + ",  no image", EVENT_FIRMWARE_UPDATED);
+        if (!isJsonInlineHttpReply()) {
+            sendUDPMessage((uint8_t*)reply, senderIP, (uint16_t)strlen(reply), "fwResp");
+        }
         return;
     }
     if (bestVersion.compare(deviceFirmware) <= 0) {
+        buildFirmwareUnavailableJson(reply, sizeof(reply), "upToDate");
+        responseMsg = reply;
         logSystemEvent(String("FWreq: ") + deviceName + ",  up to date", EVENT_FIRMWARE_UPDATED);
+        if (!isJsonInlineHttpReply()) {
+            sendUDPMessage((uint8_t*)reply, senderIP, (uint16_t)strlen(reply), "fwResp");
+        }
         return;
     }
 
     char verText[16];
     bestVersion.toChar(verText, sizeof(verText));
 
-    char json[320];
-    snprintf(json, sizeof(json),
+    snprintf(reply, sizeof(reply),
         "{\"msgType\":\"FirmwareAvailable\",\"senderDeviceID\":\"%s\",\"senderIP\":\"%s\","
         "\"newFirmware\":%s,\"newFirmwareCRC\":%u,\"newFirmwareSize\":%lu}",
         MACToString(Prefs.PROCID).c_str(), WiFi.localIP().toString().c_str(),
         firmwareJsonArray(bestVersion).c_str(), crc, (unsigned long)size);
 
+    responseMsg = reply;
+
+    if (isJsonInlineHttpReply()) {
+        logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offered (HTTP)", EVENT_FIRMWARE_UPDATED);
+        return;
+    }
+
+    // UDP / async path: push offer to requester (HTTPS preferred, UDP fallback).
     IPAddress ip = senderIP;
-    int16_t rc = sendHTTPSJSON(ip, json, "fwResp");
+    int16_t rc = sendHTTPSJSON(ip, reply, "fwResp");
     if (rc < 200 || rc >= 400) {
-        logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offer failed", EVENT_FIRMWARE_UPDATED);
+        if (!sendUDPMessage((uint8_t*)reply, senderIP, (uint16_t)strlen(reply), "fwResp")) {
+            logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offer failed", EVENT_FIRMWARE_UPDATED);
+        } else {
+            logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offered (UDP)", EVENT_FIRMWARE_UPDATED);
+        }
     } else {
         logSystemEvent(String("FWreq: ") + deviceName + ",  " + verText + " offered", EVENT_FIRMWARE_UPDATED);
     }
@@ -1153,7 +1361,11 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
 #else
 void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     (void)root;
-    responseMsg = "OK";
+    char reply[160];
+    snprintf(reply, sizeof(reply),
+        "{\"msgType\":\"FirmwareUnavailable\",\"senderIP\":\"%s\",\"reason\":\"notHub\"}",
+        WiFi.localIP().toString().c_str());
+    responseMsg = reply;
 }
 #endif
 

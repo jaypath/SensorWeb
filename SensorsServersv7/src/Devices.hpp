@@ -112,6 +112,10 @@ public:
     // Device management
     bool updateDeviceName(int16_t index, String newDeviceName);
     int16_t addDevice(uint64_t MAC, IPAddress IP, const char* devName = "", uint32_t sendingInt = 86400, uint8_t flags = 0, uint8_t devType = 0, const FirmwareVersion* firmware = nullptr);
+    /** Register a hub known only by IP (networkState). Skips if a server already owns that IP. */
+    int16_t addServerPlaceholder(IPAddress IP);
+    static bool isServerPlaceholderMac(uint64_t MAC);
+    static uint64_t serverPlaceholderMac(IPAddress IP);
     int16_t findDevice(uint64_t MAC);
     int16_t findDevice(IPAddress IP);
     ArborysDevType* getDeviceByDevIndex(int16_t devindex);

@@ -262,7 +262,7 @@ typedef enum {
       time_t lastResetTime;
       byte rebootsToday=0;
       time_t ALIVESINCE;
-      uint8_t wifiFailCount; // consecutive minutes WiFi reconnect failed (reset when connected)
+      uint8_t wifiFailCount; // consecutive associated-without-IP recovery attempts (reset on GOT_IP)
       time_t wifiDownSince;
       bool initialSetupFinalized; // initial wizard submitted (or already configured at boot)
       bool initialSetupExitPending; // wait for provisioning client to leave AP before stopping soft-AP

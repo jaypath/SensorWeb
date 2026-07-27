@@ -244,6 +244,8 @@ static bool isHttpUiBrowseMessage(const char* messageType) {
   return false;
 }
 
+static void syncWifiDownFlags(bool connected);
+
 //wifi event registration 
 void WiFiEvent(WiFiEvent_t event) {
   I.WiFiLastEvent = event;
@@ -264,8 +266,15 @@ void WiFiEvent(WiFiEvent_t event) {
       maybeExitAPStationMode();
       break;
     }
+    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+      logSystemEvent("STA lost IP (still may be associated)", EVENT_WIFI_DISCONNECTED);
+      syncWifiDownFlags(false);
+      syncDeviceIPFromWifi();
+      break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       logSystemEvent("STA disconnected from AP", EVENT_WIFI_DISCONNECTED);
+      syncWifiDownFlags(false);
+      syncDeviceIPFromWifi();
       break;
     case ARDUINO_EVENT_WIFI_AP_START:
       logSystemEvent("WiFi AP started", EVENT_WIFI_AP_STARTED);
@@ -824,29 +833,42 @@ bool SendHTTPMessage(HTTPMessage& M) {
 
 
 int8_t measureWifiLinkStatus() {
-  //2 - connected by all measures, but wifi.status() != WL_CONNECTED
-  //1 - valid status (WL_CONNECTED)
+  //2 - usable IP/gateway/SSID/RSSI, but wifi.status() != WL_CONNECTED
+  //1 - WL_CONNECTED with valid IP and gateway
   //0 - unknown status
   //-1 - no valid IP address
   //-2 - no valid RSSI range
   //-3 - no valid SSID
   //-4 - no valid gateway
 
-  int32_t rssi = WiFi.RSSI();
+  const int32_t rssi = WiFi.RSSI();
+  const bool hasSsid = WiFi.SSID().length() > 0;
+  const bool hasIp = WiFi.localIP() != IPAddress(0, 0, 0, 0);
+  const bool hasGw = WiFi.gatewayIP() != IPAddress(0, 0, 0, 0);
+  const bool rssiOk = (rssi < 0 && rssi > -150);
 
+  // WL_CONNECTED alone is not enough — associated-without-DHCP reports connected + 0.0.0.0.
   if (WiFi.status() == WL_CONNECTED) {
+    if (!hasIp) {
+      I.WiFiStatus = -1;
+      return -1;
+    }
+    if (!hasGw) {
+      I.WiFiStatus = -4;
+      return -4;
+    }
     I.WiFiStatus = 1;
     return 1;
   }
-  I.WiFiStatus = 0;
 
-  if (WiFi.SSID().length() <= 0) {
+  I.WiFiStatus = 0;
+  if (!hasSsid) {
     I.WiFiStatus = -3;
-  } else if (WiFi.gatewayIP() == IPAddress(0, 0, 0, 0)) {
+  } else if (!hasGw) {
     I.WiFiStatus = -4;
-  } else if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+  } else if (!hasIp) {
     I.WiFiStatus = -1;
-  } else if (!(rssi < 0 && rssi > -150)) {
+  } else if (!rssiOk) {
     I.WiFiStatus = -2;
   } else {
     I.WiFiStatus = 2;
@@ -1022,13 +1044,19 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
       enterAPStationMode();
       return linkStatus;
     }
-    for (uint8_t attempt = 1; attempt <= WIFI_BOOT_RETRY_LIMIT; ++attempt) {
+    const uint32_t bootDeadline = millis() + WIFI_BOOT_MAX_MS;
+    uint8_t attempt = 0;
+    while ((int32_t)(bootDeadline - millis()) > 1000) {
+      ++attempt;
+      const uint32_t remaining = bootDeadline - millis();
+      const uint16_t tryMs = (remaining > WIFI_BOOT_TRY_MS) ? WIFI_BOOT_TRY_MS : (uint16_t)remaining;
       #ifdef _USETFT
-      tftPrint("WiFi Attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT) + "...",
+      tftPrint("WiFi Attempt " + String(attempt) + "...",
           false, TFT_WHITE, 2, 1, false, -1, -1);
       #endif
-      SerialPrint("Boot WiFi attempt " + String(attempt) + "/" + String(WIFI_BOOT_RETRY_LIMIT), true);
-      if (tryWifi(WIFI_BOOT_TRY_MS, true) == 1) {
+      SerialPrint("Boot WiFi attempt " + String(attempt) + " (" + String(tryMs) + " ms, budget "
+          + String(WIFI_BOOT_MAX_MS) + " ms)", true);
+      if (tryWifi(tryMs, true) == 1) {
         #ifdef _USETFT
         tftPrint(" OK", true, TFT_GREEN);
         #endif
@@ -1040,12 +1068,13 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
       tftPrint(" Fail", true, TFT_RED);
       #endif
     }
-    SerialPrint("Boot WiFi failed after " + String(WIFI_BOOT_RETRY_LIMIT) + " attempts; entering AP mode", true);
+    SerialPrint("Boot WiFi failed within " + String(WIFI_BOOT_MAX_MS) + " ms; entering AP mode", true);
     enterAPStationMode();
     return linkStatus;
   }
 
-  // Runtime: ESP-IDF auto-reconnect handles brief STA drops. After WIFI_DOWN_AP_THRESHOLD_SEC
+  // Runtime: ESP-IDF auto-reconnect handles brief STA drops. Associated-without-IP is
+  // handled by maybeRecoverWifiWithoutIp() (every loop). After WIFI_DOWN_AP_THRESHOLD_SEC
   // of continuous failure, open soft-AP so credentials can be updated; keep AP up until STA recovers.
   if (!haveWifiCredentials()) {
     if (!softApRunning()) {
@@ -1053,6 +1082,8 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
     }
     return linkStatus;
   }
+
+  maybeRecoverWifiWithoutIp();
 
   if (I.wifiDownSince && isTimeValid(I.currentTime)
       && (I.currentTime - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
@@ -1066,7 +1097,8 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
 }
 
 bool wifiReadyForNetwork() {
-  return measureWifiLinkStatus() == 1;
+  const int8_t s = measureWifiLinkStatus();
+  return s == 1 || s == 2;
 }
 
 bool softApRunning() {
@@ -1183,6 +1215,79 @@ void startWifiConnectAsync() {
   SerialPrint("startWifiConnectAsync: non-blocking STA reconnect started", true);
 }
 
+void maybeRecoverWifiWithoutIp() {
+  if (!haveWifiCredentials()) return;
+  // Avoid bouncing STA while someone is using the soft-AP portal.
+  if (softApRunning() && apStationUserActive()) return;
+
+  static uint32_t s_zeroIpSinceMs = 0;
+  static uint32_t s_lastRecoverMs = 0;
+  static uint32_t s_beginAfterDisconnectMs = 0;
+
+  const uint32_t nowMs = millis();
+
+  // Complete a pending begin after a forced disconnect (avoid long delay in the loop).
+  if (s_beginAfterDisconnectMs != 0) {
+    if ((int32_t)(nowMs - s_beginAfterDisconnectMs) < 300) return;
+    s_beginAfterDisconnectMs = 0;
+    #ifdef _USE32
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
+    #endif
+    if (softApRunning()) {
+      if (WiFi.getMode() != WIFI_MODE_APSTA) {
+        WiFi.mode(WIFI_MODE_APSTA);
+      }
+    } else if (WiFi.getMode() != WIFI_MODE_STA && WiFi.getMode() != WIFI_MODE_APSTA) {
+      WiFi.mode(WIFI_MODE_STA);
+    }
+    beginWifiPreferBestBssid();
+    WiFi.setSleep(WIFI_PS_NONE);
+    SerialPrint("maybeRecoverWifiWithoutIp: WiFi.begin after disconnect", true);
+    return;
+  }
+
+  if (wifiReadyForNetwork()) {
+    s_zeroIpSinceMs = 0;
+    return;
+  }
+
+  // Associated (or Arduino-ESP32 3.x idle/associated-without-IP) but no DHCP address.
+  const wl_status_t st = WiFi.status();
+  const bool associatedNoIp = (WiFi.localIP() == IPAddress(0, 0, 0, 0))
+      && (st == WL_CONNECTED || st == WL_IDLE_STATUS);
+  if (!associatedNoIp) {
+    s_zeroIpSinceMs = 0;
+    return;
+  }
+
+  if (s_zeroIpSinceMs == 0) {
+    s_zeroIpSinceMs = nowMs ? nowMs : 1;
+    SerialPrint("maybeRecoverWifiWithoutIp: associated without IP; waiting for DHCP", true);
+    return;
+  }
+  if ((nowMs - s_zeroIpSinceMs) < WIFI_ZERO_IP_GRACE_MS) return;
+  if (s_lastRecoverMs != 0 && (nowMs - s_lastRecoverMs) < WIFI_ZERO_IP_RECOVER_INTERVAL_MS) {
+    return;
+  }
+
+  s_lastRecoverMs = nowMs;
+  if (I.wifiFailCount < 255) I.wifiFailCount++;
+
+  if (I.wifiFailCount >= WIFI_ZERO_IP_REBOOT_AFTER) {
+    controlledReboot("WiFi associated without IP; recovery exhausted", RESET_WIFI, true);
+    return;
+  }
+
+  SerialPrint("maybeRecoverWifiWithoutIp: disconnect+reconnect attempt #"
+      + String(I.wifiFailCount) + " status=" + String((int)st)
+      + " ip=" + WiFi.localIP().toString(), true);
+  // false = keep credentials in flash; force a fresh association/DHCP cycle.
+  WiFi.disconnect(false);
+  s_beginAfterDisconnectMs = nowMs ? nowMs : 1;
+  s_zeroIpSinceMs = 0;
+}
+
 void maybeOptimizeWifiBssid() {
   static time_t s_lastOptimizeTime = 0;
 
@@ -1275,6 +1380,7 @@ return false;
 namespace {
   uint32_t s_apEnterMillis = 0;
   uint32_t s_apLastChannelScanMillis = 0;
+  uint32_t s_apLastReconnectMillis = 0;
   volatile bool s_apChannelScanListen = false;
   volatile bool s_apChannelScanGotResponse = false;
 
@@ -1420,6 +1526,7 @@ void enterAPStationMode() {
   I.apLastChannelScanTime = 0;
   s_apLastChannelScanMillis = 0;
   s_apEnterMillis = millis();
+  s_apLastReconnectMillis = millis();
   if (isTimeValid(I.currentTime)) {
     I.apModeEnteredTime = I.currentTime;
     // Defer first STA reconnect so soft-AP can stabilize (WiFi.begin can bounce AP briefly).
@@ -1493,6 +1600,8 @@ void exitAPStationMode() {
   I.apModeEnteredTime = 0;
   I.apLastChannelScanTime = 0;
   s_apLastChannelScanMillis = 0;
+  s_apEnterMillis = 0;
+  s_apLastReconnectMillis = 0;
   s_apChannelScanListen = false;
   s_apChannelScanGotResponse = false;
 
@@ -1525,16 +1634,19 @@ void serviceAPStationMode() {
 
   if (!haveWifiCredentials()) return;
 
-  const bool firstCheck = (I.apLastReconnectCheckTime == 0);
-  const bool due = firstCheck
-      || (isTimeValid(I.currentTime)
-          && I.currentTime - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
+  const bool firstCheck = (I.apLastReconnectCheckTime == 0 && s_apLastReconnectMillis == 0);
+  const bool dueByTime = isTimeValid(I.currentTime) && I.apLastReconnectCheckTime != 0
+      && (I.currentTime - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
+  const bool dueByMillis = (millis() - s_apLastReconnectMillis) >= (WIFI_AP_STA_RECONNECT_SEC * 1000UL);
+  const bool due = firstCheck || dueByTime || (!isTimeValid(I.currentTime) && dueByMillis)
+      || (isTimeValid(I.currentTime) && I.apLastReconnectCheckTime == 0 && dueByMillis);
   if (!due) return;
 
   const bool clientActiveSinceLastCheck = !firstCheck
       && isTimeValid(I.apLastClientActivity)
       && I.apLastClientActivity >= I.apLastReconnectCheckTime;
 
+  s_apLastReconnectMillis = millis();
   if (isTimeValid(I.currentTime)) {
     I.apLastReconnectCheckTime = I.currentTime;
   }
@@ -1543,6 +1655,30 @@ void serviceAPStationMode() {
   if (!clientActiveSinceLastCheck) {
     startWifiConnectAsync();
   }
+}
+
+uint32_t getApStationEnterMillis() {
+  return s_apEnterMillis;
+}
+
+bool apStationUserActive() {
+  if (!softApRunning()) return false;
+  if (WiFi.softAPgetStationNum() > 0) return true;
+  if (isTimeValid(I.apLastClientActivity) && isTimeValid(I.currentTime)
+      && (I.currentTime - I.apLastClientActivity) < 60) {
+    return true;
+  }
+  // Fallback when wall clock is unset: treat recent HTTP (by millis) as activity.
+  static uint32_t lastHttpStamp = 0;
+  static uint32_t lastHttpActivityMs = 0;
+  if (I.HTTP_LAST_INCOMINGMSG_TIME != lastHttpStamp) {
+    lastHttpStamp = I.HTTP_LAST_INCOMINGMSG_TIME;
+    lastHttpActivityMs = millis();
+  }
+  if (lastHttpActivityMs != 0 && (millis() - lastHttpActivityMs) < 60000UL) {
+    return true;
+  }
+  return false;
 }
 
 // Helper function to URL encode strings
@@ -3199,12 +3335,50 @@ static String formatArborysDeviceFirmware(const ArborysDevType* device) {
   return String(buf);
 }
 
+// Marks: * if any sensor is flagged (Flags bit0); (exp) if any sensor is expired.
+// On remotes, hub OverrideFlags suppress marks: bit1 (Monitored) suppresses *,
+// bit7 (Critical) suppresses (exp). Local (this device) sensors ignore OverrideFlags.
+static void collectDeviceViewerNameMarks(bool deviceFlagged[NUMDEVICES], bool deviceExpired[NUMDEVICES]) {
+  for (int16_t di = 0; di < NUMDEVICES; di++) {
+    deviceFlagged[di] = false;
+    deviceExpired[di] = false;
+  }
+  for (int16_t si = 0; si < NUMSENSORS; si++) {
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(si);
+    if (!sensor || !sensor->IsSet) continue;
+    if (sensor->deviceIndex < 0 || sensor->deviceIndex >= NUMDEVICES) continue;
+
+    const bool useOverrideFlags = (sensor->deviceIndex != I.MY_DEVICE_INDEX);
+    const uint8_t overrideFlags = useOverrideFlags ? sensor->OverrideFlags : 0;
+
+    if (bitRead(sensor->Flags, 0) && !(useOverrideFlags && bitRead(overrideFlags, 1))) {
+      deviceFlagged[sensor->deviceIndex] = true;
+    }
+    if (sensor->expired && !(useOverrideFlags && bitRead(overrideFlags, 7))) {
+      deviceExpired[sensor->deviceIndex] = true;
+    }
+  }
+}
+
+static String formatDeviceViewerName(const ArborysDevType* device, bool flagged, bool expired, bool includeFirmware) {
+  if (!device) return "";
+  String label = String(device->devName);
+  if (includeFirmware) label += " v" + formatArborysDeviceFirmware(device);
+  if (flagged) label += "*";
+  if (expired) label += "(exp)";
+  return label;
+}
+
 static void appendDeviceFirmwareInfoRow(const ArborysDevType* device) {
   WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Firmware Version:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(device) + "</td></tr>";
 }
 
 #ifndef _USEGSHEET
 static void appendAllDevicesFirmwareTable() {
+  bool deviceFlagged[NUMDEVICES];
+  bool deviceExpired[NUMDEVICES];
+  collectDeviceViewerNameMarks(deviceFlagged, deviceExpired);
+
   WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
   WEBHTML = WEBHTML + "<h4>Registered Devices</h4>";
   WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
@@ -3219,7 +3393,7 @@ static void appendAllDevicesFirmwareTable() {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
     if (!d) continue;
     WEBHTML = WEBHTML + "<tr>";
-    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"/?devIndex=" + String(di) + "\">" + String(d->devName) + "</a></td>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"/?devIndex=" + String(di) + "\">" + formatDeviceViewerName(d, deviceFlagged[di], deviceExpired[di], false) + "</a></td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + d->IP.toString() + "\" target=\"_blank\">" + d->IP.toString() + "</a></td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(d->devType) + "</td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(d) + "</td>";
@@ -4992,20 +5166,20 @@ static void appendSdCardUploadForm(const String& currentPath) {
   jsPath.replace("\"", "\\\"");
 
   WEBHTML = WEBHTML + "<h3>Upload File or Folder</h3>";
-  WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>50 files</strong> (uploaded one at a time).</p>";
+  WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>50 files</strong> (uploaded one at a time). Dropping a file or folder starts upload immediately.</p>";
   if (currentPath.equalsIgnoreCase("/Firmware")) {
     WEBHTML = WEBHTML + "<p>Firmware files: name each binary <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (e.g. <code>PleasantB-9.0.0.bin</code>). The version is the segment after the <strong>last</strong> hyphen.</p>";
   }
   WEBHTML = WEBHTML + "<form id=\"sd-upload-form\" method=\"POST\" action=\"/SDCARD_UPLOAD?path=" + urlEncode(currentPath) + "\" enctype=\"multipart/form-data\">";
   WEBHTML = WEBHTML + "<div id=\"sd-drop-zone\" style=\"border: 2px dashed #999; padding: 24px; margin: 10px 0; text-align: center; cursor: pointer; background-color: #fafafa;\">";
-  WEBHTML = WEBHTML + "Drag and drop a file or folder here";
+  WEBHTML = WEBHTML + "Drag and drop a file or folder here to upload now";
   WEBHTML = WEBHTML + "<input type=\"file\" name=\"upload\" id=\"sd-file-input\" style=\"display:none;\">";
   WEBHTML = WEBHTML + "<input type=\"file\" id=\"sd-folder-input\" webkitdirectory directory multiple style=\"display:none;\">";
   WEBHTML = WEBHTML + "</div>";
   WEBHTML = WEBHTML + "<p id=\"sd-upload-name\" style=\"color:#555;\"></p>";
   WEBHTML = WEBHTML + "<button type=\"button\" id=\"sd-choose-file\" style=\"padding: 8px 16px; margin-right: 8px; background-color: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer;\">Choose File</button>";
   WEBHTML = WEBHTML + "<button type=\"button\" id=\"sd-choose-folder\" style=\"padding: 8px 16px; margin-right: 8px; background-color: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer;\">Choose Folder</button>";
-  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload File to SD Card\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
+  WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Upload Selected File\" style=\"padding: 10px 20px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
   WEBHTML = WEBHTML + "<script>\n";
   WEBHTML = WEBHTML + "const SD_BASE_PATH = \"" + jsPath + "\";\n";
@@ -5028,6 +5202,20 @@ static void appendSdCardUploadForm(const String& currentPath) {
 
   function showSelected(text) {
     if (label) label.textContent = text;
+  }
+
+  function redirectAfterUpload(ok, fail, lastError, lastName) {
+    let redirect = '/SDCARD?path=' + encodeURIComponent(SD_BASE_PATH);
+    if (fail === 0) {
+      if (ok === 1 && lastName) {
+        redirect += '&upload=ok&file=' + encodeURIComponent(lastName);
+      } else {
+        redirect += '&upload=ok&msg=' + encodeURIComponent('Upload complete: ' + ok + ' file(s)');
+      }
+    } else {
+      redirect += '&upload=fail&msg=' + encodeURIComponent('Upload: ' + ok + ' ok, ' + fail + ' failed. ' + lastError);
+    }
+    window.location.href = redirect;
   }
 
   function readDirectoryEntries(dirEntry, prefix) {
@@ -5092,30 +5280,44 @@ static void appendSdCardUploadForm(const String& currentPath) {
     let ok = 0;
     let fail = 0;
     let lastError = '';
+    let lastName = '';
     for (let i = 0; i < fileEntries.length; i++) {
       const rel = (fileEntries[i].relativePath || fileEntries[i].file.name).replace(/\\/g, '/');
       const parts = rel.split('/');
-      const fileName = parts.pop();
+      parts.pop();
       const subDir = parts.join('/');
       const targetDir = joinPath(SD_BASE_PATH, subDir);
       showSelected('Uploading ' + (i + 1) + '/' + fileEntries.length + ': ' + rel);
       try {
         const uploadFile = fileEntries[i].file;
-        await uploadOneFile(uploadFile, targetDir);
+        lastName = await uploadOneFile(uploadFile, targetDir);
         ok++;
       } catch (err) {
         fail++;
         lastError = err.message || 'Upload failed';
       }
     }
+    redirectAfterUpload(ok, fail, lastError, lastName);
+  }
 
-    let redirect = '/SDCARD?path=' + encodeURIComponent(SD_BASE_PATH);
-    if (fail === 0) {
-      redirect += '&upload=ok&msg=' + encodeURIComponent('Folder upload complete: ' + ok + ' file(s)');
-    } else {
-      redirect += '&upload=fail&msg=' + encodeURIComponent('Folder upload: ' + ok + ' ok, ' + fail + ' failed. ' + lastError);
+  async function uploadDroppedFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    let ok = 0;
+    let fail = 0;
+    let lastError = '';
+    let lastName = '';
+    for (let i = 0; i < files.length; i++) {
+      showSelected('Uploading ' + (i + 1) + '/' + files.length + ': ' + files[i].name);
+      try {
+        lastName = await uploadOneFile(files[i], SD_BASE_PATH);
+        ok++;
+      } catch (err) {
+        fail++;
+        lastError = err.message || 'Upload failed';
+      }
     }
-    window.location.href = redirect;
+    redirectAfterUpload(ok, fail, lastError, lastName);
   }
 
   chooseFile.addEventListener('click', function(e) {
@@ -5150,14 +5352,14 @@ static void appendSdCardUploadForm(const String& currentPath) {
       }
     }
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      input.files = e.dataTransfer.files;
-      showSelected('Selected file: ' + e.dataTransfer.files[0].name);
+      showSelected('Uploading: ' + e.dataTransfer.files[0].name);
+      uploadDroppedFiles(e.dataTransfer.files);
     }
   });
 
   input.addEventListener('change', function() {
     if (input.files && input.files.length > 0) {
-      showSelected('Selected file: ' + input.files[0].name);
+      showSelected('Selected file: ' + input.files[0].name + ' (click Upload Selected File)');
     }
   });
 
@@ -5307,6 +5509,7 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
 
   WEBHTML = WEBHTML + "<h3>File Browser</h3>";
   WEBHTML = WEBHTML + "<p><strong>Current path:</strong> " + currentPath + "</p>";
+  appendSdCardUploadForm(currentPath);
   WEBHTML = WEBHTML + "<table style=\"width:100%; border-collapse: collapse; margin: 10px 0;\">";
   WEBHTML = WEBHTML + "<tr style=\"background-color: #f0f0f0;\">";
   WEBHTML = WEBHTML + "<th style=\"border: 1px solid #ddd; padding: 8px; text-align: left;\">Name</th>";
@@ -5333,7 +5536,6 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
     WEBHTML = WEBHTML + "</table>";
     if (dir) dir.close();
     appendSdCardDirectoryManageForms(currentPath);
-    appendSdCardUploadForm(currentPath);
     return;
   }
 
@@ -5422,7 +5624,6 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
   WEBHTML = WEBHTML + "</table>";
   WEBHTML = WEBHTML + "<p><strong>Directories:</strong> " + String(dirCount) + ", <strong>Files:</strong> " + String(fileCount) + "</p>";
   appendSdCardDirectoryManageForms(currentPath);
-  appendSdCardUploadForm(currentPath);
 }
 #endif
 
@@ -6117,6 +6318,11 @@ static void pushJsonPingReplyContext(uint8_t via, IPAddress udpReplyIp = IPAddre
   s_jsonPingReplyUdpIp = udpReplyIp;
 }
 
+bool isJsonInlineHttpReply() {
+  return s_jsonPingReplyVia == JSON_PING_REPLY_HTTP_INLINE
+      || s_jsonPingReplyVia == JSON_PING_REPLY_HTTPS_INLINE;
+}
+
 static void popJsonPingReplyContext() {
   if (s_jsonPingReplyViaDepth == 0) {
     s_jsonPingReplyVia = JSON_PING_REPLY_NONE;
@@ -6714,19 +6920,13 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\">Device </span>";
     WEBHTML = WEBHTML + "<select name=\"devIndex\" onchange=\"this.form.submit()\" style=\"font-size: 1em; padding: 4px 8px; margin: 0 4px; max-width: 70%;\">";
     bool deviceFlagged[NUMDEVICES];
-    for (int16_t di = 0; di < NUMDEVICES; di++) deviceFlagged[di] = false;
-    for (int16_t si = 0; si < NUMSENSORS; si++) {
-      ArborysSnsType* sensor = Sensors.snsIndexToPointer(si);
-      if (sensor && sensor->IsSet && sensor->deviceIndex >= 0 && sensor->deviceIndex < NUMDEVICES && bitRead(sensor->Flags, 0)) {
-        deviceFlagged[sensor->deviceIndex] = true;
-      }
-    }
+    bool deviceExpired[NUMDEVICES];
+    collectDeviceViewerNameMarks(deviceFlagged, deviceExpired);
     for (int16_t di = 0; di < NUMDEVICES; di++) {
       if (!Sensors.isDeviceInit(di)) continue;
       ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
       if (!d) continue;
-      String label = String(d->devName) + " v" + formatArborysDeviceFirmware(d);
-      if (deviceFlagged[di]) label += "*";
+      String label = formatDeviceViewerName(d, deviceFlagged[di], deviceExpired[di], true);
       WEBHTML = WEBHTML + "<option value=\"" + String(di) + "\"";
       if (di == CURRENT_DEVICEVIEWER_DEVINDEX) WEBHTML = WEBHTML + " selected";
       WEBHTML = WEBHTML + ">" + label + "</option>";
@@ -7622,6 +7822,12 @@ void processJSONMessage(String& postData, String& responseMsg) {
   else if (msgType == "FirmwareUnavailable") {
     processJSONMessage_FirmwareUnavailable(root, responseMsg);
   }
+  else if (msgType == "networkStateReq") {
+    processJSONMessage_networkStateReq(root, responseMsg);
+  }
+  else if (msgType == "alarmsReq") {
+    processJSONMessage_alarmsReq(root, responseMsg);
+  }
   else {
     SerialPrint("Unknown message type: " + msgType,true);
     SerialPrint("Erroneous Post data: " + postData,true);
@@ -7894,6 +8100,158 @@ void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg) {
   #endif
   responseMsg = "OK";
   return;
+}
+
+void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg) {
+  (void)root;
+
+#if !_IS_SERVER_HUB
+  responseMsg = "{\"msgType\":\"networkState\",\"error\":\"notServer\"}";
+  return;
+#else
+  uint8_t serverCount = 0;
+  uint8_t peripheralCount = 0;
+  String serverIPs;
+  serverIPs.reserve(320);
+
+  for (int16_t i = 0; i < NUMDEVICES; i++) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet) continue;
+    if (d->devType >= 100) {
+      if (d->IP == IPAddress(0, 0, 0, 0)) continue;
+      if (serverCount > 0) serverIPs += ',';
+      serverIPs += '"';
+      serverIPs += d->IP.toString();
+      serverIPs += '"';
+      serverCount++;
+    } else {
+      peripheralCount++;
+    }
+  }
+
+  responseMsg.reserve(64 + serverIPs.length());
+  responseMsg = "{\"msgType\":\"networkState\",\"serverCount\":";
+  responseMsg += String(serverCount);
+  responseMsg += ",\"serverIPs\":[";
+  responseMsg += serverIPs;
+  responseMsg += "],\"peripheralCount\":";
+  responseMsg += String(peripheralCount);
+  responseMsg += ",\"timestamp\":";
+  responseMsg += String((uint32_t)I.currentTime);
+  responseMsg += '}';
+#endif
+}
+
+// Keep alarmsAck under LMK plaintext budget (~8 KB) when returned via POST_ENC.
+static constexpr uint16_t ALARMS_ACK_MAX_JSON_BYTES = 7000;
+
+static bool lookupLocalSensorLimits(int16_t snsIndex, double& limitHigh, double& limitLow) {
+#if _HAS_LOCAL_SENSORS
+  if (!Sensors.isMySensor(snsIndex)) return false;
+  const int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+  if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) return false;
+  limitHigh = Prefs.SNS_LIMIT_MAX[prefsIndex];
+  limitLow = Prefs.SNS_LIMIT_MIN[prefsIndex];
+  return true;
+#else
+  (void)snsIndex;
+  (void)limitHigh;
+  (void)limitLow;
+  return false;
+#endif
+}
+
+static void appendAlarmedSensorJson(String& out, int16_t snsIndex, ArborysSnsType* S, ArborysDevType* D) {
+  out += "{\"name\":\"";
+  out += String(S->snsName);
+  out += "\",\"mac\":\"";
+  out += MACToString(D->MAC, '\0', true);
+  out += "\",\"type\":";
+  out += String(S->snsType);
+  out += ",\"id\":";
+  out += String(S->snsID);
+  out += ",\"value\":";
+  if (isnan(S->snsValue)) out += "null";
+  else out += String(S->snsValue, 4);
+  out += ",\"limitHigh\":";
+  double limitHigh = 0;
+  double limitLow = 0;
+  if (lookupLocalSensorLimits(snsIndex, limitHigh, limitLow)) {
+    out += String(limitHigh, 4);
+    out += ",\"limitLow\":";
+    out += String(limitLow, 4);
+  } else {
+    out += "null,\"limitLow\":null";
+  }
+  out += ",\"timeLogged\":";
+  out += String((uint32_t)S->timeLogged);
+  out += ",\"expired\":";
+  out += S->expired ? "true" : "false";
+  out += ",\"flags\":";
+  out += String(S->Flags);
+  out += '}';
+}
+
+void processJSONMessage_alarmsReq(JsonObject root, String& responseMsg) {
+  // Register requester when present (same pattern as other JSON handlers).
+  processJSONMessage_addDevice(root, responseMsg);
+
+  ArborysDevType* me = Sensors.getDeviceByMAC(ESP.getEfuseMac());
+  if (!me) {
+    responseMsg = "{\"msgType\":\"alarmsAck\",\"error\":\"noSelfDevice\"}";
+    return;
+  }
+
+  const bool isHub = (_IS_SERVER_HUB != 0);
+  String sensorsJson;
+  sensorsJson.reserve(1024);
+  sensorsJson = '[';
+
+  uint16_t count = 0;
+  bool truncated = false;
+  bool first = true;
+  // Leave headroom for msgType + senderDevice + count/truncated (+ optional error) wrapper.
+  const uint16_t sensorsBudget = ALARMS_ACK_MAX_JSON_BYTES > 450
+      ? (uint16_t)(ALARMS_ACK_MAX_JSON_BYTES - 450) : 512;
+
+  for (int16_t i = 0; i < NUMSENSORS; ++i) {
+    // Hubs: all alarmed sensors in the network DB. Peripherals: own sensors only.
+    if (!isHub && !Sensors.isMySensor(i)) continue;
+    if (!Sensors.matchesMainScreenAlert(i, true)) continue;
+    ArborysSnsType* S = Sensors.snsIndexToPointer(i);
+    ArborysDevType* D = Sensors.getDeviceBySnsIndex(i);
+    if (!S || !D || !S->IsSet || !D->IsSet) continue;
+
+    const unsigned int mark = sensorsJson.length();
+    if (!first) sensorsJson += ',';
+    appendAlarmedSensorJson(sensorsJson, i, S, D);
+    if (sensorsJson.length() > sensorsBudget) {
+      sensorsJson.remove(mark);
+      truncated = true;
+      break;
+    }
+    first = false;
+    count++;
+  }
+  sensorsJson += ']';
+
+  responseMsg.reserve(sensorsJson.length() + 288);
+  responseMsg = "{\"msgType\":\"alarmsAck\",";
+  responseMsg += JSONbuilder_device(me);
+  if (!isHub) {
+    responseMsg += ",\"error\":\"notServer\"";
+  }
+  responseMsg += ",\"count\":";
+  responseMsg += String(count);
+  responseMsg += ",\"truncated\":";
+  responseMsg += truncated ? "true" : "false";
+  responseMsg += ",\"sensors\":";
+  responseMsg += sensorsJson;
+  responseMsg += '}';
+
+  SerialPrint(String("alarmsReq: returning ") + String(count) + " alarmed sensor(s)"
+      + (isHub ? "" : " (peripheral/notServer)")
+      + (truncated ? " (truncated)" : ""), true);
 }
 
 void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg) {
@@ -8775,6 +9133,105 @@ int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP) {
   } else {
     return sendUDPMessage((uint8_t*)jsonBuffer, ip, strlen(jsonBuffer), "pingMsg");
   }
+}
+
+int16_t sendMSG_networkStateReq(IPAddress& serverIP, uint16_t timeoutMs) {
+  if (serverIP == IPAddress(0, 0, 0, 0) || !wifiReadyForNetwork()) return -1;
+
+  String httpBody = "{\"msgType\":\"networkStateReq\"}";
+  JSONbuilder_encodeHTTP(httpBody);
+
+  char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", serverIP.toString().c_str());
+
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(httpBody.c_str());
+  M.timeout = timeoutMs;
+  if (!M.initPayload(768)) return -1;
+
+  if (!SendHTTPMessage(M)) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1;
+  }
+  registerHTTPSend(serverIP, "netState");
+
+  if (!M.payload || !M.payload.get() || M.payload.get()[0] != '{') return -1;
+
+  StaticJsonDocument<768> doc;
+  if (deserializeJson(doc, M.payload.get()) != DeserializationError::Ok) return -1;
+  if (strcmp(doc["msgType"] | "", "networkState") != 0) return -1;
+  if (doc["error"].is<const char*>()) return -2;
+
+  int16_t registered = 0;
+  JsonArray ips = doc["serverIPs"].as<JsonArray>();
+  if (!ips.isNull()) {
+    for (JsonVariant v : ips) {
+      IPAddress ip;
+      if (!ip.fromString(v.as<const char*>())) continue;
+      if (Sensors.addServerPlaceholder(ip) >= 0) registered++;
+    }
+  }
+  const int count = doc["serverCount"] | registered;
+  return (int16_t)count;
+}
+
+int16_t sendMSG_alarmsReq(IPAddress& serverIP, String& responseOut, uint16_t timeoutMs) {
+  responseOut = "";
+  if (serverIP == IPAddress(0, 0, 0, 0) || !wifiReadyForNetwork()) return -1;
+
+  ArborysDevType* me = Sensors.getDeviceByMAC(ESP.getEfuseMac());
+  String httpBody;
+  if (me) {
+    httpBody = "{\"msgType\":\"alarmsReq\",";
+    httpBody += JSONbuilder_device(me);
+    httpBody += '}';
+  } else {
+    httpBody = "{\"msgType\":\"alarmsReq\"}";
+  }
+  JSONbuilder_encodeHTTP(httpBody);
+
+  char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", serverIP.toString().c_str());
+
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(httpBody.c_str());
+  M.timeout = timeoutMs;
+  // Alarms payloads can be large; allocate enough for a full alarmsAck.
+  if (!M.initPayload(ALARMS_ACK_MAX_JSON_BYTES + 256)) return -1;
+
+  if (!SendHTTPMessage(M)) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1;
+  }
+  registerHTTPSend(serverIP, "alarmsReq");
+
+  if (!M.payload || !M.payload.get() || M.payload.get()[0] != '{') return -1;
+  responseOut = String(M.payload.get());
+
+  // Light parse for count / error (avoid loading the full sensor array into a JsonDocument).
+  if (responseOut.indexOf("\"msgType\":\"alarmsAck\"") < 0) {
+    responseOut = "";
+    return -3;
+  }
+  // Peripherals include error:"notServer" but still return their own alarmed sensors.
+  // Only treat other errors as hard failures.
+  const bool notServer = (responseOut.indexOf("\"error\":\"notServer\"") >= 0);
+  if (!notServer && responseOut.indexOf("\"error\"") >= 0) {
+    return -2;
+  }
+
+  int count = 0;
+  const int countKey = responseOut.indexOf("\"count\":");
+  if (countKey >= 0) {
+    count = responseOut.substring(countKey + 8).toInt();
+  }
+  return (int16_t)count;
 }
 
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP) {

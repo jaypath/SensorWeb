@@ -163,17 +163,23 @@ extern uint16_t TESTRUN;
 extern uint32_t WTHRFAIL;
 #endif
 
-// Boot: 5 blocking tries × 45 s, then non-blocking AP.
+// Boot: block at most WIFI_BOOT_MAX_MS trying STA, then non-blocking APSTA (STA retries continue there).
 // Runtime: wait WIFI_DOWN_AP_THRESHOLD_SEC before opening soft-AP for credential recovery;
 // while AP is up, retry known STA credentials every WIFI_AP_STA_RECONNECT_SEC (time-debounced
 // WiFi.begin; do not gate on WL_IDLE_STATUS). Soft-AP stays up until STA is usable.
+// Associated-without-IP (WL_CONNECTED / WL_IDLE + 0.0.0.0): wait WIFI_ZERO_IP_GRACE_MS for DHCP,
+// then disconnect+begin; reboot with RESET_WIFI after WIFI_ZERO_IP_REBOOT_AFTER attempts.
 // Peripherals (_MYTYPE < 100): also enter/stay in APSTA when no live server is known
 // (none registered, or all servers expired / stale) so users can debug via 192.168.4.1.
 // AP-mode ESP-NOW channel scans run only when credentials are missing (avoid RF hops during STA retry).
-static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 5;
-static constexpr uint16_t WIFI_BOOT_TRY_MS = 45000;
+static constexpr uint32_t WIFI_BOOT_MAX_MS = 60000;         // total boot STA budget before APSTA
+static constexpr uint16_t WIFI_BOOT_TRY_MS = 30000;         // per-attempt wait within the boot budget
+static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 2;         // used by connectWiFi() helpers (≤ boot budget)
 static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 300; // 5 minutes of continuous STA failure → enter AP+STA
 static constexpr uint16_t WIFI_AP_STA_RECONNECT_SEC = 60;   // while in AP+STA, retry known SSID this often
+static constexpr uint32_t WIFI_ZERO_IP_GRACE_MS = 25000;    // allow DHCP after associate / LOST_IP
+static constexpr uint32_t WIFI_ZERO_IP_RECOVER_INTERVAL_MS = 45000; // between forced reconnect attempts
+static constexpr uint8_t WIFI_ZERO_IP_REBOOT_AFTER = 5;     // forced reconnects before reboot
 // Prefer strongest BSSID for the configured SSID at connect time; re-evaluate periodically.
 // Chosen BSSID is never persisted — only the best AP at the moment of selection.
 static constexpr uint16_t WIFI_BSSID_OPTIMIZE_INTERVAL_SEC = 1800; // 30 minutes
@@ -192,16 +198,22 @@ enum WifiCheckMode : uint8_t {
 
 int8_t measureWifiLinkStatus();
 int8_t CheckWifiStatus(WifiCheckMode mode = WIFI_CHECK_NORMAL);
-// Single gate for HTTP/LAN/internet traffic (STA associated with router).
+// Single gate for HTTP/LAN/internet traffic (STA usable: non-zero IP + gateway).
 bool wifiReadyForNetwork();
 bool softApRunning();
 void updateRSSI(bool forceUpdate = false);
 void syncDeviceIPFromWifi();
 void startWifiConnectAsync();
+/** Recover L2-associated STA stuck without DHCP/IP (0.0.0.0). Safe to call every loop. */
+void maybeRecoverWifiWithoutIp();
 void maybeOptimizeWifiBssid();
 void enterAPStationMode();
 void exitAPStationMode();
 void maybeExitAPStationMode();
+/** millis() captured when soft-AP last started; 0 if never. */
+uint32_t getApStationEnterMillis();
+/** Soft-AP client associated and/or recent AP HTTP activity. */
+bool apStationUserActive();
 #if _MYTYPE < 100
 // Peripheral: enter/stay in APSTA when no live server (for AP debug portal).
 void servicePeripheralServerApMode();
@@ -314,6 +326,8 @@ void registerUDPMessage(IPAddress ip, const char* messageType);
 void registerUDPSend(IPAddress ip, const char* messageType);
 void registerHTTPSend(IPAddress ip, const char* messageType);
 void registerHTTPMessage(const char* messageType);
+/** True when the current JSON handler should put its reply in responseMsg (HTTP/HTTPS /POST). */
+bool isJsonInlineHttpReply();
 
 
 //sending data
@@ -332,6 +346,12 @@ bool SendData(int16_t snsIndex, bool forceSend=false, int16_t sendToDeviceIndex=
 
 //send json messages
 int16_t sendMSG_ping(IPAddress& ip, bool viaHTTP);
+/** HTTP networkStateReq to a hub; registers unknown server IPs as placeholders. Returns server count parsed, or <0 on error. */
+int16_t sendMSG_networkStateReq(IPAddress& serverIP, uint16_t timeoutMs = 5000);
+/** Blocking HTTP alarmsReq. Fills responseOut with alarmsAck JSON.
+ *  Hubs return network alarms; peripherals return own alarms plus error:"notServer".
+ *  Returns alarm count (>=0), or -1 network/http fail, -2 hard error, -3 parse fail. */
+int16_t sendMSG_alarmsReq(IPAddress& serverIP, String& responseOut, uint16_t timeoutMs = 5000);
 // Data request: UDP is fire-and-forget; HTTP/HTTPS is queued to a worker (non-blocking).
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
 int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
@@ -363,6 +383,8 @@ void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
 void processDeferredDataRequest();
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
 void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg);
+void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg);
+void processJSONMessage_alarmsReq(JsonObject root, String& responseMsg);
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
 static void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg);
 

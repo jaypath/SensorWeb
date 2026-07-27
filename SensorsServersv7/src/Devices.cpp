@@ -43,6 +43,34 @@ static bool shouldAcceptRemoteSensor(uint64_t deviceMAC) {
 #endif
 }
 
+bool Devices_Sensors::isServerPlaceholderMac(uint64_t MAC) {
+    return ((MAC >> 40) & 0xFFULL) == 0x02ULL;
+}
+
+uint64_t Devices_Sensors::serverPlaceholderMac(IPAddress IP) {
+    return (0x02ULL << 40) | (uint32_t)IP;
+}
+
+int16_t Devices_Sensors::addServerPlaceholder(IPAddress IP) {
+    if (IP == IPAddress(0, 0, 0, 0)) return -1;
+    const int16_t existingIp = findDevice(IP);
+    if (existingIp >= 0) {
+        ArborysDevType* d = getDeviceByDevIndex(existingIp);
+        if (d && d->IsSet && d->devType >= 100) {
+            // Known server (real or placeholder) already owns this IP — do not overwrite.
+            return existingIp;
+        }
+    }
+#ifdef _USELOWPOWER
+    // Reserve one slot for the local device; only keep up to NUMDEVICES-1 servers.
+    const uint8_t maxServers = (NUMDEVICES > 1) ? (uint8_t)(NUMDEVICES - 1) : 1;
+    if (countServers() >= maxServers) return -1;
+#endif
+    char name[33];
+    snprintf(name, sizeof(name), "srv-%u.%u.%u.%u", IP[0], IP[1], IP[2], IP[3]);
+    return addDevice(serverPlaceholderMac(IP), IP, name, 0, 0, 100);
+}
+
 #if !_IS_SERVER_HUB
 static void enforceStoragePolicy(Devices_Sensors& sensors) {
     const uint64_t myMac = (uint64_t)ESP.getEfuseMac();
@@ -123,6 +151,26 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
     if (!shouldAcceptRemoteDevice(MAC, devType, existing)) {
         return -1;
     }
+
+    // Self-registering hub may upgrade an IP-only networkState placeholder in place.
+    if (existingIndex < 0 && IP != IPAddress(0, 0, 0, 0) && !isServerPlaceholderMac(MAC)) {
+        const int16_t byIp = findDevice(IP);
+        if (byIp >= 0 && isServerPlaceholderMac(devices[byIp].MAC)
+            && (devType >= 100 || devices[byIp].devType >= 100)) {
+            existingIndex = byIp;
+            devices[byIp].MAC = MAC;
+            existing = &devices[byIp];
+        }
+    }
+    // Do not let a placeholder overwrite a real server already known at this IP.
+    if (existingIndex < 0 && isServerPlaceholderMac(MAC) && IP != IPAddress(0, 0, 0, 0)) {
+        const int16_t byIp = findDevice(IP);
+        if (byIp >= 0 && devices[byIp].IsSet && devices[byIp].devType >= 100
+            && !isServerPlaceholderMac(devices[byIp].MAC)) {
+            return byIp;
+        }
+    }
+
     if (existingIndex >= 0) {
         //check if existing device has all the same parameters as the new device
         ArborysDevType* device = &devices[existingIndex];

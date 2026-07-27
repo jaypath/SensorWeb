@@ -26,6 +26,15 @@ uint16_t computeBufferCRC(const uint8_t* data, size_t len);
 bool checkAndApplySDFirmwareOnBoot();
 void peripheralFirmwareHourlyCheck();
 void processChunkFirmwareTick();
+bool isFirmwareChunkSessionActive();
+/**
+ * HTTP FirmwareRequest to one server. Blocks for the inline yes/no reply.
+ * Returns 1 = FirmwareAvailable (and starts chunk download if startDownload),
+ *         0 = FirmwareUnavailable, -1 = transport/parse error.
+ */
+int8_t sendMSG_FirmwareRequest(IPAddress& serverIP, bool startDownload = true, uint16_t timeoutMs = 5000);
+/** Poll known servers over HTTP until yes, all say no, or none reachable. Same return codes. */
+int8_t checkFirmwareFromServersHTTP(bool startDownload = true, uint16_t timeoutMs = 5000);
 void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg);
 void processJSONMessage_FirmwareAvailable(JsonObject root, String& responseMsg);
 void processJSONMessage_FirmwareUnavailable(JsonObject root, String& responseMsg);

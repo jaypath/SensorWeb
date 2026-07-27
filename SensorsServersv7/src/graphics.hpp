@@ -334,8 +334,8 @@ extern LGFX tft;
     byte buttonInteriorMargin=2;
   
     uint8_t IconSet=0; //using this icon set
-    uint8_t StatusFlags=0; //bit 0 - sensors currently flagged (ack for sensor flags), bit 1 = weather alert flag ack. These are set and stay until main flag is cleared.
-    uint8_t StatusFlagsChanged=0; //bit 0 - sensors changed, bit 1 = weather alert flag changed, bit 2 = HVAC changed. If any action is taken based on these, they will be cleared.
+    uint8_t StatusFlags=0; //bit 0 = I.isFlagged (FLAG), bit 1 = weather events, bit 2 = alarmed sensors (ALARM), bit 3 = critical expired (EXP)
+    uint8_t StatusFlagsChanged=0; //same bit layout as StatusFlags; cleared after header/info consume the change
 
     // Acute right-header banner (HeaderInfoAlert). Non-empty text overrides IP/dawn cycling until cleared or TTL expires.
     char headerInfoAlert[HEADER_INFO_ALERT_MAXLEN] = {0};

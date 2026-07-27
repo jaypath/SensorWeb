@@ -1492,7 +1492,8 @@ void fcnDrawMainScreen(int16_t index) {
     //statusflags and statusflagschanged have the following bits:
     //bit 0 = global sensor flag (I.isFlagged). This is used for the header
     //bit 1 = weather event flag (I.WeatherEventFlags). This is used for the header
-    //bit 2 = alarm flag (alarmcount is >0)
+    //bit 2 = alarmed/flagged sensors (header ALARM)
+    //bit 3 = critical expired sensors (header EXP when no bit 2)
 
     if  (I.isFlagged>0) {
       if (isBit(GRAPHICS.StatusFlags,0)==false) setBit(GRAPHICS.StatusFlagsChanged,0); //set bit 0 to 1 if global sensor flag is set
@@ -1513,13 +1514,23 @@ void fcnDrawMainScreen(int16_t index) {
     }
 
     GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
-    if (GRAPHICS.alarmCount>0) {
-      if (isBit(GRAPHICS.StatusFlags,2)==false)         setBit(GRAPHICS.StatusFlagsChanged,2); //set bit 2 to 1 if alarm count is >0
-      setBit(GRAPHICS.StatusFlags,2); //set bit 2 to 1 if alarm count is >0
+    uint16_t flaggedAlerts = Sensors.countMainScreenFlaggedAlerts(true);
+    uint16_t expiredAlerts = Sensors.countMainScreenCriticalExpiredAlerts(true);
+    if (flaggedAlerts>0) {
+      if (isBit(GRAPHICS.StatusFlags,2)==false) setBit(GRAPHICS.StatusFlagsChanged,2);
+      setBit(GRAPHICS.StatusFlags,2);
     }
     else {
-      if (isBit(GRAPHICS.StatusFlags,2)==true) setBit(GRAPHICS.StatusFlagsChanged,2); //set bit 2 to 1 if alarm count is >0
-      clearBit(GRAPHICS.StatusFlags,2); //clear bit 2 if alarm count is not >0
+      if (isBit(GRAPHICS.StatusFlags,2)==true) setBit(GRAPHICS.StatusFlagsChanged,2);
+      clearBit(GRAPHICS.StatusFlags,2);
+    }
+    if (expiredAlerts>0) {
+      if (isBit(GRAPHICS.StatusFlags,3)==false) setBit(GRAPHICS.StatusFlagsChanged,3);
+      setBit(GRAPHICS.StatusFlags,3);
+    }
+    else {
+      if (isBit(GRAPHICS.StatusFlags,3)==true) setBit(GRAPHICS.StatusFlagsChanged,3);
+      clearBit(GRAPHICS.StatusFlags,3);
     }
   }
 
@@ -1600,14 +1611,19 @@ void fcnDrawHeader(int16_t index) {
   tft.drawString(st,x,y);
   x += tft.textWidth(st)+10;
 
-  // Shared trailing slot (within 0-180): ALARM/FLAG takes priority over HVAC
+  // Shared trailing slot (within 0-180): ALARM / EXP / FLAG takes priority over HVAC
   clearBit(HeaderFlags,1);
   clearBit(HeaderFlags,2);
   FH = setFont(2);
   tft.setTextFont(2);
-  if (isBit(GRAPHICS.StatusFlags,2)) { // alarm flag
+  if (isBit(GRAPHICS.StatusFlags,2)) { // alarmed/flagged sensors
     tft.setTextColor(TFT_BLACK,TFT_RED);
     tft.drawString("ALARM",x,y+2);
+    setBit(HeaderFlags,1);
+    tft.setTextColor(FG_COLOR,BG_COLOR);
+  } else if (isBit(GRAPHICS.StatusFlags,3)) { // expired only (no alarmed)
+    tft.setTextColor(TFT_BLACK,TFT_LIGHTGREY);
+    tft.drawString("EXP",x,y+2);
     setBit(HeaderFlags,1);
     tft.setTextColor(FG_COLOR,BG_COLOR);
   } else if (isBit(GRAPHICS.StatusFlags,0)) {
@@ -2632,12 +2648,21 @@ void fcnDrawDailyDetailScreen(int16_t index) {
     }
 
     GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
-    if (GRAPHICS.alarmCount > 0) {
+    uint16_t flaggedAlerts = Sensors.countMainScreenFlaggedAlerts(true);
+    uint16_t expiredAlerts = Sensors.countMainScreenCriticalExpiredAlerts(true);
+    if (flaggedAlerts > 0) {
       if (isBit(GRAPHICS.StatusFlags, 2) == false) setBit(GRAPHICS.StatusFlagsChanged, 2);
       setBit(GRAPHICS.StatusFlags, 2);
     } else {
       if (isBit(GRAPHICS.StatusFlags, 2) == true) setBit(GRAPHICS.StatusFlagsChanged, 2);
       clearBit(GRAPHICS.StatusFlags, 2);
+    }
+    if (expiredAlerts > 0) {
+      if (isBit(GRAPHICS.StatusFlags, 3) == false) setBit(GRAPHICS.StatusFlagsChanged, 3);
+      setBit(GRAPHICS.StatusFlags, 3);
+    } else {
+      if (isBit(GRAPHICS.StatusFlags, 3) == true) setBit(GRAPHICS.StatusFlagsChanged, 3);
+      clearBit(GRAPHICS.StatusFlags, 3);
     }
   }
 

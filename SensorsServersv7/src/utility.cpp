@@ -134,6 +134,9 @@ void systemHousekeeping(bool fullHousekeeping) {
     serviceAPStationMode();
   }
 
+  // Catch L2-associated / LOST_IP stuck at 0.0.0.0 (auto-reconnect will not help).
+  maybeRecoverWifiWithoutIp();
+
   if (fullHousekeeping) {
     I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex(); //update my device index
 
