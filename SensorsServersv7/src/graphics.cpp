@@ -1324,6 +1324,7 @@ void fcnTouchDailyDetailNav(int16_t index) {
   }
   if (dayOffset > 0 && GRAPHICS.touchX >= btnW && GRAPHICS.touchX < 2 * btnW) {
     GRAPHICS.SCREEN_DATA[0].Local_Code = dayOffset - 1;
+    GRAPHICS.SubScreen_Next = dayOffset - 1;
     GRAPHICS.SubScreen_Now = -1;
     GRAPHICS.zeroChildTimers();
     GRAPHICS.GRAPHICS_TIMERS.Timers[0] = GRAPHICS.SCREEN_DATA[0].Timer_RESET;
@@ -1332,6 +1333,7 @@ void fcnTouchDailyDetailNav(int16_t index) {
   }
   if (dayOffset < NUMWTHRDAYS - 1 && GRAPHICS.touchX >= 2 * btnW && GRAPHICS.touchX < 3 * btnW) {
     GRAPHICS.SCREEN_DATA[0].Local_Code = dayOffset + 1;
+    GRAPHICS.SubScreen_Next = dayOffset + 1;
     GRAPHICS.SubScreen_Now = -1;
     GRAPHICS.zeroChildTimers();
     GRAPHICS.GRAPHICS_TIMERS.Timers[0] = GRAPHICS.SCREEN_DATA[0].Timer_RESET;
@@ -2670,6 +2672,7 @@ void fcnDrawDailyDetailScreen(int16_t index) {
     GRAPHICS.zeroChildTimers();
   }
 
+  // Keep SubScreen_Next/Now equal (day index) so fcnDrawScreen's shared 30s timeout can return to MAIN.
   if (GRAPHICS.SubScreen_Now != (int16_t)dayOffset || GRAPHICS.SCREEN_DATA[1].drawFunction == nullptr) {
     tft.fillRect(GRAPHICS.SCREEN_DATA[0].X, GRAPHICS.SCREEN_DATA[0].Y,
       GRAPHICS.SCREEN_DATA[0].W, GRAPHICS.SCREEN_DATA[0].H, BG_COLOR);
@@ -2680,6 +2683,7 @@ void fcnDrawDailyDetailScreen(int16_t index) {
     GRAPHICS.SCREEN_DATA[5].loadScreenElements(&fcnDrawDailyDetailPlots, 0, 218, 320, 200, SCREEN_NONE, dayOffset, 5, 30, 5, nullptr);
     GRAPHICS.SCREEN_DATA[6].loadScreenElements(&fcnDrawDailyDetailNavBar, 0, 419, 320, 60, SCREEN_NONE, dayOffset, 6, 30, 6, &fcnTouchDailyDetailNav);
     GRAPHICS.zeroChildTimers();
+    GRAPHICS.SubScreen_Next = dayOffset;
     GRAPHICS.SubScreen_Now = dayOffset;
     GRAPHICS.Screen_Now = SCREEN_DAILY;
   }
