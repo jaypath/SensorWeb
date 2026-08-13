@@ -3335,9 +3335,8 @@ static String formatArborysDeviceFirmware(const ArborysDevType* device) {
   return String(buf);
 }
 
-// Marks: * if any sensor is flagged (Flags bit0); (exp) if any sensor is expired.
-// On remotes, hub OverrideFlags suppress marks: bit1 (Monitored) suppresses *,
-// bit7 (Critical) suppresses (exp). Local (this device) sensors ignore OverrideFlags.
+// Marks: * if any sensor is flagged (Flags bit0 usable); (exp) if expired and critical bit usable.
+// Remote OverrideFlags ignore the matching Flags bit; local sensors never use OverrideFlags.
 static void collectDeviceViewerNameMarks(bool deviceFlagged[NUMDEVICES], bool deviceExpired[NUMDEVICES]) {
   for (int16_t di = 0; di < NUMDEVICES; di++) {
     deviceFlagged[di] = false;
@@ -3348,13 +3347,12 @@ static void collectDeviceViewerNameMarks(bool deviceFlagged[NUMDEVICES], bool de
     if (!sensor || !sensor->IsSet) continue;
     if (sensor->deviceIndex < 0 || sensor->deviceIndex >= NUMDEVICES) continue;
 
-    const bool useOverrideFlags = (sensor->deviceIndex != I.MY_DEVICE_INDEX);
-    const uint8_t overrideFlags = useOverrideFlags ? sensor->OverrideFlags : 0;
-
-    if (bitRead(sensor->Flags, 0) && !(useOverrideFlags && bitRead(overrideFlags, 1))) {
+    // * only when flagged and still monitored-or-critical for alert relevance
+    if (Sensors.isSensorFlagBitUsed(si, 0) &&
+        (Sensors.isSensorFlagBitUsed(si, 1) || Sensors.isSensorFlagBitUsed(si, 7))) {
       deviceFlagged[sensor->deviceIndex] = true;
     }
-    if (sensor->expired && !(useOverrideFlags && bitRead(overrideFlags, 7))) {
+    if (sensor->expired && Sensors.isSensorFlagBitUsed(si, 7)) {
       deviceExpired[sensor->deviceIndex] = true;
     }
   }
@@ -3550,7 +3548,8 @@ static void appendSensorTableOverrideConfigCell(int16_t j, ArborysSnsType* senso
   WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">OverrideFlags:</label>";
   WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
   uint8_t currentOverrideFlags = sensor->OverrideFlags;
-  const char* overrideFlagNames[] = {"Flag Status", "Monitored", "Outside", "Derived/Calc", "Predictive", "High/Low", "Changed", "Critical"};
+  // Same RMB layout as Flags; checked bit = ignore that Flags bit for remotes
+  const char* overrideFlagNames[] = {"Flagged", "Monitored", "LowPower", "Derived/Calc", "Outside", "High/Low", "Changed", "Critical"};
   for (int i = 0; i < 8; i++) {
     WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
     WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"override_flag_bit" + String(i) + "\" value=\"1\"";
@@ -4486,8 +4485,8 @@ void handleSENSOR_UPDATE_POST() {
     Prefs.SNS_INTERVAL_SEND[prefsIndex] = server.arg("intervalSend").toInt();
   }
   
-  // Update flags - reconstruct from individual bits
-  uint16_t flags = 0;
+  // Update flags - reconstruct from individual bits (preserve bits 8+ e.g. auto-zero)
+  uint16_t flags = Prefs.SNS_FLAGS[prefsIndex] & 0xFF00;
   for (int i = 0; i < 8; i++) {
     String flagName = "flag_bit" + String(i);
     if (server.hasArg(flagName)) {
@@ -4597,7 +4596,8 @@ void handleSensorSetup() {
   if (prefsIndex < 0) {
     WEBHTML = WEBHTML + "<p>Calibration unavailable: this sensor has no Prefs storage slot.</p>";
   } else {
-    bool isSoil = (snsType == 33 || snsType == 3);
+    bool isSoil = (snsType == 33 || snsType == 3 || snsType == 34 || snsType == 35);
+    bool usesScaling = sensorUsesScaling(snsType);
     if (isSoil) {
       WEBHTML = WEBHTML + "<p>Use the live measurement below to take measurements in bone dry soil and fully saturated soil. Enter both of those values below. Alternatively (though less accurate), use air (dry) and water (wet) for measurements. If you enter the same value for both, the calibration will be ignored.</p>";
     } else {
@@ -4641,6 +4641,16 @@ void handleSensorSetup() {
     WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\"><label style=\"display: inline-block; width: 130px;\">" + maxLabel + "</label>";
     WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" id=\"maxval\" name=\"maxval\" required style=\"width: 120px; padding: 4px;\" value=\"" + calibMaxStr + "\">";
     WEBHTML = WEBHTML + "<button type=\"button\" onclick=\"useLive('maxval')\" style=\"margin-left: 6px; padding: 4px 10px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;\">Use live</button></div>";
+    if (usesScaling) {
+      bool autoZero = bitRead(Prefs.SNS_FLAGS[prefsIndex], SNS_FLAG_BIT_AUTOZERO);
+      WEBHTML = WEBHTML + "<div style=\"margin-bottom: 10px;\">";
+      WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 8px;\">";
+      WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"autozero\" value=\"1\"";
+      if (autoZero) WEBHTML = WEBHTML + " checked";
+      WEBHTML = WEBHTML + ">";
+      WEBHTML = WEBHTML + "<span>Auto-zero (adjust calibration min so scaled readings never go below 0)</span>";
+      WEBHTML = WEBHTML + "</label></div>";
+    }
     WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Apply Calibration</button>";
     WEBHTML = WEBHTML + "</form>";
   }
@@ -4679,6 +4689,13 @@ void handleSNS_CALIBRATION() {
   if (Prefs.SNS_CALIB_MAX[prefsIndex] != maxval) {
     Prefs.SNS_CALIB_MAX[prefsIndex] = maxval;
     Prefs.isUpToDate = false;
+  }
+  if (sensorUsesScaling(snsType)) {
+    bool autoZero = server.hasArg("autozero");
+    if ((bool)bitRead(Prefs.SNS_FLAGS[prefsIndex], SNS_FLAG_BIT_AUTOZERO) != autoZero) {
+      bitWrite(Prefs.SNS_FLAGS[prefsIndex], SNS_FLAG_BIT_AUTOZERO, autoZero ? 1 : 0);
+      Prefs.isUpToDate = false;
+    }
   }
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Calibration applied. Redirecting...");
@@ -5136,6 +5153,7 @@ static void appendSdCardDirectoryManageForms(const String& currentPath) {
   if (firmwareDir) {
     WEBHTML = WEBHTML + "<p><strong>/Firmware</strong> accepts firmware uploads and file deletes. "
       "Use <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (version after the last hyphen). "
+      "Uploading a newer version automatically deletes older binaries for that device. "
       "Delete legacy subfolders below if migrating from the old per-device layout.</p>";
     WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\" onsubmit=\"return confirm('Delete this directory and ALL contents?');\">";
     WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"rmdir\">";
@@ -5170,7 +5188,8 @@ static void appendSdCardUploadForm(const String& currentPath) {
   WEBHTML = WEBHTML + "<h3>Upload File or Folder</h3>";
   WEBHTML = WEBHTML + "<p>Upload to <strong>" + currentPath + "</strong>. Existing files are replaced. Folders may contain up to <strong>50 files</strong> (uploaded one at a time). Dropping a file or folder starts upload immediately.</p>";
   if (currentPath.equalsIgnoreCase("/Firmware")) {
-    WEBHTML = WEBHTML + "<p>Firmware files: name each binary <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (e.g. <code>PleasantB-9.0.0.bin</code>). The version is the segment after the <strong>last</strong> hyphen.</p>";
+    WEBHTML = WEBHTML + "<p>Firmware files: name each binary <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (e.g. <code>PleasantB-9.0.0.bin</code>). The version is the segment after the <strong>last</strong> hyphen. "
+      "A successful upload of a newer version deletes older <code>&lt;devicename&gt;-*.bin</code> files for that device.</p>";
   }
   WEBHTML = WEBHTML + "<form id=\"sd-upload-form\" method=\"POST\" action=\"/SDCARD_UPLOAD?path=" + urlEncode(currentPath) + "\" enctype=\"multipart/form-data\">";
   WEBHTML = WEBHTML + "<div id=\"sd-drop-zone\" style=\"border: 2px dashed #999; padding: 24px; margin: 10px 0; text-align: center; cursor: pointer; background-color: #fafafa;\">";
@@ -5409,6 +5428,8 @@ void handleSDCARD_UPLOAD() {
     logSdUploadError(targetPath, uploadError);
   } else if (bytesWritten == 0) {
     storeError("SD upload failed: No file received", ERROR_SD_FILEWRITE, true);
+  } else {
+    pruneOlderSDFirmwareAfterUpload(targetPath.c_str());
   }
 
   if (ajax) {

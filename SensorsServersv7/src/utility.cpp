@@ -375,6 +375,22 @@ bool initSystem() {
         char oldBuf[16], newBuf[16];
         Prefs.FIRMWARE.toChar(oldBuf, sizeof(oldBuf));
         buildFw.toChar(newBuf, sizeof(newBuf));
+        #if _HAS_LOCAL_SENSORS
+        // 9.4.22 introduced scaled-sensor auto-zero; enable it by default for soil sensors on upgrade.
+        // Skip uninitialized slots so setupSensors() can still apply full defaults on a wiped Prefs.
+        {
+          const uint8_t autoZeroIntroduced[3] = {9, 4, 22};
+          if (Prefs.FIRMWARE.compare(autoZeroIntroduced) < 0) {
+            byte sensortypes[] = _SENSORTYPES;
+            for (byte i = 0; i < _SENSORNUM; i++) {
+              if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) continue;
+              if (sensorUsesScaling(sensortypes[i])) {
+                bitWrite(Prefs.SNS_FLAGS[i], SNS_FLAG_BIT_AUTOZERO, 1);
+              }
+            }
+          }
+        }
+        #endif
         Prefs.FIRMWARE = buildFw;
         int8_t saveStatus = bootSecure.setPrefs(true);
         if (saveStatus > 0) {

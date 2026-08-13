@@ -9,7 +9,8 @@ struct STRUCT_CORE;
 
 // Constants
 
-//sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=outside, RMB3-derived/calculated  value, RMB4 =  predictive value, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is monitored - alert if no updates received within time limit specified)
+//sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3=derived/calculated, RMB4 = Outside, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = critical (alert if expires)
+// OverrideFlags: same bit layout; set bit = hub ignores that Flags bit for remotes (local sensors never use OverrideFlags)
 //device types
 /*
 
@@ -92,7 +93,7 @@ struct ArborysSnsType {
     #endif
     int16_t snsPin = -9999;    // local sensor pin; -9999 = none / remote sensor
     int16_t powerPin = -9999;
-    uint8_t OverrideFlags = 0; // hub override for remote sensor flags
+    uint8_t OverrideFlags = 0; // hub ignore-bits for remote Flags (same RMB layout); local sensors unused
     // Alarm band (hubs store remotes'; peripherals also mirror Prefs here for JSON send).
     // NaN = not set / unknown.
     float limitHigh = NAN;
@@ -141,6 +142,8 @@ public:
     // True if at least one non-expired server (devType>=100) has been heard from recently.
     // Also refreshes server.expired flags. Used by peripherals to keep APSTA for debug access.
     bool hasLiveServer(time_t currentTime = 0);
+    // True if Flags bit is set and (for remotes) OverrideFlags does not ignore that bit.
+    bool isSensorFlagBitUsed(int16_t index, uint8_t bit, bool useOverrideFlags = true);
     bool isOutsideSensor(int16_t index);
     bool hasOutsideSensors(String parameter="all");
     int16_t findOutsideSensorByType(String parameter="all");

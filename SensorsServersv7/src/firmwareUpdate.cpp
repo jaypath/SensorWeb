@@ -230,7 +230,8 @@ bool findHighestSDFirmwareForDevice(const char* deviceName, FirmwareVersion& ver
             }
 
             char candidatePath[96];
-            snprintf(candidatePath, sizeof(candidatePath), "%s/%s", kFirmwareDir, entry.name());
+            const char* base = firmwareBinBaseName(entry.name());
+            snprintf(candidatePath, sizeof(candidatePath), "%s/%s", kFirmwareDir, base ? base : entry.name());
             if (!sdFirmwareFileNameMatchesEmbedded(candidatePath, ver)) {
                 entry.close();
                 entry = dir.openNextFile();
@@ -272,6 +273,94 @@ bool findHighestSDFirmwareForDevice(const char* deviceName, FirmwareVersion& ver
     }
 
     return true;
+    #endif
+}
+
+uint8_t deleteOlderSDFirmwareForDevice(const char* deviceName, const FirmwareVersion& newerVersion) {
+    #ifndef _USESDCARD
+    (void)deviceName;
+    (void)newerVersion;
+    return 0;
+    #else
+    if (!deviceName || !deviceName[0] || newerVersion.isUnset()) return 0;
+
+    static const char* kFirmwareDir = "/Firmware";
+    if (!SD.exists(kFirmwareDir)) return 0;
+
+    File dir = SD.open(kFirmwareDir);
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return 0;
+    }
+
+    // Collect first so FAT readdir is not disturbed by deletes mid-iteration.
+    static const uint8_t kMaxDelete = 24;
+    static char toDelete[kMaxDelete][96];
+    uint8_t deleteCount = 0;
+
+    File entry = dir.openNextFile();
+    while (entry) {
+        if (!entry.isDirectory() && deleteCount < kMaxDelete) {
+            char parsedDevice[64];
+            FirmwareVersion ver;
+            if (parseFirmwareDeviceAndVersionFromBinName(entry.name(), parsedDevice, sizeof(parsedDevice), ver)
+                && strcmp(parsedDevice, deviceName) == 0
+                && ver.compare(newerVersion) < 0) {
+                const char* base = firmwareBinBaseName(entry.name());
+                if (base && base[0]) {
+                    int n = snprintf(toDelete[deleteCount], sizeof(toDelete[0]), "%s/%s", kFirmwareDir, base);
+                    if (n > 0 && (size_t)n < sizeof(toDelete[0])) deleteCount++;
+                }
+            }
+        }
+        entry.close();
+        entry = dir.openNextFile();
+        esp_task_wdt_reset();
+    }
+    dir.close();
+
+    uint8_t removed = 0;
+    for (uint8_t i = 0; i < deleteCount; i++) {
+        if (SD.remove(toDelete[i])) {
+            removed++;
+            SerialPrint("SD firmware: deleted older " + String(toDelete[i]), true);
+        } else {
+            SerialPrint("SD firmware: failed to delete older " + String(toDelete[i]), true);
+        }
+        esp_task_wdt_reset();
+    }
+
+    if (removed > 0) {
+        char verBuf[16];
+        newerVersion.toChar(verBuf, sizeof(verBuf));
+        SerialPrint("SD firmware: pruned " + String(removed) + " older file(s) for " + String(deviceName)
+            + " after " + String(verBuf), true);
+    }
+    return removed;
+    #endif
+}
+
+uint8_t pruneOlderSDFirmwareAfterUpload(const char* uploadedPath) {
+    #ifndef _USESDCARD
+    (void)uploadedPath;
+    return 0;
+    #else
+    if (!uploadedPath || uploadedPath[0] != '/') return 0;
+
+    const char* slash = strrchr(uploadedPath, '/');
+    if (!slash || slash == uploadedPath) return 0;
+    size_t parentLen = (size_t)(slash - uploadedPath);
+    // Parent must be "/Firmware" (case-insensitive)
+    if (parentLen != 9 || strncasecmp(uploadedPath, "/Firmware", 9) != 0) return 0;
+
+    char deviceName[64];
+    FirmwareVersion version;
+    if (!parseFirmwareDeviceAndVersionFromBinName(uploadedPath, deviceName, sizeof(deviceName), version)) {
+        return 0;
+    }
+    if (version.isUnset()) return 0;
+
+    return deleteOlderSDFirmwareForDevice(deviceName, version);
     #endif
 }
 

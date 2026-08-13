@@ -659,11 +659,18 @@ int16_t Devices_Sensors::findSensorByPointer(ArborysSnsType* P) {
     return -1;
 }
 
+bool Devices_Sensors::isSensorFlagBitUsed(int16_t index, uint8_t bit, bool useOverrideFlags) {
+    // Flags bit is usable only when set on the sensor AND (for remotes) not ignored via OverrideFlags.
+    if (index < 0 || index >= NUMSENSORS || !sensors[index].IsSet || bit > 7) return false;
+    if (!bitRead(sensors[index].Flags, bit)) return false;
+    if (!useOverrideFlags) return true;
+    if (sensors[index].deviceIndex == I.MY_DEVICE_INDEX) return true; // local: OverrideFlags unused
+    return !bitRead(sensors[index].OverrideFlags, bit);
+}
+
 bool Devices_Sensors::isOutsideSensor(int16_t index) {
-    if (index >= 0 && index < NUMSENSORS && sensors[index].IsSet) {
-        return bitRead(sensors[index].Flags,4);
-    }
-    return false;
+    // Outside = Flags bit4, unless hub OverrideFlags bit4 ignores it for remotes
+    return isSensorFlagBitUsed(index, 4);
 }
 
 
@@ -703,7 +710,7 @@ uint8_t Devices_Sensors::returnBatteryPercentage(ArborysSnsType* P) {
   
 
 double Devices_Sensors::getAverageOutsideParameterValue(String parameter, uint32_t MoreRecentThan) {
-    //outside sensors are those with bit 4 set in the flags
+    // Outside = Flags bit4 usable (not ignored by OverrideFlags); must also be monitored (bit1 usable).
     //return -127 if no monitored outside sensors of that type, or return the average value if there are any. This its in an int8_t range.
     //parameter can be "temperature", "humidity", or "pressure", etc
     //optionally specify the recency of the last update, in unixtime seconds.
@@ -717,8 +724,8 @@ double Devices_Sensors::getAverageOutsideParameterValue(String parameter, uint32
     for (int16_t i = 0; i < NUMSENSORS ; i++) {
         if (!sensors[i].IsSet) continue;
 
-        if (bitRead(sensors[i].Flags,4) == 0) continue; //not an outside sensor
-        if (bitRead(sensors[i].Flags,1) == 0) continue; //not monitored
+        if (!isSensorFlagBitUsed(i, 4)) continue; // not outside (or Outside overridden off)
+        if (!isSensorFlagBitUsed(i, 1)) continue; // not monitored (or Monitored overridden off)
         if (isSensorOfType(i,parameter) == false) continue; //not the type I want
         
         // Check time filter
@@ -818,7 +825,7 @@ int16_t Devices_Sensors::findOldestSensor() {
 int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType, bool useOverrideFlags) { 
 //checks if a sensor is flagged based on the criteria used by countFlagged
 //order of operations:
-//0. check if the sensor has OverrideFlags set, and if so, use the OverrideFlags instead of the sensor's Flags
+//0. for remotes, OverrideFlags bits clear the corresponding Flags bits (ignored / not usable)
 //1. check if the sensor is set
 //2. check if the sensor is of the specified type
 //3. check if the sensor is expired (either critical or any, depending on the criteria)
@@ -827,14 +834,13 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 //here snsIndex is the index of the sensor to check, and snsType is an explicit declaration of the sesnor type if optionalsnsflags is set to 14
 //optionalsnsflags is a bitmask of the sensor types to count: 0 = all , 1 = temp, 2 = humidity, 3 = soil, 4 = pressure, 5 = HVAC, 6 = server, 7 = dist, 8 = binary, 9 = leak, 10 = battery, 11 = human, 12 = network, 14 = specified sensor type, 15 = EXCLUDE THE INDICATED SENSOR TYPES (note that you cannot have both bit 0 and exclude... ALL or NONE!)
 
-byte overrideFlags = 0;
-if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
-    useOverrideFlags = false;
-} else {
-    overrideFlags = sensors[snsIndex].OverrideFlags;
-}
-
     if (!sensors[snsIndex].IsSet) return -100; //no sensor
+
+    // Effective flags: remotes drop any bit the hub OverrideFlags ignores; local sensors use Flags as-is.
+    uint8_t effectiveFlags = sensors[snsIndex].Flags;
+    if (useOverrideFlags && sensors[snsIndex].deviceIndex != I.MY_DEVICE_INDEX) {
+        effectiveFlags = (uint8_t)(sensors[snsIndex].Flags & ~sensors[snsIndex].OverrideFlags);
+    }
 
     bool isgood=true;
 
@@ -875,25 +881,21 @@ if (sensors[snsIndex].deviceIndex == I.MY_DEVICE_INDEX) {
 
     if (isgood == false) return 0; //sensor not matching the criteria
 
-    //now check the flags and expiration rules
-    //is this expired?
-    if ((countCriticalExpired && bitRead(sensors[snsIndex].Flags,7) && sensors[snsIndex].expired)) {
-        if (useOverrideFlags && bitRead(overrideFlags,7) == 1) return -2; //critical expired but override flags set to not critical
-        else return 2; //critical expired and override flags set to critical
+    //now check the flags and expiration rules (using effectiveFlags so OverrideFlags gate each bit)
+    if (countCriticalExpired && bitRead(effectiveFlags, 7) && sensors[snsIndex].expired) {
+        return 2; //critical expired
     }
 
     //for regular expired, the sensor must be monitored 
-    if (countAnyExpired && sensors[snsIndex].expired && bitRead(sensors[snsIndex].Flags,1) == 1) {
-        if (useOverrideFlags && bitRead(overrideFlags,1) == 1) return -3; //any expired but override flags set to not monitored
-        else return 3; //any expired and override flags set to monitored
+    if (countAnyExpired && sensors[snsIndex].expired && bitRead(effectiveFlags, 1)) {
+        return 3; //any expired and monitored
     }
 
     // Check time filter
     if (MoreRecentThan > 0 && sensors[snsIndex].timeRead < MoreRecentThan) return -4; //not recent enough
 
-    if ((sensors[snsIndex].Flags & flagsthatmatter) == flagsettings) {
-        if (useOverrideFlags && (overrideFlags & flagsthatmatter) == flagsettings) return -1; //flagged but override flags set to not flagged
-        else return 1; //flagged and override flags set to flagged
+    if ((effectiveFlags & flagsthatmatter) == flagsettings) {
+        return 1; // matches flag criteria
     }
 
 
@@ -1333,6 +1335,7 @@ ArborysDevType* Devices_Sensors::getNextExpiredDevice(int16_t& startIndex) {
 
 void Devices_Sensors::checkDeviceFlags() {
     //check all devices and sensors and update the flags accordingly
+    // Remote OverrideFlags gate which sensor Flags bits contribute to the device rollup.
     for (int16_t i = 0; i < NUMDEVICES; i++) {
         if (!devices[i].IsSet) continue;
         devices[i].Flags = 0;
@@ -1340,10 +1343,12 @@ void Devices_Sensors::checkDeviceFlags() {
         for (int16_t j = 0; j < NUMSENSORS; j++) {
             if (!sensors[j].IsSet) continue;
             if (sensors[j].deviceIndex != i) continue;
-            if (bitRead(sensors[j].Flags,7)) bitWrite(devices[i].Flags, 7, 1); //there is a sensor that is critical, so the device is critical
-            if (bitRead(sensors[j].Flags,1)) bitWrite(devices[i].Flags, 1, 1); //there is a sensor that is monitored, so the device is monitored
-            if (bitRead(sensors[j].Flags,2)) bitWrite(devices[i].Flags, 2, 1); //there is a low power sensor, so the device is low power
-            if (bitRead(sensors[j].Flags,0) && (bitRead(sensors[j].Flags,1) || bitRead(sensors[j].Flags,7))) bitWrite(devices[i].Flags, 0, 1); //there is a sensor that is flagged and matters, so the device is flagged            
+            if (isSensorFlagBitUsed(j, 7)) bitWrite(devices[i].Flags, 7, 1); // critical
+            if (isSensorFlagBitUsed(j, 1)) bitWrite(devices[i].Flags, 1, 1); // monitored
+            if (isSensorFlagBitUsed(j, 2)) bitWrite(devices[i].Flags, 2, 1); // low power
+            if (isSensorFlagBitUsed(j, 0) && (isSensorFlagBitUsed(j, 1) || isSensorFlagBitUsed(j, 7))) {
+                bitWrite(devices[i].Flags, 0, 1); // flagged and matters
+            }
         }
     }
 }
@@ -1411,7 +1416,7 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
     
     int16_t result = isSensorIndexInvalid(index);
     if (result != 0) return -1*result;
-    if (onlyCritical && !bitRead(sensors[index].Flags, 7)) return -5;
+    if (onlyCritical && !isSensorFlagBitUsed(index, 7)) return -5;
     (void)multiplier; // legacy param; expiration uses 1.25 × SendingInt
 
     uint16_t sendint = sensors[index].SendingInt;
@@ -1513,7 +1518,7 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
         return (snsType >= 50 && snsType < 60);
     }
     if (type == "soil") {//soil
-        return (snsType == 3 || snsType == 33);
+        return (snsType == 3 || snsType == 33 || snsType == 34 || snsType == 35);
     }
     if (type == "leak") {//leak
         return (snsType == 70);

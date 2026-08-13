@@ -1,0 +1,13 @@
+# Minimal Supabase CLI config for Edge Functions.
+# Project ref / DB settings are not required to deploy functions from the dashboard zip/CLI.
+
+[functions.enroll-device]
+verify_jwt = true
+
+[functions.mint-device-jwt]
+# Device calls this with MAC + API key (no user JWT yet).
+verify_jwt = false
+
+[functions.device-api]
+# Device sends Bearer JWT from mint-device-jwt; function verifies JWT_SECRET itself.
+verify_jwt = false

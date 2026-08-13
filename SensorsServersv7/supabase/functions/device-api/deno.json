@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "jose": "jsr:@panva/jose@6",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2"
+  }
+}

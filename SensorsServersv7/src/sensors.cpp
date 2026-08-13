@@ -192,6 +192,10 @@ for (byte i=0;i<_SENSORNUM;i++) {
   
   if (sensorNeedsDefaults) {
     Prefs.SNS_FLAGS[i] = flagstates[i];
+    // Soil / scaled moisture sensors default auto-zero ON so scaled readings never go negative
+    if (sensorUsesScaling(sensortypes[i])) {
+      bitWrite(Prefs.SNS_FLAGS[i], SNS_FLAG_BIT_AUTOZERO, 1);
+    }
     Prefs.SNS_LIMIT_MAX[i] = limit_max[i];
     Prefs.SNS_LIMIT_MIN[i] = limit_min[i];
     Prefs.SNS_INTERVAL_POLL[i] = interval_poll[i];
@@ -383,6 +387,26 @@ int8_t readAllSensors(bool forceRead) {
 }
 
 
+bool sensorUsesScaling(uint8_t snsType) {
+  // Sensors that map a raw reading through SNS_CALIB_MIN/MAX to a 0-100 scale
+  return snsType == 3 || snsType == 33 || snsType == 34 || snsType == 35;
+}
+
+// Map raw → 0..100 via calib endpoints. If auto-zero is enabled and the scaled value
+// would be negative, move SNS_CALIB_MIN to the current raw reading so it becomes zero.
+static double applyScaledReading(int16_t prefs_index, double raw, double calibMin, double calibMax, bool calibWasUnset) {
+  double scaled = mapfloat(raw, calibMin, calibMax, 0, 100);
+  if (bitRead(Prefs.SNS_FLAGS[prefs_index], SNS_FLAG_BIT_AUTOZERO) && scaled < 0) {
+    Prefs.SNS_CALIB_MIN[prefs_index] = raw;
+    if (calibWasUnset) {
+      Prefs.SNS_CALIB_MAX[prefs_index] = calibMax;
+    }
+    Prefs.isUpToDate = false;
+    scaled = 0;
+  }
+  return scaled;
+}
+
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
   
@@ -461,7 +485,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
               if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
                 P->snsValue = resistance;
               } else {
-                P->snsValue = mapfloat(resistance, calibMin, calibMax, 0, 100); //calibrated moisture range
+                P->snsValue = applyScaledReading(prefs_index, resistance, calibMin, calibMax, false);
               }
             }
           } 
@@ -473,11 +497,12 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
               //sensible defaults if it was never set (NAN) or is degenerate (min==max).
               double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
               double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
-              if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+              bool calibWasUnset = (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax);
+              if (calibWasUnset) {
                 calibMin = 0.15;
                 calibMax = 1.75;
               }
-              P->snsValue = mapfloat(val, calibMin, calibMax, 0, 100); //this is the effective measurement range
+              P->snsValue = applyScaledReading(prefs_index, val, calibMin, calibMax, calibWasUnset);
               if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
             }
           } 
@@ -502,7 +527,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
                 if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
                   P->snsValue = resistance;
                 } else {
-                  P->snsValue = mapfloat(resistance, calibMin, calibMax, 0, 100); //calibrated moisture range
+                  P->snsValue = applyScaledReading(prefs_index, resistance, calibMin, calibMax, false);
                 }
               }
             } 
@@ -515,11 +540,12 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
                 //sensible defaults if it was never set (NAN) or is degenerate (min==max).
                 double calibMin = Prefs.SNS_CALIB_MIN[prefs_index];
                 double calibMax = Prefs.SNS_CALIB_MAX[prefs_index];
-                if (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax) {
+                bool calibWasUnset = (isnan(calibMin) || isnan(calibMax) || calibMin==calibMax);
+                if (calibWasUnset) {
                   calibMin = 0.15;
                   calibMax = 1.75;
                 }
-                P->snsValue = mapfloat(P->snsValue, calibMin, calibMax, 0, 100); //calibrated measurement range
+                P->snsValue = applyScaledReading(prefs_index, P->snsValue, calibMin, calibMax, calibWasUnset);
                 if (isSoilCapacitanceValid(P->snsValue)==false) isInvalid=true;
               }
             } 

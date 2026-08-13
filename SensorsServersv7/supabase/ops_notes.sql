@@ -1,0 +1,14 @@
+-- Optional: grant trial cloud access to a user after Auth signup + device enroll.
+-- Replace USER_UUID with auth.users.id from Dashboard → Authentication → Users.
+--
+-- insert into public.subscriptions (user_id, plan, status, valid_until)
+-- values ('USER_UUID', 'trial', 'trial', now() + interval '90 days');
+
+--
+-- Storage: Dashboard → Storage → New bucket → name "firmware" → Private.
+-- Upload bins at paths matching firmware_releases.storage_path (e.g. 101/32/9.4.22.bin).
+--
+-- Example firmware_releases row:
+-- insert into public.firmware_releases
+--   (dev_type, feature_mask, version_major, version_minor, version_patch, storage_path, is_active)
+-- values (101, 32, 9, 4, 22, '101/32/9.4.22.bin', true);

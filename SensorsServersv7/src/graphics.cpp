@@ -12,6 +12,12 @@
 #define MAXALARMS 48
 byte alarms[MAXALARMS] = {255};
 
+// Sensor summary pagination (8x6 grid). Circular Next/Prev; last page is not padded from page 1.
+static const uint8_t SENSOR_SUMMARY_ROWS = 8;
+static const uint8_t SENSOR_SUMMARY_COLS = 6;
+static const uint8_t SENSOR_SUMMARY_PAGE_SIZE = SENSOR_SUMMARY_ROWS * SENSOR_SUMMARY_COLS; // 48
+static uint8_t g_sensorSummaryPage = 0;
+
 
 struct STRUCT_GRAPHICS GRAPHICS;
 
@@ -857,9 +863,23 @@ static byte fcnGetMainScreenAlarms(byte rows, byte cols, bool useOverrideFlags) 
   return alarmArrayInd;
 }
 
-// Sensor summary page: every valid sensor, no type or flag filter (paginated via GRAPHICS.alarmIndex).
+static uint8_t sensorSummaryValidCount() {
+  uint8_t total = 0;
+  for (int16_t i = 0; i < NUMSENSORS; i++) {
+    if (Sensors.isSensorIndexInvalid(i, false) == 0) total++;
+  }
+  return total;
+}
+
+static uint8_t sensorSummaryPageCount() {
+  uint8_t total = sensorSummaryValidCount();
+  if (total == 0) return 1;
+  return (uint8_t)((total + SENSOR_SUMMARY_PAGE_SIZE - 1) / SENSOR_SUMMARY_PAGE_SIZE);
+}
+
+// Sensor summary page: every valid sensor, no type or flag filter.
+// Page g_sensorSummaryPage shows the next up-to-pageSize sensors; incomplete last page is not padded.
 static byte fcnFillAllSensorBoxes(byte rows, byte cols) {
-  if (GRAPHICS.alarmIndex >= NUMSENSORS) GRAPHICS.alarmIndex = 0;
   for (byte k = 0; k < MAXALARMS; k++) {
     alarms[k] = 255;
   }
@@ -867,18 +887,22 @@ static byte fcnFillAllSensorBoxes(byte rows, byte cols) {
   byte alarmsToDisplay = rows * cols;
   if (alarmsToDisplay > MAXALARMS) alarmsToDisplay = MAXALARMS;
 
-  byte alarmArrayInd = 0;
-  byte sensorIndex = GRAPHICS.alarmIndex;
+  uint8_t pageCount = sensorSummaryPageCount();
+  if (g_sensorSummaryPage >= pageCount) g_sensorSummaryPage = 0;
 
-  while (alarmArrayInd < alarmsToDisplay) {
-    if (Sensors.isSensorIndexInvalid(sensorIndex, false) == 0) {
-      if (inArrayBytes(alarms, alarmsToDisplay, sensorIndex, false) == -1) {
-        alarms[alarmArrayInd++] = sensorIndex;
-      }
+  const uint16_t skip = (uint16_t)g_sensorSummaryPage * alarmsToDisplay;
+  uint16_t seen = 0;
+  byte alarmArrayInd = 0;
+
+  for (int16_t i = 0; i < NUMSENSORS && alarmArrayInd < alarmsToDisplay; i++) {
+    if (Sensors.isSensorIndexInvalid(i, false) != 0) continue;
+    if (seen < skip) {
+      seen++;
+      continue;
     }
-    if (!cycleByteIndex(sensorIndex, NUMSENSORS, GRAPHICS.alarmIndex)) break;
+    alarms[alarmArrayInd++] = (byte)i;
+    seen++;
   }
-  GRAPHICS.alarmIndex = sensorIndex;
 
   return alarmArrayInd;
 }
@@ -1083,7 +1107,10 @@ void fcnDrawScreen() {
 void loadFunctionsForScreen() {
   //load the appropriate drawing functions, timer defaults, and other required data for the new screen
   if (GRAPHICS.Screen_Next==SCREEN_MAIN )     GRAPHICS.SCREEN_DATA[0].loadScreenElements(&fcnDrawMainScreen, 0, 0, 320, 480, SCREEN_MAIN, 0, 0, 240, 0, nullptr);
-  else if (GRAPHICS.Screen_Next==SCREEN_SENSORS )       GRAPHICS.SCREEN_DATA[0].loadScreenElements(&fcnDrawSensorScreen, 0, 0, 320, 480, SCREEN_SENSORS, 0, 0, 30, 0, nullptr);    
+  else if (GRAPHICS.Screen_Next==SCREEN_SENSORS ) {
+    g_sensorSummaryPage = 0; // fresh entry always starts on page 1
+    GRAPHICS.SCREEN_DATA[0].loadScreenElements(&fcnDrawSensorScreen, 0, 0, 320, 480, SCREEN_SENSORS, 0, 0, 30, 0, nullptr);
+  }
   else if (GRAPHICS.Screen_Next==SCREEN_ALERT )     GRAPHICS.SCREEN_DATA[0].loadScreenElements(&fcnDrawAlertScreen, 0, 0, 320, 480, SCREEN_ALERT, 0, 0, 30, 0, nullptr);
   else if (GRAPHICS.Screen_Next==SCREEN_DAILY ) {
     int16_t daySel = GRAPHICS.SCREEN_DATA[0].Local_Code;
@@ -1217,6 +1244,9 @@ void fcnDrawNavButtons(int16_t index) {
     case 113:
       fcnPrintTxtCenter("Yes",2, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
       break;
+    case 114:
+      fcnPrintTxtCenter("Sns Opt",1, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
+      break;
     case 120: //alternative yes
       fcnPrintTxtCenter("YES",1, x+width/2,y+height/2,TFT_BLACK,TFT_BLACK,TFT_LIGHTGREY);
       break;
@@ -1241,9 +1271,13 @@ void fcnSwitchSubScreen(int16_t index) {
 }
 
 static uint32_t helper_weatherDayMidnight(uint8_t daysfromnow) {
-  // Use I.currentTime (local pseudo-unix), not now()/year()/month()/day() (UTC calendar).
+  // I.currentTime is already local pseudo-unix (UTC + TZ + DST). Break out its local
+  // Y/M/D and rebuild 00:00 with asLocalTime=false so the result stays in that same
+  // timeline. Do NOT wrap with unixToLocal — that would apply the TZ offset twice and
+  // shift the daily plot window earlier (e.g. EDT: prior 8pm → 7pm instead of midnight → 11pm).
   time_t localNow = I.currentTime;
-  uint32_t midnightToday = unixToLocal(makeUnixTime((byte)(year(localNow) - 2000), month(localNow), day(localNow), 0, 0, 0, false));
+  uint32_t midnightToday = (uint32_t)makeUnixTime(
+    (byte)(year(localNow) - 2000), month(localNow), day(localNow), 0, 0, 0, false);
   return midnightToday + (uint32_t)daysfromnow * 86400UL;
 }
 
@@ -2710,8 +2744,10 @@ void fcnDrawSensorScreen(int16_t index) {
   //now assign the screen elements, based on subscreen info
   //subscreen 0 = sensor summary
   //subscreen 1 = sensor details
-  //subscreen 101 = del sensor
-  //subscreen 102 = del sensor confirm
+  //subscreen 114 = sensor options (OverrideFlags ignore bits)
+  //subscreen 110 = del sensor confirm
+  //subscreen 100 = del sensor
+  //subscreen 107 = broadcast
   if (GRAPHICS.SubScreen_Next != GRAPHICS.SubScreen_Now || GRAPHICS.SCREEN_DATA[1].drawFunction == nullptr) {
     //subscreen changed!
     //clear the current subscreen
@@ -2722,6 +2758,7 @@ void fcnDrawSensorScreen(int16_t index) {
 
     if (GRAPHICS.SubScreen_Next == 0) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorSummarySubcreen, 0,0,320,360, SCREEN_NONE, 0, 1, 30, 1, &fcnConvertTouchToSensorSubscreen);
     else if (GRAPHICS.SubScreen_Next ==1) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorDetailsSubscreen, 0,0,320,360, SCREEN_MAIN, 0, 1, 30, 1, &fcnSwitchScreen); 
+    else if (GRAPHICS.SubScreen_Next == 114) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorOptions, 0,0,320,419, SCREEN_NONE, 0, 1, 30, 1, &fcnTouchSensorOptions);
     else if (GRAPHICS.SubScreen_Next == 110) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorDelSnsConfirm, 0,0,320,360, SCREEN_NONE, 0, 1, 30, 1, nullptr);
     else if (GRAPHICS.SubScreen_Next == 107) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorBroadcast, 0,0,320,360, SCREEN_MAIN, 0, 1, 30, 1, &fcnSwitchScreen);
     else if (GRAPHICS.SubScreen_Next == 100) GRAPHICS.SCREEN_DATA[1].loadScreenElements(&fcnDrawSensorDelSns, 0,0,320,360, SCREEN_MAIN, 0, 1, 30, 1, &fcnSwitchScreen); 
@@ -2760,6 +2797,28 @@ void fcnConvertTouchToSensorSubscreen(int16_t index) {
   else GRAPHICS.miscData = alarms[GRAPHICS.miscData];
   
   return;
+}
+
+void fcnTouchSensorSummaryPageNav(int16_t index) {
+  if (index < 0 || index >= MAXSCREENELEMENTS) return;
+
+  const uint8_t pageCount = sensorSummaryPageCount();
+  if (pageCount <= 1) return;
+
+  const int16_t code = GRAPHICS.SCREEN_DATA[index].Local_Code;
+  if (code == 104) { // Next — circular
+    g_sensorSummaryPage = (uint8_t)((g_sensorSummaryPage + 1) % pageCount);
+  } else if (code == 105) { // Prev — circular
+    g_sensorSummaryPage = (uint8_t)((g_sensorSummaryPage + pageCount - 1) % pageCount);
+  } else {
+    return;
+  }
+
+  GRAPHICS.GRAPHICS_TIMERS.Timers[0] = GRAPHICS.SCREEN_DATA[0].Timer_RESET;
+  GRAPHICS.SubScreen_Next = 0;
+  GRAPHICS.SubScreen_Now = -1; // force summary redraw with new page
+  GRAPHICS.zeroChildTimers();
+  fcnDrawScreen();
 }
 
 
@@ -2963,13 +3022,118 @@ void fcnDrawSensorDetailsSubscreen(int16_t index) {
   tft.printf("Sns flags: %s\n",String(sensor->Flags,BIN).c_str());
 
   GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0,419,64,60, SCREEN_MAIN, 0, 0, 30, 2, &fcnSwitchScreen); 
-  GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawNavButtons, 128,419,64,60, SCREEN_NONE, 110, 0, 30, 3, &fcnSwitchSubScreen); 
+  GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawNavButtons, 64,419,64,60, SCREEN_NONE, 114, 0, 30, 3, &fcnSwitchSubScreen); 
+  GRAPHICS.SCREEN_DATA[4].loadScreenElements(&fcnDrawNavButtons, 128,419,64,60, SCREEN_NONE, 110, 0, 30, 4, &fcnSwitchSubScreen); 
 
   GRAPHICS.SCREEN_DATA[2].drawFunction(2);
   GRAPHICS.SCREEN_DATA[3].drawFunction(3);
+  GRAPHICS.SCREEN_DATA[4].drawFunction(4);
 
 
   return;
+}
+
+// Sensor Options layout: title + 8 OverrideFlags rows (ignore bits). Shared by draw/touch.
+static const int16_t SNSOPT_BOX = 30;
+static const int16_t SNSOPT_ROW_H = 45;
+static const int16_t SNSOPT_ROWS_TOP = 40; // below title
+static const int16_t SNSOPT_BOX_X = 320 - 10 - SNSOPT_BOX; // right-aligned with 10px margin
+// Same RMB layout as Flags; checked = ignore that Flags bit for remotes
+static const char* const SNSOPT_LABELS[8] = {
+  "ignore flagged",
+  "ignore monitored",
+  "ignore low power",
+  "ignore derived",
+  "ignore outside",
+  "ignore high/low",
+  "ignore changed",
+  "ignore critical"
+};
+
+static void helper_drawSensorOptionCheckbox(uint8_t bit, uint8_t overrideFlags) {
+  int16_t rowY = SNSOPT_ROWS_TOP + (int16_t)bit * SNSOPT_ROW_H;
+  int16_t boxY = rowY + (SNSOPT_ROW_H - SNSOPT_BOX) / 2;
+  tft.fillRect(SNSOPT_BOX_X, boxY, SNSOPT_BOX, SNSOPT_BOX, BG_COLOR);
+  tft.drawRect(SNSOPT_BOX_X, boxY, SNSOPT_BOX, SNSOPT_BOX, FG_COLOR);
+  if (bitRead(overrideFlags, bit)) {
+    // filled check mark via inset rectangle
+    tft.fillRect(SNSOPT_BOX_X + 6, boxY + 6, SNSOPT_BOX - 12, SNSOPT_BOX - 12, FG_COLOR);
+  }
+}
+
+void fcnDrawSensorOptions(int16_t index) {
+  if (index < 0 || index >= MAXSCREENELEMENTS) return;
+
+  GRAPHICS.GRAPHICS_TIMERS.Timers[0] = 30;
+  GRAPHICS.clearScreenArea(0);
+
+  if (GRAPHICS.miscData < 0 || GRAPHICS.miscData >= NUMSENSORS) {
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_RED, BG_COLOR);
+    tft.setCursor(0, 0);
+    tft.println("Sensor not found");
+    tft.println("Touch MAIN to return");
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    GRAPHICS.GRAPHICS_TIMERS.Timers[0] = 5;
+    GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 64, 419, 64, 60, SCREEN_MAIN, 0, 0, 30, 2, &fcnSwitchScreen);
+    GRAPHICS.SCREEN_DATA[2].drawFunction(2);
+    return;
+  }
+
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(GRAPHICS.miscData);
+  if (!sensor || !Sensors.isSensorInit(GRAPHICS.miscData)) {
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_RED, BG_COLOR);
+    tft.setCursor(0, 0);
+    tft.println("Sensor not found");
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    GRAPHICS.GRAPHICS_TIMERS.Timers[0] = 5;
+    GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 64, 419, 64, 60, SCREEN_MAIN, 0, 0, 30, 2, &fcnSwitchScreen);
+    GRAPHICS.SCREEN_DATA[2].drawFunction(2);
+    return;
+  }
+
+  tft.setTextFont(2);
+  tft.setTextColor(FG_COLOR, BG_COLOR);
+  tft.setCursor(0, 0);
+  tft.printf("Sensor Options\n%s", sensor->snsName);
+
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    int16_t rowY = SNSOPT_ROWS_TOP + (int16_t)bit * SNSOPT_ROW_H;
+    int16_t textY = rowY + (SNSOPT_ROW_H - (int16_t)tft.fontHeight(tft.getFont())) / 2;
+    tft.setCursor(8, textY);
+    tft.print(SNSOPT_LABELS[bit]);
+    helper_drawSensorOptionCheckbox(bit, sensor->OverrideFlags);
+  }
+
+  GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0, 419, 64, 60, SCREEN_MAIN, 0, 0, 30, 2, &fcnSwitchScreen);
+  GRAPHICS.SCREEN_DATA[2].drawFunction(2);
+}
+
+void fcnTouchSensorOptions(int16_t index) {
+  if (index < 0 || index >= MAXSCREENELEMENTS) return;
+  if (GRAPHICS.miscData < 0 || GRAPHICS.miscData >= NUMSENSORS) return;
+
+  ArborysSnsType* sensor = Sensors.snsIndexToPointer(GRAPHICS.miscData);
+  if (!sensor || !Sensors.isSensorInit(GRAPHICS.miscData)) return;
+
+  // Keep screen alive while interacting
+  GRAPHICS.GRAPHICS_TIMERS.Timers[0] = 30;
+
+  int16_t relY = GRAPHICS.touchY - SNSOPT_ROWS_TOP;
+  if (relY < 0) return;
+  uint8_t bit = (uint8_t)(relY / SNSOPT_ROW_H);
+  if (bit >= 8) return;
+
+  int16_t rowY = SNSOPT_ROWS_TOP + (int16_t)bit * SNSOPT_ROW_H;
+  int16_t boxY = rowY + (SNSOPT_ROW_H - SNSOPT_BOX) / 2;
+  // Only the checkbox toggles (30x30 hit target)
+  if (GRAPHICS.touchX < SNSOPT_BOX_X || GRAPHICS.touchX >= SNSOPT_BOX_X + SNSOPT_BOX) return;
+  if (GRAPHICS.touchY < boxY || GRAPHICS.touchY >= boxY + SNSOPT_BOX) return;
+
+  flipBit(sensor->OverrideFlags, bit);
+  I.isUpToDate = false;
+  helper_drawSensorOptionCheckbox(bit, sensor->OverrideFlags);
 }
 
 
@@ -2982,25 +3146,43 @@ void fcnDrawSensorSummarySubcreen(int16_t index) {
   GRAPHICS.GRAPHICS_TIMERS.Timers[0] = GRAPHICS.SCREEN_DATA[0].Timer_RESET;
   GRAPHICS.clearScreenArea(0); //clear the entire screen  
 
-  //populate the nav buttons for this screen
-  GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0,419,64,60, SCREEN_MAIN, 0, 0, 5, 2, &fcnSwitchScreen); 
-  GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawNavButtons, 64,419,64,60, SCREEN_NONE, 107, 0, 5, 3, &fcnSwitchSubScreen); 
+  const uint8_t pageCount = sensorSummaryPageCount();
+  if (g_sensorSummaryPage >= pageCount) g_sensorSummaryPage = 0;
+
+  // Nav: MAIN | [Prev | Next when multi-page] | Bdcst
+  GRAPHICS.SCREEN_DATA[2].loadScreenElements(&fcnDrawNavButtons, 0,419,64,60, SCREEN_MAIN, 0, 0, 5, 2, &fcnSwitchScreen);
+  uint8_t nextBtnSlot = 3;
+  if (pageCount > 1) {
+    GRAPHICS.SCREEN_DATA[3].loadScreenElements(&fcnDrawNavButtons, 64,419,64,60, SCREEN_NONE, 105, 0, 5, 3, &fcnTouchSensorSummaryPageNav); // Prev
+    GRAPHICS.SCREEN_DATA[4].loadScreenElements(&fcnDrawNavButtons, 128,419,64,60, SCREEN_NONE, 104, 0, 5, 4, &fcnTouchSensorSummaryPageNav); // Next
+    nextBtnSlot = 5;
+  }
+  GRAPHICS.SCREEN_DATA[nextBtnSlot].loadScreenElements(&fcnDrawNavButtons, (uint16_t)((nextBtnSlot - 2) * 64),419,64,60, SCREEN_NONE, 107, 0, 5, nextBtnSlot, &fcnSwitchSubScreen); // Bdcst
 
   //run the new screen elements
-  GRAPHICS.SCREEN_DATA[2].drawFunction(2);
-  GRAPHICS.SCREEN_DATA[3].drawFunction(3);
+  for (uint8_t slot = 2; slot <= nextBtnSlot; slot++) {
+    if (GRAPHICS.SCREEN_DATA[slot].drawFunction) GRAPHICS.SCREEN_DATA[slot].drawFunction(slot);
+  }
 
-  fcnFillAllSensorBoxes(8, 6);
+  fcnFillAllSensorBoxes(SENSOR_SUMMARY_ROWS, SENSOR_SUMMARY_COLS);
 
   int16_t FH = setFont(2);
   tft.setTextColor(FG_COLOR,BG_COLOR);
   tft.setCursor(0,0);
-  fcnDrawSensors(0,18,8,6);
+  fcnDrawSensors(0,18,SENSOR_SUMMARY_ROWS,SENSOR_SUMMARY_COLS);
   tft.setCursor(0,tft.height()-FH-62);
-  tft.printf("Dev: %u  Sns: %u  Alrm: %u  Exp: %u",
-      Sensors.numDevices, Sensors.numSensors,
-      Sensors.countMainScreenFlaggedAlerts(true),
-      Sensors.countMainScreenCriticalExpiredAlerts(true));
+  if (pageCount > 1) {
+    tft.printf("Dev: %u  Sns: %u  Alrm: %u  Exp: %u  Pg: %u/%u",
+        Sensors.numDevices, Sensors.numSensors,
+        Sensors.countMainScreenFlaggedAlerts(true),
+        Sensors.countMainScreenCriticalExpiredAlerts(true),
+        (unsigned)(g_sensorSummaryPage + 1), (unsigned)pageCount);
+  } else {
+    tft.printf("Dev: %u  Sns: %u  Alrm: %u  Exp: %u",
+        Sensors.numDevices, Sensors.numSensors,
+        Sensors.countMainScreenFlaggedAlerts(true),
+        Sensors.countMainScreenCriticalExpiredAlerts(true));
+  }
 
   return;
 }

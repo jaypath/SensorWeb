@@ -15,6 +15,8 @@ struct ArborysSnsType;
 class Devices_Sensors;
 
 //  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
+// Prefs.SNS_FLAGS is uint16_t: bits 0-7 mirror runtime Flags; bit 8 = auto-zero for scaled sensors (SNS_FLAG_BIT_AUTOZERO)
+#define SNS_FLAG_BIT_AUTOZERO 8
 
   /*sens types
 //0 - not defined
@@ -231,6 +233,7 @@ extern  Adafruit_BME280 bme; // I2C
 
 
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false, bool uncalibrated=false);
+bool sensorUsesScaling(uint8_t snsType);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
 void setupSensors();

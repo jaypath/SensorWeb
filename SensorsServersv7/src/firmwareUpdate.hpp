@@ -21,6 +21,10 @@ bool parseFirmwareVersionFromBinName(const char* filename, FirmwareVersion& out)
 bool buildFirmwareBinPath(const char* deviceName, const FirmwareVersion& version, char* out, size_t outLen);
 bool findHighestSDFirmwareForDevice(const char* deviceName, FirmwareVersion& versionOut,
     char* filePathOut, size_t pathLen, uint16_t* crcOut, uint32_t* sizeOut);
+/** Deletes /Firmware/<device>-x.y.z.bin files with version strictly older than newerVersion. */
+uint8_t deleteOlderSDFirmwareForDevice(const char* deviceName, const FirmwareVersion& newerVersion);
+/** After a successful /Firmware upload, prune older bins for that device. Returns count deleted. */
+uint8_t pruneOlderSDFirmwareAfterUpload(const char* uploadedPath);
 uint16_t computeFileCRC(const char* filePath);
 uint16_t computeBufferCRC(const uint8_t* data, size_t len);
 bool checkAndApplySDFirmwareOnBoot();

@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "jose": "jsr:@panva/jose@6",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2",
+    "bcryptjs": "npm:bcryptjs@2.4.3"
+  }
+}
