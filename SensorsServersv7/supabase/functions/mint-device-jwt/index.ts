@@ -2,6 +2,7 @@ import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import { verifyApiKey } from "../_shared/crypto.ts";
 import { mintUserJwt, DEFAULT_EXPIRES_IN } from "../_shared/jwt.ts";
 import { normalizeMac } from "../_shared/mac.ts";
+import { enforceRateLimits } from "../_shared/ratelimit.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 
 type MintBody = {
@@ -26,6 +27,11 @@ Deno.serve(async (req) => {
     }
 
     const deviceMac = normalizeMac(body.device_mac ?? "");
+    const rate = await enforceRateLimits(req, deviceMac);
+    if (!rate.ok) {
+      return jsonResponse({ error: rate.error, code: rate.code }, rate.status);
+    }
+
     const apiKey = typeof body.api_key === "string" ? body.api_key.trim() : "";
     if (!deviceMac || !apiKey) {
       return jsonResponse({ error: "device_mac and api_key are required" }, 400);

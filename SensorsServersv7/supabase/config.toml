@@ -4,10 +4,22 @@
 [functions.enroll-device]
 verify_jwt = true
 
+[functions.enroll-device-admin]
+# Admin session JWT required; function also checks public.admins.
+verify_jwt = true
+
 [functions.mint-device-jwt]
 # Device calls this with MAC + API key (no user JWT yet).
 verify_jwt = false
 
 [functions.device-api]
 # Device sends Bearer JWT from mint-device-jwt; function verifies JWT_SECRET itself.
+verify_jwt = false
+
+[functions.provision-devices-bulk]
+# Admin session JWT; checks public.admins.
+verify_jwt = true
+
+[functions.claim-device]
+# Device one-time credential pickup (MAC + claim_code); no user JWT.
 verify_jwt = false

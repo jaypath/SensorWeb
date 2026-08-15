@@ -24,3 +24,15 @@ export function hashApiKey(apiKey: string): string {
 export function verifyApiKey(apiKey: string, hash: string): boolean {
   return bcrypt.compareSync(apiKey, hash);
 }
+
+/** 4-character alphanumeric claim code (A-Z0-9), uppercase. */
+export function generateClaimCode(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < 4; i++) {
+    out += alphabet[bytes[i]! % alphabet.length]!;
+  }
+  return out;
+}

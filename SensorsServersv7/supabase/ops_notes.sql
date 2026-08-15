@@ -3,11 +3,32 @@
 --
 -- insert into public.subscriptions (user_id, plan, status, valid_until)
 -- values ('USER_UUID', 'trial', 'trial', now() + interval '90 days');
-
+--
+-- Admins: run schema_admins.sql
+-- Provisioning mailbox: run schema_provisioning.sql
+--
+-- Bulk provision (admin JWT):
+--   POST /functions/v1/provision-devices-bulk
+--   { "devices": [ { "email": "a@b.com", "device_mac": "AABBCCDDEEFF", "name": "hub1" } ] }
+-- Skips MACs already in devices. Creates Auth user if email new.
+-- Returns api_key + claim_code (4 alphanumeric); staging expires in 180 days.
+-- Staging also stores project_url, anon_key, mint/device_api paths, api_version, user_id.
+-- Run schema_provisioning_v2.sql if table already existed without those columns.
+--
+-- Device claim (no JWT):
+--   POST /functions/v1/claim-device
+--   { "device_mac": "AABBCCDDEEFF", "claim_code": "A1B2" }
+-- Returns full bootstrap: project_url, anon_key, user_id, api_key, mint_url, device_api_url, api_version.
+-- Staging row deleted after claim.
+--
+-- Rate limits (claim-device + mint-device-jwt): run schema_rate_limits.sql
+--   IP+MAC: 5/min soft (429); >30/min → blocked_macs
+--   IP: 15/min soft (429); >200/min → blocked_ips
+-- Unblock: delete from blocked_ips / blocked_macs in SQL Editor.
+--
+-- enroll-device-admin (single device by email) still available.
 --
 -- Storage: Dashboard → Storage → New bucket → name "firmware" → Private.
--- Upload bins at paths matching firmware_releases.storage_path (e.g. 101/32/9.4.22.bin).
---
 -- Example firmware_releases row:
 -- insert into public.firmware_releases
 --   (dev_type, feature_mask, version_major, version_minor, version_patch, storage_path, is_active)
