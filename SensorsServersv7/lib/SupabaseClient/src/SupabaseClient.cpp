@@ -8,6 +8,8 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
+#include <new>
+#include <esp_task_wdt.h>
 
 #if defined(_USE_CERT_BUNDLE)
 extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
@@ -283,17 +285,24 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
 
   String url = String(cfg_.projectUrl) + pathAndQuery;
 
-  WiFiClientSecure client;
+  // Heap-allocate TLS client — WiFiClientSecure is large on the stack.
+  WiFiClientSecure* client = new (std::nothrow) WiFiClientSecure();
+  if (!client) {
+    setError(SupabaseError::HttpFailed, "oom", "WiFiClientSecure alloc failed");
+    return lastError_;
+  }
 #if defined(_USE_CERT_BUNDLE)
-  client.setCACertBundle(x509_crt_imported_bundle_bin_start,
-                         (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
+  client->setCACertBundle(x509_crt_imported_bundle_bin_start,
+                          (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
 #else
-  client.setInsecure();
+  client->setInsecure();
 #endif
 
   HTTPClient http;
   http.setTimeout(cfg_.httpTimeoutMs ? cfg_.httpTimeoutMs : 20000);
-  if (!http.begin(client, url)) {
+  esp_task_wdt_reset();
+  if (!http.begin(*client, url)) {
+    delete client;
     setError(SupabaseError::HttpFailed, "http_begin", "HTTP begin failed");
     return lastError_;
   }
@@ -303,11 +312,11 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
   http.addHeader("apikey", cfg_.anonKey);
   if (prefer && prefer[0]) http.addHeader("Prefer", prefer);
   if (withBearer && accessToken_[0]) {
-    char auth[960];
-    snprintf(auth, sizeof(auth), "Bearer %s", accessToken_);
+    String auth = String("Bearer ") + accessToken_;
     http.addHeader("Authorization", auth);
   }
 
+  esp_task_wdt_reset();
   int code = -1;
   if (!method || !strcmp(method, "POST")) {
     code = http.POST(bodyJson ? bodyJson : "{}");
@@ -320,12 +329,24 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
     code = http.sendRequest("DELETE");
   } else {
     http.end();
+    delete client;
     setError(SupabaseError::InvalidArg, "bad_method", "Unsupported HTTP method");
     return lastError_;
   }
 
+  esp_task_wdt_reset();
   responseOut = http.getString();
   http.end();
+  delete client;
+  esp_task_wdt_reset();
+
+  // Guard heap: ArduinoJson will allocate another copy while parsing.
+  constexpr size_t kMaxResponseBytes = 48 * 1024;
+  if (responseOut.length() > kMaxResponseBytes) {
+    setError(SupabaseError::BufferTooSmall, "response_too_large", "Supabase response too large");
+    responseOut = "";
+    return lastError_;
+  }
 
   if (code < 200 || code >= 300) {
     // Map common PostgREST / Auth failures
@@ -342,10 +363,7 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
         return lastError_;
       }
       if (msg[0]) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "HTTP %d", code);
         setError(SupabaseError::HttpFailed, "http_error", msg);
-        (void)buf;
         return lastError_;
       }
     }
@@ -716,7 +734,8 @@ SupabaseError SupabaseClient::fetchOwnSite(char* siteSlugOut, size_t siteSlugOut
 
 static void appendSensorFilters(String& path, const SupabaseQueryFilter& filter,
                                 const String* macInCsv) {
-  path += "select=*&order=time_read.desc";
+  path += "select=device_mac,sns_type,sns_id,sns_name,sns_value,time_read,time_logged,"
+          "sending_int,flags,expired,limit_high,limit_low,utc_offset&order=time_read.desc";
   if (filter.deviceMac && filter.deviceMac[0]) {
     path += "&device_mac=eq.";
     path += urlEncode(filter.deviceMac);

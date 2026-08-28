@@ -326,8 +326,9 @@ bool supabaseHubInventorySync(SupabaseHubInventoryResult* out) {
   const char* site = supabaseSiteSlug();
   const uint64_t myMac = ESP.getEfuseMac();
 
-  // Device metadata for the site (IP / name / type)
-  SupabaseDeviceDto devBuf[48];
+  // Static: these buffers are ~20KB; stack would overflow the Arduino loop task.
+  static SupabaseDeviceDto s_devBuf[48];
+  static SupabaseSensorDto s_snsBuf[96];
   uint16_t devCount = 0;
   {
     SupabaseQueryFilter df;
@@ -337,7 +338,7 @@ bool supabaseHubInventorySync(SupabaseHubInventoryResult* out) {
     df.snsType = -1;
     df.expired = -1;
     df.limit = 48;
-    if (Supabase.queryDevices(df, devBuf, 48, &devCount) != SupabaseError::Ok) {
+    if (Supabase.queryDevices(df, s_devBuf, 48, &devCount) != SupabaseError::Ok) {
       if (out) {
         strncpy(out->error, Supabase.lastErrorCode(), sizeof(out->error) - 1);
       }
@@ -348,13 +349,12 @@ bool supabaseHubInventorySync(SupabaseHubInventoryResult* out) {
 
   auto findDevMeta = [&](const char* macStr) -> const SupabaseDeviceDto* {
     for (uint16_t i = 0; i < devCount; i++) {
-      if (strcasecmp(devBuf[i].deviceMac, macStr) == 0) return &devBuf[i];
+      if (strcasecmp(s_devBuf[i].deviceMac, macStr) == 0) return &s_devBuf[i];
     }
     return nullptr;
   };
 
   // Sensors with time_read in the last 24h for this site
-  SupabaseSensorDto snsBuf[96];
   uint16_t snsCount = 0;
   {
     SupabaseQueryFilter sf;
@@ -365,7 +365,7 @@ bool supabaseHubInventorySync(SupabaseHubInventoryResult* out) {
     sf.expired = 0;
     sf.timeStartUnix = nowUnix - SUPABASE_HUB_INVENTORY_LOOKBACK_SEC;
     sf.limit = 96;
-    if (Supabase.querySensors(sf, snsBuf, 96, &snsCount) != SupabaseError::Ok) {
+    if (Supabase.querySensors(sf, s_snsBuf, 96, &snsCount) != SupabaseError::Ok) {
       if (out) {
         strncpy(out->error, Supabase.lastErrorCode(), sizeof(out->error) - 1);
       }
@@ -378,7 +378,7 @@ bool supabaseHubInventorySync(SupabaseHubInventoryResult* out) {
   uint16_t devicesAdded = 0;
 
   for (uint16_t i = 0; i < snsCount; i++) {
-    const SupabaseSensorDto& s = snsBuf[i];
+    const SupabaseSensorDto& s = s_snsBuf[i];
     uint64_t mac = SupabaseClient::macFromString(s.deviceMac);
     if (mac == 0 || mac == myMac) continue;
 
@@ -498,7 +498,8 @@ void supabaseHubPollExpiredAfterLan(ArborysDevType* device) {
   char macStr[16];
   SupabaseClient::macToString(device->MAC, macStr);
 
-  SupabaseSensorDto snsBuf[32];
+  // Static buffer (~3KB) — avoid large stack use during LAN+cloud path
+  static SupabaseSensorDto s_snsBuf[32];
   uint16_t snsCount = 0;
   SupabaseQueryFilter sf;
   memset(&sf, 0, sizeof(sf));
@@ -509,7 +510,7 @@ void supabaseHubPollExpiredAfterLan(ArborysDevType* device) {
   sf.limit = 32;
 
   supabaseRefreshIdentity();
-  if (Supabase.querySensors(sf, snsBuf, 32, &snsCount) != SupabaseError::Ok) {
+  if (Supabase.querySensors(sf, s_snsBuf, 32, &snsCount) != SupabaseError::Ok) {
     SerialPrint("Supabase expired poll failed for " + String(device->devName) + ": " +
                     String(Supabase.lastErrorCode()),
                 true);
@@ -545,8 +546,8 @@ void supabaseHubPollExpiredAfterLan(ArborysDevType* device) {
 
     const SupabaseSensorDto* cloud = nullptr;
     for (uint16_t i = 0; i < snsCount; i++) {
-      if (snsBuf[i].snsType == s->snsType && snsBuf[i].snsId == s->snsID) {
-        cloud = &snsBuf[i];
+      if (s_snsBuf[i].snsType == s->snsType && s_snsBuf[i].snsId == s->snsID) {
+        cloud = &s_snsBuf[i];
         break;
       }
     }
