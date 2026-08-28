@@ -3,6 +3,9 @@
 #include "BootSecure.hpp"
 #include "firmwareUpdate.hpp"
 #include "server.hpp"
+#ifdef _USESUPABASE
+#include "supabase_prefs.hpp"
+#endif
 #include <esp_app_format.h>
 #include "esp_ota_ops.h"
 
@@ -349,6 +352,10 @@ bool initSystem() {
       SerialPrint("Will redefine Prefs struct later...", true,5);
   } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true,5);
 
+  #ifdef _USESUPABASE
+  supabaseBeginFromPrefs();
+  #endif
+
   #ifdef _USESDCARD
   // Load devices/sensors before any registration or IP sync can overwrite DevicesSensors.dat.
   loadSensorData();
@@ -436,6 +443,9 @@ bool initSystem() {
 
   if (wifiReadyForNetwork()) {
     SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(), true, 5);
+    #ifdef _USESUPABASE
+    supabaseServiceStartupSiteSync();
+    #endif
   } else {
     SerialPrint("Wifi not connected; continuing with AP/ESP-NOW. Status: " + String(I.WiFiStatus), true, 5);
   }

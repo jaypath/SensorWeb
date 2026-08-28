@@ -402,6 +402,16 @@ void apiSaveTimezone();
 void apiGetSetupStatus();
 void handleInitialSetup();
 void handleApiCompleteSetup();
+#ifdef _USESUPABASE
+void apiSupabaseClaim();
+void apiSupabaseSites();
+void apiSupabaseSite();
+#if _IS_SERVER_HUB
+void apiSupabaseSiteCreate();
+void apiSupabaseSiteDelete();
+void apiSupabaseInventory();
+#endif
+#endif
 String getWiFiModeString();
 
 // Generate AP SSID based on MAC address: "SensorNet-" + last 3 bytes of MAC in hex

@@ -24,6 +24,9 @@
 #include "BootSecure.hpp"
 #include "AddESPNOW.hpp"
 #include "firmwareUpdate.hpp"
+#ifdef _USESUPABASE
+#include "supabase_prefs.hpp"
+#endif
 
 #include <ssl_client.h> // Ensure this is at the top of server.cpp
 
@@ -1002,6 +1005,9 @@ static bool initialSetupRequirementsMet() {
   if (Prefs.TimeZoneOffset > 50400) return false;
   #ifdef _USEWEATHER
   if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) return false;
+  #endif
+  #ifdef _USESUPABASE
+  if (!Prefs.SUPABASE_CLAIMED) return false;
   #endif
   return true;
 }
@@ -2039,6 +2045,10 @@ void apiGetSetupStatus() {
                 ",\"location_configured\":" + String(location_configured ? "true" : "false") +
                 ",\"timezone_configured\":" + String(timezone_configured ? "true" : "false") +
                 ",\"setup_complete\":" + String(setup_complete ? "true" : "false");
+  #ifdef _USESUPABASE
+  json += ",\"supabase_claimed\":" + String(Prefs.SUPABASE_CLAIMED ? "true" : "false");
+  json += ",\"site_slug\":\"" + String(supabaseSiteSlug()) + "\"";
+  #endif
   
   if (wifi_configured) {
     json += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
@@ -2065,6 +2075,9 @@ void handleApiCompleteSetup() {
     if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) missing += "location; ";
     #endif
     if (Prefs.TimeZoneOffset > 50400) missing += "timezone; ";
+    #ifdef _USESUPABASE
+    if (!Prefs.SUPABASE_CLAIMED) missing += "cloud claim; ";
+    #endif
     server.send(400, "application/json",
       "{\"success\":false,\"error\":\"Setup incomplete: " + missing + "required before finishing\"}");
     return;
@@ -2089,6 +2102,215 @@ void handleApiCompleteSetup() {
   delay(250);
   controlledReboot("Initial setup complete", RESET_NEWWIFI, true);
 }
+
+#ifdef _USESUPABASE
+void apiSupabaseClaim() {
+  registerHTTPMessage("API_SB_Claim");
+  if (!wifiReadyForNetwork()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required to claim\"}");
+    return;
+  }
+  String claimCode = server.hasArg("claim_code") ? server.arg("claim_code") : "";
+  if (claimCode.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"claim_code required\"}");
+    return;
+  }
+
+  SupabaseConfig cfg;
+  cfg.clear();
+  cfg.applyDefaults();
+  SupabaseClient::macToString(ESP.getEfuseMac(), cfg.deviceMac);
+  cfg.utcOffsetSec = Prefs.TimeZoneOffset;
+  Supabase.begin(cfg);
+
+  if (Supabase.claimDevice(claimCode.c_str()) != SupabaseError::Ok) {
+    String err = Supabase.lastErrorMessage();
+    if (err.length() == 0) err = Supabase.lastErrorCode();
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"" + err + "\"}");
+    return;
+  }
+
+  if (!supabasePersistClaimedPrefs()) {
+    server.send(500, "application/json", "{\"success\":false,\"error\":\"Failed to save credentials\"}");
+    return;
+  }
+
+  String json = "{\"success\":true,\"site_slug\":\"";
+  json += supabaseSiteSlug();
+  json += "\",\"user_id\":\"";
+  json += Prefs.SUPABASE_USER_ID;
+  json += "\"}";
+  server.send(200, "application/json", json);
+}
+
+void apiSupabaseSites() {
+  registerHTTPMessage("API_SB_Sites");
+  if (!Prefs.SUPABASE_CLAIMED) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
+    return;
+  }
+  if (!wifiReadyForNetwork()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
+    return;
+  }
+
+  supabaseBeginFromPrefs();
+  Supabase.setUtcOffset(Prefs.TimeZoneOffset);
+
+  SupabaseSiteDto sites[32];
+  uint16_t count = 0;
+  if (Supabase.listSites(sites, 32, &count) != SupabaseError::Ok) {
+    String err = Supabase.lastErrorMessage();
+    if (err.length() == 0) err = Supabase.lastErrorCode();
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"" + err + "\"}");
+    return;
+  }
+
+  String json = "{\"success\":true,\"current\":\"";
+  json += supabaseSiteSlug();
+  json += "\",\"sites\":[";
+  for (uint16_t i = 0; i < count; i++) {
+    if (i) json += ",";
+    json += "{\"slug\":\"";
+    json += sites[i].slug;
+    json += "\",\"name\":\"";
+    json += sites[i].name[0] ? sites[i].name : sites[i].slug;
+    json += "\",\"device_count\":";
+    json += String(sites[i].deviceCount);
+    json += "}";
+  }
+  json += "]}";
+  server.send(200, "application/json", json);
+}
+
+static void apiSupabaseAssignSiteInternal(bool allowCreate) {
+  if (!Prefs.SUPABASE_CLAIMED) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
+    return;
+  }
+  if (!wifiReadyForNetwork()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
+    return;
+  }
+  String site = server.hasArg("site") ? server.arg("site") : "";
+  String siteName = server.hasArg("site_name") ? server.arg("site_name") : "";
+  if (site.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"site required\"}");
+    return;
+  }
+
+  supabaseBeginFromPrefs();
+  Supabase.setUtcOffset(Prefs.TimeZoneOffset);
+
+  if (Supabase.setDeviceSite(site.c_str(), siteName.length() ? siteName.c_str() : nullptr) !=
+      SupabaseError::Ok) {
+    String err = Supabase.lastErrorMessage();
+    if (err.length() == 0) err = Supabase.lastErrorCode();
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"" + err + "\"}");
+    return;
+  }
+
+  strncpy(Prefs.SITE_SLUG, site.c_str(), sizeof(Prefs.SITE_SLUG) - 1);
+  Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
+  Prefs.isUpToDate = false;
+  BootSecure boot;
+  boot.setPrefs(true);
+
+  String json = "{\"success\":true,\"site\":\"";
+  json += Prefs.SITE_SLUG;
+  json += "\",\"created\":";
+  json += allowCreate ? "true" : "false";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void apiSupabaseSite() {
+  registerHTTPMessage("API_SB_Site");
+  apiSupabaseAssignSiteInternal(false);
+}
+
+#if _IS_SERVER_HUB
+void apiSupabaseSiteCreate() {
+  registerHTTPMessage("API_SB_SiteCreate");
+  apiSupabaseAssignSiteInternal(true);
+}
+
+void apiSupabaseSiteDelete() {
+  registerHTTPMessage("API_SB_SiteDel");
+  if (!Prefs.SUPABASE_CLAIMED) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
+    return;
+  }
+  if (!wifiReadyForNetwork()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
+    return;
+  }
+  String site = server.hasArg("site") ? server.arg("site") : "";
+  if (site.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"site required\"}");
+    return;
+  }
+
+  supabaseBeginFromPrefs();
+  Supabase.setUtcOffset(Prefs.TimeZoneOffset);
+
+  if (Supabase.deleteSite(site.c_str()) != SupabaseError::Ok) {
+    String err = Supabase.lastErrorMessage();
+    if (err.length() == 0) err = Supabase.lastErrorCode();
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"" + err + "\"}");
+    return;
+  }
+
+  // Refresh this hub's site in case it was on the deleted site
+  char cloudSite[33];
+  if (Supabase.fetchOwnSite(cloudSite, sizeof(cloudSite)) == SupabaseError::Ok && cloudSite[0]) {
+    if (strcmp(Prefs.SITE_SLUG, cloudSite) != 0) {
+      strncpy(Prefs.SITE_SLUG, cloudSite, sizeof(Prefs.SITE_SLUG) - 1);
+      Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
+      Prefs.isUpToDate = false;
+      BootSecure boot;
+      boot.setPrefs(true);
+      SupabaseConfig cfg = Supabase.config();
+      strncpy(cfg.siteSlug, cloudSite, sizeof(cfg.siteSlug) - 1);
+      cfg.siteSlug[sizeof(cfg.siteSlug) - 1] = '\0';
+      Supabase.begin(cfg);
+    }
+  }
+
+  String json = "{\"success\":true,\"deleted\":\"";
+  json += site;
+  json += "\",\"current\":\"";
+  json += supabaseSiteSlug();
+  json += "\"}";
+  server.send(200, "application/json", json);
+}
+
+void apiSupabaseInventory() {
+  registerHTTPMessage("API_SB_Inv");
+  SupabaseHubInventoryResult r;
+  if (!supabaseHubInventorySync(&r)) {
+    String err = r.error[0] ? String(r.error) : "inventory failed";
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"" + err + "\"}");
+    return;
+  }
+  String json = "{\"success\":true,\"site\":\"";
+  json += supabaseSiteSlug();
+  json += "\",\"sensors_queried\":";
+  json += String(r.sensorsQueried);
+  json += ",\"sensors_added\":";
+  json += String(r.sensorsAdded);
+  json += ",\"devices_added\":";
+  json += String(r.devicesAdded);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+#endif
+#endif // _USESUPABASE
 
 /**
  * API: Scan for WiFi networks
@@ -2464,7 +2686,55 @@ void handleInitialSetup() {
       </div>
     </div>
   </div>
-  
+)===";
+
+  #ifdef _USESUPABASE
+  WEBHTML += R"===(
+  <!-- Step 4: Cloud / Site -->
+  <div class="setup-step" id="step4">
+    <div class="step-header" onclick="toggleStep('step4')">
+      <div class="step-number">4</div>
+      <div class="step-title">Cloud / Site</div>
+    </div>
+    <div class="step-content">
+      <p>Claim this device with the 4-character code from provisioning, then choose a site.</p>
+      <div id="cloud-status" class="status-message"></div>
+      <div class="form-group">
+        <label for="claim_code">Claim code *</label>
+        <input type="text" id="claim_code" maxlength="8" placeholder="ABCD" style="text-transform:uppercase;">
+      </div>
+      <button class="btn btn-primary" onclick="claimDevice()" id="claim-btn">Claim device</button>
+      <div id="site-section" style="display:none; margin-top: 20px;">
+        <div class="form-group">
+          <label for="site_select">Site</label>
+          <select id="site_select"></select>
+        </div>
+        <button class="btn btn-secondary" onclick="assignSite()" id="site-btn">Save Site</button>
+)===";
+  #if _IS_SERVER_HUB
+  WEBHTML += R"===(
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #ccc;">
+          <p><strong>New site (hub)</strong></p>
+          <div class="form-group">
+            <label for="new_site_name">Site name</label>
+            <input type="text" id="new_site_name" placeholder="Garage">
+          </div>
+          <div class="form-group">
+            <label for="new_site_slug">Site slug</label>
+            <input type="text" id="new_site_slug" placeholder="garage" style="text-transform:lowercase;">
+          </div>
+          <button class="btn btn-secondary" onclick="createSite()" id="create-site-btn">Create &amp; assign</button>
+        </div>
+)===";
+  #endif
+  WEBHTML += R"===(
+      </div>
+    </div>
+  </div>
+)===";
+  #endif
+
+  WEBHTML += R"===(
   <!-- Complete Setup -->
   <div style="text-align: center; margin: 30px 0;">
     <div id="complete-status" class="status-message"></div>
@@ -2478,8 +2748,27 @@ void handleInitialSetup() {
 let setupState = {
   wifiConfigured: false,
   locationConfigured: false,
-  timezoneConfigured: false
+  timezoneConfigured: false,
+  cloudConfigured: false
 };
+const SUPABASE_ENABLED = )===";
+
+  #ifdef _USESUPABASE
+  WEBHTML += "true";
+  #else
+  WEBHTML += "false";
+  #endif
+
+  WEBHTML += R"===(;
+const IS_HUB = )===";
+
+  #if _IS_SERVER_HUB
+  WEBHTML += "true";
+  #else
+  WEBHTML += "false";
+  #endif
+
+  WEBHTML += R"===(;
 
 // Toggle step visibility
 function toggleStep(stepId) {
@@ -2505,18 +2794,19 @@ function completeStep(stepNum) {
   const step = document.getElementById('step' + stepNum);
   step.classList.add('completed');
   step.classList.remove('active');
-  if (stepNum < 3) {
+  const maxStep = SUPABASE_ENABLED ? 4 : 3;
+  if (stepNum < maxStep) {
     const nextStep = document.getElementById('step' + (stepNum + 1));
-    nextStep.classList.add('active');
+    if (nextStep) nextStep.classList.add('active');
   }
   checkSetupComplete();
 }
 
 // Check if setup is complete
 function checkSetupComplete() {
-  if (setupState.wifiConfigured && setupState.locationConfigured && setupState.timezoneConfigured) {
-    document.getElementById('complete-btn').disabled = false;
-  }
+  let ok = setupState.wifiConfigured && setupState.locationConfigured && setupState.timezoneConfigured;
+  if (SUPABASE_ENABLED) ok = ok && setupState.cloudConfigured;
+  document.getElementById('complete-btn').disabled = !ok;
 }
 
 // Clear WiFi credentials
@@ -2797,6 +3087,119 @@ async function saveTimezone() {
   }
 }
 
+async function loadSites() {
+  if (!SUPABASE_ENABLED) return;
+  try {
+    const response = await fetch('/api/supabase/sites');
+    const data = await response.json();
+    if (!data.success) {
+      showStatus('cloud-status', data.error || 'Failed to load sites', 'error');
+      return;
+    }
+    const sel = document.getElementById('site_select');
+    sel.innerHTML = '';
+    (data.sites || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.slug;
+      opt.textContent = (s.name || s.slug) + ' (' + s.slug + ')';
+      if (s.slug === data.current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if ((data.sites || []).length === 1) {
+      sel.value = data.sites[0].slug;
+    }
+    document.getElementById('site-section').style.display = 'block';
+    if ((data.sites || []).length === 1) {
+      setupState.cloudConfigured = true;
+      completeStep(4);
+    }
+  } catch (error) {
+    showStatus('cloud-status', 'Error loading sites: ' + error.message, 'error');
+  }
+}
+
+async function claimDevice() {
+  if (!SUPABASE_ENABLED) return;
+  const code = document.getElementById('claim_code').value;
+  if (!code) {
+    showStatus('cloud-status', 'Enter claim code', 'error');
+    return;
+  }
+  showStatus('cloud-status', 'Claiming device...', 'info');
+  document.getElementById('claim-btn').disabled = true;
+  const formData = new FormData();
+  formData.append('claim_code', code);
+  try {
+    const response = await fetch('/api/supabase/claim', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      showStatus('cloud-status', 'Claimed. Select a site.', 'success');
+      setupState.cloudConfigured = true;
+      await loadSites();
+      checkSetupComplete();
+    } else {
+      showStatus('cloud-status', data.error || 'Claim failed', 'error');
+    }
+  } catch (error) {
+    showStatus('cloud-status', 'Error: ' + error.message, 'error');
+  } finally {
+    document.getElementById('claim-btn').disabled = false;
+  }
+}
+
+async function assignSite() {
+  if (!SUPABASE_ENABLED) return;
+  const site = document.getElementById('site_select').value;
+  if (!site) {
+    showStatus('cloud-status', 'Select a site', 'error');
+    return;
+  }
+  const formData = new FormData();
+  formData.append('site', site);
+  try {
+    const response = await fetch('/api/supabase/site', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      showStatus('cloud-status', 'Site saved: ' + data.site, 'success');
+      setupState.cloudConfigured = true;
+      completeStep(4);
+    } else {
+      showStatus('cloud-status', data.error || 'Failed to save site', 'error');
+    }
+  } catch (error) {
+    showStatus('cloud-status', 'Error: ' + error.message, 'error');
+  }
+}
+
+async function createSite() {
+  if (!SUPABASE_ENABLED || !IS_HUB) return;
+  const name = document.getElementById('new_site_name').value;
+  let slug = document.getElementById('new_site_slug').value;
+  if (!slug && name) slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) {
+    showStatus('cloud-status', 'Enter site name or slug', 'error');
+    return;
+  }
+  const formData = new FormData();
+  formData.append('site', slug);
+  if (name) formData.append('site_name', name);
+  try {
+    const response = await fetch('/api/supabase/site/create', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      showStatus('cloud-status', 'Created site: ' + data.site, 'success');
+      await loadSites();
+      document.getElementById('site_select').value = data.site;
+      setupState.cloudConfigured = true;
+      completeStep(4);
+    } else {
+      showStatus('cloud-status', data.error || 'Create failed', 'error');
+    }
+  } catch (error) {
+    showStatus('cloud-status', 'Error: ' + error.message, 'error');
+  }
+}
+
 // Complete setup (device reboots to refresh weather and display)
 async function completeSetup() {
   if (!confirm('Finish setup? The device will reboot to apply settings and refresh the screen.')) {
@@ -2844,6 +3247,22 @@ async function initSetup() {
       setupState.timezoneConfigured = true;
       document.getElementById('step3').classList.add('completed');
       showStatus('timezone-status', 'Configured: UTC offset = ' + status.utc_offset, 'success');
+    }
+
+    if (SUPABASE_ENABLED) {
+      if (status.supabase_claimed) {
+        setupState.cloudConfigured = true;
+        const step4 = document.getElementById('step4');
+        if (step4) {
+          step4.classList.add('completed');
+          document.getElementById('site-section').style.display = 'block';
+          showStatus('cloud-status', 'Claimed. Site: ' + (status.site_slug || 'home'), 'success');
+          loadSites();
+        }
+      } else if (setupState.timezoneConfigured) {
+        const step4 = document.getElementById('step4');
+        if (step4) step4.classList.add('active');
+      }
     }
     
     checkSetupComplete();
@@ -3960,6 +4379,48 @@ void handleCONFIG() {
   // Submit button
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
+
+  #ifdef _USESUPABASE
+  WEBHTML += "<br><hr><h3>Cloud / Site (Supabase)</h3>";
+  WEBHTML += "<p>Claimed: <strong>";
+  WEBHTML += Prefs.SUPABASE_CLAIMED ? "yes" : "no";
+  WEBHTML += "</strong>";
+  if (Prefs.SUPABASE_CLAIMED) {
+    WEBHTML += " &nbsp; Current site: <strong>";
+    WEBHTML += supabaseSiteSlug();
+    WEBHTML += "</strong>";
+  }
+  WEBHTML += "</p>";
+  WEBHTML += "<div id=\"cfg-cloud-status\" style=\"margin:8px 0;\"></div>";
+  WEBHTML += "<div style=\"margin:10px 0;\"><label>Claim code </label>";
+  WEBHTML += "<input type=\"text\" id=\"cfg_claim_code\" maxlength=\"8\" style=\"padding:8px; text-transform:uppercase;\"> ";
+  WEBHTML += "<button type=\"button\" onclick=\"cfgClaimDevice()\" style=\"padding:8px 16px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;\">Claim / Re-claim</button></div>";
+  WEBHTML += "<div id=\"cfg-site-wrap\" style=\"margin:10px 0;";
+  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
+  WEBHTML += "\"><label>Site </label><select id=\"cfg_site_select\" style=\"padding:8px; min-width:200px;\"></select> ";
+  WEBHTML += "<button type=\"button\" onclick=\"cfgAssignSite()\" style=\"padding:8px 16px; background:#2196F3; color:white; border:none; border-radius:4px; cursor:pointer;\">Save Site</button></div>";
+  #if _IS_SERVER_HUB
+  WEBHTML += "<div id=\"cfg-create-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #ddd;";
+  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
+  WEBHTML += "\"><strong>New site (hub)</strong><br>";
+  WEBHTML += "<input type=\"text\" id=\"cfg_new_site_name\" placeholder=\"Site name\" style=\"padding:8px; margin:4px;\"> ";
+  WEBHTML += "<input type=\"text\" id=\"cfg_new_site_slug\" placeholder=\"slug\" style=\"padding:8px; margin:4px; text-transform:lowercase;\"> ";
+  WEBHTML += "<button type=\"button\" onclick=\"cfgCreateSite()\" style=\"padding:8px 16px; background:#FF9800; color:white; border:none; border-radius:4px; cursor:pointer;\">Create &amp; assign</button></div>";
+  WEBHTML += "<div id=\"cfg-delete-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #f5c6cb;";
+  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
+  WEBHTML += "\"><strong>Delete site (hub)</strong>";
+  WEBHTML += "<div id=\"cfg-site-list\" style=\"margin:8px 0; font-size:14px;\">Loading sites...</div>";
+  WEBHTML += "<p style=\"font-size:13px;color:#666;\">Deleting a site moves its devices to another site (or creates <code>home</code> if it was the last site).</p>";
+  WEBHTML += "</div>";
+  WEBHTML += "<div id=\"cfg-inventory-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #c8e6c9;";
+  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
+  WEBHTML += "\"><strong>Peripheral inventory (hub)</strong><br>";
+  WEBHTML += "<p style=\"font-size:13px;color:#666;\">Queries this site for sensors that reported in the last 24 hours and adds any unknown peripherals. Also runs automatically every 12 hours.</p>";
+  WEBHTML += "<button type=\"button\" onclick=\"cfgQuerySupabase()\" id=\"cfg-inventory-btn\" style=\"padding:8px 16px; background:#009688; color:white; border:none; border-radius:4px; cursor:pointer;\">Query Supabase</button>";
+  WEBHTML += "</div>";
+  #endif
+  #endif
+
   WEBHTML = WEBHTML + "<br><a href=\"/REBOOT\" style=\"display: inline-block; margin-top: 8px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">Reboot</a>";
 
   //make another form that changes the ota slot
@@ -4047,8 +4508,167 @@ async function autodetectDST() {
     btn.value = "Autodetect Daylight Savings";
   }
 }
-  </script>
 )===";
+
+  #ifdef _USESUPABASE
+  WEBHTML += R"===(
+const CFG_IS_HUB = )===";
+  #if _IS_SERVER_HUB
+  WEBHTML += "true";
+  #else
+  WEBHTML += "false";
+  #endif
+  WEBHTML += R"===(;
+function cfgCloudMsg(msg) {
+  const el = document.getElementById('cfg-cloud-status');
+  if (el) el.textContent = msg || '';
+}
+async function cfgLoadSites() {
+  try {
+    const response = await fetch('/api/supabase/sites');
+    const data = await response.json();
+    if (!data.success) { cfgCloudMsg(data.error || 'Failed to load sites'); return; }
+    const wrap = document.getElementById('cfg-site-wrap');
+    if (wrap) wrap.style.display = 'block';
+    const createWrap = document.getElementById('cfg-create-wrap');
+    if (createWrap) createWrap.style.display = 'block';
+    const deleteWrap = document.getElementById('cfg-delete-wrap');
+    if (deleteWrap) deleteWrap.style.display = 'block';
+    const invWrap = document.getElementById('cfg-inventory-wrap');
+    if (invWrap) invWrap.style.display = 'block';
+    const sel = document.getElementById('cfg_site_select');
+    sel.innerHTML = '';
+    (data.sites || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.slug;
+      const n = (s.device_count !== undefined) ? s.device_count : 0;
+      opt.textContent = (s.name || s.slug) + ' (' + s.slug + ') — ' + n + ' device' + (n === 1 ? '' : 's');
+      if (s.slug === data.current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if ((data.sites || []).length === 1) sel.value = data.sites[0].slug;
+    const list = document.getElementById('cfg-site-list');
+    if (list && CFG_IS_HUB) {
+      if (!(data.sites || []).length) {
+        list.innerHTML = '<em>No sites</em>';
+      } else {
+        let html = '<table style="border-collapse:collapse;width:100%;max-width:480px;"><tr><th style="text-align:left;padding:4px;border-bottom:1px solid #ddd;">Site</th><th style="text-align:right;padding:4px;border-bottom:1px solid #ddd;">Devices</th><th></th></tr>';
+        (data.sites || []).forEach(s => {
+          const n = (s.device_count !== undefined) ? s.device_count : 0;
+          const label = (s.name || s.slug) + ' (' + s.slug + ')';
+          html += '<tr><td style="padding:6px 4px;">' + label + (s.slug === data.current ? ' <em>current</em>' : '') +
+            '</td><td style="text-align:right;padding:6px 4px;">' + n +
+            '</td><td style="padding:6px 4px;"><button type="button" onclick="cfgDeleteSite(\'' + s.slug + '\',' + n + ')" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;">Delete</button></td></tr>';
+        });
+        html += '</table>';
+        list.innerHTML = html;
+      }
+    }
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+}
+async function cfgClaimDevice() {
+  const code = document.getElementById('cfg_claim_code').value;
+  if (!code) { cfgCloudMsg('Enter claim code'); return; }
+  const formData = new FormData();
+  formData.append('claim_code', code);
+  cfgCloudMsg('Claiming...');
+  try {
+    const response = await fetch('/api/supabase/claim', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      cfgCloudMsg('Claimed. Site: ' + (data.site_slug || ''));
+      await cfgLoadSites();
+    } else {
+      cfgCloudMsg(data.error || 'Claim failed');
+    }
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+}
+async function cfgAssignSite() {
+  const site = document.getElementById('cfg_site_select').value;
+  if (!site) { cfgCloudMsg('Select a site'); return; }
+  const formData = new FormData();
+  formData.append('site', site);
+  try {
+    const response = await fetch('/api/supabase/site', { method: 'POST', body: formData });
+    const data = await response.json();
+    cfgCloudMsg(data.success ? ('Site saved: ' + data.site) : (data.error || 'Failed'));
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+}
+async function cfgCreateSite() {
+  if (!CFG_IS_HUB) return;
+  const name = document.getElementById('cfg_new_site_name').value;
+  let slug = document.getElementById('cfg_new_site_slug').value;
+  if (!slug && name) slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) { cfgCloudMsg('Enter site name or slug'); return; }
+  const formData = new FormData();
+  formData.append('site', slug);
+  if (name) formData.append('site_name', name);
+  try {
+    const response = await fetch('/api/supabase/site/create', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      cfgCloudMsg('Created: ' + data.site);
+      await cfgLoadSites();
+      document.getElementById('cfg_site_select').value = data.site;
+    } else {
+      cfgCloudMsg(data.error || 'Create failed');
+    }
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+}
+async function cfgDeleteSite(slug, deviceCount) {
+  if (!CFG_IS_HUB || !slug) return;
+  const n = deviceCount || 0;
+  const msg = 'Delete site \"' + slug + '\"?' +
+    (n ? ('\\n\\n' + n + ' device(s) on this site will be moved to another site (or to a new \"home\" if this is the last site).') : '') +
+    '\\n\\nThis cannot be undone.';
+  if (!confirm(msg)) return;
+  if (!confirm('Confirm delete site \"' + slug + '\"?')) return;
+  const formData = new FormData();
+  formData.append('site', slug);
+  cfgCloudMsg('Deleting ' + slug + '...');
+  try {
+    const response = await fetch('/api/supabase/site/delete', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      cfgCloudMsg('Deleted \"' + slug + '\". Current site: ' + (data.current || ''));
+      await cfgLoadSites();
+    } else {
+      cfgCloudMsg(data.error || 'Delete failed');
+    }
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+}
+async function cfgQuerySupabase() {
+  if (!CFG_IS_HUB) return;
+  const btn = document.getElementById('cfg-inventory-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Querying...'; }
+  cfgCloudMsg('Querying Supabase for site peripherals...');
+  try {
+    const response = await fetch('/api/supabase/inventory', { method: 'POST' });
+    const data = await response.json();
+    if (data.success) {
+      cfgCloudMsg('Inventory: queried ' + data.sensors_queried +
+        ' sensor(s), added ' + data.sensors_added + ' sensor(s) / ' +
+        data.devices_added + ' device(s).');
+    } else {
+      cfgCloudMsg(data.error || 'Inventory query failed');
+    }
+  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Query Supabase'; }
+  }
+}
+document.addEventListener('DOMContentLoaded', function() {
+  if (document.getElementById('cfg-site-wrap') && document.getElementById('cfg-site-wrap').style.display !== 'none') {
+    cfgLoadSites();
+  }
+});
+if (document.getElementById('cfg-site-wrap') && document.getElementById('cfg-site-wrap').style.display !== 'none') {
+  cfgLoadSites();
+}
+)===";
+  #endif
+
+  WEBHTML = WEBHTML + "</script>";
 
 
   WEBHTML = WEBHTML + "</html>";
@@ -6804,6 +7424,12 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
         " (UDP rate " + String(udpPingSuccessRatePercent(device)) + "%)", true);
 
     sendMSG_DataRequest(device, -1, !useUdp);
+
+    #ifdef _USESUPABASE
+    // After LAN attempt: cloud fallback at 2×/3×/… SendingInt for expired sensors
+    supabaseHubPollExpiredAfterLan(device);
+    #endif
+
     return; // one device per call
   }
 
@@ -7542,6 +8168,17 @@ void setupServerRoutes() {
     server.on("/api/complete-setup", HTTP_POST, handleApiCompleteSetup);
     server.on("/api/complete-setup", HTTP_GET, handleApiCompleteSetup);
     server.on("/api/SNS_READ_NOW", HTTP_GET, handleSNS_READ_NOW);
+    #ifdef _USESUPABASE
+    server.on("/api/supabase/claim", HTTP_POST, apiSupabaseClaim);
+    server.on("/api/supabase/sites", HTTP_GET, apiSupabaseSites);
+    server.on("/api/supabase/site", HTTP_POST, apiSupabaseSite);
+    #if _IS_SERVER_HUB
+    server.on("/api/supabase/site/create", HTTP_POST, apiSupabaseSiteCreate);
+    server.on("/api/supabase/site/delete", HTTP_POST, apiSupabaseSiteDelete);
+    server.on("/api/supabase/inventory", HTTP_POST, apiSupabaseInventory);
+    server.on("/api/supabase/inventory", HTTP_GET, apiSupabaseInventory);
+    #endif
+    #endif
             
     // Weather routes
     server.on("/WEATHER", HTTP_GET, handleWeather);

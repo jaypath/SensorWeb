@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 
-/** Wire protocol version sent on every device-api request. */
+/** Retained for Prefs / claim bootstrap compatibility (PostgREST path does not send this). */
 #ifndef SUPABASE_API_VERSION
 #define SUPABASE_API_VERSION 1
 #endif
@@ -34,6 +34,8 @@ struct SupabaseDeviceDto {
   char userId[40];
   char name[30];
   char deviceIp[16];
+  char siteSlug[33];    // e.g. home, work
+  char siteId[40];      // uuid or empty
   uint8_t devType;
   uint32_t featureMask;
   uint32_t sendingInt;
@@ -98,10 +100,18 @@ struct SupabaseFirmwareOffer {
   int32_t sizeBytes;
 };
 
+struct SupabaseSiteDto {
+  char id[40];
+  char slug[33];
+  char name[64];
+  uint16_t deviceCount;
+};
+
 struct SupabaseQueryFilter {
-  const char* table;       // "sensors" | "devices" | "sensor_readings"
+  const char* table;       // "sensors" | "devices" | "sensor_readings" | "sites"
   const char* deviceMac;   // optional
   const char* deviceIp;    // optional
+  const char* site;        // optional site slug (null/empty = all sites for user)
   int16_t snsType;         // -1 = any
   int8_t expired;          // -1 = any, 0/1 = filter
   uint32_t timeStartUnix;  // 0 = none

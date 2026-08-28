@@ -62,6 +62,13 @@ int8_t BootSecure::setup() {
     }
     #endif
 
+    #ifdef _USESUPABASE
+    if (Prefs.SITE_SLUG[0] == '\0') {
+        strncpy(Prefs.SITE_SLUG, "home", sizeof(Prefs.SITE_SLUG) - 1);
+        Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
+    }
+    #endif
+
     return prefs_status;
 }
 

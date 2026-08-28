@@ -56,6 +56,9 @@
 #include "utility.hpp"
 #include "firmwareUpdate.hpp"
 #include <esp_task_wdt.h>
+#ifdef _USESUPABASE
+#include "supabase_prefs.hpp"
+#endif
 
 #ifdef _USELOWPOWER
 #include "LowPower.hpp"
@@ -446,6 +449,10 @@ void loop() {
 
     systemHousekeeping();
 
+    #ifdef _USESUPABASE
+    supabaseServiceStartupSiteSync();
+    supabaseServiceCloudSync(false);
+    #endif
 
     #ifdef _USETFLUNA    
 //    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
@@ -546,7 +553,9 @@ void loop() {
             #ifdef _ISHVACSERVER
                 checkHVAC();
             #endif
-
+            #ifdef _USESUPABASE
+            supabaseHubPollTick();
+            #endif
         #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;

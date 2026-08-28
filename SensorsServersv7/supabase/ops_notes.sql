@@ -4,6 +4,18 @@
 -- insert into public.subscriptions (user_id, plan, status, valid_until)
 -- values ('USER_UUID', 'trial', 'trial', now() + interval '90 days');
 --
+-- Sites: run schema_sites.sql
+-- Device data path: run schema_postgrest_device.sql
+--   Devices use mint-device-jwt + PostgREST (/rest/v1), NOT device-api Edge.
+--   RPCs: ensure_my_site, delete_my_site, insert_my_reading
+-- Optional site slug on enroll/provision (default "home").
+--
+-- Bulk provision example with sites:
+--   { "devices": [
+--     { "email": "a@b.com", "device_mac": "...", "site": "home" },
+--     { "email": "a@b.com", "device_mac": "...", "site": "work", "site_name": "Downtown office" }
+--   ]}
+--
 -- Admins: run schema_admins.sql
 -- Provisioning mailbox: run schema_provisioning.sql
 --

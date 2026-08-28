@@ -3,10 +3,8 @@
 /**
  * SensorWeb Supabase device client
  *
- * Actions (device-api v1): list_active_sensors, query, upsert_device, upsert_sensor,
- * insert_reading, firmware_check, firmware_url.
- *
- * Every call sends api_version=SUPABASE_API_VERSION. Auth via mint-device-jwt.
+ * Auth: mint-device-jwt / claim-device Edge Functions.
+ * Data path: PostgREST /rest/v1 (+ RPCs ensure_my_site, delete_my_site, insert_my_reading).
  * Enable with -D _USESUPABASE=1
  */
 
@@ -30,6 +28,11 @@ public:
 
   void begin(const SupabaseConfig& cfg);
   void setUtcOffset(int32_t offsetSec);
+  /** Update STA IP + device type included on device metadata writes. */
+  void setDeviceIdentity(const char* deviceIp, uint8_t devType);
+  /** Unix time of last successful HTTPS call to Supabase (0 if unknown). */
+  uint32_t lastSuccessUnix() const { return lastSuccessUnix_; }
+  uint32_t lastSuccessMs() const { return lastSuccessMs_; }
   const SupabaseConfig& config() const { return cfg_; }
   SupabaseError lastError() const { return lastError_; }
   const char* lastErrorMessage() const { return lastErrorMsg_; }
@@ -37,8 +40,22 @@ public:
 
   SupabaseError ensureAuth();
 
+  /** One-time claim via claim-device; fills config from bootstrap response. */
+  SupabaseError claimDevice(const char* claimCode);
+
+  SupabaseError listSites(SupabaseSiteDto* out, uint16_t maxOut, uint16_t* countOut);
+
+  /** Delete a site (RPC reassigns devices). Hub use. */
+  SupabaseError deleteSite(const char* siteSlug);
+
+  /** Assign (and create if needed) site via ensure_my_site + devices PATCH. */
+  SupabaseError setDeviceSite(const char* siteSlug, const char* siteName = nullptr);
+
+  /** Query this device's row and return cloud site_slug. */
+  SupabaseError fetchOwnSite(char* siteSlugOut, size_t siteSlugOutLen);
+
   SupabaseError listActiveSensors(SupabaseSensorDto* out, uint16_t maxOut, uint16_t* countOut,
-                                  const char* scopeMac = nullptr);
+                                  const char* scopeMac = nullptr, const char* site = nullptr);
 
   SupabaseError querySensors(const SupabaseQueryFilter& filter, SupabaseSensorDto* out,
                              uint16_t maxOut, uint16_t* countOut);
@@ -174,13 +191,18 @@ private:
   SupabaseConfig cfg_;
   char accessToken_[900];
   uint32_t tokenExpiresAt_;
+  uint32_t lastSuccessUnix_;
+  uint32_t lastSuccessMs_;
   SupabaseError lastError_;
   char lastErrorMsg_[96];
   char lastErrorCode_[40];
 
   void setError(SupabaseError err, const char* code, const char* msg);
-  SupabaseError httpPostJson(const char* path, const char* bodyJson, bool withBearer,
-                             String& responseOut);
+  void noteSuccess();
+  SupabaseError httpJson(const char* method, const char* pathAndQuery, const char* bodyJson,
+                         bool withBearer, String& responseOut, const char* prefer = nullptr);
+  SupabaseError resolveSiteId(const char* siteSlug, char* siteIdOut, size_t siteIdLen);
+  SupabaseError macsForSite(const char* siteSlug, String& macCsvOut);
 };
 
 extern SupabaseClient Supabase;

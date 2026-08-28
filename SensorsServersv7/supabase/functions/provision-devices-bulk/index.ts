@@ -2,6 +2,7 @@ import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import { currentBootstrapConfig } from "../_shared/bootstrap.ts";
 import { generateApiKey, generateClaimCode, hashApiKey } from "../_shared/crypto.ts";
 import { normalizeMac } from "../_shared/mac.ts";
+import { ensureSiteForUser } from "../_shared/sites.ts";
 import { serviceClient, userClientFromAuthHeader } from "../_shared/supabase.ts";
 import { ensureTrialSubscription, resolveTargetUser } from "../_shared/users.ts";
 
@@ -12,6 +13,9 @@ type BulkRow = {
   user_id?: string;
   device_mac?: string;
   name?: string | null;
+  /** Optional site slug (default "home"). */
+  site?: string | null;
+  site_name?: string | null;
 };
 
 type BulkBody = {
@@ -119,6 +123,13 @@ Deno.serve(async (req) => {
           await ensureTrialSubscription(admin, target.userId);
         }
 
+        const site = await ensureSiteForUser(
+          admin,
+          target.userId,
+          row.site,
+          row.site_name,
+        );
+
         const { apiKey, prefix } = generateApiKey();
         const apiKeyHash = hashApiKey(apiKey);
         const claimCode = generateClaimCode();
@@ -133,8 +144,9 @@ Deno.serve(async (req) => {
             api_key_prefix: prefix,
             name,
             is_active: true,
+            site_id: site.id,
           })
-          .select("id, device_mac, api_key_prefix, name, is_active, created_at")
+          .select("id, device_mac, api_key_prefix, name, is_active, created_at, site_id")
           .single();
 
         if (insDevErr || !createdDev) {
@@ -160,9 +172,11 @@ Deno.serve(async (req) => {
             device_api_path: bootstrap.device_api_path,
             claim_path: bootstrap.claim_path,
             api_version: bootstrap.api_version,
+            site_slug: site.slug,
+            site_id: site.id,
           })
           .select(
-            "id, device_mac, user_id, user_email, claim_code, expires_at, created_at, project_url, mint_path, device_api_path, claim_path, api_version",
+            "id, device_mac, user_id, user_email, claim_code, expires_at, created_at, project_url, mint_path, device_api_path, claim_path, api_version, site_slug, site_id",
           )
           .single();
 
@@ -183,6 +197,9 @@ Deno.serve(async (req) => {
           api_key_prefix: prefix,
           expires_at: expiresAt,
           name,
+          site_id: site.id,
+          site_slug: site.slug,
+          site_name: site.name,
           project_url: bootstrap.project_url,
           anon_key: bootstrap.anon_key,
           mint_path: bootstrap.mint_path,

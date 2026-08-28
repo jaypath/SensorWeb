@@ -1,12 +1,15 @@
 import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import { generateApiKey, hashApiKey } from "../_shared/crypto.ts";
 import { normalizeMac } from "../_shared/mac.ts";
+import { ensureSiteForUser } from "../_shared/sites.ts";
 import { serviceClient, userClientFromAuthHeader } from "../_shared/supabase.ts";
 
 type AdminEnrollBody = {
   email?: string;
   device_mac?: string;
   name?: string | null;
+  site?: string | null;
+  site_name?: string | null;
   /** If true and device already belongs to the target user, issue a new API key. */
   rotate?: boolean;
   /** Optional plan for newly created users (default trial). */
@@ -144,6 +147,8 @@ Deno.serve(async (req) => {
       }
     }
 
+    const site = await ensureSiteForUser(admin, targetUserId, body.site, body.site_name);
+
     // --- Enroll / rotate device under target user ---
     const { data: existingDev, error: findErr } = await admin
       .from("devices")
@@ -185,10 +190,11 @@ Deno.serve(async (req) => {
           api_key_prefix: prefix,
           name: name ?? undefined,
           is_active: true,
+          site_id: site.id,
         })
         .eq("id", existingDev.id)
         .eq("user_id", targetUserId)
-        .select("id, device_mac, api_key_prefix, name, is_active, created_at")
+        .select("id, device_mac, api_key_prefix, name, is_active, created_at, site_id")
         .single();
 
       if (updErr || !updated) {
@@ -204,6 +210,8 @@ Deno.serve(async (req) => {
         email,
         user_created: userCreated,
         temporary_password: temporaryPassword,
+        site_slug: site.slug,
+        site_name: site.name,
         warning:
           "Store api_key on the device now; it cannot be retrieved again." +
           (temporaryPassword
@@ -221,8 +229,9 @@ Deno.serve(async (req) => {
         api_key_prefix: prefix,
         name,
         is_active: true,
+        site_id: site.id,
       })
-      .select("id, device_mac, api_key_prefix, name, is_active, created_at")
+      .select("id, device_mac, api_key_prefix, name, is_active, created_at, site_id")
       .single();
 
     if (insErr || !createdDev) {
@@ -238,6 +247,8 @@ Deno.serve(async (req) => {
       email,
       user_created: userCreated,
       temporary_password: temporaryPassword,
+      site_slug: site.slug,
+      site_name: site.name,
       warning:
         "Store api_key on the device now; it cannot be retrieved again." +
         (temporaryPassword

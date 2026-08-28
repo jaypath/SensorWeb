@@ -1,7 +1,7 @@
 {
   "name": "SupabaseClient",
   "version": "1.0.0",
-  "description": "SensorWeb Supabase device-api client (mint JWT, sync devices/sensors, firmware check)",
+  "description": "SensorWeb Supabase client (mint JWT + PostgREST for devices/sensors/readings)",
   "keywords": "supabase, esp32, sensors",
   "authors": { "name": "SensorWeb" },
   "frameworks": "arduino",

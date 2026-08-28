@@ -1,0 +1,4 @@
+-implement hub based adjustment of sensor limits
+-create app
+-allow end user to deregister a device
+-allow end user to register a device that is already in table (requires that the device MAC was entered, but that the device is not registered to another user)

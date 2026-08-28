@@ -242,6 +242,15 @@ typedef enum {
     double SNS_CALIB_MIN[_SENSORNUM] = {0}; //store min values for each sensor in NVS
     double SNS_CALIB_MAX[_SENSORNUM] = {0}; //store max values for each sensor in NVS
     #endif
+
+    #ifdef _USESUPABASE
+    char SUPABASE_PROJECT_URL[96] = {0};
+    char SUPABASE_ANON_KEY[200] = {0};
+    char SUPABASE_API_KEY[96] = {0};
+    char SUPABASE_USER_ID[40] = {0};
+    char SITE_SLUG[33] = {'h','o','m','e','\0'};
+    bool SUPABASE_CLAIMED = false;
+    #endif
   };
   
   struct ERROR_STRUCT {
@@ -499,6 +508,10 @@ class LGFX;
 
 #ifdef _USEGSHEET
 #include "GsheetUpload.hpp"
+#endif
+
+#ifdef _USESUPABASE
+#include <SupabaseClient.hpp>
 #endif
 
 #ifdef _USEFIREBASE

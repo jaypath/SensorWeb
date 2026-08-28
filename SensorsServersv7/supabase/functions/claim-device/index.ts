@@ -48,7 +48,7 @@ Deno.serve(async (req) => {
     const { data: row, error: findErr } = await admin
       .from("device_provisioning")
       .select(
-        "id, device_mac, user_id, user_email, api_key_plaintext, claim_code, expires_at, project_url, anon_key, mint_path, device_api_path, claim_path, api_version",
+        "id, device_mac, user_id, user_email, api_key_plaintext, claim_code, expires_at, project_url, anon_key, mint_path, device_api_path, claim_path, api_version, site_slug, site_id",
       )
       .eq("device_mac", deviceMac)
       .eq("claim_code", claimCode)
@@ -96,13 +96,15 @@ Deno.serve(async (req) => {
       device_api_path: row.device_api_path || live.device_api_path,
       claim_path: row.claim_path || live.claim_path,
       api_version: row.api_version ?? live.api_version,
+      site_id: row.site_id ?? null,
+      site_slug: row.site_slug || "home",
       // Convenience full URLs
       mint_url: projectUrl ? `${projectUrl}${row.mint_path || live.mint_path}` : null,
       device_api_url: projectUrl
         ? `${projectUrl}${row.device_api_path || live.device_api_path}`
         : null,
       warning:
-        "Credentials delivered once; staging row deleted. Persist project_url, anon_key, device_mac, api_key, user_id on device.",
+        "Credentials delivered once; staging row deleted. Persist project_url, anon_key, device_mac, api_key, user_id, site_slug on device.",
     });
   } catch (e) {
     console.error("claim-device:", e);
