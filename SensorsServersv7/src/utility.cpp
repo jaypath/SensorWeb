@@ -443,9 +443,8 @@ bool initSystem() {
 
   if (wifiReadyForNetwork()) {
     SerialPrint("Wifi OK. Current IP Address: " + WiFi.localIP().toString(), true, 5);
-    #ifdef _USESUPABASE
-    supabaseServiceStartupSiteSync();
-    #endif
+    // Supabase site sync runs from loop() after setup (TLS during initSystem was
+    // crashing on SPIRAM builds when WiFiClientSecure was heap-allocated).
   } else {
     SerialPrint("Wifi not connected; continuing with AP/ESP-NOW. Status: " + String(I.WiFiStatus), true, 5);
   }

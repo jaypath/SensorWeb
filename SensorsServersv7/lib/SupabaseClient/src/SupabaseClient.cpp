@@ -8,7 +8,6 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
-#include <new>
 #include <esp_task_wdt.h>
 
 #if defined(_USE_CERT_BUNDLE)
@@ -285,24 +284,20 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
 
   String url = String(cfg_.projectUrl) + pathAndQuery;
 
-  // Heap-allocate TLS client — WiFiClientSecure is large on the stack.
-  WiFiClientSecure* client = new (std::nothrow) WiFiClientSecure();
-  if (!client) {
-    setError(SupabaseError::HttpFailed, "oom", "WiFiClientSecure alloc failed");
-    return lastError_;
-  }
+  // Must stay in internal RAM (stack). `new` can land in PSRAM on SPIRAM builds and
+  // mbedtls/WiFiClientSecure then crashes during TLS handshake.
+  WiFiClientSecure client;
 #if defined(_USE_CERT_BUNDLE)
-  client->setCACertBundle(x509_crt_imported_bundle_bin_start,
-                          (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
+  client.setCACertBundle(x509_crt_imported_bundle_bin_start,
+                         (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
 #else
-  client->setInsecure();
+  client.setInsecure();
 #endif
 
   HTTPClient http;
   http.setTimeout(cfg_.httpTimeoutMs ? cfg_.httpTimeoutMs : 20000);
   esp_task_wdt_reset();
-  if (!http.begin(*client, url)) {
-    delete client;
+  if (!http.begin(client, url)) {
     setError(SupabaseError::HttpFailed, "http_begin", "HTTP begin failed");
     return lastError_;
   }
@@ -329,7 +324,6 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
     code = http.sendRequest("DELETE");
   } else {
     http.end();
-    delete client;
     setError(SupabaseError::InvalidArg, "bad_method", "Unsupported HTTP method");
     return lastError_;
   }
@@ -337,7 +331,6 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
   esp_task_wdt_reset();
   responseOut = http.getString();
   http.end();
-  delete client;
   esp_task_wdt_reset();
 
   // Guard heap: ArduinoJson will allocate another copy while parsing.
