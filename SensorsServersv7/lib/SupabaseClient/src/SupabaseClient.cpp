@@ -9,6 +9,9 @@
 #include <string.h>
 #include <time.h>
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #if defined(_USE_CERT_BUNDLE)
 extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
@@ -269,6 +272,104 @@ static bool sensorFreshNow(const SupabaseSensorDto& s, uint32_t nowUnix) {
   return (s.timeRead + grace) > nowUnix;
 }
 
+// WiFiClientSecure must live in internal DRAM — PSRAM-backed `new` crashes mbedtls
+// on SPIRAM boards, and a stack-local instance blows the WebServer/loop stack (~8KB).
+// Binary semaphore (not mutex) so a stuck hold can be force-released from another task
+// if the owner dies or hangs inside HTTPClient/mbedtls.
+static SemaphoreHandle_t s_supabaseTlsSem = nullptr;
+static WiFiClientSecure* s_supabaseTlsClient = nullptr;
+static volatile uint32_t s_tlsHoldGen = 0;
+static volatile uint32_t s_tlsHeldSinceMs = 0;
+#ifndef SUPABASE_TLS_MAX_HOLD_MS
+// Must exceed httpTimeout (10s) + handshake slack; recovers stuck holds without waiting a minute.
+#define SUPABASE_TLS_MAX_HOLD_MS 30000UL
+#endif
+
+static bool supabaseTlsSemEnsure() {
+  if (s_supabaseTlsSem) return true;
+  s_supabaseTlsSem = xSemaphoreCreateBinary();
+  if (!s_supabaseTlsSem) return false;
+  // Binary starts empty; give once so the first take succeeds.
+  xSemaphoreGive(s_supabaseTlsSem);
+  return true;
+}
+
+static void supabaseTlsForceReleaseIfStale(uint32_t maxHoldMs) {
+  if (!s_supabaseTlsSem || s_tlsHeldSinceMs == 0) return;
+  const uint32_t now = millis();
+  const uint32_t heldFor = now - s_tlsHeldSinceMs;
+  if (heldFor < maxHoldMs) return;
+
+  // NEVER call WiFiClientSecure::stop() from a non-owner task — mbedtls is not
+  // thread-safe and that panics mid-handshake (reboot, no storeError; often while
+  // the TFT shows "ArbNet Png"). Invalidate the hold gen so the owner's later
+  // release is a no-op, then give the semaphore so waiters can proceed. The
+  // client may still be mid-use; callers must tolerate tls_busy / HttpFailed.
+  ++s_tlsHoldGen;
+  s_tlsHeldSinceMs = 0;
+  xSemaphoreGive(s_supabaseTlsSem);
+  Serial.printf("Supabase TLS: force-released after %lu ms (stale hold; client not stopped)\n",
+                (unsigned long)heldFor);
+}
+
+static WiFiClientSecure* supabaseTlsClientAcquire(TickType_t waitTicks, uint32_t* holdGenOut) {
+  if (holdGenOut) *holdGenOut = 0;
+  if (!supabaseTlsSemEnsure()) return nullptr;
+  supabaseTlsForceReleaseIfStale(SUPABASE_TLS_MAX_HOLD_MS);
+  if (xSemaphoreTake(s_supabaseTlsSem, waitTicks) != pdTRUE) return nullptr;
+  if (!s_supabaseTlsClient) {
+    void* mem = heap_caps_malloc(sizeof(WiFiClientSecure),
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!mem) {
+      xSemaphoreGive(s_supabaseTlsSem);
+      return nullptr;
+    }
+    s_supabaseTlsClient = new (mem) WiFiClientSecure();
+  }
+  const uint32_t gen = ++s_tlsHoldGen;
+  s_tlsHeldSinceMs = millis();
+  if (s_tlsHeldSinceMs == 0) s_tlsHeldSinceMs = 1; // avoid 0 = "not held"
+  if (holdGenOut) *holdGenOut = gen;
+  return s_supabaseTlsClient;
+}
+
+static void supabaseTlsClientRelease(WiFiClientSecure* client, uint32_t holdGen) {
+  if (!s_supabaseTlsSem) return;
+  // Stale force-release already bumped gen and gave the semaphore.
+  if (holdGen == 0 || holdGen != s_tlsHoldGen) {
+    return;
+  }
+  if (client) {
+    client->stop();
+  }
+  s_tlsHeldSinceMs = 0;
+  xSemaphoreGive(s_supabaseTlsSem);
+}
+
+bool SupabaseClient::isTlsBusy() {
+  if (!supabaseTlsSemEnsure()) return false;
+  supabaseTlsForceReleaseIfStale(SUPABASE_TLS_MAX_HOLD_MS);
+  if (xSemaphoreTake(s_supabaseTlsSem, 0) != pdTRUE) {
+    return true;
+  }
+  xSemaphoreGive(s_supabaseTlsSem);
+  return false;
+}
+
+uint32_t SupabaseClient::tlsHeldForMs() {
+  const uint32_t since = s_tlsHeldSinceMs;
+  if (!since) return 0;
+  return millis() - since;
+}
+
+bool SupabaseClient::isInvalidDeviceCredentials() const {
+  if (strcmp(lastErrorCode_, "invalid_device") == 0) return true;
+  if (strcmp(lastErrorCode_, "reclaim_required") == 0) return true;
+  if (strstr(lastErrorMsg_, "Invalid device credentials") != nullptr) return true;
+  if (strstr(lastErrorMsg_, "Re-claim required") != nullptr) return true;
+  return false;
+}
+
 SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQuery,
                                        const char* bodyJson, bool withBearer,
                                        String& responseOut, const char* prefer) {
@@ -283,23 +384,40 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
   }
 
   String url = String(cfg_.projectUrl) + pathAndQuery;
+  const uint32_t timeoutMs = cfg_.httpTimeoutMs ? cfg_.httpTimeoutMs : 10000;
 
-  // Must stay in internal RAM (stack). `new` can land in PSRAM on SPIRAM builds and
-  // mbedtls/WiFiClientSecure then crashes during TLS handshake.
-  WiFiClientSecure client;
+  uint32_t holdGen = 0;
+  // Fail fast when another ArborysNet task holds TLS; stale holds are cleared in acquire.
+  WiFiClientSecure* client = supabaseTlsClientAcquire(pdMS_TO_TICKS(100), &holdGen);
+  if (!client) {
+    setError(SupabaseError::HttpFailed, "tls_busy", "Please wait, TLS client occupied");
+    return lastError_;
+  }
+
 #if defined(_USE_CERT_BUNDLE)
-  client.setCACertBundle(x509_crt_imported_bundle_bin_start,
-                         (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
+  client->setCACertBundle(x509_crt_imported_bundle_bin_start,
+                          (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
 #else
-  client.setInsecure();
+  client->setInsecure();
 #endif
+  client->setTimeout(timeoutMs);
+  // Handshake should not exceed the HTTP budget (was capped at 35s independently).
+  client->setHandshakeTimeout(timeoutMs);
 
   HTTPClient http;
-  http.setTimeout(cfg_.httpTimeoutMs ? cfg_.httpTimeoutMs : 20000);
+  http.setTimeout(timeoutMs);
   esp_task_wdt_reset();
-  if (!http.begin(client, url)) {
+  if (!http.begin(*client, url)) {
+    http.end();
+    supabaseTlsClientRelease(client, holdGen);
     setError(SupabaseError::HttpFailed, "http_begin", "HTTP begin failed");
     return lastError_;
+  }
+
+  const bool wantCount = (prefer && strstr(prefer, "count=") != nullptr);
+  if (wantCount) {
+    static const char* kCountHeaders[] = {"Content-Range", "content-range"};
+    http.collectHeaders(kCountHeaders, 2);
   }
 
   http.addHeader("Content-Type", "application/json");
@@ -324,13 +442,31 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
     code = http.sendRequest("DELETE");
   } else {
     http.end();
+    supabaseTlsClientRelease(client, holdGen);
     setError(SupabaseError::InvalidArg, "bad_method", "Unsupported HTTP method");
     return lastError_;
   }
 
   esp_task_wdt_reset();
-  responseOut = http.getString();
+  // Prefer empty/minimal body + Content-Range for counts.
+  if (wantCount) {
+    String range = http.header("Content-Range");
+    if (range.length() == 0) range = http.header("content-range");
+    // Still drain body to free connection.
+    (void)http.getString();
+    responseOut = "";
+    if (range.length()) {
+      int slash = range.lastIndexOf('/');
+      if (slash >= 0 && slash + 1 < (int)range.length()) {
+        responseOut = range.substring(slash + 1);
+        responseOut.trim();
+      }
+    }
+  } else {
+    responseOut = http.getString();
+  }
   http.end();
+  supabaseTlsClientRelease(client, holdGen);
   esp_task_wdt_reset();
 
   // Guard heap: ArduinoJson will allocate another copy while parsing.
@@ -351,6 +487,28 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
         setError(SupabaseError::SubscriptionInactive, "subscription_inactive", msg);
         return lastError_;
       }
+      if (strstr(msg, "sensor_limit") || strcmp(codeStr, "P0001") == 0 ||
+          strstr(codeStr, "sensor_limit") != nullptr) {
+        setError(SupabaseError::ApiRejected, "sensor_limit",
+                 msg[0] ? msg : "sensor_limit");
+        return lastError_;
+      }
+      // mint-device-jwt: IP mismatch / bad key without IP recovery → must re-claim.
+      if ((code == 401 || code == 403) &&
+          (strcmp(codeStr, "reclaim_required") == 0 ||
+           strstr(msg, "Re-claim required") != nullptr)) {
+        setError(SupabaseError::AuthFailed, "reclaim_required",
+                 msg[0] ? msg : "Re-claim required");
+        return lastError_;
+      }
+      // mint-device-jwt returns this for missing/inactive device — only true "not registered".
+      if ((code == 401 || code == 403) &&
+          (strcmp(codeStr, "invalid_device") == 0 ||
+           strstr(msg, "Invalid device credentials") || strstr(msg, "invalid device"))) {
+        setError(SupabaseError::AuthFailed, "invalid_device",
+                 msg[0] ? msg : "Invalid device credentials");
+        return lastError_;
+      }
       if (code == 401 || code == 403) {
         setError(SupabaseError::ApiRejected, "http_forbidden", msg[0] ? msg : "Auth/access rejected");
         return lastError_;
@@ -361,6 +519,7 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
       }
     }
     if (code == 401 || code == 403) {
+      // No JSON body — treat as forbidden, not as confirmed invalid device.
       setError(SupabaseError::ApiRejected, "http_forbidden", "Auth/access rejected");
     } else {
       char msg[64];
@@ -375,6 +534,128 @@ SupabaseError SupabaseClient::httpJson(const char* method, const char* pathAndQu
   return SupabaseError::Ok;
 }
 
+static bool supabaseParseHttpsHostPort(const char* url, char* hostOut, size_t hostLen, uint16_t* portOut) {
+  if (!url || !hostOut || hostLen < 2 || !portOut) return false;
+  *portOut = 443;
+  const char* p = url;
+  if (!strncmp(p, "https://", 8)) {
+    p += 8;
+  } else if (!strncmp(p, "http://", 7)) {
+    p += 7;
+    *portOut = 80;
+  }
+  const char* slash = strchr(p, '/');
+  const char* colon = strchr(p, ':');
+  size_t n = 0;
+  if (colon && (!slash || colon < slash)) {
+    n = (size_t)(colon - p);
+    *portOut = (uint16_t)atoi(colon + 1);
+  } else if (slash) {
+    n = (size_t)(slash - p);
+  } else {
+    n = strlen(p);
+  }
+  if (n == 0 || n >= hostLen) return false;
+  memcpy(hostOut, p, n);
+  hostOut[n] = '\0';
+  return true;
+}
+
+SupabaseError SupabaseClient::httpJsonFireAndForget(const char* method, const char* pathAndQuery,
+                                                    const char* bodyJson, bool withBearer,
+                                                    const char* prefer) {
+  if (!cfg_.projectUrl[0] || !cfg_.anonKey[0]) {
+    setError(SupabaseError::NotConfigured, "not_configured", "Supabase URL/anon incomplete");
+    return lastError_;
+  }
+  if (withBearer && (!cfg_.isReady() || !accessToken_[0])) {
+    setError(SupabaseError::AuthFailed, "no_token", "JWT required before fire-and-forget send");
+    return lastError_;
+  }
+  if (!method || !pathAndQuery || pathAndQuery[0] != '/') {
+    setError(SupabaseError::InvalidArg, "bad_path", "path must start with /");
+    return lastError_;
+  }
+
+  char host[96];
+  uint16_t port = 443;
+  if (!supabaseParseHttpsHostPort(cfg_.projectUrl, host, sizeof(host), &port)) {
+    setError(SupabaseError::InvalidArg, "bad_url", "Could not parse project URL host");
+    return lastError_;
+  }
+
+  const char* body = bodyJson ? bodyJson : "";
+  const size_t bodyLen = strlen(body);
+  const uint32_t timeoutMs = cfg_.httpTimeoutMs ? cfg_.httpTimeoutMs : 10000;
+
+  uint32_t holdGen = 0;
+  WiFiClientSecure* client = supabaseTlsClientAcquire(pdMS_TO_TICKS(100), &holdGen);
+  if (!client) {
+    setError(SupabaseError::HttpFailed, "tls_busy", "Please wait, TLS client occupied");
+    return lastError_;
+  }
+
+#if defined(_USE_CERT_BUNDLE)
+  client->setCACertBundle(x509_crt_imported_bundle_bin_start,
+                          (size_t)(x509_crt_imported_bundle_bin_end - x509_crt_imported_bundle_bin_start));
+#else
+  client->setInsecure();
+#endif
+  client->setTimeout(timeoutMs);
+  client->setHandshakeTimeout(timeoutMs);
+
+  esp_task_wdt_reset();
+  if (!client->connect(host, port)) {
+    supabaseTlsClientRelease(client, holdGen);
+    setError(SupabaseError::HttpFailed, "connect", "TLS connect failed");
+    return lastError_;
+  }
+
+  // Build a small request; do not wait for status/body.
+  String req;
+  req.reserve(384 + bodyLen);
+  req += method ? method : "PATCH";
+  req += ' ';
+  req += pathAndQuery;
+  req += " HTTP/1.1\r\nHost: ";
+  req += host;
+  req += "\r\nContent-Type: application/json\r\nAccept: application/json\r\n";
+  req += "apikey: ";
+  req += cfg_.anonKey;
+  req += "\r\n";
+  if (prefer && prefer[0]) {
+    req += "Prefer: ";
+    req += prefer;
+    req += "\r\n";
+  }
+  if (withBearer) {
+    req += "Authorization: Bearer ";
+    req += accessToken_;
+    req += "\r\n";
+  }
+  req += "Content-Length: ";
+  req += String((unsigned)bodyLen);
+  req += "\r\nConnection: close\r\n\r\n";
+  if (bodyLen) req += body;
+
+  esp_task_wdt_reset();
+  const size_t wrote = client->write((const uint8_t*)req.c_str(), req.length());
+  if (wrote != req.length()) {
+    client->stop();
+    supabaseTlsClientRelease(client, holdGen);
+    setError(SupabaseError::HttpFailed, "write", "Failed to write full HTTP request");
+    return lastError_;
+  }
+  client->flush();
+  // Fire-and-forget: do not read the response; release stops the socket.
+  supabaseTlsClientRelease(client, holdGen);
+  esp_task_wdt_reset();
+
+  setError(SupabaseError::Ok, "", "");
+  noteSuccess();
+  return SupabaseError::Ok;
+}
+
 SupabaseError SupabaseClient::ensureAuth() {
   if (!cfg_.isReady()) {
     setError(SupabaseError::NotConfigured, "not_configured", "SupabaseConfig incomplete");
@@ -382,29 +663,56 @@ SupabaseError SupabaseClient::ensureAuth() {
   }
 
   time_t now = time(nullptr);
-  if (accessToken_[0] && tokenExpiresAt_ > 0 && (uint32_t)now + 60 < tokenExpiresAt_) {
-    setError(SupabaseError::Ok, "", "");
-    return SupabaseError::Ok;
+  // Prefer cached JWT. If expires_at was missing, repair instead of reminting
+  // (a second mint+TLS in the next step has been crashing SPIRAM hubs).
+  if (accessToken_[0]) {
+    if (tokenExpiresAt_ == 0 && now > 1000000000L) {
+      tokenExpiresAt_ = (uint32_t)now + 3600;
+    }
+    if (tokenExpiresAt_ > 0 && (uint32_t)now + 60 < tokenExpiresAt_) {
+      setError(SupabaseError::Ok, "", "");
+      return SupabaseError::Ok;
+    }
   }
 
   JsonDocument body;
   body["device_mac"] = cfg_.deviceMac;
-  body["api_key"] = cfg_.apiKey;
+  // Empty api_key allowed: server may mint via public-IP recovery.
+  if (cfg_.apiKey[0]) body["api_key"] = cfg_.apiKey;
+  else body["api_key"] = "";
   String bodyStr;
   serializeJson(body, bodyStr);
 
   String resp;
   SupabaseError httpErr = httpJson("POST", "/functions/v1/mint-device-jwt", bodyStr.c_str(), false, resp);
+  if (httpErr != SupabaseError::Ok) {
+    // Keep httpJson's error (TLS busy, reclaim_required, invalid_device, etc.).
+    return lastError_;
+  }
+  if (resp.length() == 0) {
+    setError(SupabaseError::AuthFailed, "auth_empty", "mint-device-jwt returned empty body");
+    return lastError_;
+  }
   JsonDocument doc;
   DeserializationError e = deserializeJson(doc, resp);
   if (e) {
-    setError(SupabaseError::AuthFailed, "auth_parse", e.c_str());
+    char msg[64];
+    snprintf(msg, sizeof(msg), "mint JWT parse: %s", e.c_str());
+    setError(SupabaseError::AuthFailed, "auth_parse", msg);
     return lastError_;
   }
   const char* token = doc["access_token"] | "";
   if (!token[0]) {
     const char* err = doc["error"] | "mint failed";
-    setError(httpErr != SupabaseError::Ok ? httpErr : SupabaseError::AuthFailed, "auth_failed", err);
+    const char* codeStr = doc["code"] | "";
+    if (strcmp(codeStr, "reclaim_required") == 0 || strstr(err, "Re-claim required")) {
+      setError(SupabaseError::AuthFailed, "reclaim_required", err);
+    } else if (strcmp(codeStr, "invalid_device") == 0 ||
+               strstr(err, "Invalid device credentials") || strstr(err, "invalid device")) {
+      setError(SupabaseError::AuthFailed, "invalid_device", err);
+    } else {
+      setError(SupabaseError::AuthFailed, "auth_failed", err);
+    }
     return lastError_;
   }
   copyStr(accessToken_, sizeof(accessToken_), token);
@@ -538,7 +846,8 @@ SupabaseError SupabaseClient::macsForSite(const char* siteSlug, String& macCsvOu
 
   String path = "/rest/v1/devices?site_id=eq.";
   path += urlEncode(siteId);
-  path += "&select=device_mac&limit=200";
+  path += "&select=device_mac&limit=";
+  path += String(ARBORYSNET_HUB_DEVICE_PAGE);
 
   String resp;
   if (httpJson("GET", path.c_str(), nullptr, true, resp) != SupabaseError::Ok) return lastError_;
@@ -569,9 +878,15 @@ SupabaseError SupabaseClient::listSites(SupabaseSiteDto* out, uint16_t maxOut, u
   }
   if (ensureAuth() != SupabaseError::Ok) return lastError_;
 
+  // Cap at 10: slug/label + description only (no nested devices(count) — that bloated TLS/JSON).
+  uint16_t lim = maxOut;
+  if (lim > ARBORYSNET_MAX_SITES) lim = ARBORYSNET_MAX_SITES;
+
+  String path = "/rest/v1/sites?select=id,slug,name&order=slug.asc&limit=";
+  path += String(lim);
+
   String resp;
-  if (httpJson("GET", "/rest/v1/sites?select=id,slug,name,devices(count)&order=slug",
-               nullptr, true, resp) != SupabaseError::Ok) {
+  if (httpJson("GET", path.c_str(), nullptr, true, resp) != SupabaseError::Ok) {
     return lastError_;
   }
 
@@ -584,20 +899,48 @@ SupabaseError SupabaseClient::listSites(SupabaseSiteDto* out, uint16_t maxOut, u
   JsonArrayConst arr = doc.as<JsonArrayConst>();
   uint16_t n = 0;
   for (JsonObjectConst o : arr) {
-    if (n >= maxOut) break;
+    if (n >= lim) break;
     memset(&out[n], 0, sizeof(out[n]));
     copyStr(out[n].id, sizeof(out[n].id), o["id"] | "");
     copyStr(out[n].slug, sizeof(out[n].slug), o["slug"] | "");
     copyStr(out[n].name, sizeof(out[n].name), o["name"] | "");
-    uint16_t cnt = 0;
-    JsonVariantConst dc = o["devices"];
-    if (dc.is<JsonArrayConst>() && dc.as<JsonArrayConst>().size() > 0) {
-      cnt = (uint16_t)(dc.as<JsonArrayConst>()[0]["count"] | 0);
-    }
-    out[n].deviceCount = cnt;
+    out[n].slug[24] = '\0';
+    out[n].name[64] = '\0';
+    out[n].deviceCount = 0;
     ++n;
   }
   if (countOut) *countOut = n;
+  setError(SupabaseError::Ok, "", "");
+  return SupabaseError::Ok;
+}
+
+SupabaseError SupabaseClient::countDevicesForSite(const char* siteSlug, uint16_t* countOut) {
+  if (countOut) *countOut = 0;
+  if (!siteSlug || !siteSlug[0]) {
+    setError(SupabaseError::InvalidArg, "invalid_arg", "site required");
+    return lastError_;
+  }
+  if (ensureAuth() != SupabaseError::Ok) return lastError_;
+
+  char siteId[40];
+  if (resolveSiteId(siteSlug, siteId, sizeof(siteId)) != SupabaseError::Ok) return lastError_;
+
+  String path = "/rest/v1/devices?select=id&site_id=eq.";
+  path += urlEncode(siteId);
+  path += "&limit=1";
+
+  String resp;
+  // Prefer count=exact → httpJson puts total from Content-Range into responseOut.
+  if (httpJson("GET", path.c_str(), nullptr, true, resp, "count=exact") != SupabaseError::Ok) {
+    return lastError_;
+  }
+
+  uint32_t total = 0;
+  if (resp.length() && resp != "*") {
+    total = (uint32_t)strtoul(resp.c_str(), nullptr, 10);
+  }
+  if (total > 65535UL) total = 65535UL;
+  if (countOut) *countOut = (uint16_t)total;
   setError(SupabaseError::Ok, "", "");
   return SupabaseError::Ok;
 }
@@ -702,24 +1045,43 @@ SupabaseError SupabaseClient::fetchOwnSite(char* siteSlugOut, size_t siteSlugOut
   }
   siteSlugOut[0] = '\0';
 
-  SupabaseQueryFilter filter;
-  memset(&filter, 0, sizeof(filter));
-  filter.table = "devices";
-  filter.deviceMac = cfg_.deviceMac;
-  filter.snsType = -1;
-  filter.expired = -1;
-  filter.limit = 1;
+  if (ensureAuth() != SupabaseError::Ok) return lastError_;
 
-  SupabaseDeviceDto row;
-  uint16_t count = 0;
-  SupabaseError err = queryDevices(filter, &row, 1, &count);
-  if (err != SupabaseError::Ok) return lastError_;
-  if (count == 0 || !row.siteSlug[0]) {
-    setError(SupabaseError::NotRegistered, "no_device_site", "device site not found");
+  const char* mac = cfg_.deviceMac;
+  if (!mac[0]) {
+    setError(SupabaseError::InvalidArg, "no_mac", "device MAC required");
     return lastError_;
   }
 
-  strncpy(siteSlugOut, row.siteSlug, siteSlugOutLen - 1);
+  // Lightweight GET — avoid full queryDevices select (large JSON / heap on peripherals).
+  String path = "/rest/v1/devices?select=device_mac,site_id,sites(slug)&device_mac=eq.";
+  path += urlEncode(mac);
+  path += "&limit=1";
+
+  String resp;
+  if (httpJson("GET", path.c_str(), nullptr, true, resp) != SupabaseError::Ok) return lastError_;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, resp)) {
+    setError(SupabaseError::ParseFailed, "parse_failed", "fetchOwnSite parse failed");
+    return lastError_;
+  }
+
+  JsonArrayConst arr = doc.as<JsonArrayConst>();
+  if (arr.size() == 0) {
+    // Soft: keep local slug so boot Query does not hard-fail after ping.
+    strncpy(siteSlugOut, cfg_.siteSlug[0] ? cfg_.siteSlug : "home", siteSlugOutLen - 1);
+    siteSlugOut[siteSlugOutLen - 1] = '\0';
+    setError(SupabaseError::Ok, "", "");
+    return SupabaseError::Ok;
+  }
+
+  JsonObjectConst o = arr[0];
+  const char* slug = o["site_slug"] | nestedSiteSlug(o);
+  if (!slug || !slug[0]) {
+    slug = cfg_.siteSlug[0] ? cfg_.siteSlug : "home";
+  }
+  strncpy(siteSlugOut, slug, siteSlugOutLen - 1);
   siteSlugOut[siteSlugOutLen - 1] = '\0';
   setError(SupabaseError::Ok, "", "");
   return SupabaseError::Ok;
@@ -760,6 +1122,10 @@ static void appendSensorFilters(String& path, const SupabaseQueryFilter& filter,
   uint16_t lim = filter.limit ? filter.limit : SUPABASE_MAX_QUERY_ROWS;
   path += "&limit=";
   path += String(lim);
+  if (filter.offset) {
+    path += "&offset=";
+    path += String(filter.offset);
+  }
 }
 
 SupabaseError SupabaseClient::listActiveSensors(SupabaseSensorDto* out, uint16_t maxOut,
@@ -807,7 +1173,9 @@ SupabaseError SupabaseClient::querySensors(const SupabaseQueryFilter& filter, Su
   if (ensureAuth() != SupabaseError::Ok) return lastError_;
 
   String macCsv;
-  if (filter.site && filter.site[0] && !(filter.deviceMac && filter.deviceMac[0])) {
+  if (filter.deviceMacIn && filter.deviceMacIn[0]) {
+    macCsv = filter.deviceMacIn;
+  } else if (filter.site && filter.site[0] && !(filter.deviceMac && filter.deviceMac[0])) {
     if (macsForSite(filter.site, macCsv) != SupabaseError::Ok) return lastError_;
     if (!macCsv.length()) {
       setError(SupabaseError::Ok, "", "");
@@ -875,8 +1243,12 @@ SupabaseError SupabaseClient::queryDevices(const SupabaseQueryFilter& filter, Su
   }
   uint16_t lim = filter.limit ? filter.limit : maxOut;
   if (lim > maxOut) lim = maxOut;
-  path += "&limit=";
+  path += "&order=device_mac.asc&limit=";
   path += String(lim);
+  if (filter.offset) {
+    path += "&offset=";
+    path += String(filter.offset);
+  }
 
   String resp;
   if (httpJson("GET", path.c_str(), nullptr, true, resp) != SupabaseError::Ok) return lastError_;
@@ -908,7 +1280,9 @@ SupabaseError SupabaseClient::queryReadings(const SupabaseQueryFilter& filter, S
   if (ensureAuth() != SupabaseError::Ok) return lastError_;
 
   String macCsv;
-  if (filter.site && filter.site[0] && !(filter.deviceMac && filter.deviceMac[0])) {
+  if (filter.deviceMacIn && filter.deviceMacIn[0]) {
+    macCsv = filter.deviceMacIn;
+  } else if (filter.site && filter.site[0] && !(filter.deviceMac && filter.deviceMac[0])) {
     if (macsForSite(filter.site, macCsv) != SupabaseError::Ok) return lastError_;
     if (!macCsv.length()) {
       setError(SupabaseError::Ok, "", "");
@@ -970,26 +1344,37 @@ SupabaseError SupabaseClient::queryReadings(const SupabaseQueryFilter& filter, S
   return SupabaseError::Ok;
 }
 
-SupabaseError SupabaseClient::upsertDevice(const SupabaseDeviceDto& device) {
+SupabaseError SupabaseClient::upsertDevice(const SupabaseDeviceDto& device, bool fireAndForget) {
   if (ensureAuth() != SupabaseError::Ok) return lastError_;
 
   const char* mac = device.deviceMac[0] ? device.deviceMac : cfg_.deviceMac;
+  if (!mac || !mac[0]) {
+    setError(SupabaseError::InvalidArg, "no_mac", "device MAC required");
+    return lastError_;
+  }
+
   JsonDocument patch;
 
+  // MAC selects the row (?device_mac=eq.… below); do not PATCH device_mac (immutable identity).
   const char* ip = device.deviceIp[0] ? device.deviceIp : cfg_.deviceIp;
-  if (ip[0]) patch["device_ip"] = ip;
+  if (ip[0] && strcmp(ip, "0.0.0.0") != 0) patch["device_ip"] = ip;
   if (device.name[0]) {
     patch["dev_name"] = device.name;
     patch["name"] = device.name;
   }
-  patch["dev_type"] = device.devType ? device.devType : cfg_.devType;
-  patch["feature_mask"] = device.featureMask;
-  patch["sending_int"] = device.sendingInt;
-  patch["firmware_major"] = device.firmwareMajor;
-  patch["firmware_minor"] = device.firmwareMinor;
-  patch["firmware_patch"] = device.firmwarePatch;
-  patch["expired"] = device.expired;
-  patch["flags"] = device.flags;
+  const uint8_t dtype = device.devType ? device.devType : cfg_.devType;
+  if (dtype) patch["dev_type"] = dtype;
+  // Only patch these when provided so a name/IP keepalive does not wipe cloud values.
+  if (device.featureMask) patch["feature_mask"] = device.featureMask;
+  if (device.sendingInt) patch["sending_int"] = device.sendingInt;
+  if (device.firmwareMajor || device.firmwareMinor || device.firmwarePatch) {
+    patch["firmware_major"] = device.firmwareMajor;
+    patch["firmware_minor"] = device.firmwareMinor;
+    patch["firmware_patch"] = device.firmwarePatch;
+  }
+  if (device.flags) patch["flags"] = device.flags;
+  if (device.expired) patch["expired"] = true;
+  if (device.isActive) patch["is_active"] = true;
 
   char iso[24];
   if (device.dataReceived) {
@@ -1007,7 +1392,8 @@ SupabaseError SupabaseClient::upsertDevice(const SupabaseDeviceDto& device) {
     if (iso[0]) patch["last_seen_at"] = iso;
   }
 
-  if (device.siteSlug[0]) {
+  // site_id needs ensure_my_site response; skip on fire-and-forget (claim already set site).
+  if (!fireAndForget && device.siteSlug[0]) {
     JsonDocument siteBody;
     siteBody["p_slug"] = device.siteSlug;
     String siteStr;
@@ -1034,8 +1420,26 @@ SupabaseError SupabaseClient::upsertDevice(const SupabaseDeviceDto& device) {
 
   String path = "/rest/v1/devices?device_mac=eq.";
   path += urlEncode(mac);
+  if (fireAndForget) {
+    return httpJsonFireAndForget("PATCH", path.c_str(), patchStr.c_str(), true, "return=minimal");
+  }
   String resp;
   return httpJson("PATCH", path.c_str(), patchStr.c_str(), true, resp, "return=minimal");
+}
+
+SupabaseError SupabaseClient::pingDevice() {
+  // Minimal F&F keepalive (IP + last_seen). Prefer upsertDevice(dto, true) for full fields.
+  SupabaseDeviceDto d;
+  memset(&d, 0, sizeof(d));
+  if (cfg_.deviceMac[0]) {
+    strncpy(d.deviceMac, cfg_.deviceMac, sizeof(d.deviceMac) - 1);
+  }
+  if (cfg_.deviceIp[0]) {
+    strncpy(d.deviceIp, cfg_.deviceIp, sizeof(d.deviceIp) - 1);
+  }
+  d.devType = cfg_.devType;
+  d.isActive = true;
+  return upsertDevice(d, true);
 }
 
 SupabaseError SupabaseClient::upsertSensor(const SupabaseSensorDto& sensor) {

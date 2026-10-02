@@ -45,6 +45,7 @@ static void LOWPOWER_pump() {
 static void LOWPOWER_doSensorCycle() {
     if (!wifiReadyForNetwork()) {
         SerialPrint("LP: WiFi not ready — skip sensors", true);
+        storeError("Low power wake skipped sensor read: WiFi not ready", ERROR_SENSOR_READ, true);
         return;
     }
     byte snscount = readAllSensors(true);
@@ -213,6 +214,7 @@ static void LOWPOWER_firmwarePathStayAlive() {
             }
             if (fwTransportFailed && opsDone && !isFirmwareChunkSessionActive()) {
                 SerialPrint("LP: FW transport failed + ops done — sleep", true);
+                storeError("Low power firmware request transport failed", ERROR_HTTP_REQUEST, true);
                 return;
             }
             if (!isFirmwareChunkSessionActive() && opsDone && askedNo >= serverCount) {
@@ -225,6 +227,7 @@ static void LOWPOWER_firmwarePathStayAlive() {
             if (downloadStartMs == 0) downloadStartMs = millis();
             if ((millis() - downloadStartMs) >= LP_FW_DOWNLOAD_MAX_MS) {
                 SerialPrint("LP: firmware download timeout — sleep", true);
+                storeError("Low power firmware download timed out", ERROR_HTTP_REQUEST, true);
                 return;
             }
         } else if (downloadStartMs != 0 && opsDone) {
@@ -234,6 +237,7 @@ static void LOWPOWER_firmwarePathStayAlive() {
 
         if (!sawServer && (millis() - pathStart) >= LP_NO_SERVER_MS) {
             SerialPrint("LP: no server for 5 min — sleep", true);
+            storeError("Low power firmware check found no server", ERROR_HTTP_REQUEST, true);
             return;
         }
 

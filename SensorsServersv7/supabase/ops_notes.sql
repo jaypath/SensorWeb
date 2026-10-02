@@ -5,9 +5,15 @@
 -- values ('USER_UUID', 'trial', 'trial', now() + interval '90 days');
 --
 -- Sites: run schema_sites.sql
+-- Site label/description limits: schema_site_label_limits.sql
+-- Max 10 sites/user: schema_site_max_10.sql
 -- Device data path: run schema_postgrest_device.sql
 --   Devices use mint-device-jwt + PostgREST (/rest/v1), NOT device-api Edge.
 --   RPCs: ensure_my_site, delete_my_site, insert_my_reading
+-- Auth IP + 10-sensor cap: run schema_device_auth_ip.sql
+-- Readings dedupe (hub-centric upload): run schema_readings_dedupe.sql
+--   Unique (user_id, device_mac, sns_type, sns_id, time_read); insert_my_reading ON CONFLICT DO NOTHING;
+--   sensors row advances only when new time_read is newer. Hubs may insert for any owned MAC.
 -- Optional site slug on enroll/provision (default "home").
 --
 -- Bulk provision example with sites:
@@ -32,6 +38,18 @@
 --   { "device_mac": "AABBCCDDEEFF", "claim_code": "A1B2" }
 -- Returns full bootstrap: project_url, anon_key, user_id, api_key, mint_url, device_api_url, api_version.
 -- Staging row deleted after claim.
+--
+-- mint-device-jwt (no JWT; device_mac required, api_key optional):
+--   POST /functions/v1/mint-device-jwt
+--   { "device_mac": "AABBCCDDEEFF", "api_key": "..." }
+-- Success paths:
+--   1) Valid api_key → JWT; stores last_auth_public_ip from Edge client IP; logs device_auth_log method=api_key
+--   2) Bad/missing api_key but client IP == devices.last_auth_public_ip → JWT (ip_recovery); logs method=ip_recovery
+-- Failures:
+--   unknown/inactive MAC → 401 { code: "invalid_device" }
+--   bad key + IP mismatch / no prior IP → 401 { code: "reclaim_required" } (device must re-claim)
+-- Run schema_device_auth_ip.sql for last_auth_public_ip, device_auth_log, and 10-sensor cap.
+-- Sensor cap (2C): max 10 sensor identities per device_mac; new identities / readings rejected (sensor_limit).
 --
 -- Rate limits (claim-device + mint-device-jwt): run schema_rate_limits.sql
 --   IP+MAC: 5/min soft (429); >30/min → blocked_macs

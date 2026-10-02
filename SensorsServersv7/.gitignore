@@ -4,3 +4,11 @@ Firmware/
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+# pioarduino HybridCompile (custom_sdkconfig) artifacts
+managed_components/
+dependencies.lock
+.dummy/
+/CMakeLists.txt
+/sdkconfig.*_USB
+/sdkconfig.*_OTA
+src/idf_component.yml*

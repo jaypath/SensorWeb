@@ -8,6 +8,7 @@
 #include <math.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+#include "device_roles.hpp"
 struct STRUCT_CORE;
 class WeatherInfoOptimized;
 class Devices_Sensors;
@@ -170,7 +171,7 @@ extern uint32_t WTHRFAIL;
 // WiFi.begin; do not gate on WL_IDLE_STATUS). Soft-AP stays up until STA is usable.
 // Associated-without-IP (WL_CONNECTED / WL_IDLE + 0.0.0.0): wait WIFI_ZERO_IP_GRACE_MS for DHCP,
 // then disconnect+begin; reboot with RESET_WIFI after WIFI_ZERO_IP_REBOOT_AFTER attempts.
-// Peripherals (_MYTYPE < 100): also enter/stay in APSTA when no live server is known
+// Peripherals (_I_AM_PERIPHERAL, _MYTYPE 1–99): also enter/stay in APSTA when no live server is known
 // (none registered, or all servers expired / stale) so users can debug via 192.168.4.1.
 // AP-mode ESP-NOW channel scans run only when credentials are missing (avoid RF hops during STA retry).
 static constexpr uint32_t WIFI_BOOT_MAX_MS = 60000;         // total boot STA budget before APSTA
@@ -215,7 +216,7 @@ void maybeExitAPStationMode();
 uint32_t getApStationEnterMillis();
 /** Soft-AP client associated and/or recent AP HTTP activity. */
 bool apStationUserActive();
-#if _MYTYPE < 100
+#if _I_AM_PERIPHERAL
 // Peripheral: enter/stay in APSTA when no live server (for AP debug portal).
 void servicePeripheralServerApMode();
 #endif
@@ -255,10 +256,17 @@ void handleRETRIEVEDATA_MOVINGAVERAGE();
 void handleFLUSHSD();
 void handleSETWIFI();
 void handleSTATUS();
+void handleMESH_SETTINGS();
+#if _HAS_LOCAL_SENSORS
+void handleSWITCHSTATE();
+void handleSWITCHSTATE_POST();
+#endif
 void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t snsType, uint8_t snsID);
 void serverTextHeader(String pagename);
 void serverTextStreamBegin(int htmlcode=200, bool asHTML=true);
 void serverTextFlush(bool force=false);
+/** Stream a C string in small chunks (use for large R"===("…")===" literals). */
+void serverTextAppend(const char* s);
 void serverTextClose(int htmlcode=200, bool asHTML=true);
 // Weather configuration handlers
 void handleWeather();
@@ -271,6 +279,7 @@ void handleCONFIG_POST();
 void handleCONFIG_DELETE();
 #if _IS_SERVER_HUB
 void handleSENSOR_OVERRIDE_UPDATE();
+void handleSENSOR_LIMITS_UPDATE();
 #endif
 #if _HAS_LOCAL_SENSORS
 void handleSENSOR_UPDATE_POST();
@@ -353,27 +362,42 @@ int16_t sendMSG_networkStateReq(IPAddress& serverIP, uint16_t timeoutMs = 5000);
  *  Hubs return network alarms; peripherals return own alarms plus error:"notServer".
  *  Returns alarm count (>=0), or -1 network/http fail, -2 hard error, -3 parse fail. */
 int16_t sendMSG_alarmsReq(IPAddress& serverIP, String& responseOut, uint16_t timeoutMs = 5000);
+/** HTTP sunReq to a type 100 weather hub. Fills UTC unix sunrise/sunset. Returns 0 ok, <0 fail. */
+int16_t sendMSG_sunReq(IPAddress& serverIP, uint32_t* sunriseUtc, uint32_t* sunsetUtc, uint16_t timeoutMs = 3000);
+/** Ask known type 100 servers for dawn/dusk. Returns 1 filled, 0 no type 100, -1 request failed. */
+int16_t requestSunTimesFromType100(uint32_t& sunriseUtc, uint32_t& sunsetUtc);
 // Data request: UDP is fire-and-forget; HTTP/HTTPS is queued to a worker (non-blocking).
 int16_t sendMSG_DataRequest(int16_t deviceIndex, int16_t snsIndex, bool viaHTTP);
 int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
 
-// Connectivity ping metrics: ESPNow + UDP every ~10 min; HTTP only if both fail.
+// Connectivity ping metrics: ArborysMesh every ~10 min; HTTP if mesh fails.
 // Pass startCycle=true on the 10-minute mark; call every second while a cycle is active.
 void serviceDeviceConnectivityPings(bool startCycle = false);
 
 #if _IS_SERVER_HUB
-// Hub: request data from expired peripherals. Pass startCycle=true after expiry check;
-// call every second; processes one eligible device per call (no delayWithNetwork).
+// Hub: before labeling a non-low-power peripheral expired, probe with snsReqExpired
+// (HTTP when WiFi is up, ArborysMesh ACK when it is not). One device per call.
 void serviceExpiredDeviceDataRequests(bool startCycle = false);
 #endif
 
+// Peripheral: a hub reported missing readings. Counted at most once per 2× SendingInt.
+void noteExpiredDataRequest(uint64_t hubMac);
+void resetExpiredRequestLadder();
+
+// HTTP errorLog to each known hub. The hub storeError()s it onto its SD card.
+// sensor may be null. detail is optional short text after the type and source.
+void sendErrorLogToHubs(uint16_t code, const ArborysSnsType* sensor, const char* detail);
+// HTTP only. Does not call storeError. Used by storeError on peripherals.
+void forwardPeripheralErrorToHubs(uint16_t code, const char* message);
+
 //add json handlers
 void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, bool isAck);
-void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex);
+void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex, bool expiredRequest = false);
 void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 void wrapupSendDataList(const int16_t* snsIndices, uint8_t count);
+String JSONbuilder_device(ArborysDevType* device);
 String JSONbuilder_sensorObject(ArborysSnsType* S);
 uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer);
 
@@ -384,8 +408,13 @@ void processJSONMessage_DataRequest(JsonObject root, String& responseMsg);
 void processDeferredDataRequest();
 void processJSONMessage_sensorData(JsonObject root, String& responseMsg);
 void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg);
+void processJSONMessage_setLimits(JsonObject root, String& responseMsg);
 void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg);
 void processJSONMessage_alarmsReq(JsonObject root, String& responseMsg);
+void processJSONMessage_sunReq(JsonObject root, String& responseMsg);
+#if _IS_SERVER_HUB
+void processJSONMessage_cloudAck(JsonObject root, String& responseMsg);
+#endif
 int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
 static void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& responseMsg);
 
@@ -402,10 +431,12 @@ void apiSaveTimezone();
 void apiGetSetupStatus();
 void handleInitialSetup();
 void handleApiCompleteSetup();
-#ifdef _USESUPABASE
+#if _SUPABASE_RUNTIME
 void apiSupabaseClaim();
+void apiSupabaseQuit();
 void apiSupabaseSites();
 void apiSupabaseSite();
+void apiSupabaseUploadToggle();
 #if _IS_SERVER_HUB
 void apiSupabaseSiteCreate();
 void apiSupabaseSiteDelete();

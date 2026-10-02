@@ -278,10 +278,10 @@ struct WeatherEventFile {
 // Optimized WeatherInfo class - maintains same interface as original
 class WeatherInfoOptimized {
 private:
-    uint32_t hourBase = 0;
+    uint32_t hourBase = 0; // UTC unix of first hourly slot
     HourlySlot hourly[NUM_HOURLY];
 
-    uint32_t periodBaseStart = 0;
+    uint32_t periodBaseStart = 0; // UTC
     int32_t periodAnchorDayOffset = 0;
     bool periodBaseIsDaytime = true;
     uint8_t firstFilledPeriod = 0;
@@ -314,8 +314,8 @@ private:
 
     // Helper methods
     void initAlertInfo();
-    static uint32_t localMidnightToday();
-    static int32_t nwsDayOffsetFromMidnight(time_t t);
+    static uint32_t localMidnightToday(); // UTC unix of local-calendar midnight today
+    static int32_t nwsDayOffsetFromMidnight(time_t t); // t is UTC
     static time_t floorToHour(time_t t);
     void ensureHourBaseFromTimestamp(time_t t);
     bool isHourlyValid() const { return hourBase != 0; }
@@ -373,15 +373,15 @@ private:
 public:
     WeatherAlertSummary alertInfo;
     uint8_t NumWeatherEvents=0;
-    uint32_t lastAlertFetchTime = 0;
-    uint32_t lastAlertUpdateTime = 0;
+    uint32_t lastAlertFetchTime = 0; // UTC
+    uint32_t lastAlertUpdateTime = 0; // UTC
 
-    uint32_t lastUpdateT = 0;
-    uint32_t lastUpdateError = 0;
-    uint32_t fetchedAt = 0;
+    uint32_t lastUpdateT = 0; // UTC
+    uint32_t lastUpdateError = 0; // UTC
+    uint32_t fetchedAt = 0; // UTC
     WeatherComponentStatus componentStatus[WC_COUNT];
-    uint32_t sunrise;
-    uint32_t sunset;
+    uint32_t sunrise; // UTC unix
+    uint32_t sunset; // UTC unix
     bool flag_rain;
     bool flag_snow;
     bool flag_ice;
@@ -406,7 +406,12 @@ public:
     int16_t getWindSpeed(uint32_t dt);
 
     int16_t getHourSlot(time_t t) const { return hourSlot(t); }
+    uint32_t getHourBase() const { return hourBase; } // UTC unix of hourly[0]
     int16_t getPeriodSlotForDaysFromToday(uint8_t daysfromnow, bool wantDaytime) const;
+
+    // Lite/package: if blob times look like local-pseudo (pre-UTC producer), convert to UTC.
+    // No-op when packageMarkedUtc is true (WPKG_FLAG_TIMES_UTC).
+    void normalizePackagedTimestampsToUtc(bool packageMarkedUtc);
 
     int16_t getDailyWeatherID(uint8_t daysfromnow, bool indays=false);
     void getDailyTemp(uint8_t daysfromnow, int8_t* temp);
@@ -459,7 +464,7 @@ public:
 };
 
 // Shared by full (_USEWEATHER) and lite (_USEWEATHERLITE): prefer live outside sensors,
-// else NOAA hourly forecast via getTemperature(I.currentTime).
+// else NOAA hourly forecast via getTemperature(utcNow()).
 void updateCurrentOutsideConditions();
 
 extern String WEBHTML;

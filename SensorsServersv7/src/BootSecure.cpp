@@ -67,6 +67,11 @@ int8_t BootSecure::setup() {
         strncpy(Prefs.SITE_SLUG, "home", sizeof(Prefs.SITE_SLUG) - 1);
         Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
     }
+    // Prefs wipe / first boot / size mismatch → role default for upload toggle.
+    if (prefs_status <= 0) {
+        Prefs.UPLOAD_TO_SUPABASE = (_IS_SERVER_HUB != 0);
+        Prefs.isUpToDate = false;
+    }
     #endif
 
     return prefs_status;

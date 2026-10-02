@@ -38,12 +38,25 @@ public:
   const char* lastErrorMessage() const { return lastErrorMsg_; }
   const char* lastErrorCode() const { return lastErrorCode_; }
 
+  /**
+   * True if another task currently holds the shared Supabase WiFiClientSecure.
+   * Non-blocking probe — also clears holds older than ~60s (stuck/hung TLS).
+   */
+  static bool isTlsBusy();
+  /** Milliseconds the TLS client has been held (0 if free). */
+  static uint32_t tlsHeldForMs();
+  /** True when last error requires clearing local claim (invalid_device or reclaim_required). */
+  bool isInvalidDeviceCredentials() const;
+
   SupabaseError ensureAuth();
 
   /** One-time claim via claim-device; fills config from bootstrap response. */
   SupabaseError claimDevice(const char* claimCode);
 
   SupabaseError listSites(SupabaseSiteDto* out, uint16_t maxOut, uint16_t* countOut);
+
+  /** Exact device count for a site slug (PostgREST Content-Range). */
+  SupabaseError countDevicesForSite(const char* siteSlug, uint16_t* countOut);
 
   /** Delete a site (RPC reassigns devices). Hub use. */
   SupabaseError deleteSite(const char* siteSlug);
@@ -64,7 +77,20 @@ public:
   SupabaseError queryReadings(const SupabaseQueryFilter& filter, SupabaseReadingDto* out,
                               uint16_t maxOut, uint16_t* countOut);
 
-  SupabaseError upsertDevice(const SupabaseDeviceDto& device);
+  /**
+   * PATCH devices row for this MAC. Auth (JWT) is always blocking.
+   * @param fireAndForget if true, write the PATCH and close without waiting for
+   *        HTTP response (avoids WDT hangs on read). Same payload as the blocking
+   *        path except site_id is omitted (ensure_my_site needs a response).
+   */
+  SupabaseError upsertDevice(const SupabaseDeviceDto& device, bool fireAndForget = false);
+
+  /**
+   * Keepalive: same as upsertDevice(dto, true) with cfg IP + last_seen only.
+   * Prefer upsertDevice(..., true) when name/type/firmware should be sent.
+   */
+  SupabaseError pingDevice();
+
   SupabaseError upsertSensor(const SupabaseSensorDto& sensor);
   SupabaseError insertReading(const SupabaseReadingDto& reading, bool refreshSensor = true);
 
@@ -150,10 +176,10 @@ public:
     out.limitLow = in.limitLow;
   }
 
-  inline SupabaseError upsertDevice(const ArborysDevType& device) {
+  inline SupabaseError upsertDevice(const ArborysDevType& device, bool fireAndForget = false) {
     SupabaseDeviceDto dto;
     fillFromDevice(device, dto);
-    return upsertDevice(dto);
+    return upsertDevice(dto, fireAndForget);
   }
 
   inline SupabaseError upsertSensor(uint64_t deviceMac, const ArborysSnsType& sensor) {
@@ -201,6 +227,9 @@ private:
   void noteSuccess();
   SupabaseError httpJson(const char* method, const char* pathAndQuery, const char* bodyJson,
                          bool withBearer, String& responseOut, const char* prefer = nullptr);
+  /** Write HTTPS request and close without reading the response (ping/keepalive). */
+  SupabaseError httpJsonFireAndForget(const char* method, const char* pathAndQuery,
+                                      const char* bodyJson, bool withBearer, const char* prefer = nullptr);
   SupabaseError resolveSiteId(const char* siteSlug, char* siteIdOut, size_t siteIdLen);
   SupabaseError macsForSite(const char* siteSlug, String& macCsvOut);
 };

@@ -23,7 +23,7 @@
 //5 - RH, AHT21
 //6 - 
 //7 - distance, HC-SR04
-//8 - human presence (mm wave)
+//8 - 
 //9 - BMP pressure
 //10 - BMP temp
 //11 - BMP altitude
@@ -36,7 +36,8 @@
 18 - BME680 rh
 19 - BME680 air press
 20  - BME680 gas sensor
-21 - human present (mmwave)
+21 - 
+30 -
 40 - any binary, 1=yes/true/on
 41 = any on/off switch
 42 = any yes/no switch
@@ -49,14 +50,22 @@
 61 - battery %
 70 - leak
 99 = any numerical value
+100-150 - server types
+200-255 - interrupt-driven sensors
+200 - human presence (mm-wave RCWL-0516)
+220 - momentary lights switch
 */
 
 
 #include "globals.hpp"
 #include "utility.hpp"
 #include "firmwareUpdate.hpp"
+#if _HAS_LOCAL_SENSORS
+#include "interrupt_triggers.hpp"
+#endif
 #include <esp_task_wdt.h>
-#ifdef _USESUPABASE
+#include <esp_system.h>
+#if _SUPABASE_RUNTIME
 #include "supabase_prefs.hpp"
 #endif
 
@@ -225,8 +234,8 @@ void setup() {
 
 
     #if _HAS_LOCAL_SENSORS
-    // Peripherals have no TFT and minimal HTTP; avoid reserving 20KB to reduce heap pressure and fragmentation
-    WEBHTML.reserve(2048);
+    // Peripherals: keep WEBHTML small — large buffers OOM mid-page after the header.
+    WEBHTML.reserve(512);
     #else
     WEBHTML.reserve(20000);
     #endif
@@ -260,12 +269,33 @@ void setup() {
     if (I.rebootsToday < 255) I.rebootsToday++;
     logSystemEvent("System Booted", EVENT_BOOT_COMPLETE);
     #endif
+    {
+      // Capture panic/WDT/brownout so ArbNet TLS crashes leave a breadcrumb (they skip storeError mid-fault).
+      const esp_reset_reason_t rr = esp_reset_reason();
+      if (rr == ESP_RST_PANIC || rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT ||
+          rr == ESP_RST_WDT || rr == ESP_RST_BROWNOUT || rr == ESP_RST_SDIO) {
+        const char* name = "unknown";
+        switch (rr) {
+          case ESP_RST_PANIC:     name = "panic"; break;
+          case ESP_RST_INT_WDT:   name = "interrupt watchdog"; break;
+          case ESP_RST_TASK_WDT:  name = "task watchdog"; break;
+          case ESP_RST_WDT:       name = "other watchdog"; break;
+          case ESP_RST_BROWNOUT:  name = "brownout"; break;
+          case ESP_RST_SDIO:      name = "SDIO reset"; break;
+          default: break;
+        }
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Unexpected reset: %s", name);
+        storeError(msg, ERROR_UNDEFINED, true);
+        SerialPrint(String(msg) + " (reason=" + String((int)rr) + ")", true);
+      }
+    }
 
     initOTA();
 
     //check time and ensure validity
     I.ALIVESINCE = 0;
-    if (isTimeValid(I.currentTime)==false) {
+    if (isTimeValid((uint32_t)utcNow())==false) {
         tftPrint("Current time is not valid", true, TFT_RED);
         SerialPrint("Current time is not valid",true);        
     } else {
@@ -273,7 +303,7 @@ void setup() {
         tftPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")), true, TFT_WHITE, 2, 1, false, -1, -1);
         SerialPrint("Current UTC time = " + String(dateify(now(),"yyyy-mm-dd hh:nn:ss")),true);
         SerialPrint("Current local time = " + String(dateify(I.currentTime,"yyyy-mm-dd hh:nn:ss")),true);
-        I.ALIVESINCE = I.currentTime;
+        I.ALIVESINCE = utcNow();
         // Align day/hour/minute trackers so the first loop() pass does not run a false midnight rollover reset
         OldTime[3] = weekday();
         OldTime[2] = hour();
@@ -290,28 +320,22 @@ void setup() {
     if (I.lastResetTime != 0 && I.ALIVESINCE != 0) {
         // If the previous ALIVESINCE is significantly different from current time, 
         // this indicates an unexpected reboot occurred
-        time_t timeDiff = I.currentTime - I.ALIVESINCE;
-        if (timeDiff > 300) { // If more than 5 minutes difference, consider it unexpected
-            I.resetInfo = RESET_UNKNOWN;
-            I.lastResetTime = I.currentTime;
+        time_t timeDiff = utcNow() - I.ALIVESINCE;
+        if (timeDiff > 300) {
             SerialPrint("Unexpected reboot detected! Previous ALIVESINCE: " + String(I.ALIVESINCE) + 
-                       ", Current time: " + String(I.currentTime) + 
+                       ", Current time: " + String(utcNow()) + 
                        ", Time difference: " + String(timeDiff) + " seconds", true);
             #ifdef _USESDCARD
             storeScreenInfoSD(); // Save the updated reset info
             #endif
         }
     } else if (I.lastResetTime == 0) {
-        // This is likely the first boot, set initial values
-        I.resetInfo = RESET_DEFAULT;
-        I.lastResetTime = I.currentTime;
         #if _IS_SERVER_HUB
-        SerialPrint("First boot detected, setting initial reset info", true);
+        SerialPrint("First boot detected", true);
         #endif
     }
-    
-    
 
+    commitBootRebootIssue();
 
     #if _HAS_LOCAL_SENSORS
     initHardwareSensors(); //initialize the hardware sensors
@@ -393,7 +417,7 @@ void setup() {
         updateCurrentOutsideConditions();
         SerialPrint("Weather lite: loaded WeatherData.dat (no package yet)", true);
       } else {
-        SerialPrint("Weather lite: no local weather; will request from type-100 server", true);
+        SerialPrint("Weather lite: no local weather; will request from type-100–150 weather server", true);
       }
       weatherLiteRequestFromAnyWeatherServer();
     }
@@ -420,8 +444,14 @@ void setup() {
     #endif
 
     #if _IS_SERVER_HUB
+    #ifdef _USEGSHEET
     tftPrint("Please wait for SD card cleanup and Google Sheet updates.", true, TFT_GREEN);
+    #else
+    tftPrint("Finishing boot...", true, TFT_GREEN);
     #endif
+    #endif
+
+    esp_task_wdt_reset();
 
 
 #endif //_USELOWPOWER/else
@@ -433,7 +463,30 @@ void setup() {
   String setupMsg = String(verBuf) + " setup complete";
   SerialPrint(setupMsg, true);
   logSystemEvent(setupMsg, EVENT_BOOT_COMPLETE);
+  esp_task_wdt_reset();
+  #ifdef _USETFT
+  tftPrint("Entering main loop...", true, TFT_GREEN);
+  #endif
 }
+
+#ifdef _INITDIO_LOW
+//set up pins 25,26,27,33,34,35 as DIO outputs and set them to LOW
+  digitalWrite(25, LOW);
+  digitalWrite(26, LOW);
+  digitalWrite(27, LOW);
+  digitalWrite(33, LOW);
+  digitalWrite(34, LOW);
+  digitalWrite(35, LOW);
+  //digitalWrite(32, LOW); //this is a power pin for I2C
+#endif
+  // RCWL enable must stay HIGH (motion always armed). Re-assert after _INITDIO_LOW.
+#if defined(_PIN_ENABLE_RCWL) && (_PIN_ENABLE_RCWL != -9999) && (_PIN_ENABLE_RCWL != -1)
+  {
+    const int16_t rcwlEn = (_PIN_ENABLE_RCWL < 0) ? (int16_t)(-(_PIN_ENABLE_RCWL)) : (int16_t)_PIN_ENABLE_RCWL;
+    pinMode((uint8_t)rcwlEn, OUTPUT);
+    digitalWrite((uint8_t)rcwlEn, HIGH);
+  }
+#endif
     
 }
 
@@ -449,9 +502,21 @@ void loop() {
 
     systemHousekeeping();
 
-    #ifdef _USESUPABASE
+    #if _HAS_LOCAL_SENSORS
+    InterruptTriggers_serviceWebForces();
+    #if _USEINTERRUPT
+    serviceInterruptSensors();
+    #endif
+    #endif
+
+    #if _SUPABASE_RUNTIME
+    // Staged ArborysNet TLS (one step per gap): Auth → Ping → Query.
+    // Cloud sync (readings/keepalive) waits until that pipeline completes.
+    esp_task_wdt_reset();
     supabaseServiceStartupSiteSync();
+    esp_task_wdt_reset();
     supabaseServiceCloudSync(false);
+    esp_task_wdt_reset();
     #endif
 
     #ifdef _USETFLUNA    
@@ -493,7 +558,9 @@ void loop() {
         #endif
         
         I.MyRandomSecond = random(0, 59); //this is the random second at which I will send data. This prevents all devices from sending data at the same time, which could overload the network.
-        if (minute() % 10 == 0 && _MYTYPE >= 100) I.makeBroadcast = true; //have servers broadcast every 10 minutes
+        if (minute() % 10 == 0 && _I_AM_SERVER) {
+          I.makeBroadcast = true; //have servers broadcast every 10 minutes
+        }
         
         if (Sensors.getNumDevices() ==1) I.makeBroadcast = true; //if there is only one device (including  me), broadcast my presence
         
@@ -503,8 +570,8 @@ void loop() {
           bool anyServerOverdue = false;
           for (int16_t i = 0; i < NUMDEVICES; i++) {
             ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-            if (!d || !d->IsSet || d->devType < 100) continue;
-            if (d->dataSent == 0 || d->dataSent + d->SendingInt < I.currentTime) {
+            if (!d || !d->IsSet || !IS_SERVER_DEVICE_TYPE(d->devType)) continue;
+            if (d->dataSent == 0 || d->dataSent + d->SendingInt < (uint32_t)utcNow()) {
               anyServerOverdue = true;
               break;
             }
@@ -533,15 +600,15 @@ void loop() {
 
         #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
         static uint32_t lastWeatherTimeoutErrorT = 0;
-        if ((WeatherData.lastUpdateT == 0 || I.currentTime > WeatherData.lastUpdateT + 3600)
-            && I.currentTime - I.ALIVESINCE > 10800
-            && I.currentTime - lastWeatherTimeoutErrorT > 3600) {
+        if ((WeatherData.lastUpdateT == 0 || utcNow() > WeatherData.lastUpdateT + 3600)
+            && utcNow() - I.ALIVESINCE > 10800
+            && utcNow() - lastWeatherTimeoutErrorT > 3600) {
             #ifdef _USEWEATHERLITE
             storeError("Weather package stale >60 minutes", ERROR_WEATHER_TIMEOUT, true);
             #else
             storeError("Weather failed >60 minutes", ERROR_WEATHER_TIMEOUT, true);
             #endif
-            lastWeatherTimeoutErrorT = I.currentTime;
+            lastWeatherTimeoutErrorT = (uint32_t)utcNow();
         }
 
         // Display current conditions: outside sensors when available, else packaged/NOAA forecast
@@ -553,9 +620,7 @@ void loop() {
             #ifdef _ISHVACSERVER
                 checkHVAC();
             #endif
-            #ifdef _USESUPABASE
-            supabaseHubPollTick();
-            #endif
+            // supabaseHubPollTick() retained in supabase_prefs but unwired (inventory deferred)
         #endif
         I.isFlagged = 0;
         I.isSoilDry = 0;
@@ -563,12 +628,12 @@ void loop() {
         I.isCold = 0;
         I.isLeak = 0;
         I.isFlagged = countFlagged(0, 0b00000111, 0b00000011, 0); //only count flagged sensors if they are monitored (bit 1 is set)
-        I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
-        I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (I.currentTime > 3600) ? I.currentTime - 3600 : 0);
+        I.isSoilDry = countFlagged(-3, 0b10000111, 0b10000011, (utcNow() > 3600) ? (uint32_t)utcNow() - 3600 : 0);
+        I.isHot = countFlagged(-1, 0b10100111, 0b10100011, (utcNow() > 3600) ? (uint32_t)utcNow() - 3600 : 0);
+        I.isCold = countFlagged(-1, 0b10100111, 0b10000011, (utcNow() > 3600) ? (uint32_t)utcNow() - 3600 : 0);
+        I.isLeak = countFlagged(70, 0b10000001, 0b10000001, (utcNow() > 3600) ? (uint32_t)utcNow() - 3600 : 0);
 
-        if (I.currentTime % 300 == 0) Sensors.checkDeviceFlags(); //check the device flags every 5 minutes
+        if ((uint32_t)utcNow() % 300 == 0) Sensors.checkDeviceFlags(); //check the device flags every 5 minutes
 
         handleStoreCoreData();
         
@@ -624,21 +689,22 @@ void loop() {
     }
     if (OldTime[3] != weekday()) {
         OldTime[3] = weekday();
-        I.ESPNOW_SENDS = 0;
-        I.ESPNOW_RECEIVES = 0;
+        I.MESH_SENDS = 0;
+        I.MESH_RECEIVES = 0;
         I.UDP_RECEIVES = 0;
         I.UDP_SENDS = 0;
         I.HTTP_RECEIVES = 0;
         I.HTTP_SENDS = 0;
 
-        I.ESPNOW_INCOMING_ERRORS = 0;
-        I.ESPNOW_OUTGOING_ERRORS = 0;
+        I.MESH_INCOMING_ERRORS = 0;
+        I.MESH_OUTGOING_ERRORS = 0;
         I.UDP_INCOMING_ERRORS = 0;
         I.UDP_OUTGOING_ERRORS = 0;
         I.HTTP_INCOMING_ERRORS = 0;
         I.HTTP_OUTGOING_ERRORS = 0;
         I.rebootsToday = 0;
         Sensors.resetDailyPingCounters();
+        resetExpiredRequestLadder();
 
         #ifdef _REBOOTDAILY
         SerialPrint("Rebooting daily...",true);
@@ -661,7 +727,7 @@ void loop() {
         OldTime[0] = I.currentSecond;
 
         //if time is invalid, completely reset the time
-        if (isTimeValid(I.currentTime)==false) {
+        if (isTimeValid((uint32_t)utcNow())==false) {
             SerialPrint("Time is invalid, completely resetting time",true);
             storeError("Time is invalid, completely resetting time", ERROR_TIME,true);
             I.currentTime = 0;
@@ -680,15 +746,19 @@ void loop() {
             #if _HAS_LOCAL_SENSORS
             sendAllSensors(false, -1, true);
             #endif
-            // once per minute at a random second: check critical sensor expiry
-            // (local: timeRead + 1.25×SendingInt; remote: timeLogged + 1.25×SendingInt)
-            I.isExpired = Sensors.checkExpirationAllSensors(I.currentTime, true, 0, true);
+            // once per minute at a random second.
+            // Local and critical remote: time + 1.25×SendingInt. Noncritical remote: 2×SendingInt.
+            // Hubs leave non-low-power remotes unlabeled until snsReqExpired is acked or fails.
+            I.isExpired = Sensors.checkExpirationAllSensors(utcNow(), false, 0, true);
 
             #if _IS_SERVER_HUB
             // Hub: start expired-peripheral data-request cycle (one device per second below)
             serviceExpiredDeviceDataRequests(true);
             if (I.makeBroadcast) { //broadcast every 10 minutes, at some random second within the 10th minute
                 broadcastServerPresence(true, 2);
+            }
+            if (minute() % 10 == 0) {
+              I.makeCloudUpload = true; // Supabase reading upload at random second in the 10-min slot
             }
             #endif
 

@@ -347,7 +347,7 @@ void NetworkMonitor_type::initRuntime() {
 }
 
 void NetworkMonitor_BSSIDChanges() {
-    NetworkMonitor.bssid.lastAttemptTime = I.currentTime;
+    NetworkMonitor.bssid.lastAttemptTime = utcNow();
     NetworkMonitor.bssid.success = false;
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -374,7 +374,7 @@ void NetworkMonitor_BSSIDChanges() {
 }
 
 void NetworkMonitor_LocalIPChanges() {
-    NetworkMonitor.localIp.lastAttemptTime = I.currentTime;
+    NetworkMonitor.localIp.lastAttemptTime = utcNow();
     NetworkMonitor.localIp.success = false;
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -392,7 +392,7 @@ void NetworkMonitor_LocalIPChanges() {
 }
 
 void NetworkMonitor_DNSResolutionTime() {
-    NetworkMonitor.dns.lastAttemptTime = I.currentTime;
+    NetworkMonitor.dns.lastAttemptTime = utcNow();
     NetworkMonitor.dns.success = false;
     NetworkMonitor.dns.resolutionMs = -1;
 
@@ -420,13 +420,13 @@ void NetworkMonitor_DNSResolutionTime() {
 }
 
 void NetworkMonitor_TxFailures() {
-    NetworkMonitor.txFailures.lastAttemptTime = I.currentTime;
+    NetworkMonitor.txFailures.lastAttemptTime = utcNow();
     NetworkMonitor.txFailures.failureCount = I.HTTP_OUTGOING_ERRORS;
     NetworkMonitor.txFailures.success = true;
 }
 
 void NetworkMonitor_GatewayLatency() {
-    NetworkMonitor.gatewayLatency.lastAttemptTime = I.currentTime;
+    NetworkMonitor.gatewayLatency.lastAttemptTime = utcNow();
     NetworkMonitor.gatewayLatency.success = false;
     NetworkMonitor.gatewayLatency.ping = NmPingResult();
 
@@ -445,7 +445,7 @@ void NetworkMonitor_GatewayLatency() {
 }
 
 void NetworkMonitor_PingTest() {
-    NetworkMonitor.externalPing.lastAttemptTime = I.currentTime;
+    NetworkMonitor.externalPing.lastAttemptTime = utcNow();
     NetworkMonitor.externalPing.success = false;
     NetworkMonitor.externalPing.wan = NmPingResult();
     NetworkMonitor.externalPing.gateway = NmPingResult();
@@ -481,23 +481,23 @@ void NetworkMonitor_PingTest() {
 
 void NetworkMonitor_DownloadTest() {
     if (NetworkMonitor.download.lastRunTime != 0
-        && I.currentTime - NetworkMonitor.download.lastRunTime < (time_t)NM_DOWNLOAD_MIN_INTERVAL_SEC) {
+        && utcNow() - NetworkMonitor.download.lastRunTime < (time_t)NM_DOWNLOAD_MIN_INTERVAL_SEC) {
         return;
     }
 
-    NetworkMonitor.download.lastAttemptTime = I.currentTime;
+    NetworkMonitor.download.lastAttemptTime = utcNow();
     NetworkMonitor.download.success = false;
     NetworkMonitor.download.downloadBytes = 0;
     NetworkMonitor.download.durationMs = 0;
     NetworkMonitor.download.sourceIP = IPAddress();
 
     if (WiFi.status() != WL_CONNECTED) {
-        NetworkMonitor.download.lastRunTime = I.currentTime;
+        NetworkMonitor.download.lastRunTime = utcNow();
         return;
     }
 
 #if !defined(_USE_CERT_BUNDLE)
-    NetworkMonitor.download.lastRunTime = I.currentTime;
+    NetworkMonitor.download.lastRunTime = utcNow();
     return;
 #else
     #ifdef _USE_HEADER_INFO_ALERT
@@ -505,7 +505,7 @@ void NetworkMonitor_DownloadTest() {
     #endif
 
     if (!resolveHostIPv4("speed.cloudflare.com", NetworkMonitor.download.sourceIP)) {
-        NetworkMonitor.download.lastRunTime = I.currentTime;
+        NetworkMonitor.download.lastRunTime = utcNow();
         return;
     }
 
@@ -525,7 +525,7 @@ void NetworkMonitor_DownloadTest() {
 
     HTTPClient http;
     if (!http.begin(client, url)) {
-        NetworkMonitor.download.lastRunTime = I.currentTime;
+        NetworkMonitor.download.lastRunTime = utcNow();
         return;
     }
 
@@ -539,7 +539,7 @@ void NetworkMonitor_DownloadTest() {
 
     if (httpCode != HTTP_CODE_OK) {
         http.end();
-        NetworkMonitor.download.lastRunTime = I.currentTime;
+        NetworkMonitor.download.lastRunTime = utcNow();
         return;
     }
 
@@ -548,7 +548,7 @@ void NetworkMonitor_DownloadTest() {
     http.end();
 
     NetworkMonitor.download.downloadBytes = (uint32_t)bytesRead;
-    NetworkMonitor.download.lastRunTime = I.currentTime;
+    NetworkMonitor.download.lastRunTime = utcNow();
 
     uint32_t minBytes = (downloadBytesTarget * 95u) / 100u;
     if (bytesRead >= minBytes) {

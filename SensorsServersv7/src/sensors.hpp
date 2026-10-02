@@ -27,7 +27,7 @@ class Devices_Sensors;
 //5 - RH, AHT21
 //6 - - ADS1115 reading NTC thermistor , requires _THERMISTOR_B0, _THERMISTOR_R0 (nominal resistance at 25C), _THERMISTOR_RKNOWN (resistance of resisor in series with NTC), _THERMISTOR_TKNOWN (temperature at known resistance), _THERMISTOR_VDD (supply voltage)   
 //7 - distance, HC-SR04 or tfluna 
-//8 - human presence (mm wave)
+//8 - 
 //9 - BMP pressure
 //10 - BMP temp
 //11 - BMP altitude
@@ -41,7 +41,7 @@ class Devices_Sensors;
 19 - BME680 air press
 20  - BME680 gas sensor
 21 - 
-
+30 -
 
 50 - HVAC, total heating time (use for a multizone system) (ie heat on)
 51 - HVAC, Heat zone 
@@ -56,8 +56,14 @@ class Devices_Sensors;
 60 -  battery power
 61 - battery %
 62 - battery voltage, ads1115
-70 - leak yes/no
-71 - any binary, 1=yes/true/on
+70 - leak yes/no (DIO; same pin/pull encoding as 71). Value HIGH=1 LOW=0. Alarms use Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN: value>MAX or value<MIN. MAX=0 MIN=0 → HIGH alarms; MAX=1 MIN=1 → LOW alarms; MAX=1 MIN=0 → never.
+71 - any binary DIO, 1=high/on, 0=low/off. snsPin is the GPIO (0-99 analog encoding or 200-299 digital). powerPin is pull config, not a rail: -9999/-1 ignore (INPUT, idle LOW); -100 INPUT_PULLDOWN idle LOW; -99 INPUT_PULLUP idle HIGH. Same Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN alarm rules as type 70.
+SendingInt 0 (any sensor) = transmit only on alarm-status change (Flags bit 6) or hub/user request; one send after first read so hubs can register the sensor.
+72 - any binary DIO, 0=high/on, 1=low/off. snsPin is the GPIO (0-99 analog encoding or 200-299 digital). powerPin is pull config, not a rail: -9999/-1 ignore (INPUT, idle LOW); -100 INPUT_PULLDOWN idle LOW; -99 INPUT_PULLUP idle HIGH. Same Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN alarm rules as type 70.
+73 - timer countdown DIO OUTPUT. snsValue is remaining seconds (>0 → DIO HIGH, else LOW). Each poll subtracts poll_interval seconds (min 0). Flags bit0 mirrors DIO state. Poll 0 = never update. Default poll 1s.
+74 - inverted timer countdown DIO OUTPUT (same as 73 but opposite DIO polarity when implemented).
+75 - clock-window DIO OUTPUT. limitMin = on time, limitMax = off time (local hour 0–23; -1=dawn, -2=dusk via type-100 sunAck).
+     DIO HIGH while now is in [on, off) (wraps midnight if on>off). snsValue 0=LOW / 1=HIGH; Flags bit0 mirrors DIO. No IRQ.
 80-89 network monitor sensors (sns/power pins ignored)
 80 WiFi RSSI (dBm) from STRUCT_CORE I; snsID 1=current, 2=low, 3=high — universal, no _USENETWORKMONITOR
 81-89 network monitor tests (_USENETWORKMONITOR): 81 AP switch count, 82 local IP change count,
@@ -65,10 +71,24 @@ class Devices_Sensors;
 87 external ping avg RTT (ms), 88 external ping jitter (ms), 89 download speed (Mbps)
 98 - clock
 99 = any numerical value
-100+ is a server type sensor, to which other sensors will send their data
+100-150 - server type sensors, to which other sensors will send their data
 100 - weather display server with local persistent storage (ie SD card)
+200-255 - interrupt-driven DIO sensors (_USEINTERRUPT=1). Implementation: src/interrupt_triggers.hpp/.cpp.
+     Poll interval: activity decimal refresh / daily reset; 0 = never run sensor update.
+     snsValue = daily integer count + .1 if triggered within last poll_interval, else .0.
+     Limits: fractional recent activity is HIGH. MAX≠0 MIN=0 → alarm while recent (default);
+     MAX≠0 MIN≠0 → alarm when idle; MAX=0 MIN=0 → never; MAX=0 MIN≠0 is swapped.
+200 - human presence (RCWL-0516). Rising edge IRQ. _PIN_ENABLE_RCWL (GPIO, driven HIGH at setup),
+     _RCWL_ASSOCIATED_SNS (prefs index of type 73 timer). Edges within poll_interval are ignored (no count/timer).
+     When Lights are on and remaining snsValue < 120, adds poll_interval+5 to Lights.
+220 - momentary button. Rising edge IRQ with debounce; falling edge ignored. _BUTTON_ASSOCIATED_SNS (prefs index).
+     If associated Flags bit0 is on → set associated snsValue=0 (not counted). If associated snsValue<=0 → arm to this
+     button's poll_interval (counted).
 */
 
+// Type 71 powerPin values (not a GPIO rail)
+#define SNS_DIO_PULLDOWN (-100)
+#define SNS_DIO_PULLUP (-99)
 
     #ifdef _USEMUX
       //using CD74HC4067 mux. this mux uses 4 DIO pins to choose one of 16 lines, then outputs to 1 ESP pin
@@ -233,10 +253,16 @@ extern  Adafruit_BME280 bme; // I2C
 
 
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false, bool uncalibrated=false);
+// Type 200: nonzero limit = HIGH, zero = LOW. Swaps invalid MAX=0/MIN≠0. Returns true if swapped.
+bool normalizeHumanPresenceLimits(double& limitHigh, double& limitLow);
+void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag);
 bool sensorUsesScaling(uint8_t snsType);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
 void setupSensors();
+#if _USEINTERRUPT
+void serviceInterruptSensors();
+#endif
 double peak_to_peak(int16_t pin, int ms = 50);
 void initHardwareSensors();
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);

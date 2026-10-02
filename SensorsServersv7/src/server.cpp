@@ -2,6 +2,9 @@
 #include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
+#if _HAS_LOCAL_SENSORS
+#include "interrupt_triggers.hpp"
+#endif
 #ifdef _USENETWORKMONITOR
 #if _USENETWORKMONITOR > 0
 #include "NetworkMonitor.hpp"
@@ -10,11 +13,12 @@
 #ifdef _USETFT
   #ifdef _ISCLOCK480X480
     #include "Clock480X480.hpp"
+    extern LGFX tft;
   #else
     #include "graphics.hpp"
+    extern LGFX tft;
+    extern STRUCT_GRAPHICS GRAPHICS;
   #endif
-  extern LGFX tft;
-  extern STRUCT_GRAPHICS GRAPHICS;
 #endif
 
 #ifdef _USELEDMATRIX
@@ -22,10 +26,12 @@
 #endif
 
 #include "BootSecure.hpp"
+#include "ble_provision.hpp"
 #include "AddESPNOW.hpp"
 #include "firmwareUpdate.hpp"
-#ifdef _USESUPABASE
+#if _SUPABASE_RUNTIME
 #include "supabase_prefs.hpp"
+#include <SupabaseClient.hpp>
 #endif
 
 #include <ssl_client.h> // Ensure this is at the top of server.cpp
@@ -88,8 +94,8 @@ void refreshIGMPMembership() {
 
   LOCK_TCPIP_CORE();
 
-  if (isTimeValid(I.currentTime) && isTimeValid(I.UDP_LAST_INCOMINGMSG_TIME)
-      && I.currentTime - I.UDP_LAST_INCOMINGMSG_TIME > IGMP_STALE_UDP_SEC) {
+  if (isTimeValid((uint32_t)utcNow()) && isTimeValid(I.UDP_LAST_INCOMINGMSG_TIME)
+      && utcNow() - I.UDP_LAST_INCOMINGMSG_TIME > IGMP_STALE_UDP_SEC) {
     igmp_leavegroup_netif(netif, &groupaddr);
     igmp_joingroup_netif(netif, &groupaddr);
     UNLOCK_TCPIP_CORE();
@@ -116,14 +122,14 @@ void maybeRefreshIGMPMembership() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (!isTimeValid(I.currentTime)) {
+  if (!isTimeValid((uint32_t)utcNow())) {
     return;
   }
   if (s_lastIgmpRefreshTime != 0
-      && I.currentTime - s_lastIgmpRefreshTime < IGMP_REFRESH_INTERVAL_SEC) {
+      && utcNow() - s_lastIgmpRefreshTime < IGMP_REFRESH_INTERVAL_SEC) {
     return;
   }
-  s_lastIgmpRefreshTime = I.currentTime;
+  s_lastIgmpRefreshTime = utcNow();
   refreshIGMPMembership();
 }
 #endif
@@ -154,7 +160,7 @@ static String formatRssiHtml(int32_t rssi, const char* suffix = " dBm") {
 }
 
 static String formatCommTime(uint32_t t) {
-  return (t > 0) ? dateify(t, "mm/dd/yyyy hh:nn:ss") : String("???");
+  return (t > 0) ? dateifyLocal(t, "mm/dd/yyyy hh:nn:ss") : String("???");
 }
 
 static void appendCommTableRow(const char* label, const String& value) {
@@ -176,55 +182,36 @@ static void appendBroadcastForm(const char* action, const char* label, const cha
   WEBHTML += "</button></form>";
 }
 
+static String bssidToString(const uint8_t* bssid);
+static const char* preferredCommunicationsLabel();
+
 static void appendCommunicationsSection() {
   WEBHTML += "<h3>Communications</h3>";
-  appendBroadcastForm("/REQUEST_BROADCAST", "Broadcast Now (ESPLan + UDPLan)");
+  appendBroadcastForm("/REQUEST_BROADCAST", "Broadcast Now (ArborysMesh ESP + UDP)");
 
-  WEBHTML += "<h4>ESPLan</h4>";
-  appendBroadcastForm("/REQUEST_BROADCAST_ESP", "Broadcast ESPLan", "#4CAF50");
-  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
+  WEBHTML += "<table style=\"width:100%;border-collapse:collapse;max-width:420px\">";
+  appendCommTableRow("ArborysMesh in / out", String(I.MESH_RECEIVES) + " / " + String(I.MESH_SENDS));
   {
-    String sender = MACToString(I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC);
-    if (I.ESPNOW_LAST_INCOMINGMSG_FROM_IP != IPAddress(0, 0, 0, 0)) {
-      sender += " / " + I.ESPNOW_LAST_INCOMINGMSG_FROM_IP.toString();
-    }
-    appendCommTableRow("Last incoming time", formatCommTime(I.ESPNOW_LAST_INCOMINGMSG_TIME));
-    appendCommTableRow("Last incoming type", String(I.ESPNOW_LAST_INCOMINGMSG_TYPE));
-    appendCommTableRow("Last incoming sender", sender);
-    appendCommTableRow("Total incoming today", String(I.ESPNOW_RECEIVES));
-    appendCommTableRow("Last outgoing time", formatCommTime(I.ESPNOW_LAST_OUTGOINGMSG_TIME));
-    appendCommTableRow("Last outgoing type", String(I.ESPNOW_LAST_OUTGOINGMSG_TYPE));
-    appendCommTableRow("Last outgoing target", MACToString(I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC));
-    appendCommTableRow("Total outgoing today", String(I.ESPNOW_SENDS));
+    const MeshStats& ms = meshStats();
+    appendCommTableRow("Mesh errors in / out / RX dropped",
+        String(I.MESH_INCOMING_ERRORS) + " / " + String(I.MESH_OUTGOING_ERRORS) + " / " + String(ms.rxDropped));
+    appendCommTableRow("Mesh relays sent / suppressed",
+        String(ms.relaysSent) + " / " + String(ms.relaysSuppressed));
+    appendCommTableRow("Last mesh frame heard from",
+        ms.lastRxRssi ? (MACToString(ms.lastRxFromMac) + " (" + formatRssiHtml(ms.lastRxRssi) + ")") : String("none yet"));
   }
-  WEBHTML += "</table>";
-
   #ifdef _USEUDP
-  WEBHTML += "<h4>UDPLan</h4>";
-  appendBroadcastForm("/REQUEST_BROADCAST_UDP", "Broadcast UDPLan", "#FF9800");
-  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
-  appendCommTableRow("Last incoming time", formatCommTime(I.UDP_LAST_INCOMINGMSG_TIME));
-  appendCommTableRow("Last incoming type", String(I.UDP_LAST_INCOMINGMSG_TYPE));
-  appendCommTableRow("Last incoming sender IP", I.UDP_LAST_INCOMINGMSG_FROM_IP.toString());
-  appendCommTableRow("Total incoming today", String(I.UDP_RECEIVES));
-  appendCommTableRow("Last outgoing time", formatCommTime(I.UDP_LAST_OUTGOINGMSG_TIME));
-  appendCommTableRow("Last outgoing type", String(I.UDP_LAST_OUTGOINGMSG_TYPE));
-  appendCommTableRow("Last outgoing target IP", I.UDP_LAST_OUTGOINGMSG_TO_IP.toString());
-  appendCommTableRow("Total outgoing today", String(I.UDP_SENDS));
-  WEBHTML += "</table>";
+  appendCommTableRow("UDP in / out", String(I.UDP_RECEIVES) + " / " + String(I.UDP_SENDS));
   #endif
-
-  WEBHTML += "<h4>HTTP</h4>";
-  WEBHTML += "<table style=\"width: 100%; border-collapse: collapse;\">";
-  appendCommTableRow("Last incoming time", formatCommTime(I.HTTP_LAST_INCOMINGMSG_TIME));
-  appendCommTableRow("Last incoming type", String(I.HTTP_LAST_INCOMINGMSG_TYPE));
-  appendCommTableRow("Last incoming sender IP", I.HTTP_LAST_INCOMINGMSG_FROM_IP.toString());
-  appendCommTableRow("Total incoming today", String(I.HTTP_RECEIVES));
-  appendCommTableRow("Last outgoing time", formatCommTime(I.HTTP_LAST_OUTGOINGMSG_TIME));
-  appendCommTableRow("Last outgoing type", String(I.HTTP_LAST_OUTGOINGMSG_TYPE));
-  appendCommTableRow("Last outgoing target IP", I.HTTP_LAST_OUTGOINGMSG_TO_IP.toString());
-  appendCommTableRow("Total outgoing today", String(I.HTTP_SENDS));
+  appendCommTableRow("HTTP in / out", String(I.HTTP_RECEIVES) + " / " + String(I.HTTP_SENDS));
   WEBHTML += "</table>";
+
+  WEBHTML += "<p style=\"margin-top:8px\">";
+  appendBroadcastForm("/REQUEST_BROADCAST_ESP", "Broadcast ArborysMesh", "#4CAF50");
+  #ifdef _USEUDP
+  appendBroadcastForm("/REQUEST_BROADCAST_UDP", "Broadcast UDP", "#FF9800");
+  #endif
+  WEBHTML += "</p>";
 }
 
 static bool isHttpUiBrowseMessage(const char* messageType) {
@@ -238,8 +225,8 @@ static bool isHttpUiBrowseMessage(const char* messageType) {
     "SDCard", "SDDir", "SDDownload", "SDUp", "SDDelSns", "SDStoreDev",
     "SDSaveScr", "SDSaveWthr", "SDSysLog",
     "ErrorLog", "RebootDebug", "REBOOT",
-    "404", "Broadcast", "STATUS",
-    "SnsOvrd", "SnsUpd", "ReadReq", "API_SNS_READ_NOW",
+    "404", "Broadcast", "STATUS", "MeshSet",
+    "SnsOvrd", "SnsLim", "SnsUpd", "ReadReq", "API_SNS_READ_NOW",
   };
   for (const char* uiType : kUiBrowseTypes) {
     if (strcmp(messageType, uiType) == 0) return true;
@@ -881,13 +868,13 @@ int8_t measureWifiLinkStatus() {
 
 void updateRSSI(bool forceUpdate) {
   constexpr time_t RSSI_POLL_INTERVAL_SEC = 5;
-  if (!forceUpdate && I.lastRSSItime != 0 && I.currentTime - I.lastRSSItime < RSSI_POLL_INTERVAL_SEC) {
+  if (!forceUpdate && I.lastRSSItime != 0 && utcNow() - I.lastRSSItime < RSSI_POLL_INTERVAL_SEC) {
     return;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     I.RSSIcurrent = -999;
-    I.lastRSSItime = I.currentTime;
+    I.lastRSSItime = utcNow();
     return;
   }
 
@@ -903,7 +890,7 @@ void updateRSSI(bool forceUpdate) {
       I.RSSIhigh = rssi;
     }
   }
-  I.lastRSSItime = I.currentTime;
+  I.lastRSSItime = utcNow();
 }
 
 void syncDeviceIPFromWifi() {
@@ -930,8 +917,8 @@ static void syncWifiDownFlags(bool connected) {
     I.wifiFailCount = 0;
     return;
   }
-  if (I.wifiDownSince == 0 && isTimeValid(I.currentTime)) {
-    I.wifiDownSince = I.currentTime;
+  if (I.wifiDownSince == 0 && isTimeValid((uint32_t)utcNow())) {
+    I.wifiDownSince = utcNow();
   }
 }
 
@@ -1006,9 +993,7 @@ static bool initialSetupRequirementsMet() {
   #ifdef _USEWEATHER
   if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) return false;
   #endif
-  #ifdef _USESUPABASE
-  if (!Prefs.SUPABASE_CLAIMED) return false;
-  #endif
+  // Cloud claim is optional: unclaimed devices run LAN-only.
   return true;
 }
 
@@ -1091,8 +1076,8 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
 
   maybeRecoverWifiWithoutIp();
 
-  if (I.wifiDownSince && isTimeValid(I.currentTime)
-      && (I.currentTime - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
+  if (I.wifiDownSince && isTimeValid((uint32_t)utcNow())
+      && (utcNow() - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
     if (!softApRunning()) {
       SerialPrint("WiFi down > " + String(WIFI_DOWN_AP_THRESHOLD_SEC) + "s; entering AP mode", true);
       enterAPStationMode();
@@ -1299,18 +1284,18 @@ void maybeOptimizeWifiBssid() {
 
   if (!haveWifiCredentials()) return;
   if (!wifiReadyForNetwork()) return;
-  if (!isTimeValid(I.currentTime)) return;
+  if (!isTimeValid((uint32_t)utcNow())) return;
 
   // Start the 30-minute clock on first eligible call; do not rescan immediately after boot connect.
   if (s_lastOptimizeTime == 0) {
-    s_lastOptimizeTime = I.currentTime;
+    s_lastOptimizeTime = utcNow();
     return;
   }
-  if (I.currentTime >= s_lastOptimizeTime
-      && (I.currentTime - s_lastOptimizeTime) < WIFI_BSSID_OPTIMIZE_INTERVAL_SEC) {
+  if (utcNow() >= s_lastOptimizeTime
+      && (utcNow() - s_lastOptimizeTime) < WIFI_BSSID_OPTIMIZE_INTERVAL_SEC) {
     return;
   }
-  s_lastOptimizeTime = I.currentTime;
+  s_lastOptimizeTime = utcNow();
 
   const uint8_t* currentBssid = WiFi.BSSID();
   if (!currentBssid) {
@@ -1391,19 +1376,19 @@ namespace {
   volatile bool s_apChannelScanGotResponse = false;
 
   bool apEspNowStaleFor(uint32_t seconds) {
-    if (!isTimeValid(I.ESPNOW_LAST_INCOMINGMSG_TIME)) return true;
-    if (!isTimeValid(I.currentTime)) {
+    if (!isTimeValid(I.MESH_LAST_INCOMINGMSG_TIME)) return true;
+    if (!isTimeValid((uint32_t)utcNow())) {
       return (millis() - s_apEnterMillis) >= (seconds * 1000UL);
     }
-    return (I.currentTime - I.ESPNOW_LAST_INCOMINGMSG_TIME) >= seconds;
+    return (utcNow() - I.MESH_LAST_INCOMINGMSG_TIME) >= seconds;
   }
 
   bool apClientIdleFor(uint32_t seconds) {
-    if (isTimeValid(I.apLastClientActivity) && isTimeValid(I.currentTime)) {
-      return (I.currentTime - I.apLastClientActivity) >= seconds;
+    if (isTimeValid(I.apLastClientActivity) && isTimeValid((uint32_t)utcNow())) {
+      return (utcNow() - I.apLastClientActivity) >= seconds;
     }
-    if (isTimeValid(I.apModeEnteredTime) && isTimeValid(I.currentTime)) {
-      return (I.currentTime - I.apModeEnteredTime) >= seconds;
+    if (isTimeValid(I.apModeEnteredTime) && isTimeValid((uint32_t)utcNow())) {
+      return (utcNow() - I.apModeEnteredTime) >= seconds;
     }
     return (millis() - s_apEnterMillis) >= (seconds * 1000UL);
   }
@@ -1443,14 +1428,14 @@ namespace {
 
     s_apChannelScanListen = false;
 
-    if (!found && _MYTYPE >= 100) {
+    if (!found && _I_AM_SERVER) {
       SerialPrint("AP mode: channel scan failed, server defaulting to channel 1", true);
       setWifiRfChannel(1);
     }
 
     s_apLastChannelScanMillis = millis();
-    if (isTimeValid(I.currentTime)) {
-      I.apLastChannelScanTime = I.currentTime;
+    if (isTimeValid((uint32_t)utcNow())) {
+      I.apLastChannelScanTime = utcNow();
     }
 
     SerialPrint(String("AP mode: channel scan ") + (found ? "found server" : "no server"), true);
@@ -1466,13 +1451,13 @@ namespace {
     if (!apEspNowStaleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
     if (!apClientIdleFor(AP_CHANNEL_SCAN_IDLE_SEC)) return false;
 
-    if (_MYTYPE >= 100) {
+    if (_I_AM_SERVER) {
       return s_apLastChannelScanMillis == 0;
     }
 
     if (s_apLastChannelScanMillis == 0) return true;
-    if (isTimeValid(I.apLastChannelScanTime) && isTimeValid(I.currentTime)) {
-      return (I.currentTime - I.apLastChannelScanTime) >= AP_CHANNEL_SCAN_IDLE_SEC;
+    if (isTimeValid(I.apLastChannelScanTime) && isTimeValid((uint32_t)utcNow())) {
+      return (utcNow() - I.apLastChannelScanTime) >= AP_CHANNEL_SCAN_IDLE_SEC;
     }
     return (millis() - s_apLastChannelScanMillis) >= (AP_CHANNEL_SCAN_IDLE_SEC * 1000UL);
   }
@@ -1521,9 +1506,9 @@ void enterAPStationMode() {
   }
 
   if (initESPNOW() == 1) {
-    SerialPrint("ESPNow initialized in AP mode", true);
+    SerialPrint("ArborysMesh initialized in AP mode", true);
   } else {
-    SerialPrint("ESPNow init failed in AP mode", true);
+    SerialPrint("ArborysMesh init failed in AP mode", true);
   }
 
   server.begin();
@@ -1533,10 +1518,10 @@ void enterAPStationMode() {
   s_apLastChannelScanMillis = 0;
   s_apEnterMillis = millis();
   s_apLastReconnectMillis = millis();
-  if (isTimeValid(I.currentTime)) {
-    I.apModeEnteredTime = I.currentTime;
+  if (isTimeValid((uint32_t)utcNow())) {
+    I.apModeEnteredTime = utcNow();
     // Defer first STA reconnect so soft-AP can stabilize (WiFi.begin can bounce AP briefly).
-    I.apLastReconnectCheckTime = I.currentTime;
+    I.apLastReconnectCheckTime = utcNow();
   } else {
     I.apModeEnteredTime = 0;
     I.apLastReconnectCheckTime = 0;
@@ -1565,10 +1550,10 @@ void maybeExitAPStationMode() {
   if (!I.initialSetupFinalized) return;
   if (!initialSetupRequirementsMet()) return;
 
-  #if _MYTYPE < 100
+  #if _I_AM_PERIPHERAL
   // Peripherals keep APSTA while no live server so users can reach the debug portal
   // even when STA WiFi is fine but hubs are unreachable / all expired.
-  if (!Sensors.hasLiveServer(I.currentTime)) return;
+  if (!Sensors.hasLiveServer(utcNow())) return;
   #endif
 
   if (I.initialSetupExitPending) {
@@ -1580,9 +1565,9 @@ void maybeExitAPStationMode() {
   exitAPStationMode();
 }
 
-#if _MYTYPE < 100
+#if _I_AM_PERIPHERAL
 void servicePeripheralServerApMode() {
-  const bool liveServer = Sensors.hasLiveServer(I.currentTime);
+  const bool liveServer = Sensors.hasLiveServer(utcNow());
   if (!liveServer) {
     if (!softApRunning()) {
       SerialPrint("No live server (none registered or all expired); entering APSTA for debug access", true);
@@ -1629,8 +1614,8 @@ void serviceAPStationMode() {
   static uint32_t lastHttpActivitySeen = 0;
   if (I.HTTP_LAST_INCOMINGMSG_TIME != lastHttpActivitySeen) {
     lastHttpActivitySeen = I.HTTP_LAST_INCOMINGMSG_TIME;
-    if (isTimeValid(I.currentTime)) {
-      I.apLastClientActivity = I.currentTime;
+    if (isTimeValid((uint32_t)utcNow())) {
+      I.apLastClientActivity = utcNow();
     }
   }
 
@@ -1641,11 +1626,11 @@ void serviceAPStationMode() {
   if (!haveWifiCredentials()) return;
 
   const bool firstCheck = (I.apLastReconnectCheckTime == 0 && s_apLastReconnectMillis == 0);
-  const bool dueByTime = isTimeValid(I.currentTime) && I.apLastReconnectCheckTime != 0
-      && (I.currentTime - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
+  const bool dueByTime = isTimeValid((uint32_t)utcNow()) && I.apLastReconnectCheckTime != 0
+      && (utcNow() - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
   const bool dueByMillis = (millis() - s_apLastReconnectMillis) >= (WIFI_AP_STA_RECONNECT_SEC * 1000UL);
-  const bool due = firstCheck || dueByTime || (!isTimeValid(I.currentTime) && dueByMillis)
-      || (isTimeValid(I.currentTime) && I.apLastReconnectCheckTime == 0 && dueByMillis);
+  const bool due = firstCheck || dueByTime || (!isTimeValid((uint32_t)utcNow()) && dueByMillis)
+      || (isTimeValid((uint32_t)utcNow()) && I.apLastReconnectCheckTime == 0 && dueByMillis);
   if (!due) return;
 
   const bool clientActiveSinceLastCheck = !firstCheck
@@ -1653,8 +1638,8 @@ void serviceAPStationMode() {
       && I.apLastClientActivity >= I.apLastReconnectCheckTime;
 
   s_apLastReconnectMillis = millis();
-  if (isTimeValid(I.currentTime)) {
-    I.apLastReconnectCheckTime = I.currentTime;
+  if (isTimeValid((uint32_t)utcNow())) {
+    I.apLastReconnectCheckTime = utcNow();
   }
 
   // Retry known credentials periodically; keep soft-AP up until STA recovers.
@@ -1670,8 +1655,8 @@ uint32_t getApStationEnterMillis() {
 bool apStationUserActive() {
   if (!softApRunning()) return false;
   if (WiFi.softAPgetStationNum() > 0) return true;
-  if (isTimeValid(I.apLastClientActivity) && isTimeValid(I.currentTime)
-      && (I.currentTime - I.apLastClientActivity) < 60) {
+  if (isTimeValid(I.apLastClientActivity) && isTimeValid((uint32_t)utcNow())
+      && (utcNow() - I.apLastClientActivity) < 60) {
     return true;
   }
   // Fallback when wall clock is unset: treat recent HTTP (by millis) as activity.
@@ -1766,9 +1751,10 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
   Prefs.HAVECREDENTIALS = true;
   Prefs.isUpToDate = false;
-  
 
-  
+  // SoftAP/HTTP path won — free BLE immediately so STA + ESP-NOW are not sharing the radio with BT.
+  bleProvisionStop();
+
   // Attempt WiFi connection
   SerialPrint("Attempting WiFi connection to: " + ssid, true);
 
@@ -2045,9 +2031,15 @@ void apiGetSetupStatus() {
                 ",\"location_configured\":" + String(location_configured ? "true" : "false") +
                 ",\"timezone_configured\":" + String(timezone_configured ? "true" : "false") +
                 ",\"setup_complete\":" + String(setup_complete ? "true" : "false");
-  #ifdef _USESUPABASE
-  json += ",\"supabase_claimed\":" + String(Prefs.SUPABASE_CLAIMED ? "true" : "false");
-  json += ",\"site_slug\":\"" + String(supabaseSiteSlug()) + "\"";
+  #if _SUPABASE_RUNTIME
+  json += ",\"supabase_claimed\":" + String(supabaseHasStoredCredentials() ? "true" : "false");
+  json += ",\"supabase_connected\":" + String(supabaseIsConnected() ? "true" : "false");
+  json += ",\"site_label\":\"";
+  if (supabaseHasStoredCredentials()) json += supabaseSiteSlug();
+  json += "\"";
+  json += ",\"site_slug\":\"";
+  if (supabaseHasStoredCredentials()) json += supabaseSiteSlug();
+  json += "\"";
   #endif
   
   if (wifi_configured) {
@@ -2075,9 +2067,6 @@ void handleApiCompleteSetup() {
     if (Prefs.LATITUDE == 0 && Prefs.LONGITUDE == 0) missing += "location; ";
     #endif
     if (Prefs.TimeZoneOffset > 50400) missing += "timezone; ";
-    #ifdef _USESUPABASE
-    if (!Prefs.SUPABASE_CLAIMED) missing += "cloud claim; ";
-    #endif
     server.send(400, "application/json",
       "{\"success\":false,\"error\":\"Setup incomplete: " + missing + "required before finishing\"}");
     return;
@@ -2103,7 +2092,213 @@ void handleApiCompleteSetup() {
   controlledReboot("Initial setup complete", RESET_NEWWIFI, true);
 }
 
-#ifdef _USESUPABASE
+#if _SUPABASE_RUNTIME
+// ArborysNet location fields (UI: site label / site description).
+#ifndef ARBORYSNET_SITE_LABEL_MAX
+#define ARBORYSNET_SITE_LABEL_MAX 24
+#endif
+#ifndef ARBORYSNET_SITE_DESC_MAX
+#define ARBORYSNET_SITE_DESC_MAX 64
+#endif
+
+/** Normalize to site label: lowercase a-z0-9_-, max 24, default "home". */
+static String arborysNetNormalizeLabel(const String& raw) {
+  String out;
+  out.reserve(ARBORYSNET_SITE_LABEL_MAX);
+  for (size_t i = 0; i < (size_t)raw.length() && out.length() < ARBORYSNET_SITE_LABEL_MAX; ++i) {
+    char c = raw.charAt(i);
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+      if (out.length() == 0 && (c == '_' || c == '-')) continue;
+      out += c;
+    }
+  }
+  if (out.length() == 0) out = "home";
+  return out;
+}
+
+/** Trim + cap site description at 64 chars. */
+static String arborysNetNormalizeDescription(const String& raw, const String& fallbackLabel) {
+  String out = raw;
+  out.trim();
+  if (out.length() == 0) out = fallbackLabel;
+  if (out.length() > ARBORYSNET_SITE_DESC_MAX) {
+    out = out.substring(0, ARBORYSNET_SITE_DESC_MAX);
+  }
+  return out;
+}
+
+/** Persist SITE_SLUG after an assign/ensure during setup. */
+static void supabasePersistSiteSlug(const char* slug) {
+  if (!slug || !slug[0]) slug = "home";
+  strncpy(Prefs.SITE_SLUG, slug, sizeof(Prefs.SITE_SLUG) - 1);
+  Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
+  Prefs.isUpToDate = false;
+  BootSecure boot;
+  boot.setPrefs(true);
+
+  SupabaseConfig cfg = Supabase.config();
+  strncpy(cfg.siteSlug, Prefs.SITE_SLUG, sizeof(cfg.siteSlug) - 1);
+  cfg.siteSlug[sizeof(cfg.siteSlug) - 1] = '\0';
+  Supabase.begin(cfg);
+}
+
+static String supabaseSitesArrayJson(const SupabaseSiteDto* sites, uint16_t count) {
+  String json = "[";
+  for (uint16_t i = 0; i < count; i++) {
+    if (i) json += ",";
+    const char* label = sites[i].slug[0] ? sites[i].slug : "home";
+    const char* desc = sites[i].name[0] ? sites[i].name : label;
+    json += "{\"id\":\"";
+    json += sites[i].id;
+    json += "\",\"label\":\"";
+    json += label;
+    json += "\",\"description\":\"";
+    json += desc;
+    json += "\"}";
+  }
+  json += "]";
+  return json;
+}
+
+// Keep off the stack � WiFiClientSecure TLS already uses a large stack frame.
+static SupabaseSiteDto s_setupSites[ARBORYSNET_MAX_SITES];
+
+// TLS mint+listSites must not run on the WebServer/loop stack (mbedtls overflows
+// ~8KB and freezes the LAN server). Worker + pending poll keeps handleClient responsive.
+enum : uint8_t { SB_SITES_IDLE = 0, SB_SITES_BUSY = 1, SB_SITES_OK = 2, SB_SITES_ERR = 3 };
+struct ArbSitesJob {
+  volatile uint8_t state;
+  bool autoAssign;
+  bool invalidDevice;
+  char err[96];
+  // Enough for 10 sites with full id/label/description payloads.
+  char json[4096];
+};
+static ArbSitesJob s_arbSitesJob = {};
+static TaskHandle_t s_arbSitesTask = nullptr;
+
+/** JSON error for ArborysNet APIs; clears NVS claim only on confirmed invalid_device. */
+static String supabaseApiFailJson(const char* fallbackMsg) {
+  String err = Supabase.lastErrorMessage();
+  if (err.length() == 0) err = Supabase.lastErrorCode();
+  if (err.length() == 0 && fallbackMsg) err = fallbackMsg;
+  const bool invalid = supabaseClearClaimIfInvalidDevice();
+  String out = "{\"success\":false,\"error\":\"";
+  out += err;
+  out += "\"";
+  if (Supabase.lastErrorCode()[0]) {
+    out += ",\"code\":\"";
+    out += Supabase.lastErrorCode();
+    out += "\"";
+  }
+  if (invalid) out += ",\"invalid_device\":true";
+  out += "}";
+  return out;
+}
+
+static bool supabaseRefreshSitesForSetup(uint16_t* countOut, bool autoAssignIfSingle,
+                                         bool* autoAssignedOut);
+
+static void arbSitesWorkerTask(void* /*arg*/) {
+  uint16_t count = 0;
+  bool autoAssigned = false;
+  esp_task_wdt_reset();
+  s_arbSitesJob.invalidDevice = false;
+  if (!supabaseRefreshSitesForSetup(&count, s_arbSitesJob.autoAssign, &autoAssigned)) {
+    String err = Supabase.lastErrorMessage();
+    if (err.length() == 0) err = Supabase.lastErrorCode();
+    if (err.length() == 0) err = "locations fetch failed";
+    // Include code so EmptyInput/auth vs HTTP failures are distinguishable in the UI.
+    if (Supabase.lastErrorCode()[0] && err.indexOf(Supabase.lastErrorCode()) < 0) {
+      err = String(Supabase.lastErrorCode()) + ": " + err;
+    }
+    strncpy(s_arbSitesJob.err, err.c_str(), sizeof(s_arbSitesJob.err) - 1);
+    s_arbSitesJob.err[sizeof(s_arbSitesJob.err) - 1] = '\0';
+    if (supabaseClearClaimIfInvalidDevice()) {
+      s_arbSitesJob.invalidDevice = true;
+    }
+    arborysNetLogClientError("locations fetch", ERROR_ARBORYSNET_SYNC);
+    s_arbSitesJob.state = SB_SITES_ERR;
+  } else {
+    {
+      char ev[48];
+      snprintf(ev, sizeof(ev), "locations fetched (%u)", (unsigned)count);
+      arborysNetLogEvent(ev, EVENT_ARBORYSNET_LOCATION);
+    }
+    String json = "{\"success\":true,\"current\":\"";
+    json += supabaseSiteSlug();
+    json += "\",\"site_auto_selected\":";
+    json += (autoAssigned || (s_arbSitesJob.autoAssign && count <= 1)) ? "true" : "false";
+    json += ",\"sites\":";
+    json += supabaseSitesArrayJson(s_setupSites, count);
+    json += "}";
+    if (json.length() >= sizeof(s_arbSitesJob.json)) {
+      strncpy(s_arbSitesJob.err, "sites response too large", sizeof(s_arbSitesJob.err) - 1);
+      s_arbSitesJob.err[sizeof(s_arbSitesJob.err) - 1] = '\0';
+      s_arbSitesJob.state = SB_SITES_ERR;
+    } else {
+      memcpy(s_arbSitesJob.json, json.c_str(), json.length() + 1);
+      s_arbSitesJob.state = SB_SITES_OK;
+    }
+  }
+  s_arbSitesTask = nullptr;
+  vTaskDelete(nullptr);
+}
+
+/**
+ * List sites for the claimed user (max 10). If none exist, create+assign "home".
+ * When autoAssignIfSingle and exactly one site, assign this device to it.
+ * CONFIG page must call with autoAssignIfSingle=false (list only).
+ */
+static bool supabaseRefreshSitesForSetup(uint16_t* countOut, bool autoAssignIfSingle,
+                                         bool* autoAssignedOut) {
+  if (countOut) *countOut = 0;
+  if (autoAssignedOut) *autoAssignedOut = false;
+  if (!countOut) return false;
+
+  supabaseBeginFromPrefs();
+  Supabase.setUtcOffset(Prefs.TimeZoneOffset);
+  esp_task_wdt_reset();
+
+  if (Supabase.listSites(s_setupSites, ARBORYSNET_MAX_SITES, countOut) != SupabaseError::Ok) {
+    return false;
+  }
+  esp_task_wdt_reset();
+
+  // Only mutate cloud state when the user has zero sites (Home must always exist).
+  if (*countOut == 0) {
+    if (Supabase.setDeviceSite("home", "home") != SupabaseError::Ok) {
+      return false;
+    }
+    esp_task_wdt_reset();
+    supabasePersistSiteSlug("home");
+    if (autoAssignedOut) *autoAssignedOut = true;
+    if (Supabase.listSites(s_setupSites, ARBORYSNET_MAX_SITES, countOut) != SupabaseError::Ok) {
+      return false;
+    }
+    if (*countOut == 0) {
+      memset(&s_setupSites[0], 0, sizeof(s_setupSites[0]));
+      strncpy(s_setupSites[0].slug, "home", sizeof(s_setupSites[0].slug) - 1);
+      strncpy(s_setupSites[0].name, "home", sizeof(s_setupSites[0].name) - 1);
+      *countOut = 1;
+    }
+  } else if (autoAssignIfSingle && *countOut == 1) {
+    const char* slug = s_setupSites[0].slug[0] ? s_setupSites[0].slug : "home";
+    const char* name = s_setupSites[0].name[0] ? s_setupSites[0].name : slug;
+    // Skip extra TLS if already on this site locally.
+    if (strcmp(supabaseSiteSlug(), slug) == 0) {
+      if (autoAssignedOut) *autoAssignedOut = true;
+    } else if (Supabase.setDeviceSite(slug, name) == SupabaseError::Ok) {
+      esp_task_wdt_reset();
+      supabasePersistSiteSlug(slug);
+      if (autoAssignedOut) *autoAssignedOut = true;
+    }
+  }
+
+  return true;
+}
+
 void apiSupabaseClaim() {
   registerHTTPMessage("API_SB_Claim");
   if (!wifiReadyForNetwork()) {
@@ -2116,6 +2311,9 @@ void apiSupabaseClaim() {
     return;
   }
 
+  // Keep this handler short: claim + persist only. Site mint/list is a separate
+  // /api/arborysnet/sites call so the browser does not sit through multiple TLS
+  // round-trips (that was causing "Failed to fetch" / dropped connections).
   SupabaseConfig cfg;
   cfg.clear();
   cfg.applyDefaults();
@@ -2123,20 +2321,26 @@ void apiSupabaseClaim() {
   cfg.utcOffsetSec = Prefs.TimeZoneOffset;
   Supabase.begin(cfg);
 
+  esp_task_wdt_reset();
   if (Supabase.claimDevice(claimCode.c_str()) != SupabaseError::Ok) {
     String err = Supabase.lastErrorMessage();
     if (err.length() == 0) err = Supabase.lastErrorCode();
+    arborysNetLogClientError("claim failed", ERROR_ARBORYSNET_CLAIM);
     server.send(400, "application/json",
                 "{\"success\":false,\"error\":\"" + err + "\"}");
     return;
   }
+  esp_task_wdt_reset();
 
   if (!supabasePersistClaimedPrefs()) {
+    arborysNetStoreError("claim persist failed", ERROR_ARBORYSNET_CLAIM);
     server.send(500, "application/json", "{\"success\":false,\"error\":\"Failed to save credentials\"}");
     return;
   }
 
-  String json = "{\"success\":true,\"site_slug\":\"";
+  arborysNetLogEvent("device claimed", EVENT_ARBORYSNET_CLAIMED);
+
+  String json = "{\"success\":true,\"claimed\":true,\"site_slug\":\"";
   json += supabaseSiteSlug();
   json += "\",\"user_id\":\"";
   json += Prefs.SUPABASE_USER_ID;
@@ -2144,49 +2348,37 @@ void apiSupabaseClaim() {
   server.send(200, "application/json", json);
 }
 
-void apiSupabaseSites() {
-  registerHTTPMessage("API_SB_Sites");
-  if (!Prefs.SUPABASE_CLAIMED) {
-    server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
-    return;
-  }
-  if (!wifiReadyForNetwork()) {
-    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
-    return;
-  }
-
-  supabaseBeginFromPrefs();
-  Supabase.setUtcOffset(Prefs.TimeZoneOffset);
-
-  SupabaseSiteDto sites[32];
-  uint16_t count = 0;
-  if (Supabase.listSites(sites, 32, &count) != SupabaseError::Ok) {
-    String err = Supabase.lastErrorMessage();
-    if (err.length() == 0) err = Supabase.lastErrorCode();
-    server.send(400, "application/json",
-                "{\"success\":false,\"error\":\"" + err + "\"}");
-    return;
-  }
-
-  String json = "{\"success\":true,\"current\":\"";
-  json += supabaseSiteSlug();
-  json += "\",\"sites\":[";
-  for (uint16_t i = 0; i < count; i++) {
-    if (i) json += ",";
-    json += "{\"slug\":\"";
-    json += sites[i].slug;
-    json += "\",\"name\":\"";
-    json += sites[i].name[0] ? sites[i].name : sites[i].slug;
-    json += "\",\"device_count\":";
-    json += String(sites[i].deviceCount);
-    json += "}";
-  }
-  json += "]}";
+void apiSupabaseQuit() {
+  registerHTTPMessage("API_SB_Quit");
+  const bool hadCreds = supabaseHasStoredCredentials() || Prefs.SUPABASE_CLAIMED;
+  supabaseQuitArborysNet();
+  String json = "{\"success\":true,\"quit\":true,\"was_claimed\":";
+  json += hadCreds ? "true" : "false";
+  json += "}";
   server.send(200, "application/json", json);
 }
 
-static void apiSupabaseAssignSiteInternal(bool allowCreate) {
-  if (!Prefs.SUPABASE_CLAIMED) {
+void apiSupabaseUploadToggle() {
+  registerHTTPMessage("API_SB_Upload");
+  if (!server.hasArg("enabled")) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"enabled required\"}");
+    return;
+  }
+  const String v = server.arg("enabled");
+  Prefs.UPLOAD_TO_SUPABASE =
+      (v == "1" || v == "true" || v == "TRUE" || v == "on" || v == "yes");
+  Prefs.isUpToDate = false;
+  BootSecure boot;
+  boot.setPrefs(true);
+  String json = "{\"success\":true,\"upload_to_supabase\":";
+  json += Prefs.UPLOAD_TO_SUPABASE ? "true" : "false";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void apiSupabaseSites() {
+  registerHTTPMessage("API_SB_Sites");
+  if (!supabaseHasStoredCredentials()) {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
     return;
   }
@@ -2194,33 +2386,137 @@ static void apiSupabaseAssignSiteInternal(bool allowCreate) {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
     return;
   }
-  String site = server.hasArg("site") ? server.arg("site") : "";
-  String siteName = server.hasArg("site_name") ? server.arg("site_name") : "";
-  if (site.length() == 0) {
-    server.send(400, "application/json", "{\"success\":false,\"error\":\"site required\"}");
+
+  // auto_assign=1: used by setup wizard. CONFIG page must NOT auto-assign �
+  // that added extra TLS handshakes and was resetting the hub on /CONFIG.
+  const bool autoAssign =
+      server.hasArg("auto_assign") &&
+      (server.arg("auto_assign") == "1" || server.arg("auto_assign") == "true");
+
+  if (s_arbSitesJob.state == SB_SITES_BUSY) {
+    server.send(200, "application/json", "{\"success\":false,\"pending\":true}");
+    return;
+  }
+  if (s_arbSitesJob.state == SB_SITES_OK) {
+    server.send(200, "application/json", s_arbSitesJob.json);
+    s_arbSitesJob.state = SB_SITES_IDLE;
+    return;
+  }
+  if (s_arbSitesJob.state == SB_SITES_ERR) {
+    String out = "{\"success\":false,\"error\":\"";
+    out += s_arbSitesJob.err;
+    out += "\"";
+    if (s_arbSitesJob.invalidDevice) out += ",\"invalid_device\":true";
+    out += "}";
+    server.send(400, "application/json", out);
+    s_arbSitesJob.state = SB_SITES_IDLE;
+    return;
+  }
+
+  // Shared Supabase TLS in use (boot Auth/Ping/Query, expired poll, etc.) �
+  // tell the browser immediately instead of starting a worker that will tls_busy.
+  if (SupabaseClient::isTlsBusy()) {
+    const uint32_t heldMs = SupabaseClient::tlsHeldForMs();
+    String out = "{\"success\":false,\"tls_busy\":true,\"held_ms\":";
+    out += String(heldMs);
+    out += ",\"error\":\"Please wait, TLS client occupied";
+    if (heldMs > 0) {
+      out += " (";
+      out += String(heldMs / 1000);
+      out += "s)";
+    }
+    out += "\"}";
+    server.send(200, "application/json", out);
+    return;
+  }
+
+  s_arbSitesJob.autoAssign = autoAssign;
+  s_arbSitesJob.err[0] = '\0';
+  s_arbSitesJob.json[0] = '\0';
+  s_arbSitesJob.state = SB_SITES_BUSY;
+
+  BaseType_t ok = xTaskCreatePinnedToCore(
+      arbSitesWorkerTask, "arbSites", 32768, nullptr, 1, &s_arbSitesTask, 1);
+  if (ok != pdPASS) {
+    s_arbSitesJob.state = SB_SITES_IDLE;
+    s_arbSitesTask = nullptr;
+    server.send(500, "application/json",
+                "{\"success\":false,\"error\":\"Failed to start locations worker\"}");
+    return;
+  }
+  server.send(200, "application/json", "{\"success\":false,\"pending\":true}");
+}
+
+static void apiSupabaseAssignSiteInternal(bool allowCreate) {
+  if (!supabaseHasStoredCredentials()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed on ArborysNet\"}");
+    return;
+  }
+  if (!wifiReadyForNetwork()) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
+    return;
+  }
+  String rawLabel = server.hasArg("site_label") ? server.arg("site_label")
+                    : (server.hasArg("site") ? server.arg("site") : "");
+  String rawDesc = server.hasArg("site_description") ? server.arg("site_description")
+                   : (server.hasArg("site_name") ? server.arg("site_name") : "");
+  String label = arborysNetNormalizeLabel(rawLabel);
+  String desc = arborysNetNormalizeDescription(rawDesc, label);
+  if (rawLabel.length() == 0) {
+    server.send(400, "application/json",
+                "{\"success\":false,\"error\":\"site label required\"}");
     return;
   }
 
   supabaseBeginFromPrefs();
   Supabase.setUtcOffset(Prefs.TimeZoneOffset);
 
-  if (Supabase.setDeviceSite(site.c_str(), siteName.length() ? siteName.c_str() : nullptr) !=
-      SupabaseError::Ok) {
-    String err = Supabase.lastErrorMessage();
-    if (err.length() == 0) err = Supabase.lastErrorCode();
-    server.send(400, "application/json",
-                "{\"success\":false,\"error\":\"" + err + "\"}");
+  if (SupabaseClient::isTlsBusy()) {
+    server.send(200, "application/json",
+                "{\"success\":false,\"tls_busy\":true,\"error\":\"Please wait, TLS client occupied\"}");
     return;
   }
 
-  strncpy(Prefs.SITE_SLUG, site.c_str(), sizeof(Prefs.SITE_SLUG) - 1);
+  // Firmware-side cap when creating a new location (DB also enforces after SQL applied).
+  if (allowCreate) {
+    uint16_t existing = 0;
+    if (Supabase.listSites(s_setupSites, ARBORYSNET_MAX_SITES, &existing) == SupabaseError::Ok) {
+      bool known = false;
+      for (uint16_t i = 0; i < existing; i++) {
+        if (strcmp(s_setupSites[i].slug, label.c_str()) == 0) { known = true; break; }
+      }
+      if (!known && existing >= ARBORYSNET_MAX_SITES) {
+        server.send(400, "application/json",
+                    "{\"success\":false,\"error\":\"Maximum 10 locations per account\"}");
+        return;
+      }
+    }
+  }
+
+  if (Supabase.setDeviceSite(label.c_str(), desc.c_str()) != SupabaseError::Ok) {
+    arborysNetLogClientError(allowCreate ? "create location" : "assign location",
+                             ERROR_ARBORYSNET_SYNC);
+    server.send(400, "application/json", supabaseApiFailJson("location update failed"));
+    return;
+  }
+
+  strncpy(Prefs.SITE_SLUG, label.c_str(), sizeof(Prefs.SITE_SLUG) - 1);
   Prefs.SITE_SLUG[sizeof(Prefs.SITE_SLUG) - 1] = '\0';
   Prefs.isUpToDate = false;
   BootSecure boot;
   boot.setPrefs(true);
 
-  String json = "{\"success\":true,\"site\":\"";
+  {
+    char ev[72];
+    snprintf(ev, sizeof(ev), "%s location %s", allowCreate ? "created" : "assigned",
+             Prefs.SITE_SLUG);
+    arborysNetLogEvent(ev, EVENT_ARBORYSNET_LOCATION);
+  }
+
+  String json = "{\"success\":true,\"label\":\"";
   json += Prefs.SITE_SLUG;
+  json += "\",\"description\":\"";
+  json += desc;
   json += "\",\"created\":";
   json += allowCreate ? "true" : "false";
   json += "}";
@@ -2240,7 +2536,7 @@ void apiSupabaseSiteCreate() {
 
 void apiSupabaseSiteDelete() {
   registerHTTPMessage("API_SB_SiteDel");
-  if (!Prefs.SUPABASE_CLAIMED) {
+  if (!supabaseHasStoredCredentials()) {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"Device not claimed\"}");
     return;
   }
@@ -2248,9 +2544,11 @@ void apiSupabaseSiteDelete() {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"WiFi required\"}");
     return;
   }
-  String site = server.hasArg("site") ? server.arg("site") : "";
-  if (site.length() == 0) {
-    server.send(400, "application/json", "{\"success\":false,\"error\":\"site required\"}");
+  String rawLabel = server.hasArg("site_label") ? server.arg("site_label")
+                    : (server.hasArg("site") ? server.arg("site") : "");
+  String site = arborysNetNormalizeLabel(rawLabel);
+  if (rawLabel.length() == 0) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"site label required\"}");
     return;
   }
 
@@ -2258,10 +2556,8 @@ void apiSupabaseSiteDelete() {
   Supabase.setUtcOffset(Prefs.TimeZoneOffset);
 
   if (Supabase.deleteSite(site.c_str()) != SupabaseError::Ok) {
-    String err = Supabase.lastErrorMessage();
-    if (err.length() == 0) err = Supabase.lastErrorCode();
-    server.send(400, "application/json",
-                "{\"success\":false,\"error\":\"" + err + "\"}");
+    arborysNetLogClientError("delete location", ERROR_ARBORYSNET_SYNC);
+    server.send(400, "application/json", supabaseApiFailJson("delete failed"));
     return;
   }
 
@@ -2281,6 +2577,12 @@ void apiSupabaseSiteDelete() {
     }
   }
 
+  {
+    char ev[64];
+    snprintf(ev, sizeof(ev), "deleted location %s", site.c_str());
+    arborysNetLogEvent(ev, EVENT_ARBORYSNET_LOCATION);
+  }
+
   String json = "{\"success\":true,\"deleted\":\"";
   json += site;
   json += "\",\"current\":\"";
@@ -2293,9 +2595,15 @@ void apiSupabaseInventory() {
   registerHTTPMessage("API_SB_Inv");
   SupabaseHubInventoryResult r;
   if (!supabaseHubInventorySync(&r)) {
-    String err = r.error[0] ? String(r.error) : "inventory failed";
-    server.send(400, "application/json",
-                "{\"success\":false,\"error\":\"" + err + "\"}");
+    // Prefer live client error (may be invalid_device) over summary buffer.
+    if (Supabase.lastErrorCode()[0] || Supabase.lastErrorMessage()[0]) {
+      arborysNetLogClientError("inventory", ERROR_ARBORYSNET_SYNC);
+      server.send(400, "application/json", supabaseApiFailJson("inventory failed"));
+    } else {
+      String err = r.error[0] ? String(r.error) : "inventory failed";
+      server.send(400, "application/json",
+                  "{\"success\":false,\"error\":\"" + err + "\"}");
+    }
     return;
   }
   String json = "{\"success\":true,\"site\":\"";
@@ -2310,7 +2618,7 @@ void apiSupabaseInventory() {
   server.send(200, "application/json", json);
 }
 #endif
-#endif // _USESUPABASE
+#endif // _SUPABASE_RUNTIME
 
 /**
  * API: Scan for WiFi networks
@@ -2500,7 +2808,7 @@ void handleInitialSetup() {
   serverTextHeader("Initial Setup");
   serverTextStreamBegin(200, true);
   
-  WEBHTML += R"===(
+  serverTextAppend(R"===(
 <style>
   .setup-container { max-width: 900px; margin: 20px auto; padding: 20px; font-family: Arial, sans-serif; }
   .setup-step { background: #f8f9fa; border: 2px solid #dee2e6; border-radius: 8px; padding: 20px; margin: 15px 0; }
@@ -2531,7 +2839,7 @@ void handleInitialSetup() {
 </style>
 
 <body>
-)===";
+)===");
   // Allow navigation to Main/Status/etc. for intentional no-WiFi (ESP-NOW) operation.
   appendStandardPageNav();
   WEBHTML += R"===(
@@ -2569,7 +2877,7 @@ void handleInitialSetup() {
   }
   WEBHTML += "<button class=\"btn btn-danger\" onclick=\"clearWiFiCredentials()\">Clear credentials</button>";
 
-  WEBHTML += R"===( 
+  serverTextAppend(R"===( 
   <!-- Step 1: WiFi Configuration -->
   <div class="setup-step" id="step1">
     <div class="step-header" onclick="toggleStep('step1')">
@@ -2599,7 +2907,7 @@ void handleInitialSetup() {
       
       <div class="form-group">
         <label for="lmk_key">Local Security Key (16 characters)</label>
-        <input type="text" id="lmk_key" maxlength="16" placeholder="Optional - for ESPNow encryption">
+        <input type="text" id="lmk_key" maxlength="16" placeholder="Optional - for ArborysMesh encryption">
       </div>
 
       <div class="form-group">
@@ -2686,42 +2994,45 @@ void handleInitialSetup() {
       </div>
     </div>
   </div>
-)===";
+)===");
 
-  #ifdef _USESUPABASE
-  WEBHTML += R"===(
-  <!-- Step 4: Cloud / Site -->
+  #if _SUPABASE_RUNTIME
+  serverTextAppend(R"===(
+  <!-- Step 4: ArborysNet (optional) -->
   <div class="setup-step" id="step4">
     <div class="step-header" onclick="toggleStep('step4')">
       <div class="step-number">4</div>
-      <div class="step-title">Cloud / Site</div>
+      <div class="step-title">ArborysNet (Optional)</div>
     </div>
     <div class="step-content">
-      <p>Claim this device with the 4-character code from provisioning, then choose a site.</p>
+      <p>Optionally claim this device with your ArborysNet code and choose a location. You can skip this and finish setup for LAN-only use; claim later from CONFIG if desired.</p>
       <div id="cloud-status" class="status-message"></div>
+      <p id="claimed-line" style="margin:12px 0 8px;">Connected: <strong id="connected-flag">No</strong></p>
+      <span id="setup-has-creds" style="display:none;">0</span>
       <div class="form-group">
-        <label for="claim_code">Claim code *</label>
+        <label for="claim_code">Claim code</label>
         <input type="text" id="claim_code" maxlength="8" placeholder="ABCD" style="text-transform:uppercase;">
       </div>
       <button class="btn btn-primary" onclick="claimDevice()" id="claim-btn">Claim device</button>
-      <div id="site-section" style="display:none; margin-top: 20px;">
+      <div id="site-section" style="margin-top: 20px;">
         <div class="form-group">
-          <label for="site_select">Site</label>
+          <label for="site_select">Location</label>
           <select id="site_select"></select>
         </div>
-        <button class="btn btn-secondary" onclick="assignSite()" id="site-btn">Save Site</button>
-)===";
+        <button class="btn btn-secondary" onclick="loadSites()" id="refresh-sites-btn" disabled>Refresh locations</button>
+        <button class="btn btn-secondary" onclick="assignSite()" id="site-btn" style="margin-left:8px;">Save location</button>
+)===");
   #if _IS_SERVER_HUB
   WEBHTML += R"===(
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #ccc;">
-          <p><strong>New site (hub)</strong></p>
+          <p><strong>New location (hub)</strong></p>
           <div class="form-group">
-            <label for="new_site_name">Site name</label>
-            <input type="text" id="new_site_name" placeholder="Garage">
+            <label for="new_site_description">Site description (max 64)</label>
+            <input type="text" id="new_site_description" maxlength="64" placeholder="Downtown garage">
           </div>
           <div class="form-group">
-            <label for="new_site_slug">Site slug</label>
-            <input type="text" id="new_site_slug" placeholder="garage" style="text-transform:lowercase;">
+            <label for="new_site_label">Site label (max 24)</label>
+            <input type="text" id="new_site_label" maxlength="24" placeholder="garage" style="text-transform:lowercase;">
           </div>
           <button class="btn btn-secondary" onclick="createSite()" id="create-site-btn">Create &amp; assign</button>
         </div>
@@ -2753,7 +3064,7 @@ let setupState = {
 };
 const SUPABASE_ENABLED = )===";
 
-  #ifdef _USESUPABASE
+  #if _SUPABASE_RUNTIME
   WEBHTML += "true";
   #else
   WEBHTML += "false";
@@ -2768,7 +3079,7 @@ const IS_HUB = )===";
   WEBHTML += "false";
   #endif
 
-  WEBHTML += R"===(;
+  serverTextAppend(R"===(;
 
 // Toggle step visibility
 function toggleStep(stepId) {
@@ -2794,18 +3105,20 @@ function completeStep(stepNum) {
   const step = document.getElementById('step' + stepNum);
   step.classList.add('completed');
   step.classList.remove('active');
-  const maxStep = SUPABASE_ENABLED ? 4 : 3;
-  if (stepNum < maxStep) {
+  // Required steps are 1-3; step 4 (ArborysNet) is optional but still opened for convenience.
+  if (stepNum < 3) {
     const nextStep = document.getElementById('step' + (stepNum + 1));
     if (nextStep) nextStep.classList.add('active');
+  } else if (stepNum === 3 && SUPABASE_ENABLED) {
+    const step4 = document.getElementById('step4');
+    if (step4 && !step4.classList.contains('completed')) step4.classList.add('active');
   }
   checkSetupComplete();
 }
 
-// Check if setup is complete
+// Check if setup is complete (ArborysNet / step 4 is optional)
 function checkSetupComplete() {
-  let ok = setupState.wifiConfigured && setupState.locationConfigured && setupState.timezoneConfigured;
-  if (SUPABASE_ENABLED) ok = ok && setupState.cloudConfigured;
+  const ok = setupState.wifiConfigured && setupState.locationConfigured && setupState.timezoneConfigured;
   document.getElementById('complete-btn').disabled = !ok;
 }
 
@@ -3087,35 +3400,111 @@ async function saveTimezone() {
   }
 }
 
-async function loadSites() {
+function isDeviceConnected() {
+  const flag = document.getElementById('connected-flag');
+  return !!(flag && flag.textContent.trim() === 'Yes');
+}
+
+function hasStoredCreds() {
+  const el = document.getElementById('setup-has-creds');
+  return !!(el && el.textContent.trim() === '1');
+}
+
+function setHasCredsUi(has) {
+  const el = document.getElementById('setup-has-creds');
+  if (el) el.textContent = has ? '1' : '0';
+  const refreshBtn = document.getElementById('refresh-sites-btn');
+  if (refreshBtn) refreshBtn.disabled = !has;
+}
+
+function handleSetupApiFailure(data, fallbackMsg) {
+  const err = (data && data.error) ? data.error : (fallbackMsg || 'failed');
+  const invalid = !!(data && (data.invalid_device || data.code === 'invalid_device' ||
+    /invalid_device|Invalid device credentials/i.test(String(err))));
+  setConnectedUi(false);
+  if (invalid) {
+    setHasCredsUi(false);
+    showStatus('cloud-status', err + ' (credentials cleared. Re-claim required)', 'error');
+    setupState.cloudConfigured = false;
+    checkSetupComplete();
+    return true;
+  }
+  showStatus('cloud-status', err, 'error');
+  return false;
+}
+
+function setConnectedUi(connected) {
+  const flag = document.getElementById('connected-flag');
+  if (flag) flag.textContent = connected ? 'Yes' : 'No';
+}
+
+async function loadSites(pendingLeft) {
   if (!SUPABASE_ENABLED) return;
+  const refreshBtn = document.getElementById('refresh-sites-btn');
+  if (!hasStoredCreds()) {
+    showStatus('cloud-status', 'Claim the device before refreshing locations', 'error');
+    return;
+  }
+  if (pendingLeft === undefined) pendingLeft = 40;
+  if (refreshBtn) refreshBtn.disabled = true;
   try {
-    const response = await fetch('/api/supabase/sites');
+    showStatus('cloud-status', 'Loading locations...', 'info');
+    const response = await fetch('/api/arborysnet/sites');
     const data = await response.json();
-    if (!data.success) {
-      showStatus('cloud-status', data.error || 'Failed to load sites', 'error');
+    if (data.pending) {
+      if (pendingLeft <= 0) {
+        showStatus('cloud-status', 'Locations still loading - tap Refresh locations to retry', 'error');
+        return;
+      }
+      await new Promise(r => setTimeout(r, 1500));
+      return loadSites(pendingLeft - 1);
+    }
+    if (data.tls_busy || (data.error && data.error.indexOf('TLS client occupied') >= 0)) {
+      showStatus('cloud-status', data.error || 'Please wait, TLS client occupied', 'info');
       return;
     }
-    const sel = document.getElementById('site_select');
-    sel.innerHTML = '';
-    (data.sites || []).forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.slug;
-      opt.textContent = (s.name || s.slug) + ' (' + s.slug + ')';
-      if (s.slug === data.current) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    if ((data.sites || []).length === 1) {
-      sel.value = data.sites[0].slug;
+    if (!data.success) {
+      handleSetupApiFailure(data, 'Failed to load locations');
+      return;
     }
-    document.getElementById('site-section').style.display = 'block';
-    if ((data.sites || []).length === 1) {
-      setupState.cloudConfigured = true;
-      completeStep(4);
-    }
+    setConnectedUi(true);
+    applySitesUi(data);
   } catch (error) {
-    showStatus('cloud-status', 'Error loading sites: ' + error.message, 'error');
+    setConnectedUi(false);
+    showStatus('cloud-status', 'Error loading locations: ' + error.message, 'error');
+  } finally {
+    if (refreshBtn && hasStoredCreds()) refreshBtn.disabled = false;
   }
+}
+
+function applySitesUi(data) {
+  const sites = data.sites || [];
+  const sel = document.getElementById('site_select');
+  if (!sel) return;
+
+  sel.innerHTML = '';
+  if (sites.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no locations - refresh or create one)';
+    sel.appendChild(opt);
+    showStatus('cloud-status', data.sites_error || 'No locations yet. Create one or refresh.', 'info');
+    checkSetupComplete();
+    return;
+  }
+
+  sites.forEach(s => {
+    const label = s.label || s.slug || '';
+    const desc = s.description || s.name || label;
+    const opt = document.createElement('option');
+    opt.value = label;
+    opt.textContent = desc + (label && label !== desc ? ' [' + label + ']' : '');
+    if (label === data.current || label === data.site_slug) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (data.current) sel.value = data.current;
+  showStatus('cloud-status', 'Choose a location, then Save location.', 'info');
+  checkSetupComplete();
 }
 
 async function claimDevice() {
@@ -3130,18 +3519,29 @@ async function claimDevice() {
   const formData = new FormData();
   formData.append('claim_code', code);
   try {
-    const response = await fetch('/api/supabase/claim', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/claim', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      showStatus('cloud-status', 'Claimed. Select a site.', 'success');
-      setupState.cloudConfigured = true;
-      await loadSites();
+      setHasCredsUi(true);
+      setConnectedUi(true);
+      setupState.cloudConfigured = false;
+      const step4 = document.getElementById('step4');
+      if (step4) {
+        step4.classList.add('active');
+        step4.classList.remove('completed');
+      }
+      showStatus('cloud-status', 'Connected: Yes. Tap Refresh locations, then choose a location.', 'success');
       checkSetupComplete();
     } else {
+      setConnectedUi(false);
       showStatus('cloud-status', data.error || 'Claim failed', 'error');
+      setupState.cloudConfigured = false;
+      checkSetupComplete();
     }
   } catch (error) {
     showStatus('cloud-status', 'Error: ' + error.message, 'error');
+    setupState.cloudConfigured = false;
+    checkSetupComplete();
   } finally {
     document.getElementById('claim-btn').disabled = false;
   }
@@ -3149,53 +3549,72 @@ async function claimDevice() {
 
 async function assignSite() {
   if (!SUPABASE_ENABLED) return;
-  const site = document.getElementById('site_select').value;
-  if (!site) {
-    showStatus('cloud-status', 'Select a site', 'error');
+  if (!hasStoredCreds()) {
+    showStatus('cloud-status', 'Claim the device first', 'error');
+    return;
+  }
+  const label = document.getElementById('site_select').value;
+  if (!label) {
+    showStatus('cloud-status', 'Select a location (refresh the list first)', 'error');
     return;
   }
   const formData = new FormData();
-  formData.append('site', site);
+  formData.append('site_label', label);
   try {
-    const response = await fetch('/api/supabase/site', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/site', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      showStatus('cloud-status', 'Site saved: ' + data.site, 'success');
+      setConnectedUi(true);
+      showStatus('cloud-status', 'Location saved: ' + (data.label || data.site || label), 'success');
       setupState.cloudConfigured = true;
       completeStep(4);
     } else {
-      showStatus('cloud-status', data.error || 'Failed to save site', 'error');
+      handleSetupApiFailure(data, 'Failed to save location');
     }
   } catch (error) {
+    setConnectedUi(false);
     showStatus('cloud-status', 'Error: ' + error.message, 'error');
   }
 }
 
 async function createSite() {
   if (!SUPABASE_ENABLED || !IS_HUB) return;
-  const name = document.getElementById('new_site_name').value;
-  let slug = document.getElementById('new_site_slug').value;
-  if (!slug && name) slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  if (!slug) {
-    showStatus('cloud-status', 'Enter site name or slug', 'error');
+  if (!hasStoredCreds()) {
+    showStatus('cloud-status', 'Claim the device first', 'error');
     return;
   }
+  const descriptionEl = document.getElementById('new_site_description');
+  const labelEl = document.getElementById('new_site_label');
+  const description = descriptionEl ? descriptionEl.value : '';
+  let label = labelEl ? labelEl.value : '';
+  if (!label && description) {
+    label = description.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 24);
+  }
+  if (!label) {
+    showStatus('cloud-status', 'Enter a site label or description', 'error');
+    return;
+  }
+  if (label.length > 24) label = label.substring(0, 24);
   const formData = new FormData();
-  formData.append('site', slug);
-  if (name) formData.append('site_name', name);
+  formData.append('site_label', label);
+  if (description) formData.append('site_description', description.substring(0, 64));
   try {
-    const response = await fetch('/api/supabase/site/create', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/site/create', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      showStatus('cloud-status', 'Created site: ' + data.site, 'success');
+      setConnectedUi(true);
+      const saved = data.label || data.site || label;
+      showStatus('cloud-status', 'Created location: ' + saved, 'success');
       await loadSites();
-      document.getElementById('site_select').value = data.site;
+      const sel = document.getElementById('site_select');
+      if (sel) sel.value = saved;
       setupState.cloudConfigured = true;
       completeStep(4);
     } else {
-      showStatus('cloud-status', data.error || 'Create failed', 'error');
+      handleSetupApiFailure(data, 'Create failed');
     }
   } catch (error) {
+    setConnectedUi(false);
     showStatus('cloud-status', 'Error: ' + error.message, 'error');
   }
 }
@@ -3250,18 +3669,28 @@ async function initSetup() {
     }
 
     if (SUPABASE_ENABLED) {
-      if (status.supabase_claimed) {
+      const step4 = document.getElementById('step4');
+      const connected = !!(status.supabase_connected);
+      const hasCreds = !!(status.supabase_claimed || status.supabase_connected);
+      setConnectedUi(connected);
+      setHasCredsUi(hasCreds);
+      if (connected && status.site_slug) {
         setupState.cloudConfigured = true;
-        const step4 = document.getElementById('step4');
         if (step4) {
           step4.classList.add('completed');
-          document.getElementById('site-section').style.display = 'block';
-          showStatus('cloud-status', 'Claimed. Site: ' + (status.site_slug || 'home'), 'success');
-          loadSites();
+          step4.classList.remove('active');
         }
-      } else if (setupState.timezoneConfigured) {
-        const step4 = document.getElementById('step4');
+        showStatus('cloud-status', 'Connected: Yes. Location: ' + status.site_slug + '. Refresh locations to change.', 'success');
+      } else if (hasCreds) {
+        setupState.cloudConfigured = false;
         if (step4) step4.classList.add('active');
+        showStatus('cloud-status', 'Credentials stored. Tap Refresh locations to connect, or Complete Setup to finish without cloud.', 'info');
+      } else {
+        setupState.cloudConfigured = false;
+        if (setupState.timezoneConfigured && step4) step4.classList.add('active');
+        if (setupState.timezoneConfigured) {
+          showStatus('cloud-status', 'Optional: claim with ArborysNet, or tap Complete Setup to finish LAN-only.', 'info');
+        }
       }
     }
     
@@ -3276,7 +3705,7 @@ async function initSetup() {
 initSetup();
 </script>
 </body></html>
-)===";
+)===");
   
   serverTextClose(200, true);
 }
@@ -3429,7 +3858,7 @@ void handleWEATHERPKG() {
       if (dst) dst.close();
       sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
       WeatherLite.lastRequestAttemptAt =
-          isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : WeatherLite.lastRequestAttemptAt;
+          isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : WeatherLite.lastRequestAttemptAt;
       server.send(200, "text/plain", "OK");
       return;
     }
@@ -3478,18 +3907,18 @@ bool sendWeatherPackageHttp(IPAddress ip) {
 void serviceWeatherPackagePush(bool minuteTick) {
   if (!minuteTick) return;
   if (!wifiReadyForNetwork()) return;
-  if (!isTimeValid(I.currentTime)) return;
+  if (!isTimeValid((uint32_t)utcNow())) return;
 
   static uint32_t nextPushDue = 0;
   static int16_t pushDevIndex = -1; // -1 idle, else scanning devices
 
   if (pushDevIndex < 0) {
     if (nextPushDue == 0) {
-      nextPushDue = (uint32_t)I.currentTime + 55u * 60u + (uint32_t)random(1, 16) * 60u;
+      nextPushDue = (uint32_t)utcNow() + 55u * 60u + (uint32_t)random(1, 16) * 60u;
     }
-    if ((uint32_t)I.currentTime < nextPushDue) return;
+    if ((uint32_t)utcNow() < nextPushDue) return;
     if (!WeatherData.buildWeatherPackageFile(true)) {
-      nextPushDue = (uint32_t)I.currentTime + 10u * 60u; // retry sooner on failure
+      nextPushDue = (uint32_t)utcNow() + 10u * 60u; // retry sooner on failure
       return;
     }
     pushDevIndex = 0;
@@ -3505,7 +3934,7 @@ void serviceWeatherPackagePush(bool minuteTick) {
   }
 
   pushDevIndex = -1;
-  nextPushDue = (uint32_t)I.currentTime + 55u * 60u + (uint32_t)random(1, 16) * 60u;
+  nextPushDue = (uint32_t)utcNow() + 55u * 60u + (uint32_t)random(1, 16) * 60u;
 }
 #endif
 
@@ -3519,29 +3948,29 @@ void handleREQUESTWEATHER() {
 
   WEBHTML = "";
   if (server.args()==0) {
-        WEBHTML += (String) WeatherData.getTemperature(I.currentTime) + ";"; //current temp
+        WEBHTML += (String) WeatherData.getTemperature((uint32_t)utcNow()) + ";"; //current temp
         WeatherData.getDailyTemp(0,dailyT);
         WEBHTML += (String) dailyT[0] + ";"; //dailymax
         WEBHTML += (String) dailyT[1] + ";"; //dailymin
         WEBHTML += (String) WeatherData.getDailyWeatherID(0) + ";"; //dailyID
         WEBHTML += (String) WeatherData.getDailyPoP(0) + ";"; //POP
         WEBHTML += (String) WeatherData.flag_snow + ";"; 
-        WEBHTML += (String) WeatherData.sunrise + ";"; 
-        WEBHTML += (String) WeatherData.sunset + ";"; 
+        WEBHTML += (String) WeatherData.sunrise + ";"; // UTC unix
+        WEBHTML += (String) WeatherData.sunset + ";";  // UTC unix
   } else {
     for (uint8_t i = 0; i < server.args(); i++) {
-      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature(I.currentTime + server.arg(i).toInt()*3600,false,false) + ";";
+      if (server.argName(i)=="hourly_temp") WEBHTML += (String) WeatherData.getTemperature((uint32_t)utcNow() + server.arg(i).toInt()*3600,false,false) + ";";
       WeatherData.getDailyTemp(server.arg(i).toInt(),dailyT);
-        if (server.argName(i)=="daily_tempMax") WEBHTML += (String) dailyT[0] + ";";
+      if (server.argName(i)=="daily_tempMax") WEBHTML += (String) dailyT[0] + ";";
       if (server.argName(i)=="daily_tempMin") WEBHTML += (String) dailyT[1] + ";";
       if (server.argName(i)=="daily_weatherID") WEBHTML += (String) WeatherData.getDailyWeatherID(server.arg(i).toInt(),true) + ";";
-      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID(I.currentTime + server.arg(i).toInt()*3600) + ";";
+      if (server.argName(i)=="hourly_weatherID") WEBHTML += (String) WeatherData.getWeatherID((uint32_t)utcNow() + server.arg(i).toInt()*3600) + ";";
       if (server.argName(i)=="daily_pop") WEBHTML += (String) WeatherData.getDailyPoP(server.arg(i).toInt(),true) + ";";
       if (server.argName(i)=="daily_snow") WEBHTML += (String) WeatherData.getDailySnow(server.arg(i).toInt()) + ";";
-      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP(I.currentTime + server.arg(i).toInt()*3600) + ";";
-      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow(I.currentTime + server.arg(i).toInt()*3600) + ";";      //note snow is returned in mm!!
-      if (server.argName(i)=="sunrise") WEBHTML += (String) WeatherData.sunrise + ";";
-      if (server.argName(i)=="sunset") WEBHTML += (String) WeatherData.sunset + ";";
+      if (server.argName(i)=="hourly_pop") WEBHTML += (String) WeatherData.getPoP((uint32_t)utcNow() + server.arg(i).toInt()*3600) + ";";
+      if (server.argName(i)=="hourly_snow") WEBHTML += (String) WeatherData.getSnow((uint32_t)utcNow() + server.arg(i).toInt()*3600) + ";";      //note snow is returned in mm!!
+      if (server.argName(i)=="sunrise") WEBHTML += (String) WeatherData.sunrise + ";"; // UTC unix
+      if (server.argName(i)=="sunset") WEBHTML += (String) WeatherData.sunset + ";";   // UTC unix
       if (server.argName(i)=="hour") {
         uint32_t temptime = server.arg(i).toDouble();
         if (temptime==0) WEBHTML += (String) hour() + ";";
@@ -3590,120 +4019,77 @@ void handleSTATUS() {
   serverTextHeader("Status");
   serverTextStreamBegin(200, true);
 
-  WEBHTML = WEBHTML + "<body>";  
-
-  // Navigation buttons
   appendStandardPageNav();
-  serverTextFlush();
 
-  #ifdef _USE8266
-  WEBHTML = WEBHTML + "Free Stack Memory: " + ESP.getFreeContStack() + "<br>";  
-  #endif
-
-  #ifdef _USE32
-  WEBHTML = WEBHTML + "Free Internal Heap Memory: " + esp_get_free_internal_heap_size() + "<br>";  
-  WEBHTML = WEBHTML + "Free Total Heap Memory: " + esp_get_free_heap_size() + "<br>";  
-  WEBHTML = WEBHTML + "Minimum Free Heap: " + esp_get_minimum_free_heap_size() + "<br>";  
-  WEBHTML = WEBHTML + "PSRAM Size: " + (String) ESP.getFreePsram() + " / " + (String) ESP.getPsramSize() + "<br>"; 
-  
-  #endif
-
-  WEBHTML += "Number of devices/sensors: " + (String) Sensors.getNumDevices() + " / " + (String) Sensors.getNumSensors() + "<br>";
-  WEBHTML = WEBHTML + "Alive since: " + dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") + "<br>";
-  WEBHTML = WEBHTML + "Number of reboots today: " + (String) I.rebootsToday + "<br>";;
-  WEBHTML = WEBHTML + "Last error: " + (String) I.lastError + " @" + (String) (I.lastErrorTime ? dateify(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss") : "???");
-  #ifdef _USESDCARD
-  WEBHTML = WEBHTML + " <a href=\"/ERROR_LOG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Error Log</a>";
-  WEBHTML = WEBHTML + " <a href=\"/SDCARD_SYSTEMLOG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">System Log</a>";
-  #endif
-  WEBHTML = WEBHTML + "<br>";
-  WEBHTML = WEBHTML + "Last known reset: " + (String) lastReset2String()  + " ";
-  WEBHTML = WEBHTML + "<a href=\"/REBOOT_DEBUG\" target=\"_blank\" style=\"display: inline-block; padding: 5px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; font-size: 12px;\">Debug</a><br>";
-  WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML = WEBHTML + "<p><strong>WiFi Status:</strong> " + (wifiReadyForNetwork() ? "Connected" : "Disconnected") + "<br>";
-  WEBHTML = WEBHTML + "<strong>WiFi Mode:</strong> " + getWiFiModeString() + "<br>";
-
-  wifi_mode_t t = WiFi.getMode();
-
-  if (t == WIFI_MODE_APSTA) {
-    WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
-    WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + ", Station IP: " + WiFi.localIP().toString() + "<br>";
-    WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
-    
-  } else if (t == WIFI_MODE_STA) {
-    WEBHTML = WEBHTML + "<strong>Station IP:</strong> " + WiFi.localIP().toString() + "<br>";
-    WEBHTML = WEBHTML + "<strong>Connected to:</strong> " + WiFi.SSID() + "<br>";
-  
-  } else if (t == WIFI_MODE_AP) {
-    WEBHTML = WEBHTML + "APIP: " + WiFi.softAPIP().toString() + "<br>";
-    WEBHTML = WEBHTML + "Stations connected to me: " + (String) WiFi.softAPgetStationNum() + "<br>";
+  WEBHTML += "Devices/sensors: " + String(Sensors.getNumDevices()) + " / " + String(Sensors.getNumSensors()) + "<br>";
+  WEBHTML += "Alive since: " + String(I.ALIVESINCE ? dateifyLocal(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Reboots today: " + String(I.rebootsToday) + "<br>";
+  WEBHTML += "Last error: " + String(I.lastError[0] ? I.lastError : "(none)");
+  if (I.lastError[0] && I.lastErrorTime) {
+    WEBHTML += " @" + String(dateifyLocal(I.lastErrorTime,"mm/dd/yyyy hh:nn:ss"));
   }
-
+  WEBHTML += "<br>";
   {
-    String bssidStr = WiFi.BSSIDstr();
-    if (bssidStr.length() == 0 || bssidStr == "00:00:00:00:00:00") bssidStr = "N/A";
-    WEBHTML = WEBHTML + "<strong>BSSID:</strong> " + bssidStr + "</p>";
+    const char* logMsg = getLastSystemLogMessage();
+    WEBHTML += "Last log: " + String(logMsg && logMsg[0] ? logMsg : "(none)");
+    if (getLastSystemLogTime()) {
+      WEBHTML += " @" + String(dateifyLocal(getLastSystemLogTime(),"mm/dd/yyyy hh:nn:ss"));
+    }
+    WEBHTML += "<br>";
   }
+  WEBHTML += "Last reboot: " + lastReset2String() + "<br>";
+  WEBHTML += "---------------------<br>";
+  serverTextFlush(true);
+
+  WEBHTML += "<p><strong>WiFi:</strong> " + String(wifiReadyForNetwork() ? "Connected" : "Disconnected");
+  WEBHTML += " (" + getWiFiModeString() + ")<br>";
+  wifi_mode_t t = WiFi.getMode();
+  if (t == WIFI_MODE_APSTA || t == WIFI_MODE_STA) {
+    WEBHTML += "SSID: " + WiFi.SSID() + " IP: " + WiFi.localIP().toString() + "<br>";
+  }
+  WEBHTML += "Channel: " + String(WiFi.channel()) + "<br>";
+  {
+    const uint8_t* bssid = WiFi.BSSID();
+    const bool haveAp = bssid && (bssid[0] | bssid[1] | bssid[2] | bssid[3] | bssid[4] | bssid[5]);
+    WEBHTML += "Channel AP: ";
+    if (haveAp) WEBHTML += bssidToString(bssid) + " (" + formatRssiHtml(WiFi.RSSI()) + ")";
+    else WEBHTML += "none";
+    WEBHTML += "<br>";
+  }
+  if (t == WIFI_MODE_APSTA || t == WIFI_MODE_AP) {
+    WEBHTML += "AP: " + WiFi.softAPIP().toString() + " clients: " + String(WiFi.softAPgetStationNum()) + "<br>";
+  }
+  WEBHTML += "RSSI: " + formatRssiHtml(I.RSSIcurrent) + "</p>";
+  serverTextFlush(true);
+
+#if _IS_SERVER_HUB
+  #ifdef _USE32
+  WEBHTML += "Heap free/min: " + String(esp_get_free_heap_size()) + " / " + String(esp_get_minimum_free_heap_size()) + "<br>";
+  WEBHTML += "PSRAM: " + String(ESP.getFreePsram()) + " / " + String(ESP.getPsramSize()) + "<br>";
+  serverTextFlush(true);
+  #endif
   #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
   auto nmTime = [](time_t t) -> String {
-    return t ? dateify(t, "mm/dd/yyyy hh:nn:ss") : String("???");
+    return t ? dateifyLocal(t, "mm/dd/yyyy hh:nn:ss") : String("???");
   };
-  WEBHTML = WEBHTML + "<strong>RSSI:</strong> current " + formatRssiHtml(I.RSSIcurrent)
-      + " @" + (String) (I.lastRSSItime ? dateify(I.lastRSSItime,"mm/dd/yyyy hh:nn:ss") : "???")
-      + ", best " + formatRssiHtml(I.RSSIhigh) + ", worst " + formatRssiHtml(I.RSSIlow) + "<br>";
+  WEBHTML = WEBHTML + "<strong>RSSI detail:</strong> best " + formatRssiHtml(I.RSSIhigh) + ", worst " + formatRssiHtml(I.RSSIlow) + "<br>";
   WEBHTML = WEBHTML + "AP switches: " + String(NetworkMonitor.bssid.changeCount)
       + " @" + nmTime(NetworkMonitor.bssid.lastAttemptTime) + "<br>";
-  WEBHTML = WEBHTML + "LocalIP switches: " + String(NetworkMonitor.localIp.changeCount)
-      + " @" + nmTime(NetworkMonitor.localIp.lastAttemptTime) + "<br>";
-  WEBHTML = WEBHTML + "DNS Resolution Time: " + String(NetworkMonitor.dns.resolutionMs) + " ms"
-      + " @" + nmTime(NetworkMonitor.dns.lastAttemptTime) + "<br>";
-  WEBHTML = WEBHTML + "Tx Failures: " + String(NetworkMonitor.txFailures.failureCount)
-      + " @" + nmTime(NetworkMonitor.txFailures.lastAttemptTime) + "<br>";
-  WEBHTML = WEBHTML + "Gateway Latency: " + String(NetworkMonitor.gatewayLatency.ping.avgRttMs) + " ms avg, "
-      + String(NetworkMonitor.gatewayLatency.ping.packetsLost) + "/" + String(NetworkMonitor.gatewayLatency.ping.packetsSent) + " lost, jitter "
-      + String(NetworkMonitor.gatewayLatency.ping.jitterMs) + " ms @"
-      + nmTime(NetworkMonitor.gatewayLatency.lastAttemptTime) + "<br>";
-  WEBHTML = WEBHTML + "External Ping: " + String(NetworkMonitor.externalPing.wan.avgRttMs) + " ms avg, "
-      + String(NetworkMonitor.externalPing.wan.packetsLost) + "/" + String(NetworkMonitor.externalPing.wan.packetsSent) + " lost, jitter "
-      + String(NetworkMonitor.externalPing.wan.jitterMs) + " ms (WAN)";
-  if (NetworkMonitor.externalPing.gatewayChecked) {
-    WEBHTML = WEBHTML + "; gateway " + String(NetworkMonitor.externalPing.gateway.avgRttMs) + " ms avg, "
-        + String(NetworkMonitor.externalPing.gateway.packetsLost) + "/" + String(NetworkMonitor.externalPing.gateway.packetsSent) + " lost, jitter "
-        + String(NetworkMonitor.externalPing.gateway.jitterMs) + " ms (LAN)";
-  }
-  WEBHTML = WEBHTML + " @" + nmTime(NetworkMonitor.externalPing.lastAttemptTime) + "<br>";
-  {
-    double speedMbps = -1;
-    NetworkMonitor.readSensorValue(89, speedMbps);
-    WEBHTML = WEBHTML + "Speedtest: ";
-    if (speedMbps < 0) {
-      WEBHTML = WEBHTML + "failed";
-    } else {
-      WEBHTML = WEBHTML + String(speedMbps, 2) + " Mbps (" + String(NetworkMonitor.download.durationMs) + " ms, "
-          + String(NetworkMonitor.download.downloadBytes) + " bytes)";
-    }
-    WEBHTML = WEBHTML + " from " + NetworkMonitor.download.sourceIP.toString() + " @"
-        + nmTime(NetworkMonitor.download.lastRunTime) + "<br>";
-  }
-  #else
-  WEBHTML = WEBHTML + "<strong>RSSI:</strong> current " + formatRssiHtml(I.RSSIcurrent)
-      + " @" + (String) (I.lastRSSItime ? dateify(I.lastRSSItime,"mm/dd/yyyy hh:nn:ss") : "???")
-      + ", best " + formatRssiHtml(I.RSSIhigh) + ", worst " + formatRssiHtml(I.RSSIlow) + "<br>";
+  WEBHTML = WEBHTML + "Gateway Latency: " + String(NetworkMonitor.gatewayLatency.ping.avgRttMs) + " ms avg<br>";
   #endif
+#endif
 
-  WEBHTML = WEBHTML + "---------------------<br>";
+  WEBHTML += "---------------------<br>";
+  serverTextFlush(true);
   appendCommunicationsSection();
-  WEBHTML = WEBHTML + "---------------------<br>";
-  #ifdef _USEWEATHER
-  WEBHTML = WEBHTML + "---------------------<br>";      
-  WEBHTML += "Weather last retrieved at: " + (String) (WeatherData.lastUpdateT ? dateify(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML += "Weather last failure at: " + (String) (WeatherData.lastUpdateError ? dateify(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
-  WEBHTML += "NOAA address: " + WeatherData.getGrid(0) + "<br>";
+  serverTextFlush(true);
+  WEBHTML += "---------------------<br>";
+  #if _IS_SERVER_HUB && defined(_USEWEATHER)
+  WEBHTML += "Weather last retrieved: " + String(WeatherData.lastUpdateT ? dateifyLocal(WeatherData.lastUpdateT,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
+  WEBHTML += "Weather last failure: " + String(WeatherData.lastUpdateError ? dateifyLocal(WeatherData.lastUpdateError,"mm/dd/yyyy hh:nn:ss") : "???") + "<br>";
   #endif
-  WEBHTML = WEBHTML + "---------------------<br>";      
 
-
-  serverTextClose(200);
+  serverTextClose(200, true);
 }
 
 
@@ -3730,10 +4116,26 @@ void appendStandardPageNav(bool includeWiFiConfig) {
   WEBHTML = WEBHTML + "<div style=\"text-align: center; padding: 20px; background-color: #f0f0f0; margin-bottom: 20px;\">";
   WEBHTML = WEBHTML + "<a href=\"/?main\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Main</a> ";
   WEBHTML = WEBHTML + "<a href=\"/STATUS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px;\">Status</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/MESH_SETTINGS\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px;\">Mesh Settings</a> ";
+#if _HAS_LOCAL_SENSORS
+  {
+    bool showSwitch = false;
+    for (int16_t si = 0; si < NUMSENSORS && !showSwitch; si++) {
+      ArborysSnsType* s = Sensors.snsIndexToPointer(si);
+      if (!s || !s->IsSet || s->deviceIndex != I.MY_DEVICE_INDEX) continue;
+      if (isSwitchStateOutputType(s->snsType) || isSwitchStateInterruptType(s->snsType)) showSwitch = true;
+    }
+    if (showSwitch) {
+      WEBHTML = WEBHTML + "<a href=\"/SWITCHSTATE\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px;\">SwitchState</a> ";
+    }
+  }
+#endif
+  serverTextFlush(false);
   WEBHTML = WEBHTML + "<a href=\"/REGISTER_DEVICE\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #009688; color: white; text-decoration: none; border-radius: 4px;\">Register Device</a> ";
   #ifdef _USESDCARD
   WEBHTML = WEBHTML + "<a href=\"/SDCARD\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px;\">SD Card</a> ";
   #endif
+  serverTextFlush(false);
   #ifdef _USEWEATHER
   WEBHTML = WEBHTML + "<a href=\"/WEATHER\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #607D8B; color: white; text-decoration: none; border-radius: 4px;\">Weather</a> ";
   #endif
@@ -3745,6 +4147,7 @@ void appendStandardPageNav(bool includeWiFiConfig) {
     WEBHTML = WEBHTML + " <a href=\"/InitialSetup\" style=\"display: inline-block; margin: 5px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px;\">WiFi Config</a>";
   }
   WEBHTML = WEBHTML + "</div>";
+  serverTextFlush(true);
 }
 
 static String formatArborysDeviceFirmware(const ArborysDevType* device) {
@@ -3815,10 +4218,10 @@ static void appendAllDevicesFirmwareTable() {
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(d->devType) + "</td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(d) + "</td>";
     WEBHTML = WEBHTML + "</tr>";
-    serverTextFlush();
+    serverTextFlush(true);
   }
   WEBHTML = WEBHTML + "</table></div>";
-  serverTextFlush();
+  serverTextFlush(true);
 }
 #endif
 
@@ -3828,20 +4231,26 @@ static void appendAllDevicesFirmwareTable() {
 
 namespace {
   bool s_webStreamActive = false;
-  constexpr size_t WEBHTML_CHUNK_BYTES = 2048;
+  // Keep the in-RAM HTML buffer small. Classic ESP32 peripherals OOM and blank the
+  // page after the header when WEBHTML grows (CONFIG/STATUS/InitialSetup/Main).
+  // Small TCP writes also survive lossy / low-RSSI links better than one large send.
+  constexpr size_t WEBHTML_CHUNK_BYTES = 512;
+
+  void serverTextSendSlices(const char* data, size_t len) {
+    for (size_t off = 0; off < len; ) {
+      const size_t n = (len - off > WEBHTML_CHUNK_BYTES) ? WEBHTML_CHUNK_BYTES : (len - off);
+      server.sendContent(data + off, n);
+      off += n;
+      yield();
+      esp_task_wdt_reset();
+    }
+  }
 
   void serverTextSendBufferedChunks(const char* contentType, int htmlcode) {
     // Stream an already-built buffer in slices so send() does not hold a second full copy.
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(htmlcode, contentType, "");
-    const size_t len = WEBHTML.length();
-    const char* data = WEBHTML.c_str();
-    for (size_t off = 0; off < len; off += WEBHTML_CHUNK_BYTES) {
-      const size_t n = (len - off > WEBHTML_CHUNK_BYTES) ? WEBHTML_CHUNK_BYTES : (len - off);
-      server.sendContent(data + off, n);
-      yield();
-      esp_task_wdt_reset();
-    }
+    serverTextSendSlices(WEBHTML.c_str(), WEBHTML.length());
     server.sendContent("");
     WEBHTML = "";
   }
@@ -3853,6 +4262,8 @@ void serverTextHeader(String pagename) {
   body {  font-family: arial, sans-serif; }
   </style></head>
   )===";
+  // Open body here so streamed pages still look complete if generation stops mid-handler.
+  WEBHTML += "<body>";
   WEBHTML += "<h1>" + (String) Prefs.DEVICENAME + " - " + pagename + "</h1>";
   WEBHTML += "<h2>Current Time: " + (String) dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2>";
   ArborysDevType* myDev = nullptr;
@@ -3864,11 +4275,13 @@ void serverTextHeader(String pagename) {
 
 void serverTextStreamBegin(int htmlcode, bool asHTML) {
   if (s_webStreamActive) return;
+  server.client().setTimeout(20000); // low-RSSI clients need longer than the default
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(htmlcode, asHTML ? "text/html" : "text/plain", "");
   s_webStreamActive = true;
   if (WEBHTML.length() > 0) {
-    server.sendContent(WEBHTML);
+    // Header can exceed one chunk � send in slices.
+    serverTextSendSlices(WEBHTML.c_str(), WEBHTML.length());
     WEBHTML = "";
     WEBHTML.reserve(WEBHTML_CHUNK_BYTES);
   }
@@ -3877,11 +4290,20 @@ void serverTextStreamBegin(int htmlcode, bool asHTML) {
 void serverTextFlush(bool force) {
   if (!s_webStreamActive || WEBHTML.length() == 0) return;
   if (!force && WEBHTML.length() < WEBHTML_CHUNK_BYTES) return;
-  server.sendContent(WEBHTML);
+  serverTextSendSlices(WEBHTML.c_str(), WEBHTML.length());
   WEBHTML = "";
   WEBHTML.reserve(WEBHTML_CHUNK_BYTES);
-  yield();
-  esp_task_wdt_reset();
+}
+
+void serverTextAppend(const char* s) {
+  if (!s || !*s) return;
+  if (!s_webStreamActive) {
+    WEBHTML += s;
+    return;
+  }
+  // Stream large literals in fixed-size pieces so WEBHTML never holds an 11KB+ blob.
+  serverTextFlush(true);
+  serverTextSendSlices(s, strlen(s));
 }
 
 void serverTextClose(int htmlcode, bool asHTML) {
@@ -3891,7 +4313,7 @@ void serverTextClose(int htmlcode, bool asHTML) {
 
   if (s_webStreamActive) {
     if (WEBHTML.length() > 0) {
-      server.sendContent(WEBHTML);
+      serverTextSendSlices(WEBHTML.c_str(), WEBHTML.length());
       WEBHTML = "";
     }
     server.sendContent(""); // final zero-length chunk
@@ -3910,8 +4332,13 @@ void serverTextClose(int htmlcode, bool asHTML) {
 }
 
 static void appendSensorTablePlotCells(int16_t j, ArborysSnsType* sensor) {
+#if _IS_SERVER_HUB
   WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA_MOVINGAVERAGE?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&windowSize=1800&numPointsX=48\" target=\"_blank\" rel=\"noopener noreferrer\">AvgHx</a></td>";
   WEBHTML = WEBHTML + "<td><a href=\"/RETRIEVEDATA?MAC=" + (String) Sensors.getDeviceMACBySnsIndex(j) + "&type=" + (String) sensor->snsType + "&id=" + (String) sensor->snsID + "&starttime=0&endtime=0&N=50\" target=\"_blank\" rel=\"noopener noreferrer\">History</a></td>";
+#else
+  (void)j;
+  (void)sensor;
+#endif
 }
 
 #if _HAS_LOCAL_SENSORS
@@ -3957,6 +4384,16 @@ static bool retrieveMovingAverageForWebPlot(uint64_t deviceMAC, uint8_t snsType,
 }
 
 #if _IS_SERVER_HUB
+static String formatLimitInputValue(float v) {
+  if (isnan(v)) return "?";
+  return String(v, 4);
+}
+
+static String formatIntervalInputValue(uint32_t v) {
+  if (v > 65535) v = 65535;
+  return String(v);
+}
+
 static void appendSensorTableOverrideConfigCell(int16_t j, ArborysSnsType* sensor) {
   WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">";
   WEBHTML = WEBHTML + "<details>";
@@ -3976,10 +4413,37 @@ static void appendSensorTableOverrideConfigCell(int16_t j, ArborysSnsType* senso
     WEBHTML = WEBHTML + ">";
     WEBHTML = WEBHTML + "<span style=\"font-size: 11px;\">" + String(i) + ":" + String(overrideFlagNames[i]) + "</span>";
     WEBHTML = WEBHTML + "</label>";
+    serverTextFlush(false);
   }
   WEBHTML = WEBHTML + "</div></div>";
   WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update Override</button>";
+  WEBHTML = WEBHTML + "</form></details>";
+  serverTextFlush(true);
+
+  WEBHTML = WEBHTML + "<details style=\"margin-top: 8px;\">";
+  WEBHTML = WEBHTML + "<summary style=\"cursor: pointer; font-weight: bold; color: #4CAF50;\">Sensor Limit Settings</summary>";
+  WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/SENSOR_LIMITS_UPDATE\" style=\"margin-top: 10px; padding: 10px; background-color: #f9f9f9; border: 1px solid #ddd;\">";
+  WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"snsIndex\" value=\"" + String(j) + "\">";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Upper Limit:</label>";
+  WEBHTML = WEBHTML + "<input type=\"text\" name=\"limitHigh\" value=\"" + formatLimitInputValue(sensor->limitHigh) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Lower Limit:</label>";
+  WEBHTML = WEBHTML + "<input type=\"text\" name=\"limitLow\" value=\"" + formatLimitInputValue(sensor->limitLow) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Poll Int (s):</label>";
+  WEBHTML = WEBHTML + "<input type=\"number\" min=\"1\" max=\"65535\" name=\"intervalPoll\" value=\"" + formatIntervalInputValue(sensor->PollingInt) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
+  WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Send Int (s):</label>";
+  WEBHTML = WEBHTML + "<input type=\"number\" min=\"0\" max=\"65535\" name=\"intervalSend\" value=\"" + formatIntervalInputValue(sensor->SendingInt) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "<span style=\"font-size: 11px; color: #666; margin-left: 8px;\">0 = only on alarm change</span>";
+  WEBHTML = WEBHTML + "</div>";
+  WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Submit</button>";
   WEBHTML = WEBHTML + "</form></details></td>";
+  serverTextFlush(true);
 }
 #endif
 
@@ -3998,6 +4462,7 @@ static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
       WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Sensor Name:</label>";
       WEBHTML = WEBHTML + "<input type=\"text\" name=\"sensorName\" maxlength=\"29\" value=\"" + String(sensor->snsName) + "\" style=\"width: 200px; padding: 4px;\">";
       WEBHTML = WEBHTML + "</div>";
+      serverTextFlush(false);
       WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
       WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Max Limit:</label>";
       WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMax\" value=\"" + String(Prefs.SNS_LIMIT_MAX[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
@@ -4006,14 +4471,17 @@ static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
       WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Min Limit:</label>";
       WEBHTML = WEBHTML + "<input type=\"number\" step=\"any\" name=\"limitMin\" value=\"" + String(Prefs.SNS_LIMIT_MIN[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
       WEBHTML = WEBHTML + "</div>";
+      serverTextFlush(false);
       WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
       WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Poll Int (s):</label>";
       WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalPoll\" value=\"" + String(Prefs.SNS_INTERVAL_POLL[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
       WEBHTML = WEBHTML + "</div>";
       WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
-      WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Send Int (s):</label>";
-      WEBHTML = WEBHTML + "<input type=\"number\" name=\"intervalSend\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "<label style=\"display: inline-block; width: 120px; font-weight: bold;\">Send Int (s):</label>";
+  WEBHTML = WEBHTML + "<input type=\"number\" min=\"0\" name=\"intervalSend\" value=\"" + String(Prefs.SNS_INTERVAL_SEND[prefsIndex]) + "\" style=\"width: 100px; padding: 4px;\">";
+  WEBHTML = WEBHTML + "<span style=\"font-size: 11px; color: #666; margin-left: 8px;\">0 = only on alarm change</span>";
       WEBHTML = WEBHTML + "</div>";
+      serverTextFlush(false);
       WEBHTML = WEBHTML + "<div style=\"margin-bottom: 8px;\">";
       WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">Flags:</label>";
       WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
@@ -4031,8 +4499,10 @@ static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
         WEBHTML = WEBHTML + "\">" + String(i) + ":" + String(flagNames[i]);
         if (readOnlyBits[i]) WEBHTML = WEBHTML + " (auto)";
         WEBHTML = WEBHTML + "</span></label>";
+        serverTextFlush(false);
       }
       WEBHTML = WEBHTML + "</div></div>";
+      serverTextFlush(true);
       WEBHTML = WEBHTML + "<div style=\"display: flex; gap: 8px; margin-top: 8px;\">";
       WEBHTML = WEBHTML + "<button type=\"submit\" style=\"padding: 6px 12px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Update</button>";
       WEBHTML = WEBHTML + "</form>";
@@ -4043,6 +4513,7 @@ static void appendSensorTableConfigCell(int16_t j, ArborysSnsType* sensor) {
       WEBHTML = WEBHTML + "</form>";
       WEBHTML = WEBHTML + "<a href=\"/SENSOR_SETUP?snsType=" + String(sensor->snsType) + "&snsID=" + String(sensor->snsID) + "\" style=\"display: inline-block; padding: 6px 12px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none;\">Setup</a>";
       WEBHTML = WEBHTML + "</div></details></td>";
+      serverTextFlush(true);
     } else {
       WEBHTML = WEBHTML + "<td style=\"padding: 8px;\">Configuration data not found because Index out of bounds: " + String(prefsIndex) + "</td>";
     }
@@ -4088,18 +4559,23 @@ void rootTableFill(int16_t j) {
 
   WEBHTML = WEBHTML + "<tr>";
   WEBHTML = WEBHTML + "<td>" + (String) sensor->snsName + "</td>";
+#if _IS_SERVER_HUB
   WEBHTML = WEBHTML + "<td>" + (String) sensor->snsType + "</td>";
   WEBHTML = WEBHTML + "<td>" + (String) sensor->snsID + "</td>";
   WEBHTML = WEBHTML + "<td>" + Sensors.sensorIsOfType(sensor) + "</td>";
+#endif
   WEBHTML = WEBHTML + "<td>" + (String) sensor->snsValue + "</td>";
-  WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateify(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
+  WEBHTML = WEBHTML + "<td>" + (String) (sensor->timeLogged ? dateifyLocal(sensor->timeLogged,"mm/dd hh:nn:ss") : "???") + "</td>";
+#if _IS_SERVER_HUB
   appendSensorTableFlagsCell(sensor);
+#endif
   appendSensorTableFlaggedCell(sensor);
   appendSensorTableExpiredCell(j, sensor);
   appendSensorTablePlotCells(j, sensor);
+  serverTextFlush(true);
   appendSensorTableConfigCell(j, sensor);
   WEBHTML = WEBHTML + "</tr>";
-  serverTextFlush();
+  serverTextFlush(true);
 }
 
 void handleNotFound(){
@@ -4252,8 +4728,6 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
   WEBHTML =WEBHTML  + "</style></head>";
   WEBHTML =WEBHTML  + "<script src=\"https://www.gstatic.com/charts/loader.js\"></script>\n";
   serverTextStreamBegin(200, true);
-
-  WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<h1>" + (String) Prefs.DEVICENAME + "</h1>";
   WEBHTML = WEBHTML + "<br>";
   WEBHTML = WEBHTML + "<h2>" + dateify(I.currentTime,"DOW mm/dd/yyyy hh:nn:ss") + "</h2><br>\n";
@@ -4265,7 +4739,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
     WEBHTML += "Request for Device: " + String(deviceMAC, HEX) + " sensor: " + (String) sensor->snsName + " type: " + (String) sensor->snsType + " id: " + (String) sensor->snsID + "<br>";
   }
 
-  WEBHTML += "Start time: " + (String) dateify(t[0],"mm/dd/yyyy hh:nn:ss") + " to " + (String) dateify(t[N-1],"mm/dd/yyyy hh:nn:ss")  +  "<br>";
+  WEBHTML += "Start time: " + (String) dateifyLocal(t[0],"mm/dd/yyyy hh:nn:ss") + " to " + (String) dateifyLocal(t[N-1],"mm/dd/yyyy hh:nn:ss")  +  "<br>";
   
   //add chart
   WEBHTML += "<br>-----------------------<br>\n";
@@ -4290,7 +4764,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
       WEBHTML += "[" + (String) (int64_t) (((int64_t) t[jj] - (int64_t) t[N-1])/60) + "," + (String) v[jj] + "]";
       if (jj<N-1) WEBHTML += ",";
       WEBHTML += "\n";
-      serverTextFlush();
+      serverTextFlush(true);
     }
     WEBHTML += "]);\n\n";
 
@@ -4314,7 +4788,7 @@ void addPlotToHTML(uint32_t t[], double v[], byte N, uint64_t deviceMAC, uint8_t
     WEBHTML += "unixtime,value<br>\n";
   for (byte j=0;j<N;j++) {
     WEBHTML += (String) t[j] + "," + (String) v[j] + "<br>\n";
-    serverTextFlush();
+    serverTextFlush(true);
   }
   
   serverTextClose(200);
@@ -4329,13 +4803,10 @@ void handleCONFIG() {
   WEBHTML = "";
   serverTextHeader("System Configuration");
   serverTextStreamBegin(200, true);
-//  SerialPrint("config: filename is " + (strlen(GSheetInfo.GsheetName) > 0 ? String(GSheetInfo.GsheetName) : "N/A"),true);
-
-  WEBHTML = WEBHTML + "<body>";
 
   // Navigation buttons (WiFi Config only on this page)
   appendStandardPageNav(true);
-  serverTextFlush();
+  serverTextFlush(true);
 
   WEBHTML = WEBHTML + "<p>This page is used to configure editable system parameters.</p>";
   
@@ -4359,6 +4830,7 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_start_date\" name=\"dst_start_date\" value=\"" + (String) dateify(Prefs.DSTStartUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST End</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_end_date\" name=\"dst_end_date\" value=\"" + (String) dateify(Prefs.DSTEndUnixTime,"mm/dd/yyyy hh:nn") + "\" maxlength=\"20\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
+  serverTextFlush(true);
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">DST Offset (sec)</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"dst_offset\" name=\"dst_offset\" value=\"" + (String) Prefs.DSTOffset + "\" maxlength=\"10\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Autodetect</div>";
@@ -4371,54 +4843,81 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd; background-color: #f0f0f0;\">Device Name</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\"><input type=\"text\" id=\"deviceName\" name=\"deviceName\" value=\"" + String(Prefs.DEVICENAME) + "\" maxlength=\"32\" style=\"width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;\"></div>";
 
-  //can add a div here if "show these flags" becomes editable
-  
-  
   WEBHTML = WEBHTML + "</div>";
   
   // Submit button
   WEBHTML = WEBHTML + "<br><input type=\"submit\" value=\"Update Configuration\" style=\"padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
+  serverTextFlush(true);
 
-  #ifdef _USESUPABASE
-  WEBHTML += "<br><hr><h3>Cloud / Site (Supabase)</h3>";
-  WEBHTML += "<p>Claimed: <strong>";
-  WEBHTML += Prefs.SUPABASE_CLAIMED ? "yes" : "no";
-  WEBHTML += "</strong>";
-  if (Prefs.SUPABASE_CLAIMED) {
-    WEBHTML += " &nbsp; Current site: <strong>";
-    WEBHTML += supabaseSiteSlug();
-    WEBHTML += "</strong>";
-  }
-  WEBHTML += "</p>";
+  #if _SUPABASE_RUNTIME
+  WEBHTML += "<br><hr><h3>ArborysNet</h3>";
   WEBHTML += "<div id=\"cfg-cloud-status\" style=\"margin:8px 0;\"></div>";
-  WEBHTML += "<div style=\"margin:10px 0;\"><label>Claim code </label>";
-  WEBHTML += "<input type=\"text\" id=\"cfg_claim_code\" maxlength=\"8\" style=\"padding:8px; text-transform:uppercase;\"> ";
-  WEBHTML += "<button type=\"button\" onclick=\"cfgClaimDevice()\" style=\"padding:8px 16px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;\">Claim / Re-claim</button></div>";
-  WEBHTML += "<div id=\"cfg-site-wrap\" style=\"margin:10px 0;";
-  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
-  WEBHTML += "\"><label>Site </label><select id=\"cfg_site_select\" style=\"padding:8px; min-width:200px;\"></select> ";
-  WEBHTML += "<button type=\"button\" onclick=\"cfgAssignSite()\" style=\"padding:8px 16px; background:#2196F3; color:white; border:none; border-radius:4px; cursor:pointer;\">Save Site</button></div>";
-  #if _IS_SERVER_HUB
-  WEBHTML += "<div id=\"cfg-create-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #ddd;";
-  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
-  WEBHTML += "\"><strong>New site (hub)</strong><br>";
-  WEBHTML += "<input type=\"text\" id=\"cfg_new_site_name\" placeholder=\"Site name\" style=\"padding:8px; margin:4px;\"> ";
-  WEBHTML += "<input type=\"text\" id=\"cfg_new_site_slug\" placeholder=\"slug\" style=\"padding:8px; margin:4px; text-transform:lowercase;\"> ";
-  WEBHTML += "<button type=\"button\" onclick=\"cfgCreateSite()\" style=\"padding:8px 16px; background:#FF9800; color:white; border:none; border-radius:4px; cursor:pointer;\">Create &amp; assign</button></div>";
-  WEBHTML += "<div id=\"cfg-delete-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #f5c6cb;";
-  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
-  WEBHTML += "\"><strong>Delete site (hub)</strong>";
-  WEBHTML += "<div id=\"cfg-site-list\" style=\"margin:8px 0; font-size:14px;\">Loading sites...</div>";
-  WEBHTML += "<p style=\"font-size:13px;color:#666;\">Deleting a site moves its devices to another site (or creates <code>home</code> if it was the last site).</p>";
-  WEBHTML += "</div>";
-  WEBHTML += "<div id=\"cfg-inventory-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #c8e6c9;";
-  if (!Prefs.SUPABASE_CLAIMED) WEBHTML += "display:none;";
-  WEBHTML += "\"><strong>Peripheral inventory (hub)</strong><br>";
-  WEBHTML += "<p style=\"font-size:13px;color:#666;\">Queries this site for sensors that reported in the last 24 hours and adds any unknown peripherals. Also runs automatically every 12 hours.</p>";
-  WEBHTML += "<button type=\"button\" onclick=\"cfgQuerySupabase()\" id=\"cfg-inventory-btn\" style=\"padding:8px 16px; background:#009688; color:white; border:none; border-radius:4px; cursor:pointer;\">Query Supabase</button>";
-  WEBHTML += "</div>";
-  #endif
+  {
+    const bool hasCreds = supabaseHasStoredCredentials();
+    const bool connected = supabaseIsConnected();
+    WEBHTML += "<p style=\"margin:8px 0;\">Connected: <strong id=\"cfg-connected-flag\">";
+    WEBHTML += connected ? "Yes" : "No";
+    WEBHTML += "</strong>";
+    WEBHTML += " <span id=\"cfg-has-creds\" style=\"display:none\">";
+    WEBHTML += hasCreds ? "1" : "0";
+    WEBHTML += "</span>";
+    WEBHTML += " &nbsp; Current location: <strong id=\"cfg-current-site\">";
+    if (hasCreds) WEBHTML += supabaseSiteSlug();
+    WEBHTML += "</strong></p>";
+    WEBHTML += "<div style=\"margin:10px 0;\"><label>Claim code </label>";
+    WEBHTML += "<input type=\"text\" id=\"cfg_claim_code\" maxlength=\"8\" style=\"padding:8px; text-transform:uppercase;\"> ";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgClaimDevice()\" style=\"padding:8px 16px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;\">Claim / Re-claim</button> ";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgQuitArborysNet()\" id=\"cfg-quit-arborysnet-btn\" style=\"padding:8px 16px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer;\"";
+    if (!hasCreds) WEBHTML += " disabled";
+    WEBHTML += ">Quit ArborysNet</button></div>";
+    WEBHTML += "<p style=\"font-size:13px;color:#666;margin:4px 0 10px;\">Quit clears this device&apos;s local cloud credentials (claim stays in Supabase until you reclaim).</p>";
+    WEBHTML += "<div id=\"cfg-site-wrap\" style=\"margin:10px 0;\"><label>Location </label>";
+    WEBHTML += "<div style=\"margin-top:6px;\">";
+    WEBHTML += "<select id=\"cfg_site_select\" size=\"6\" style=\"padding:8px; min-width:280px; width:100%; max-width:420px; display:block;\">";
+    if (hasCreds) {
+      const char* cur = supabaseSiteSlug();
+      WEBHTML += "<option value=\"";
+      WEBHTML += cur;
+      WEBHTML += "\" selected>";
+      WEBHTML += cur;
+      WEBHTML += " (current)</option>";
+    } else {
+      WEBHTML += "<option value=\"\">(claim device, then Refresh locations)</option>";
+    }
+    WEBHTML += "</select></div>";
+    WEBHTML += "<div style=\"margin-top:8px;\">";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgLoadSites()\" id=\"cfg-refresh-sites-btn\" style=\"padding:8px 16px; background:#607D8B; color:white; border:none; border-radius:4px; cursor:pointer;\"";
+    if (!hasCreds) WEBHTML += " disabled";
+    WEBHTML += ">Refresh locations</button> ";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgAssignSite()\" style=\"padding:8px 16px; background:#2196F3; color:white; border:none; border-radius:4px; cursor:pointer;\">Save location</button></div></div>";
+    WEBHTML += "<p style=\"font-size:13px;color:#666;margin:4px 0 10px;\">Location list loads from ArborysNet only when you tap <em>Refresh locations</em>.</p>";
+    WEBHTML += "<div style=\"margin:10px 0;\"><label><input type=\"checkbox\" id=\"cfg_upload_supabase\" ";
+    if (Prefs.UPLOAD_TO_SUPABASE) WEBHTML += "checked ";
+    WEBHTML += "onchange=\"cfgSetUploadToSupabase(this.checked)\"> Upload sensor readings to ArborysNet</label>";
+    WEBHTML += "<p style=\"font-size:12px;color:#666;margin:4px 0 0;\">Default on for hubs, off for peripherals. Peripherals still upload if no server contact for 6 hours.</p></div>";
+    #if _IS_SERVER_HUB
+    WEBHTML += "<div id=\"cfg-create-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #ddd;";
+    if (!hasCreds) WEBHTML += "display:none;";
+    WEBHTML += "\"><strong>New location (hub)</strong><br>";
+    WEBHTML += "<input type=\"text\" id=\"cfg_new_site_description\" placeholder=\"Site description\" maxlength=\"64\" style=\"padding:8px; margin:4px;\"> ";
+    WEBHTML += "<input type=\"text\" id=\"cfg_new_site_label\" placeholder=\"Site label\" maxlength=\"24\" style=\"padding:8px; margin:4px; text-transform:lowercase;\"> ";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgCreateSite()\" style=\"padding:8px 16px; background:#FF9800; color:white; border:none; border-radius:4px; cursor:pointer;\">Create &amp; assign</button></div>";
+    WEBHTML += "<div id=\"cfg-delete-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #f5c6cb;";
+    if (!hasCreds) WEBHTML += "display:none;";
+    WEBHTML += "\"><strong>Delete location (hub)</strong>";
+    WEBHTML += "<div id=\"cfg-site-list\" style=\"margin:8px 0; font-size:14px;\"><em>Refresh locations to list</em></div>";
+    WEBHTML += "<p style=\"font-size:13px;color:#666;\">Deleting a location moves its devices to another location (or creates <code>home</code> if it was the last one).</p>";
+    WEBHTML += "</div>";
+    WEBHTML += "<div id=\"cfg-inventory-wrap\" style=\"margin:14px 0; padding:12px; border:1px solid #c8e6c9;";
+    if (!hasCreds) WEBHTML += "display:none;";
+    WEBHTML += "\"><strong>Peripheral inventory (hub)</strong><br>";
+    WEBHTML += "<p style=\"font-size:13px;color:#666;\">Queries this location for sensors that reported in the last 24 hours and adds any unknown peripherals. Manual only for now (automatic poll deferred).</p>";
+    WEBHTML += "<button type=\"button\" onclick=\"cfgQueryArborysNet()\" id=\"cfg-inventory-btn\" style=\"padding:8px 16px; background:#009688; color:white; border:none; border-radius:4px; cursor:pointer;\">Query ArborysNet</button>";
+    WEBHTML += "</div>";
+    #endif
+    serverTextFlush(true);
+  }
   #endif
 
   WEBHTML = WEBHTML + "<br><a href=\"/REBOOT\" style=\"display: inline-block; margin-top: 8px; padding: 10px 20px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; cursor: pointer;\">Reboot</a>";
@@ -4446,10 +4945,11 @@ void handleCONFIG() {
   WEBHTML = WEBHTML + "<br><br><form method=\"POST\" action=\"/CONFIG_DELETE\" style=\"display: inline;\">";
   WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Reset All Settings\" style=\"padding: 10px 20px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\">";
   WEBHTML = WEBHTML + "</form>";
+  serverTextFlush(true);
   
   WEBHTML = WEBHTML + "</body>";
   WEBHTML = WEBHTML + "<script>";
-  WEBHTML = WEBHTML + R"===(
+  serverTextAppend(R"===(
 function isValidTimezoneOffset(offset) {
   return offset !== undefined && offset >= -50400 && offset <= 50400 && offset !== 90000;
 }
@@ -4461,16 +4961,13 @@ function fillDstFields(data) {
   document.getElementById('dst_offset').value = data.dst_offset !== undefined ? data.dst_offset : '';
 }
 
-// Auto-detect standard UTC offset only
 async function autodetectTimezone() {
   const btn = document.getElementById('detect-tz-btn');
   btn.disabled = true;
   btn.value = "Detecting...";
-
   try {
     const response = await fetch('/api/timezone');
     const data = await response.json();
-
     if (data.success === true && isValidTimezoneOffset(data.utc_offset)) {
       document.getElementById('utc_offset').value = data.utc_offset;
       alert('Timezone (UTC offset) detected!');
@@ -4485,16 +4982,13 @@ async function autodetectTimezone() {
   }
 }
 
-// Auto-detect DST rules only (start/end/offset/active flag)
 async function autodetectDST() {
   const btn = document.getElementById('detect-dst-btn');
   btn.disabled = true;
   btn.value = "Detecting...";
-
   try {
     const response = await fetch('/api/timezone/dst');
     const data = await response.json();
-
     if (data.success === true) {
       fillDstFields(data);
       alert('Daylight saving time settings detected!');
@@ -4508,64 +5002,202 @@ async function autodetectDST() {
     btn.value = "Autodetect Daylight Savings";
   }
 }
-)===";
+)===");
+  serverTextFlush(true);
 
-  #ifdef _USESUPABASE
-  WEBHTML += R"===(
-const CFG_IS_HUB = )===";
+  #if _SUPABASE_RUNTIME
+  // Stream ArborysNet JS in small pieces � a single ~11KB String append OOMs classic ESP32 peripherals.
+  WEBHTML += "const CFG_IS_HUB=";
   #if _IS_SERVER_HUB
-  WEBHTML += "true";
+  WEBHTML += "true;";
   #else
-  WEBHTML += "false";
+  WEBHTML += "false;";
   #endif
-  WEBHTML += R"===(;
+  serverTextAppend(R"===(
+function cfgHasCreds() {
+  const el = document.getElementById('cfg-has-creds');
+  return !!(el && el.textContent.trim() === '1');
+}
+function cfgIsConnected() {
+  const flag = document.getElementById('cfg-connected-flag');
+  return !!(flag && flag.textContent.trim() === 'Yes');
+}
+function cfgSetConnectedUi(connected) {
+  // Live-success badge only � does not gate actions or clear credentials.
+  const flag = document.getElementById('cfg-connected-flag');
+  if (flag) flag.textContent = connected ? 'Yes' : 'No';
+}
+function cfgSetHasCreds(has) {
+  const el = document.getElementById('cfg-has-creds');
+  if (el) el.textContent = has ? '1' : '0';
+  const refreshBtn = document.getElementById('cfg-refresh-sites-btn');
+  if (refreshBtn) refreshBtn.disabled = !has;
+  const quitBtn = document.getElementById('cfg-quit-arborysnet-btn');
+  if (quitBtn) quitBtn.disabled = !has;
+  ['cfg-create-wrap', 'cfg-delete-wrap', 'cfg-inventory-wrap'].forEach(function(id) {
+    const w = document.getElementById(id);
+    if (w) w.style.display = has ? 'block' : 'none';
+  });
+  if (!has) {
+    const cur = document.getElementById('cfg-current-site');
+    if (cur) cur.textContent = '';
+  }
+}
+function cfgHandleApiFailure(data, fallbackMsg) {
+  const err = (data && data.error) ? data.error : (fallbackMsg || 'failed');
+  const invalid = !!(data && (data.invalid_device || data.code === 'invalid_device' ||
+    /invalid_device|Invalid device credentials/i.test(String(err))));
+  cfgSetConnectedUi(false);
+  if (invalid) {
+    cfgSetHasCreds(false);
+    cfgCloudMsg(err + ' (credentials cleared. Re-claim required)');
+    return true;
+  }
+  cfgCloudMsg(err);
+  return false;
+}
 function cfgCloudMsg(msg) {
   const el = document.getElementById('cfg-cloud-status');
   if (el) el.textContent = msg || '';
 }
-async function cfgLoadSites() {
-  try {
-    const response = await fetch('/api/supabase/sites');
-    const data = await response.json();
-    if (!data.success) { cfgCloudMsg(data.error || 'Failed to load sites'); return; }
-    const wrap = document.getElementById('cfg-site-wrap');
-    if (wrap) wrap.style.display = 'block';
-    const createWrap = document.getElementById('cfg-create-wrap');
-    if (createWrap) createWrap.style.display = 'block';
-    const deleteWrap = document.getElementById('cfg-delete-wrap');
-    if (deleteWrap) deleteWrap.style.display = 'block';
-    const invWrap = document.getElementById('cfg-inventory-wrap');
-    if (invWrap) invWrap.style.display = 'block';
-    const sel = document.getElementById('cfg_site_select');
-    sel.innerHTML = '';
-    (data.sites || []).forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.slug;
-      const n = (s.device_count !== undefined) ? s.device_count : 0;
-      opt.textContent = (s.name || s.slug) + ' (' + s.slug + ') — ' + n + ' device' + (n === 1 ? '' : 's');
-      if (s.slug === data.current) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    if ((data.sites || []).length === 1) sel.value = data.sites[0].slug;
-    const list = document.getElementById('cfg-site-list');
-    if (list && CFG_IS_HUB) {
-      if (!(data.sites || []).length) {
-        list.innerHTML = '<em>No sites</em>';
-      } else {
-        let html = '<table style="border-collapse:collapse;width:100%;max-width:480px;"><tr><th style="text-align:left;padding:4px;border-bottom:1px solid #ddd;">Site</th><th style="text-align:right;padding:4px;border-bottom:1px solid #ddd;">Devices</th><th></th></tr>';
-        (data.sites || []).forEach(s => {
-          const n = (s.device_count !== undefined) ? s.device_count : 0;
-          const label = (s.name || s.slug) + ' (' + s.slug + ')';
-          html += '<tr><td style="padding:6px 4px;">' + label + (s.slug === data.current ? ' <em>current</em>' : '') +
-            '</td><td style="text-align:right;padding:6px 4px;">' + n +
-            '</td><td style="padding:6px 4px;"><button type="button" onclick="cfgDeleteSite(\'' + s.slug + '\',' + n + ')" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;">Delete</button></td></tr>';
-        });
-        html += '</table>';
-        list.innerHTML = html;
-      }
-    }
-  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+function cfgStamp() {
+  try { return new Date().toLocaleString(); } catch (e) { return ''; }
 }
+function cfgEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+)===");
+  serverTextFlush(true);
+
+  #if _IS_SERVER_HUB
+  serverTextAppend(R"===(
+function cfgRenderSiteList(sites, current) {
+  const list = document.getElementById('cfg-site-list');
+  if (!list) return;
+  const rows = sites || [];
+  if (!rows.length) {
+    list.innerHTML = '<em>No locations</em>';
+    return;
+  }
+  const onlyOne = rows.length === 1;
+  let html = '<table style="border-collapse:collapse;width:100%;max-width:480px;"><tr><th style="text-align:left;padding:4px;border-bottom:1px solid #ddd;">Description</th><th style="text-align:left;padding:4px;border-bottom:1px solid #ddd;">Label</th><th></th></tr>';
+  rows.forEach(s => {
+    const label = s.label || s.slug || '';
+    if (!label) return;
+    const desc = s.description || s.name || label;
+    const isCurrent = (label === current);
+    const isSoleHome = onlyOne && (label === 'home' || label === current);
+    html += '<tr><td style="padding:6px 4px;">' + cfgEsc(desc) + (isCurrent ? ' <em>(current)</em>' : '') +
+      '</td><td style="padding:6px 4px;"><code>' + cfgEsc(label) + '</code></td><td style="padding:6px 4px;">';
+    if (isSoleHome) {
+      html += '<span style="color:#666;font-size:13px;">Cannot delete (only location)</span>';
+    } else {
+      html += '<button type="button" data-site="' + cfgEsc(label) + '" onclick="cfgDeleteSite(this.getAttribute(\'data-site\'))" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;">Delete</button>';
+    }
+    html += '</td></tr>';
+  });
+  html += '</table>';
+  list.innerHTML = html;
+}
+)===");
+  #else
+  WEBHTML += "function cfgRenderSiteList(sites, current) {}\n";
+  #endif
+  serverTextFlush(true);
+
+  serverTextAppend(R"===(
+async function cfgLoadSites() {
+  if (!cfgHasCreds()) {
+    cfgCloudMsg('Claim the device before refreshing locations');
+    return;
+  }
+  const refreshBtn = document.getElementById('cfg-refresh-sites-btn');
+  if (refreshBtn) refreshBtn.disabled = true;
+  const sel = document.getElementById('cfg_site_select');
+  const prevValue = sel ? sel.value : '';
+  try {
+    cfgCloudMsg('Loading locations...');
+    for (let attempt = 0; attempt < 40; attempt++) {
+      let response;
+      let data;
+      try {
+        response = await fetch('/api/arborysnet/sites');
+        data = await response.json();
+      } catch (parseErr) {
+        cfgSetConnectedUi(false);
+        cfgCloudMsg('Error refreshing sites: ' + (parseErr && parseErr.message ? parseErr.message : 'bad response'));
+        return;
+      }
+      if (data.pending) {
+        cfgCloudMsg('Loading locations... (' + (attempt + 1) + ')');
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      if (data.tls_busy) {
+        cfgCloudMsg(data.error || 'Please wait, TLS client occupied');
+        return;
+      }
+      if (!data.success) {
+        cfgHandleApiFailure(data, 'HTTP ' + response.status);
+        return;
+      }
+      const sites = data.sites || [];
+      if (sel) {
+        sel.innerHTML = '';
+        if (!sites.length) {
+          const fallback = data.current || prevValue || 'home';
+          const opt = document.createElement('option');
+          opt.value = fallback;
+          opt.textContent = fallback + ' (current)';
+          opt.selected = true;
+          sel.appendChild(opt);
+        } else {
+          let matched = false;
+          sites.forEach(s => {
+            const label = s.label || s.slug || '';
+            if (!label) return;
+            const desc = s.description || s.name || label;
+            const opt = document.createElement('option');
+            opt.value = label;
+            opt.textContent = (label === data.current)
+              ? (label + ' (current)')
+              : ((desc === label) ? label : (desc + ' [' + label + ']'));
+            if (label === data.current || label === prevValue) {
+              opt.selected = true;
+              matched = true;
+            }
+            sel.appendChild(opt);
+          });
+          if (!matched && data.current) {
+            const opt = document.createElement('option');
+            opt.value = data.current;
+            opt.textContent = data.current + ' (current)';
+            opt.selected = true;
+            sel.insertBefore(opt, sel.firstChild);
+          }
+          if (data.current) sel.value = data.current;
+          else if (prevValue) sel.value = prevValue;
+        }
+      }
+      const cur = document.getElementById('cfg-current-site');
+      if (cur) cur.textContent = (sel && sel.value) || data.current || '';
+      cfgRenderSiteList(sites.length ? sites : [{ label: (data.current || prevValue || 'home'), description: (data.current || prevValue || 'home') }], data.current || (sel && sel.value) || '');
+      cfgSetConnectedUi(true);
+      cfgCloudMsg('Sites refreshed at ' + cfgStamp());
+      return;
+    }
+    cfgCloudMsg('Error refreshing sites: still loading after timeout. Tap Refresh locations to retry.');
+  } catch (e) { cfgCloudMsg('Error refreshing sites: ' + e.message); }
+  finally {
+    if (refreshBtn && cfgHasCreds()) refreshBtn.disabled = false;
+  }
+}
+)===");
+  serverTextFlush(true);
+
+  serverTextAppend(R"===(
 async function cfgClaimDevice() {
   const code = document.getElementById('cfg_claim_code').value;
   if (!code) { cfgCloudMsg('Enter claim code'); return; }
@@ -4573,104 +5205,170 @@ async function cfgClaimDevice() {
   formData.append('claim_code', code);
   cfgCloudMsg('Claiming...');
   try {
-    const response = await fetch('/api/supabase/claim', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/claim', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      cfgCloudMsg('Claimed. Site: ' + (data.site_slug || ''));
-      await cfgLoadSites();
+      cfgSetHasCreds(true);
+      cfgSetConnectedUi(true);
+      cfgCloudMsg('Connected: Yes. Tap Refresh locations, then choose a location.');
     } else {
+      cfgSetConnectedUi(false);
       cfgCloudMsg(data.error || 'Claim failed');
     }
   } catch (e) { cfgCloudMsg('Error: ' + e.message); }
 }
-async function cfgAssignSite() {
-  const site = document.getElementById('cfg_site_select').value;
-  if (!site) { cfgCloudMsg('Select a site'); return; }
-  const formData = new FormData();
-  formData.append('site', site);
+async function cfgQuitArborysNet() {
+  if (!cfgHasCreds()) {
+    cfgCloudMsg('Device is not claimed');
+    return;
+  }
+  if (!confirm('Quit ArborysNet on this device? Local cloud credentials will be cleared. You can claim again later with a code.')) {
+    return;
+  }
+  const quitBtn = document.getElementById('cfg-quit-arborysnet-btn');
+  if (quitBtn) quitBtn.disabled = true;
+  cfgCloudMsg('Clearing ArborysNet credentials...');
   try {
-    const response = await fetch('/api/supabase/site', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/quit', { method: 'POST' });
     const data = await response.json();
-    cfgCloudMsg(data.success ? ('Site saved: ' + data.site) : (data.error || 'Failed'));
-  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+    if (data.success) {
+      cfgSetHasCreds(false);
+      cfgSetConnectedUi(false);
+      const code = document.getElementById('cfg_claim_code');
+      if (code) code.value = '';
+      cfgCloudMsg('ArborysNet quit. Local credentials cleared. Device is LAN-only until re-claimed.');
+    } else {
+      cfgCloudMsg(data.error || 'Quit failed');
+      if (quitBtn && cfgHasCreds()) quitBtn.disabled = false;
+    }
+  } catch (e) {
+    cfgCloudMsg('Error: ' + e.message);
+    if (quitBtn && cfgHasCreds()) quitBtn.disabled = false;
+  }
 }
+async function cfgSetUploadToSupabase(enabled) {
+  const formData = new FormData();
+  formData.append('enabled', enabled ? '1' : '0');
+  try {
+    const response = await fetch('/api/arborysnet/upload', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      cfgCloudMsg(enabled ? 'Upload to ArborysNet enabled' : 'Upload to ArborysNet disabled');
+    } else {
+      cfgCloudMsg(data.error || 'Failed to save upload setting');
+      const cb = document.getElementById('cfg_upload_supabase');
+      if (cb) cb.checked = !enabled;
+    }
+  } catch (e) {
+    cfgCloudMsg('Error: ' + e.message);
+    const cb = document.getElementById('cfg_upload_supabase');
+    if (cb) cb.checked = !enabled;
+  }
+}
+async function cfgAssignSite() {
+  if (!cfgHasCreds()) { cfgCloudMsg('Claim the device first'); return; }
+  const label = document.getElementById('cfg_site_select').value;
+  if (!label) { cfgCloudMsg('Select a location (refresh the list first)'); return; }
+  const formData = new FormData();
+  formData.append('site_label', label);
+  try {
+    const response = await fetch('/api/arborysnet/site', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+      cfgSetConnectedUi(true);
+      const cur = document.getElementById('cfg-current-site');
+      if (cur) cur.textContent = data.label || data.site || label;
+      cfgCloudMsg('Location saved: ' + (data.label || data.site || label));
+    } else {
+      cfgHandleApiFailure(data, 'Failed');
+    }
+  } catch (e) { cfgSetConnectedUi(false); cfgCloudMsg('Error: ' + e.message); }
+}
+)===");
+  serverTextFlush(true);
+
+  #if _IS_SERVER_HUB
+  serverTextAppend(R"===(
 async function cfgCreateSite() {
   if (!CFG_IS_HUB) return;
-  const name = document.getElementById('cfg_new_site_name').value;
-  let slug = document.getElementById('cfg_new_site_slug').value;
-  if (!slug && name) slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  if (!slug) { cfgCloudMsg('Enter site name or slug'); return; }
+  if (!cfgHasCreds()) { cfgCloudMsg('Claim the device first'); return; }
+  const descEl = document.getElementById('cfg_new_site_description');
+  const labelEl = document.getElementById('cfg_new_site_label');
+  const description = descEl ? descEl.value : '';
+  let label = labelEl ? labelEl.value : '';
+  if (!label && description) {
+    label = description.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 24);
+  }
+  if (!label) { cfgCloudMsg('Enter a site label or description'); return; }
+  if (label.length > 24) label = label.substring(0, 24);
   const formData = new FormData();
-  formData.append('site', slug);
-  if (name) formData.append('site_name', name);
+  formData.append('site_label', label);
+  if (description) formData.append('site_description', description.substring(0, 64));
   try {
-    const response = await fetch('/api/supabase/site/create', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/site/create', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      cfgCloudMsg('Created: ' + data.site);
+      const saved = data.label || data.site || label;
+      cfgCloudMsg('Created: ' + saved);
       await cfgLoadSites();
-      document.getElementById('cfg_site_select').value = data.site;
+      document.getElementById('cfg_site_select').value = saved;
+      const cur = document.getElementById('cfg-current-site');
+      if (cur) cur.textContent = saved;
     } else {
-      cfgCloudMsg(data.error || 'Create failed');
+      cfgHandleApiFailure(data, 'Create failed');
     }
-  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+  } catch (e) { cfgSetConnectedUi(false); cfgCloudMsg('Error: ' + e.message); }
 }
-async function cfgDeleteSite(slug, deviceCount) {
-  if (!CFG_IS_HUB || !slug) return;
-  const n = deviceCount || 0;
-  const msg = 'Delete site \"' + slug + '\"?' +
-    (n ? ('\\n\\n' + n + ' device(s) on this site will be moved to another site (or to a new \"home\" if this is the last site).') : '') +
+async function cfgDeleteSite(label) {
+  if (!CFG_IS_HUB || !label) return;
+  if (!cfgHasCreds()) { cfgCloudMsg('Claim the device first'); return; }
+  const msg = 'Delete location \"' + label + '\"?' +
+    '\\n\\nDevices on this location will be moved to another location (or to a new \"home\" if this is the last one).' +
     '\\n\\nThis cannot be undone.';
   if (!confirm(msg)) return;
-  if (!confirm('Confirm delete site \"' + slug + '\"?')) return;
+  if (!confirm('Confirm delete location \"' + label + '\"?')) return;
   const formData = new FormData();
-  formData.append('site', slug);
-  cfgCloudMsg('Deleting ' + slug + '...');
+  formData.append('site_label', label);
+  cfgCloudMsg('Deleting ' + label + '...');
   try {
-    const response = await fetch('/api/supabase/site/delete', { method: 'POST', body: formData });
+    const response = await fetch('/api/arborysnet/site/delete', { method: 'POST', body: formData });
     const data = await response.json();
     if (data.success) {
-      cfgCloudMsg('Deleted \"' + slug + '\". Current site: ' + (data.current || ''));
+      cfgCloudMsg('Deleted \"' + label + '\". Current: ' + (data.current || ''));
       await cfgLoadSites();
     } else {
-      cfgCloudMsg(data.error || 'Delete failed');
+      cfgHandleApiFailure(data, 'Delete failed');
     }
-  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+  } catch (e) { cfgSetConnectedUi(false); cfgCloudMsg('Error: ' + e.message); }
 }
-async function cfgQuerySupabase() {
+async function cfgQueryArborysNet() {
   if (!CFG_IS_HUB) return;
+  if (!cfgHasCreds()) { cfgCloudMsg('Claim the device first'); return; }
   const btn = document.getElementById('cfg-inventory-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Querying...'; }
-  cfgCloudMsg('Querying Supabase for site peripherals...');
+  cfgCloudMsg('Querying ArborysNet for location peripherals...');
   try {
-    const response = await fetch('/api/supabase/inventory', { method: 'POST' });
+    const response = await fetch('/api/arborysnet/inventory', { method: 'POST' });
     const data = await response.json();
     if (data.success) {
+      cfgSetConnectedUi(true);
       cfgCloudMsg('Inventory: queried ' + data.sensors_queried +
         ' sensor(s), added ' + data.sensors_added + ' sensor(s) / ' +
         data.devices_added + ' device(s).');
     } else {
-      cfgCloudMsg(data.error || 'Inventory query failed');
+      cfgHandleApiFailure(data, 'Inventory query failed');
     }
-  } catch (e) { cfgCloudMsg('Error: ' + e.message); }
+  } catch (e) { cfgSetConnectedUi(false); cfgCloudMsg('Error: ' + e.message); }
   finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Query Supabase'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Query ArborysNet'; }
   }
 }
-document.addEventListener('DOMContentLoaded', function() {
-  if (document.getElementById('cfg-site-wrap') && document.getElementById('cfg-site-wrap').style.display !== 'none') {
-    cfgLoadSites();
-  }
-});
-if (document.getElementById('cfg-site-wrap') && document.getElementById('cfg-site-wrap').style.display !== 'none') {
-  cfgLoadSites();
-}
-)===";
+)===");
+  serverTextFlush(true);
+  #endif
   #endif
 
   WEBHTML = WEBHTML + "</script>";
-
-
   WEBHTML = WEBHTML + "</html>";
 
   serverTextClose(200, true);
@@ -4684,13 +5382,9 @@ void handleGSHEET() {
   serverTextHeader("Google Sheets");
   serverTextStreamBegin(200, true);
   #if defined(_USEGSHEET)
-
-
-  WEBHTML = WEBHTML + "<body>";
-
   // Navigation buttons
   appendStandardPageNav();
-  serverTextFlush();
+  serverTextFlush(true);
 
   WEBHTML = WEBHTML + "<p>This page displays Google Sheets configuration and status.</p>";
   
@@ -4723,7 +5417,7 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) GSheetInfo.uploadGsheetFailCount + "</div>";
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastErrorTime</div>";
-  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) ((GSheetInfo.lastErrorTime) ? dateify(GSheetInfo.lastErrorTime) : "N/A") + "</div>";
+  WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + (String) ((GSheetInfo.lastErrorTime) ? dateifyLocal(GSheetInfo.lastErrorTime) : "N/A") + "</div>";
 
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">lastGsheetResponse</div>";
   WEBHTML = WEBHTML + "<div style=\"padding: 12px; border: 1px solid #ddd;\">" + String(GSheetInfo.lastGsheetResponse) + "</div>";
@@ -4760,7 +5454,6 @@ void handleGSHEET() {
   WEBHTML = WEBHTML + "</form>";
   
   #else
-  WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<p>Google Sheets upload is not available on this device</p>";
   #endif
   
@@ -4847,14 +5540,14 @@ void handleGSHEET_DELETE_ALL() {
 
 void handleREQUEST_BROADCAST() {
   bool result = broadcastServerPresence(true, 2);
-  SerialPrint("Broadcast (ESPLan+UDPLan): " + String(result ? "Success" : "Failed"), true);
+  SerialPrint("Broadcast (ArborysMesh ESP+UDP): " + String(result ? "Success" : "Failed"), true);
   server.sendHeader("Location", "/STATUS");
   server.send(302, "text/plain", result ? "Success" : "Failed");
 }
 
 void handleREQUEST_BROADCAST_ESP() {
   bool result = broadcastServerPresence(true, 0);
-  SerialPrint("Broadcast ESPLan: " + String(result ? "Success" : "Failed"), true);
+  SerialPrint("Broadcast ArborysMesh: " + String(result ? "Success" : "Failed"), true);
   server.sendHeader("Location", "/STATUS");
   server.send(302, "text/plain", result ? "Success" : "Failed");
 }
@@ -5007,6 +5700,7 @@ void handleCONFIG_OTA_SWITCH() {
   if (result == 1) {
     server.send(302, "text/plain", "OTA slot switched. Restarting in 3 seconds...");
     delay(3000);
+    recordRebootIssue(RESET_OTA);
     esp_restart();
   } else if (result == 0) {
     server.send(200, "text/plain", "OTA slot already active. No restart needed. Redirecting to status page...");
@@ -5019,7 +5713,60 @@ void handleCONFIG_OTA_SWITCH() {
   }
 }
 
+#ifdef _USE_HEADER_INFO_ALERT
+static void showSensorLanMsgBanner(const char* snsName) {
+  char shortName[11] = "";
+  if (snsName && snsName[0] != '\0') {
+    strncpy(shortName, snsName, 10);
+    shortName[10] = '\0';
+  }
+  char banner[24];
+  snprintf(banner, sizeof(banner), "Msg [%s]", shortName[0] ? shortName : "sensor");
+  HeaderInfoAlert(banner, TFT_YELLOW, TFT_BLACK, 60);
+}
+#endif
+
 #if _IS_SERVER_HUB
+static bool parseLimitFormValue(const String& raw, float& out) {
+  String s = raw;
+  s.trim();
+  if (s.length() == 0 || s == "?") return false;
+  char* end = nullptr;
+  out = strtof(s.c_str(), &end);
+  if (!end || end == s.c_str()) return false;
+  while (*end == ' ') end++;
+  if (*end != '\0') return false;
+  if (isnan(out) || isinf(out)) return false;
+  return true;
+}
+
+// Empty / "?" means "not provided" (leave unchanged). Invalid number fails.
+static bool parseOptionalIntervalFormValue(const String& raw, uint32_t& out, bool& provided, uint32_t minVal = 1) {
+  String s = raw;
+  s.trim();
+  provided = false;
+  if (s.length() == 0 || s == "?") return true;
+  char* end = nullptr;
+  unsigned long v = strtoul(s.c_str(), &end, 10);
+  if (!end || end == s.c_str()) return false;
+  while (*end == ' ') end++;
+  if (*end != '\0') return false;
+  if (v < minVal || v > 65535) return false;
+  out = (uint32_t)v;
+  provided = true;
+  return true;
+}
+
+static void redirectSensorLimitsResult(bool ok, const String& snsName, const char* err) {
+  String loc = "/?limits=" + String(ok ? "success" : "failed")
+      + "&limitsensor=" + urlEncode(snsName);
+  if (!ok && err && err[0] != '\0') {
+    loc += "&limiterr=" + urlEncode(String(err));
+  }
+  server.sendHeader("Location", loc);
+  server.send(302, "text/plain", ok ? "Sensor limits updated." : "Sensor limit update failed.");
+}
+
 void handleSENSOR_OVERRIDE_UPDATE() {
   registerHTTPMessage("SnsOvrd");
 
@@ -5048,6 +5795,284 @@ void handleSENSOR_OVERRIDE_UPDATE() {
 
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "Sensor override flags updated. Redirecting...");
+}
+
+void handleSENSOR_LIMITS_UPDATE() {
+  registerHTTPMessage("SnsLim");
+
+  if (!server.hasArg("snsIndex")) {
+    server.send(400, "text/plain", "Missing sensor index");
+    return;
+  }
+
+  int16_t snsIndex = server.arg("snsIndex").toInt();
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!sensor || !sensor->IsSet) {
+    server.send(400, "text/plain", "Invalid sensor index");
+    return;
+  }
+
+  const String snsName = String(sensor->snsName);
+  if (Sensors.isMySensor(snsIndex)) {
+    redirectSensorLimitsResult(false, snsName, "local sensor");
+    return;
+  }
+  float limitHigh = NAN;
+  float limitLow = NAN;
+  if (!server.hasArg("limitHigh") || !server.hasArg("limitLow") ||
+      !parseLimitFormValue(server.arg("limitHigh"), limitHigh) ||
+      !parseLimitFormValue(server.arg("limitLow"), limitLow)) {
+    redirectSensorLimitsResult(false, snsName, "invalid limits");
+    return;
+  }
+
+  uint32_t intervalPoll = 0;
+  uint32_t intervalSend = 0;
+  bool havePoll = false;
+  bool haveSend = false;
+  if ((server.hasArg("intervalPoll") &&
+       !parseOptionalIntervalFormValue(server.arg("intervalPoll"), intervalPoll, havePoll)) ||
+      (server.hasArg("intervalSend") &&
+       !parseOptionalIntervalFormValue(server.arg("intervalSend"), intervalSend, haveSend, 0))) {
+    redirectSensorLimitsResult(false, snsName, "invalid intervals");
+    return;
+  }
+
+  ArborysDevType* device = Sensors.getDeviceBySnsIndex(snsIndex);
+  if (!device || !device->IsSet) {
+    redirectSensorLimitsResult(false, snsName, "device not found");
+    return;
+  }
+  if (device->IP == IPAddress(0, 0, 0, 0)) {
+    redirectSensorLimitsResult(false, snsName, "device IP unknown");
+    return;
+  }
+
+  ArborysDevType* me = Sensors.getDeviceByMAC(ESP.getEfuseMac());
+  if (!me) {
+    redirectSensorLimitsResult(false, snsName, "local device missing");
+    return;
+  }
+
+#ifdef _USE_HEADER_INFO_ALERT
+  showSensorLanMsgBanner(sensor->snsName);
+#endif
+
+  String json = "{\"msgType\":\"setLimits\",";
+  json += JSONbuilder_device(me);
+  json += ",\"toMAC\":\"";
+  json += MACToString(device->MAC, '\0', true);
+  json += "\",\"snsType\":";
+  json += String(sensor->snsType);
+  json += ",\"snsID\":";
+  json += String(sensor->snsID);
+  json += ",\"limitHigh\":";
+  json += String(limitHigh, 4);
+  json += ",\"limitLow\":";
+  json += String(limitLow, 4);
+  if (havePoll) {
+    json += ",\"pollingInt\":";
+    json += String(intervalPoll);
+  }
+  if (haveSend) {
+    json += ",\"sendingInt\":";
+    json += String(intervalSend);
+  }
+  json += "}";
+
+  bool ok = false;
+  if (isValidLMKKey()) {
+    const int16_t code = sendHTTPSJSON(device->IP, json.c_str(), "setLimits", 10000);
+    ok = (code >= 200 && code < 400);
+  } else {
+    String httpBody = json;
+    JSONbuilder_encodeHTTP(httpBody);
+    ok = (sendHTTPJSON(device->IP, httpBody.c_str(), "setLimits", 10000) == 200);
+  }
+
+  if (ok) {
+    sensor->limitHigh = limitHigh;
+    sensor->limitLow = limitLow;
+    if (havePoll) sensor->PollingInt = intervalPoll;
+    if (haveSend) {
+      sensor->SendingInt = intervalSend;
+      if (intervalSend != 0 && (device->SendingInt == 0 || intervalSend < device->SendingInt)) {
+        device->SendingInt = intervalSend;
+      }
+    }
+    I.isUpToDate = false;
+    redirectSensorLimitsResult(true, snsName, nullptr);
+    SerialPrint("Sensor limits/timing sent to " + snsName + " (" + device->IP.toString() + ")", true);
+  } else {
+    redirectSensorLimitsResult(false, snsName, "no acknowledgment");
+    SerialPrint("Sensor limit update failed for " + snsName, true);
+  }
+}
+#endif
+
+#if _HAS_LOCAL_SENSORS
+static String switchStateLabel(const ArborysSnsType* s) {
+  if (!s) return "—";
+  if (s->snsType == 73 || s->snsType == 74) {
+    if (s->snsValue > 0.0) return "ON (" + String((int)floor(s->snsValue)) + "s)";
+    return "OFF";
+  }
+  const uint8_t forceLeft = InterruptTriggers_webForceRemainingSec(s);
+  if (forceLeft > 0) {
+    return String(bitRead(s->Flags, 0) ? "ON" : "OFF") + " (web " + String(forceLeft) + "s)";
+  }
+  return bitRead(s->Flags, 0) ? "ON" : "OFF";
+}
+
+void handleSWITCHSTATE() {
+  WEBHTML.clear();
+  WEBHTML = "";
+  serverTextHeader("SwitchState");
+  serverTextStreamBegin(200, true);
+  appendStandardPageNav();
+
+  WEBHTML += "<h2>Controlled outputs (types 71–79)</h2>";
+  WEBHTML += "<p>Set ON/OFF for up to 255 seconds. Automatic logic continues (countdown, motion, clock schedule). "
+             "Clock-style outputs require a duration and return to schedule when it expires.</p>";
+  WEBHTML += "<table style=\"width:100%; border-collapse:collapse; margin-bottom:20px;\">";
+  WEBHTML += "<tr style=\"background:#f0f0f0;\">"
+             "<th style=\"border:1px solid #ddd; padding:8px; text-align:left;\">Name</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">Type</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">State</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">Action</th></tr>";
+
+  uint8_t outCount = 0;
+  for (int16_t si = 0; si < NUMSENSORS; si++) {
+    ArborysSnsType* s = Sensors.snsIndexToPointer(si);
+    if (!s || !s->IsSet || s->deviceIndex != I.MY_DEVICE_INDEX) continue;
+    if (!isSwitchStateOutputType(s->snsType)) continue;
+    outCount++;
+
+    WEBHTML += "<tr>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px;\">" + String(s->snsName) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px; text-align:center;\">" + String(s->snsType) + "." + String(s->snsID) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px; text-align:center;\">" + switchStateLabel(s) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px;\">";
+    WEBHTML += "<form method=\"POST\" action=\"/SWITCHSTATE\" style=\"display:inline-block; margin:2px;\">";
+    WEBHTML += "<input type=\"hidden\" name=\"action\" value=\"set\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(s->snsType) + "\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(s->snsID) + "\">";
+    WEBHTML += "<input type=\"hidden\" name=\"state\" value=\"1\">";
+    WEBHTML += "<label>sec <input type=\"number\" name=\"seconds\" min=\"1\" max=\"255\" value=\"60\" style=\"width:64px;\"></label> ";
+    WEBHTML += "<button type=\"submit\" style=\"padding:6px 12px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;\">ON</button>";
+    WEBHTML += "</form> ";
+    WEBHTML += "<form method=\"POST\" action=\"/SWITCHSTATE\" style=\"display:inline-block; margin:2px;\">";
+    WEBHTML += "<input type=\"hidden\" name=\"action\" value=\"set\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(s->snsType) + "\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(s->snsID) + "\">";
+    WEBHTML += "<input type=\"hidden\" name=\"state\" value=\"0\">";
+    WEBHTML += "<label>sec <input type=\"number\" name=\"seconds\" min=\"0\" max=\"255\" value=\"0\" style=\"width:64px;\" title=\"Type 73/74: ignored (turns off now). Type 75: force off for N seconds.\"></label> ";
+    WEBHTML += "<button type=\"submit\" style=\"padding:6px 12px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer;\">OFF</button>";
+    WEBHTML += "</form></td></tr>";
+    serverTextFlush(false);
+  }
+  if (outCount == 0) {
+    WEBHTML += "<tr><td colspan=\"4\" style=\"border:1px solid #ddd; padding:8px;\">No local output switches (types 71–79).</td></tr>";
+  }
+  WEBHTML += "</table>";
+  serverTextFlush(true);
+
+  WEBHTML += "<h2>Interrupt triggers (types 200–255)</h2>";
+  WEBHTML += "<p>Trigger a rising-edge action (same as a physical button / motion pulse). Does not hold state.</p>";
+  WEBHTML += "<table style=\"width:100%; border-collapse:collapse;\">";
+  WEBHTML += "<tr style=\"background:#f0f0f0;\">"
+             "<th style=\"border:1px solid #ddd; padding:8px; text-align:left;\">Name</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">Type</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">Value</th>"
+             "<th style=\"border:1px solid #ddd; padding:8px;\">Action</th></tr>";
+
+  uint8_t irqCount = 0;
+  for (int16_t si = 0; si < NUMSENSORS; si++) {
+    ArborysSnsType* s = Sensors.snsIndexToPointer(si);
+    if (!s || !s->IsSet || s->deviceIndex != I.MY_DEVICE_INDEX) continue;
+    if (!isSwitchStateInterruptType(s->snsType)) continue;
+    irqCount++;
+
+    WEBHTML += "<tr>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px;\">" + String(s->snsName) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px; text-align:center;\">" + String(s->snsType) + "." + String(s->snsID) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px; text-align:center;\">" + String(s->snsValue, 1) + "</td>";
+    WEBHTML += "<td style=\"border:1px solid #ddd; padding:8px;\">";
+#if _USEINTERRUPT
+    WEBHTML += "<form method=\"POST\" action=\"/SWITCHSTATE\" style=\"display:inline;\">";
+    WEBHTML += "<input type=\"hidden\" name=\"action\" value=\"trigger\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(s->snsType) + "\">";
+    WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(s->snsID) + "\">";
+    WEBHTML += "<button type=\"submit\" style=\"padding:6px 12px; background:#2196F3; color:white; border:none; border-radius:4px; cursor:pointer;\">Trigger</button>";
+    WEBHTML += "</form>";
+#else
+    WEBHTML += "<em>interrupts not enabled</em>";
+#endif
+    WEBHTML += "</td></tr>";
+    serverTextFlush(false);
+  }
+  if (irqCount == 0) {
+    WEBHTML += "<tr><td colspan=\"4\" style=\"border:1px solid #ddd; padding:8px;\">No local interrupt sensors (types 200–255).</td></tr>";
+  }
+  WEBHTML += "</table>";
+  serverTextClose(200, true);
+}
+
+void handleSWITCHSTATE_POST() {
+  registerHTTPMessage("SwState");
+  if (!server.hasArg("action") || !server.hasArg("snsType") || !server.hasArg("snsID")) {
+    server.send(400, "text/plain", "Missing parameters");
+    return;
+  }
+
+  const String action = server.arg("action");
+  const uint8_t snsType = (uint8_t)server.arg("snsType").toInt();
+  const uint8_t snsID = (uint8_t)server.arg("snsID").toInt();
+  const int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+  ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(snsIndex);
+  if (!sensor || !sensor->IsSet || sensor->deviceIndex != I.MY_DEVICE_INDEX) {
+    server.send(404, "text/plain", "Sensor not found");
+    return;
+  }
+
+  bool ok = false;
+  if (action == "set") {
+    if (!isSwitchStateOutputType(snsType)) {
+      server.send(400, "text/plain", "Not an output switch type");
+      return;
+    }
+    const bool on = server.hasArg("state") && server.arg("state").toInt() != 0;
+    int sec = server.hasArg("seconds") ? server.arg("seconds").toInt() : 0;
+    if (sec < 0) sec = 0;
+    if (sec > 255) sec = 255;
+    // Type 75 OFF with 0 seconds: treat as brief force-off then auto (use 1s minimum pulse).
+    if (!on && (snsType == 75) && sec == 0) sec = 1;
+    ok = InterruptTriggers_webSetOutput(sensor, on, (uint8_t)sec);
+    if (!ok) {
+      server.send(400, "text/plain", "Set rejected (check seconds 1–255 for ON / clock outputs)");
+      return;
+    }
+  } else if (action == "trigger") {
+    if (!isSwitchStateInterruptType(snsType)) {
+      server.send(400, "text/plain", "Not an interrupt sensor type");
+      return;
+    }
+#if _USEINTERRUPT
+    ok = InterruptTriggers_simulateRisingEdge(sensor);
+#else
+    ok = false;
+#endif
+    if (!ok) {
+      server.send(400, "text/plain", "Trigger failed");
+      return;
+    }
+  } else {
+    server.send(400, "text/plain", "Unknown action");
+    return;
+  }
+
+  server.sendHeader("Location", "/SWITCHSTATE");
+  server.send(302, "text/plain", "OK");
 }
 #endif
 
@@ -5117,10 +6142,18 @@ void handleSENSOR_UPDATE_POST() {
   
   // Also update the sensor's flags/limits in the Sensors array
   if (sensor) {
-    sensor->Flags = flags;
+    const uint8_t lastflag = sensor->Flags;
+    if (sensor->snsType == 200) {
+      if (normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefsIndex], Prefs.SNS_LIMIT_MIN[prefsIndex])) {
+        Prefs.isUpToDate = false;
+      }
+    }
     sensor->SendingInt = Prefs.SNS_INTERVAL_SEND[prefsIndex];
+    sensor->PollingInt = Prefs.SNS_INTERVAL_POLL[prefsIndex];
     sensor->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefsIndex];
     sensor->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefsIndex];
+    sensor->Flags = flags;
+    applyAlarmFlags(sensor, Prefs.SNS_LIMIT_MAX[prefsIndex], Prefs.SNS_LIMIT_MIN[prefsIndex], lastflag);
   }
   
   // Mark Prefs as needing to be saved
@@ -5205,9 +6238,8 @@ void handleSensorSetup() {
   WEBHTML = "";
   serverTextHeader("Sensor Setup: " + String(sensor->snsName));
   serverTextStreamBegin(200, true);
-  WEBHTML = WEBHTML + "<body>";
   WEBHTML = WEBHTML + "<p><a href=\"/\">Back to Main</a></p>";
-  serverTextFlush();
+  serverTextFlush(true);
 
   // Calibration is available for every sensor. The values live in Prefs (the source of truth);
   // if no live reading is available for this sensor it simply shows NaN and the user can still
@@ -5346,11 +6378,9 @@ void handleWeather() {
   WEBHTML = "";
   serverTextHeader("Weather Data");
   serverTextStreamBegin(200, true);
-  WEBHTML = WEBHTML + "<body>";
-
   // Navigation buttons
   appendStandardPageNav();
-  serverTextFlush();
+  serverTextFlush(true);
 
   #ifdef _USEWEATHER
   
@@ -5370,17 +6400,17 @@ void handleWeather() {
   
   //last update time
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Update Time</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateT) ? dateify(WeatherData.lastUpdateT) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateT) ? dateifyLocal(WeatherData.lastUpdateT) : "???") + "</td></tr>";
 
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Last Failure Time</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateError) ? dateify(WeatherData.lastUpdateError) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateError) ? dateifyLocal(WeatherData.lastUpdateError) : "???") + "</td></tr>";
 
   {
     static const char* kCompNames[] = {"Grid", "Hourly", "GridFcst", "Daily", "Alerts", "Sun"};
     for (uint8_t ci = 0; ci < WC_COUNT; ci++) {
       const WeatherComponentStatus& st = WeatherData.componentStatus[ci];
       const bool fresh = WeatherData.isComponentDataFresh((WeatherComponent)ci);
-      String val = st.lastAttemptT ? String(dateify(st.lastAttemptT)) : String("never");
+      String val = st.lastAttemptT ? String(dateifyLocal(st.lastAttemptT)) : String("never");
       val += st.lastSucceeded ? " OK" : " FAIL";
       val += fresh ? " fresh" : " stale";
       if (!fresh) val += " (retry 3m)";
@@ -5397,10 +6427,10 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String(Prefs.LONGITUDE, 6) + "</td></tr>";
     
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Sunrise</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunrise) ? dateify(WeatherData.sunrise) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunrise) ? dateifyLocal(WeatherData.sunrise) : "???") + "</td></tr>";
   
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Sunset</strong></td>";
-  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunset) ? dateify(WeatherData.sunset) : "???") + "</td></tr>";
+  WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunset) ? dateifyLocal(WeatherData.sunset) : "???") + "</td></tr>";
   
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Rain Flag</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + (WeatherData.flag_rain ? "Yes" : "No") + "</td></tr>";
@@ -5825,7 +6855,7 @@ static void appendSdCardUploadForm(const String& currentPath) {
   WEBHTML = WEBHTML + "<script>\n";
   WEBHTML = WEBHTML + "const SD_BASE_PATH = \"" + jsPath + "\";\n";
   WEBHTML = WEBHTML + "const SD_MAX_FOLDER_FILES = 50;\n";
-  WEBHTML = WEBHTML + R"===(
+  serverTextAppend(R"===(
 (function(){
   const zone = document.getElementById('sd-drop-zone');
   const input = document.getElementById('sd-file-input');
@@ -6012,7 +7042,7 @@ static void appendSdCardUploadForm(const String& currentPath) {
     uploadFolderFiles(entries);
   });
 })();
-</script>)==="
+</script>)===")
   ;
 }
 
@@ -6237,7 +7267,7 @@ static void appendSdCardDirectoryListing(const String& currentPath) {
     File f = SD.open(filePath.c_str(), FILE_READ);
     if (f) {
       time_t fileTime = f.getLastWrite();
-      if (fileTime > 0) lastUpdated = String(dateify(fileTime, "mm/dd/yyyy hh:nn:ss"));
+      if (fileTime > 0) lastUpdated = String(dateifyLocal(fileTime, "mm/dd/yyyy hh:nn:ss"));
       f.close();
     }
     WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\">";
@@ -6410,12 +7440,9 @@ void handleSDCARD() {
   WEBHTML = "";
   serverTextHeader("SD Card Configuration");
   serverTextStreamBegin(200, true);
-
-  WEBHTML = WEBHTML + "<body>";
-
   // Navigation buttons
   appendStandardPageNav();
-  serverTextFlush();
+  serverTextFlush(true);
   
   // SD Card Information
   WEBHTML = WEBHTML + "<h3>SD Card Information</h3>";
@@ -6812,7 +7839,22 @@ void handleSDCARD_SYSTEMLOG() {
     htmlContent += "<p>System log file is empty.</p>";
   } else {
     for (uint8_t i = 0; i < lineCount; ++i) {
-      htmlContent += "<div class=\"log-entry\">" + htmlEscapeText(lines[i]) + "</div>";
+      // Lines are "utcUnix|description|code" (UTC on disk). Convert time for display.
+      String display = lines[i];
+      const int p1 = display.indexOf('|');
+      if (p1 > 0) {
+        String tsField = display.substring(0, p1);
+        bool allDigits = tsField.length() > 0;
+        for (int c = 0; c < (int)tsField.length() && allDigits; ++c) {
+          if (tsField.charAt(c) < '0' || tsField.charAt(c) > '9') allDigits = false;
+        }
+        if (allDigits) {
+          const uint32_t utcTs = (uint32_t)strtoul(tsField.c_str(), nullptr, 10);
+          const String localTs = utcTs ? String(dateifyLocal(utcTs, "yyyy-mm-dd hh:nn:ss")) : String("???");
+          display = localTs + display.substring(p1);
+        }
+      }
+      htmlContent += "<div class=\"log-entry\">" + htmlEscapeText(display) + "</div>";
     }
     htmlContent += "<p><strong>Entries shown: " + String(lineCount) + "</strong></p>";
   }
@@ -6857,7 +7899,7 @@ void handleERROR_LOG() {
     if (readErrorFromSD(LASTERROR, entryCount)) {
       entryCount++;
       htmlContent += "<div class=\"error-entry\">";
-      htmlContent += "<span class=\"error-time\">" + (String) dateify(LASTERROR.errorTime) + "</span><br>";
+      htmlContent += "<span class=\"error-time\">" + (String) dateifyLocal(LASTERROR.errorTime) + "</span><br>";
       htmlContent += "<span class=\"error-code\">Error Code: " + String(LASTERROR.errorCode) + "</span><br>";
       htmlContent += "<div class=\"error-message\">" + (String) LASTERROR.errorMessage + "</div>";
       htmlContent += "</div>";      
@@ -6890,9 +7932,6 @@ void handleREBOOT_DEBUG() {
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader("Reboot Debug");
-
-  WEBHTML = WEBHTML + "<body>";
-  
   // Display reboot debug information
   WEBHTML = WEBHTML + "<div style=\"margin: 20px 0; padding: 20px; background-color: #f5f5f5; border-radius: 8px;\">";
   WEBHTML = WEBHTML + "<pre style=\"font-family: monospace; white-space: pre-wrap;\">";
@@ -7285,7 +8324,7 @@ static void incPingCounter(uint8_t& counter) {
 
 static void noteDevicePingAttempt(ArborysDevType* device, const char* channel, bool success) {
   if (!device) return;
-  if (strcmp(channel, "ESPNow") == 0) {
+  if (strcmp(channel, "ArborysMesh") == 0 || strcmp(channel, "ESPNow") == 0) {
     incPingCounter(device->ping_att_ESPNow);
     if (success) incPingCounter(device->ping_success_ESPNow);
   } else if (strcmp(channel, "UDP") == 0) {
@@ -7304,15 +8343,16 @@ static bool performDeviceViewerPing(ArborysDevType* device, const String& protoc
   String proto = protocol;
   proto.toLowerCase();
 
-  if (proto == "esplan") {
-    protocolLabel = "ESPLAN";
-    bool ok = sendLANBlockingPing(device, 1, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
-    noteDevicePingAttempt(device, "ESPNow", ok);
+  if (proto == "esplan" || proto == "arborysmesh") {
+    protocolLabel = "ArborysMesh";
+    bool ok = meshBlockingAckCheck(device, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
+    noteDevicePingAttempt(device, "ArborysMesh", ok);
     return ok;
   }
   if (proto == "udplan") {
-    protocolLabel = "UDPLAN";
-    bool ok = sendLANBlockingPing(device, 2, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
+    protocolLabel = "UDP";
+    // Same mesh ACK_REQ; UDP twin used when espNowFailed inside mesh stack
+    bool ok = meshBlockingAckCheck(device, DEVICE_VIEWER_PING_TIMEOUT_MS, &rttMs);
     noteDevicePingAttempt(device, "UDP", ok);
     return ok;
   }
@@ -7342,7 +8382,6 @@ static bool performDeviceViewerPing(ArborysDevType* device, const String& protoc
 // Every ~10 minutes: ping each remote device via ESPNow and UDP; HTTP only if both fail.
 // Processes one device per call so the main loop is not blocked for long.
 void serviceDeviceConnectivityPings(bool startCycle) {
-  static constexpr uint16_t METRICS_LAN_PING_MS = ESPNOW_BLOCKING_PING_DEFAULT_MS;
   static constexpr uint16_t METRICS_HTTP_PING_MS = 2000;
   static int16_t s_pingDevIndex = -1; // -1 = idle
 
@@ -7361,31 +8400,78 @@ void serviceDeviceConnectivityPings(bool startCycle) {
     if (!device || !device->IsSet) continue;
 
     esp_task_wdt_reset();
-    bool espOk = sendLANBlockingPing(device, 1, METRICS_LAN_PING_MS, nullptr);
-    noteDevicePingAttempt(device, "ESPNow", espOk);
+    bool espOk = meshBlockingAckCheck(device, meshParams().ackTimeoutMs, nullptr);
+    noteDevicePingAttempt(device, "ArborysMesh", espOk);
 
-    esp_task_wdt_reset();
-    bool udpOk = sendLANBlockingPing(device, 2, METRICS_LAN_PING_MS, nullptr);
-    noteDevicePingAttempt(device, "UDP", udpOk);
-
-    if (!espOk && !udpOk) {
+    if (!espOk) {
       esp_task_wdt_reset();
       bool httpOk = sendBlockingJsonPing(device, true, false, METRICS_HTTP_PING_MS, nullptr);
       noteDevicePingAttempt(device, "HTTP", httpOk);
     }
 
     SerialPrint("Connectivity ping " + String(device->devName) +
-      " ESPNow=" + String(espOk ? "ok" : "fail") +
-      " UDP=" + String(udpOk ? "ok" : "fail") +
-      ((!espOk && !udpOk) ? " HTTP=fallback" : ""), true);
+      " ArborysMesh=" + String(espOk ? "ok" : "fail"), true);
     return; // one device per call
   }
 
   s_pingDevIndex = -1;
 }
 
+static bool sendJsonViaPreferredHttp(IPAddress ip, const char* rawJson, const char* msgType, uint16_t timeoutMs);
+
 #if _IS_SERVER_HUB
-// Hub: request data from expired peripherals. One eligible device per call (no delayWithNetwork).
+// Hub probe before the expired label. One network attempt per call.
+static constexpr uint32_t EXPIRY_ACK_WAIT_SEC = 20;
+
+struct ExpiryProbeState {
+  uint32_t lastProbeUnix;
+  uint8_t lastAck; // 0 none, 1 acked, 2 no ack
+};
+static ExpiryProbeState s_expiryProbe[NUMDEVICES];
+
+static bool deviceHasSensorPastExpiry(int16_t devIndex) {
+  for (int16_t si = 0; si < NUMSENSORS; ++si) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+    if (!S || !S->IsSet || S->deviceIndex != devIndex) continue;
+    if (Sensors.isSensorPastExpiryThreshold(si)) return true;
+  }
+  return false;
+}
+
+static void labelPastThresholdSensorsExpired(int16_t devIndex) {
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
+  if (!device) return;
+  bool any = false;
+  for (int16_t si = 0; si < NUMSENSORS; ++si) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+    if (!S || !S->IsSet || S->deviceIndex != devIndex) continue;
+    if (!Sensors.isSensorPastExpiryThreshold(si)) {
+      S->expired = false;
+      continue;
+    }
+    if (!S->expired && Sensors.isSensorFlagBitUsed(si, 7) && I.isExpired < 255) I.isExpired++;
+    S->expired = true;
+    any = true;
+  }
+  if (any) device->expired = true;
+}
+
+static bool sendExpiredProbe(ArborysDevType* device) {
+  const bool haveWifi = wifiReadyForNetwork() && device->IP != IPAddress(0, 0, 0, 0);
+  SerialPrint("snsReqExpired to " + String(device->devName) + " via " + String(haveWifi ? "HTTP" : "ArborysMesh"), true);
+  device->dataSent = utcNow();
+  if (haveWifi) {
+    char jsonBuffer[512];
+    jsonBuffer[0] = '\0';
+    JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), false, -1, true);
+    if (jsonBuffer[0] == '\0') return false;
+    esp_task_wdt_reset();
+    return sendJsonViaPreferredHttp(device->IP, jsonBuffer, "snsReqExpired", 2500);
+  }
+  esp_task_wdt_reset();
+  return meshSendSnsReqExpired(device, 2000);
+}
+
 void serviceExpiredDeviceDataRequests(bool startCycle) {
   static int16_t s_scanIndex = -1; // -1 = idle
   #ifdef _USE_HEADER_INFO_ALERT
@@ -7397,17 +8483,43 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
   }
   if (s_scanIndex < 0) return;
 
+  const int16_t myIndex = Sensors.findMyDeviceIndex();
+  const uint32_t now = (uint32_t)utcNow();
+
   while (s_scanIndex < NUMDEVICES) {
     int16_t di = s_scanIndex++;
+    if (di == myIndex) continue;
     ArborysDevType* device = Sensors.getDeviceByDevIndex(di);
-    if (!device || !device->IsSet || !device->expired) continue;
-    if (device->devType >= 100) continue; // don't request from servers
-    if (device->dataSent > I.currentTime - 120) continue; // recently requested
-    if (Sensors.countSensors(-1, Sensors.findDevice(device->MAC)) == 0) continue;
+    if (!device || !device->IsSet) continue;
+    if (IS_SERVER_DEVICE_TYPE(device->devType)) continue;
+    if (bitRead(device->Flags, 2)) continue; // low power: labeled on the clock, not probed
+    if (Sensors.countSensors(-1, di) == 0) continue;
+
+    if (!deviceHasSensorPastExpiry(di)) {
+      for (int16_t si = 0; si < NUMSENSORS; ++si) {
+        ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+        if (!S || !S->IsSet || S->deviceIndex != di) continue;
+        S->expired = false;
+      }
+      device->expired = false;
+      s_expiryProbe[di].lastProbeUnix = 0;
+      s_expiryProbe[di].lastAck = 0;
+      continue;
+    }
+
+    const uint32_t gap = (device->SendingInt ? device->SendingInt : 300u) * 2u;
+    const bool probed = s_expiryProbe[di].lastProbeUnix != 0;
+    const bool ackWaitElapsed = probed && now >= s_expiryProbe[di].lastProbeUnix + EXPIRY_ACK_WAIT_SEC;
+    if (s_expiryProbe[di].lastAck == 1 && ackWaitElapsed) {
+      // Ack arrived and the readings still did not.
+      labelPastThresholdSensorsExpired(di);
+    }
+
+    const bool gapElapsed = !probed || now > s_expiryProbe[di].lastProbeUnix + gap;
+    if (!gapElapsed) continue;
 
     #ifdef _USE_HEADER_INFO_ALERT
     {
-      // Request is for all sensors on this device (-1 below); show device name.
       char name10[11] = "";
       strncpy(name10, device->devName, 10);
       name10[10] = '\0';
@@ -7418,18 +8530,10 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
     }
     #endif
 
-    const bool useUdp = deviceUdpPingRateAbove50(device);
-    SerialPrint("Sensor expired: data request to " + String(device->devName) +
-        " via " + String(useUdp ? "UDP" : "HTTP/HTTPS") +
-        " (UDP rate " + String(udpPingSuccessRatePercent(device)) + "%)", true);
-
-    sendMSG_DataRequest(device, -1, !useUdp);
-
-    #ifdef _USESUPABASE
-    // After LAN attempt: cloud fallback at 2×/3×/… SendingInt for expired sensors
-    supabaseHubPollExpiredAfterLan(device);
-    #endif
-
+    const bool acked = sendExpiredProbe(device);
+    s_expiryProbe[di].lastProbeUnix = now;
+    s_expiryProbe[di].lastAck = acked ? 1 : 2;
+    if (!acked) labelPastThresholdSensorsExpired(di);
     return; // one device per call
   }
 
@@ -7464,15 +8568,57 @@ static void appendDeviceViewerPingStatus() {
   }
 }
 
+#if _IS_SERVER_HUB
+static void appendDeviceViewerLimitsStatus() {
+  if (!server.hasArg("limits")) return;
+
+  const String status = server.arg("limits");
+  const String snsName = server.hasArg("limitsensor") ? server.arg("limitsensor") : "sensor";
+  if (status == "success") {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<strong>Success:</strong> Limit and timing settings were received by " + snsName + ".";
+    WEBHTML = WEBHTML + "</div>";
+  } else if (status == "failed") {
+    WEBHTML = WEBHTML + "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+    WEBHTML = WEBHTML + "<strong>Failed:</strong> Limit and timing settings were not received by " + snsName + ".";
+    if (server.hasArg("limiterr")) {
+      WEBHTML = WEBHTML + " (" + server.arg("limiterr") + ")";
+    }
+    WEBHTML = WEBHTML + "</div>";
+  }
+}
+#endif
+
+static void appendDeviceIndexOptions(int16_t selectedIndex) {
+  bool deviceFlagged[NUMDEVICES];
+  bool deviceExpired[NUMDEVICES];
+  collectDeviceViewerNameMarks(deviceFlagged, deviceExpired);
+  for (int16_t di = 0; di < NUMDEVICES; di++) {
+    if (!Sensors.isDeviceInit(di)) continue;
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d) continue;
+    String label = formatDeviceViewerName(d, deviceFlagged[di], deviceExpired[di], true);
+    WEBHTML = WEBHTML + "<option value=\"" + String(di) + "\"";
+    if (di == selectedIndex) WEBHTML = WEBHTML + " selected";
+    WEBHTML = WEBHTML + ">" + label + "</option>";
+    serverTextFlush(false);
+  }
+}
+
+static void appendRemoteDevicePingLinks() {
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=arborysmesh\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">ArborysMesh</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udplan\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDPLAN</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udp\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDP</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=http\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTP</a> ";
+  WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=https\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #009688; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTPS</a>";
+}
+
 void renderDeviceViewerPage() {
     WEBHTML = "";
     serverTextHeader("Main");
     serverTextStreamBegin(200, true);
-
-    WEBHTML = WEBHTML + "<body>";
-
     appendStandardPageNav();
-    serverTextFlush();
+    serverTextFlush(true);
 
     // Check for status messages from delete operations
     if (server.hasArg("delete")) {
@@ -7506,11 +8652,14 @@ void renderDeviceViewerPage() {
             WEBHTML = WEBHTML + "</div>";
         }
     }
+    serverTextFlush(true);
 
     #ifndef _USEGSHEET
+    #if _IS_SERVER_HUB
     if (Sensors.getNumDevices() > 0) {
         appendAllDevicesFirmwareTable();
     }
+    #endif
     #endif
 
     // Reset to first device if no devices exist
@@ -7568,18 +8717,7 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<form method=\"GET\" action=\"/\" style=\"margin: 0;\">";
     WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\">Device </span>";
     WEBHTML = WEBHTML + "<select name=\"devIndex\" onchange=\"this.form.submit()\" style=\"font-size: 1em; padding: 4px 8px; margin: 0 4px; max-width: 70%;\">";
-    bool deviceFlagged[NUMDEVICES];
-    bool deviceExpired[NUMDEVICES];
-    collectDeviceViewerNameMarks(deviceFlagged, deviceExpired);
-    for (int16_t di = 0; di < NUMDEVICES; di++) {
-      if (!Sensors.isDeviceInit(di)) continue;
-      ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
-      if (!d) continue;
-      String label = formatDeviceViewerName(d, deviceFlagged[di], deviceExpired[di], true);
-      WEBHTML = WEBHTML + "<option value=\"" + String(di) + "\"";
-      if (di == CURRENT_DEVICEVIEWER_DEVINDEX) WEBHTML = WEBHTML + " selected";
-      WEBHTML = WEBHTML + ">" + label + "</option>";
-    }
+    appendDeviceIndexOptions(CURRENT_DEVICEVIEWER_DEVINDEX);
     WEBHTML = WEBHTML + "</select>";
     WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> of " + String(Sensors.getNumDevices()) + "</span>";
     if (isThisDevice) WEBHTML = WEBHTML + "<span style=\"font-size: 1.17em; font-weight: bold;\"> (this device)</span>";
@@ -7588,37 +8726,51 @@ void renderDeviceViewerPage() {
     WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PREV\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #FF9800; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">Prev</a> ";
     WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_NEXT\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">Next</a> ";
     WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_DELETE\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #f44336; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\" onclick=\"return confirm('Are you sure you want to delete this device and all its sensors? This action cannot be undone.');\">Delete</a> ";
-    if (!isThisDevice) {
-      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=esplan\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #9C27B0; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">ESPLAN</a> ";
-      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udplan\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #673AB7; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDPLAN</a> ";
-      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=udp\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #3F51B5; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">UDP</a> ";
-      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=http\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTP</a> ";
-      WEBHTML = WEBHTML + "<a href=\"/DEVICEVIEWER_PING?protocol=https\" style=\"display: inline-block; margin: 3px 2px; padding: 6px 10px; background-color: #009688; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;\">HTTPS</a>";
-    }
+    if (!isThisDevice) appendRemoteDevicePingLinks();
     WEBHTML = WEBHTML + "</div>";
     WEBHTML = WEBHTML + "</div>";
+    serverTextFlush(true);
 
     appendDeviceViewerPingStatus();
+    #if _IS_SERVER_HUB
+    appendDeviceViewerLimitsStatus();
+    #endif
+    serverTextFlush(true);
 
     WEBHTML = WEBHTML + "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
     WEBHTML = WEBHTML + "<h4>Device Information</h4>";
     WEBHTML = WEBHTML + "<table style=\"width: 100%; border-collapse: collapse;\">";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold; width: 30%;\">Device Name:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devName) +  "</td></tr>";
+    serverTextFlush(false);
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">MAC Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(MACToString(device->MAC)) + "</td></tr>";
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">IP Address:</td><td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + device->IP.toString() + "\" target=\"_blank\">" + device->IP.toString() + "</a></td></tr>";
+    serverTextFlush(false);
     WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Device Type:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->devType) + "</td></tr>";
+#if _IS_SERVER_HUB
     appendDeviceFirmwareInfoRow(device);
+    serverTextFlush(false);
     if (isThisDevice) {
-      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(I.ALIVESINCE ? dateify(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(I.ALIVESINCE ? dateifyLocal(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss") : "???") + "</td></tr>";
     } else {
-      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Sent:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataSent ? dateify(device->dataSent, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
-      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Received:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataReceived ? dateify(device->dataReceived, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Sent:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataSent ? dateifyLocal(device->dataSent, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
+      serverTextFlush(false);
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Last Time Data Received:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->dataReceived ? dateifyLocal(device->dataReceived, "mm/dd/yyyy hh:nn:ss") : "Never") + "</td></tr>";
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Sending Interval:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->SendingInt) + " seconds</td></tr>";
+      serverTextFlush(false);
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Status:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->expired ? "Expired" : "Active") + "</td></tr>";
-      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ESPNow Pings (today):</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->ping_success_ESPNow) + " / " + String(device->ping_att_ESPNow) + " success / attempts</td></tr>";
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">ArborysMesh Pings (today):</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->ping_success_ESPNow) + " / " + String(device->ping_att_ESPNow) + " success / attempts</td></tr>";
+      serverTextFlush(false);
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">UDP Pings (today):</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->ping_success_UDP) + " / " + String(device->ping_att_UDP) + " success / attempts</td></tr>";
       WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">HTTP Pings (today):</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(device->ping_success_HTTP) + " / " + String(device->ping_att_HTTP) + " success / attempts</td></tr>";
     }
+#else
+    if (isThisDevice && I.ALIVESINCE) {
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Alive Since:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(dateifyLocal(I.ALIVESINCE, "mm/dd/yyyy hh:nn:ss")) + "</td></tr>";
+    }
+    if (!isThisDevice) {
+      WEBHTML = WEBHTML + "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">Preferred Communications:</td><td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(preferredCommunicationsLabel()) + "</td></tr>";
+    }
+#endif
     WEBHTML = WEBHTML + "</table>";
     WEBHTML = WEBHTML + "</div>";
     serverTextFlush(true);
@@ -7634,7 +8786,7 @@ void renderDeviceViewerPage() {
 
     WEBHTML = WEBHTML + "<div style=\"background-color: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #2196f3;\">";
     WEBHTML = WEBHTML + "<h4>Sensors (" + String(sensorCount) + " total)</h4>";
-    serverTextFlush();
+    serverTextFlush(true);
 
     if (sensorCount == 0) {
         WEBHTML = WEBHTML + "<p>No sensors found for this device.</p>";
@@ -7642,9 +8794,11 @@ void renderDeviceViewerPage() {
         WEBHTML = WEBHTML + "<table id=\"DeviceSensors\" style=\"width: 100%; border-collapse: collapse; margin-top: 10px;\">";
         WEBHTML = WEBHTML + "<tr style=\"background-color: #2196f3; color: white;\">";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Sensor</th>";
+#if _IS_SERVER_HUB
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">ID</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Type Name</th>";
+#endif
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Value</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Last Logged</th>";
         #if _IS_SERVER_HUB
@@ -7665,8 +8819,10 @@ void renderDeviceViewerPage() {
           WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Critical</th>";
         }
         #endif
+#if _IS_SERVER_HUB
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Avg</th>";
         WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Plot Raw</th>";
+#endif
         #if _HAS_LOCAL_SENSORS
         if (isThisDevice) {
           WEBHTML = WEBHTML + "<th style=\"padding: 8px; border: 1px solid #ddd; text-align: left;\">Config</th>";
@@ -7682,6 +8838,7 @@ void renderDeviceViewerPage() {
         }
         #endif
         WEBHTML = WEBHTML + "</tr>";
+        serverTextFlush(true);
 
         for (int16_t i = 0; i < NUMSENSORS; i++) {
             ArborysSnsType* sensor = Sensors.snsIndexToPointer(i);
@@ -7981,8 +9138,8 @@ static String registerDeviceFromAckJson(const String& ackJson, IPAddress targetI
   }
 
 #if !_IS_SERVER_HUB
-  // Peripherals only store servers (devType >= 100); helloPing was still sent so remote can register us.
-  if (outDevType < 100) {
+  // Peripherals only store servers (devType 100�150); helloPing was still sent so remote can register us.
+  if (IS_PERIPHERAL_DEVICE_TYPE(outDevType)) {
     return "no storage for peripherals";
   }
 #endif
@@ -8011,7 +9168,6 @@ static void renderRegisterDevicePage(const String& ipFieldValue,
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader("Register Device");
-  WEBHTML = WEBHTML + "<body>";
   appendStandardPageNav();
 
   WEBHTML = WEBHTML + "<form method=\"POST\" action=\"/REGISTER_DEVICE\" style=\"max-width: 520px; margin: 20px 0;\">";
@@ -8123,8 +9279,12 @@ void setupServerRoutes() {
     server.on("/REBOOT", handleReboot);
     
     server.on("/STATUS", handleSTATUS);
+    server.on("/MESH_SETTINGS", HTTP_GET, handleMESH_SETTINGS);
+    server.on("/MESH_SETTINGS", HTTP_POST, handleMESH_SETTINGS);
+#if _IS_SERVER_HUB
     server.on("/RETRIEVEDATA", handleRETRIEVEDATA);
     server.on("/RETRIEVEDATA_MOVINGAVERAGE", handleRETRIEVEDATA_MOVINGAVERAGE);
+#endif
     
     // Configuration routes
     server.on("/CONFIG", HTTP_GET, handleCONFIG);
@@ -8133,6 +9293,7 @@ void setupServerRoutes() {
     server.on("/CONFIG_OTA_SWITCH", HTTP_POST, handleCONFIG_OTA_SWITCH);
     #if _IS_SERVER_HUB
     server.on("/SENSOR_OVERRIDE_UPDATE", HTTP_POST, handleSENSOR_OVERRIDE_UPDATE);
+    server.on("/SENSOR_LIMITS_UPDATE", HTTP_POST, handleSENSOR_LIMITS_UPDATE);
     #endif
     
     #if _HAS_LOCAL_SENSORS
@@ -8141,14 +9302,18 @@ void setupServerRoutes() {
     server.on("/SENSOR_READ_SEND_NOW", HTTP_POST, handleSENSOR_READ_SEND_NOW);
     server.on("/SENSOR_SETUP", HTTP_GET, handleSensorSetup);
     server.on("/SNS_CALIBRATION", HTTP_POST, handleSNS_CALIBRATION);
+    server.on("/SWITCHSTATE", HTTP_GET, handleSWITCHSTATE);
+    server.on("/SWITCHSTATE", HTTP_POST, handleSWITCHSTATE_POST);
     #endif
     
+    #ifdef _USEGSHEET
     // Google Sheets routes
     server.on("/GSHEET", HTTP_GET, handleGSHEET);
     server.on("/GSHEET", HTTP_POST, handleGSHEET_POST);
     server.on("/GSHEET_UPLOAD_NOW", HTTP_POST, handleGSHEET_UPLOAD_NOW);
     server.on("/GSHEET_SHARE_ALL", HTTP_POST, handleGSHEET_SHARE_ALL);
     server.on("/GSHEET_DELETE_ALL", HTTP_POST, handleGSHEET_DELETE_ALL);
+    #endif
     
     // LAN broadcast routes (presence / alive)
     server.on("/REQUEST_BROADCAST", HTTP_POST, handleREQUEST_BROADCAST);
@@ -8168,39 +9333,42 @@ void setupServerRoutes() {
     server.on("/api/complete-setup", HTTP_POST, handleApiCompleteSetup);
     server.on("/api/complete-setup", HTTP_GET, handleApiCompleteSetup);
     server.on("/api/SNS_READ_NOW", HTTP_GET, handleSNS_READ_NOW);
-    #ifdef _USESUPABASE
-    server.on("/api/supabase/claim", HTTP_POST, apiSupabaseClaim);
-    server.on("/api/supabase/sites", HTTP_GET, apiSupabaseSites);
-    server.on("/api/supabase/site", HTTP_POST, apiSupabaseSite);
+    #if _SUPABASE_RUNTIME
+    server.on("/api/arborysnet/claim", HTTP_POST, apiSupabaseClaim);
+    server.on("/api/arborysnet/quit", HTTP_POST, apiSupabaseQuit);
+    server.on("/api/arborysnet/sites", HTTP_GET, apiSupabaseSites);
+    server.on("/api/arborysnet/site", HTTP_POST, apiSupabaseSite);
+    server.on("/api/arborysnet/upload", HTTP_POST, apiSupabaseUploadToggle);
     #if _IS_SERVER_HUB
-    server.on("/api/supabase/site/create", HTTP_POST, apiSupabaseSiteCreate);
-    server.on("/api/supabase/site/delete", HTTP_POST, apiSupabaseSiteDelete);
-    server.on("/api/supabase/inventory", HTTP_POST, apiSupabaseInventory);
-    server.on("/api/supabase/inventory", HTTP_GET, apiSupabaseInventory);
+    server.on("/api/arborysnet/site/create", HTTP_POST, apiSupabaseSiteCreate);
+    server.on("/api/arborysnet/site/delete", HTTP_POST, apiSupabaseSiteDelete);
+    server.on("/api/arborysnet/inventory", HTTP_POST, apiSupabaseInventory);
+    server.on("/api/arborysnet/inventory", HTTP_GET, apiSupabaseInventory);
     #endif
     #endif
             
+    #ifdef _USEWEATHER
     // Weather routes
     server.on("/WEATHER", HTTP_GET, handleWeather);
     server.on("/WEATHER", HTTP_POST, handleWeather_POST);
     server.on("/WeatherRefresh", HTTP_POST, handleWeatherRefresh);
     server.on("/WeatherZip", HTTP_POST, handleWeatherZip);
     server.on("/WeatherAddress", HTTP_POST, handleWeatherAddress);
+    #endif
     
+    #ifdef _USESDCARD
     // SD Card routes
     server.on("/SDCARD", HTTP_GET, handleSDCARD);
     server.on("/SDCARD", HTTP_POST, handleSDCARD_DIR);
     server.on("/SDCARD_DOWNLOAD", HTTP_GET, handleSDCARD_DOWNLOAD);
-    #ifdef _USESDCARD
     server.on("/SDCARD_UPLOAD", HTTP_POST, handleSDCARD_UPLOAD, handleSDCARD_UPLOADFile);
-    #endif
     server.on("/SDCARD_DELETE_SENSORS", HTTP_POST, handleSDCARD_DELETE_SENSORS);
     server.on("/SDCARD_STORE_DEVICES", HTTP_POST, handleSDCARD_STORE_DEVICES);
     server.on("/SDCARD_SAVE_SCREENFLAGS", HTTP_POST, handleSDCARD_SAVE_SCREENFLAGS);
     server.on("/SDCARD_SAVE_WEATHERDATA", HTTP_POST, handleSDCARD_SAVE_WEATHERDATA);
     server.on("/SDCARD_SYSTEMLOG", HTTP_GET, handleSDCARD_SYSTEMLOG);
     server.on("/ERROR_LOG", HTTP_GET, handleERROR_LOG);
-    server.on("/REBOOT_DEBUG", HTTP_GET, handleREBOOT_DEBUG);
+    #endif
     
     // Device viewer routes
     server.on("/DEVICEVIEWER", HTTP_GET, handleDeviceViewer);
@@ -8239,7 +9407,7 @@ String JSONbuilder_sensorData(ArborysSnsType* S) {
 }
 
 #if _HAS_LOCAL_SENSORS
-/** Mirror Prefs alarm band onto a local sensor (Prefs remain canonical on peripherals). */
+/** Mirror Prefs alarm band and poll/send intervals onto a local sensor (Prefs remain canonical on peripherals). */
 static void syncLocalSensorLimitsFromPrefs(int16_t snsIndex) {
   if (Sensors.isSensorIndexInvalid(snsIndex, false) != 0) return;
   if (!Sensors.isMySensor(snsIndex)) return;
@@ -8249,6 +9417,8 @@ static void syncLocalSensorLimitsFromPrefs(int16_t snsIndex) {
   if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) return;
   S->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefsIndex];
   S->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefsIndex];
+  S->PollingInt = Prefs.SNS_INTERVAL_POLL[prefsIndex];
+  S->SendingInt = Prefs.SNS_INTERVAL_SEND[prefsIndex];
 }
 #endif
 
@@ -8272,6 +9442,8 @@ String JSONbuilder_sensorObject(ArborysSnsType* S) {
   sensorJSON += S->timeRead;
   sensorJSON += ",\"sendingInt\":";
   sensorJSON += S->SendingInt;
+  sensorJSON += ",\"pollingInt\":";
+  sensorJSON += S->PollingInt;
   sensorJSON += ",\"flags\":";
   sensorJSON += S->Flags;
   sensorJSON += ",\"limitHigh\":";
@@ -8355,7 +9527,12 @@ bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* 
   }
 
   String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP);
-  if (tempJSON.isEmpty() || tempJSON.length() >= jsonBufferSize) {
+  if (tempJSON.isEmpty()) {
+    SerialPrint("JSONbuilder_sensorMSG_list: buffer empty", true);
+    storeError("JSONbuilder_sensorMSG_list: buffer empty", ERROR_JSON_PARSE, true);
+    return false;
+  }
+  if (tempJSON.length() >= jsonBufferSize) {
     SerialPrint("JSONbuilder_sensorMSG_list: Buffer too small for JSON payload", true);
     storeError("JSONbuilder_sensorMSG_list: Buffer too small", ERROR_JSON_PARSE, true);
     return false;
@@ -8393,6 +9570,11 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool f
 
   if (forHTTP) JSONbuilder_encodeHTTP(tempJSON);
 
+  if (tempJSON.isEmpty()) {
+    SerialPrint("JSONbuilder_sensorMSG_all: buffer empty", true);
+    storeError("JSONbuilder_sensorMSG_all: buffer empty", ERROR_JSON_PARSE, true);
+    return;
+  }
   if (tempJSON.length() >= jsonBufferSize) {
     SerialPrint("JSONbuilder_sensorMSG_all: Buffer too small for JSON payload", true);
     storeError("JSONbuilder_sensorMSG_all: Buffer too small", ERROR_JSON_PARSE, true);
@@ -8402,7 +9584,7 @@ void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool f
   snprintf(jsonBuffer, jsonBufferSize, "%s", tempJSON.c_str());
 }
 
-void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, int16_t snsIndex) {
+void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, int16_t snsIndex, bool expiredRequest) {
   ArborysDevType* device = Sensors.getDeviceByMAC(ESP.getEfuseMac());
   if (!device) {
     SerialPrint("JSONbuilder_DataRequestMSG: My Device not found",true);
@@ -8427,7 +9609,8 @@ void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool 
     snsID = -1;
   }
 
-  String tempJSON = "{\"msgType\":\"sendSensorDataNow\",\"snsType\":" + String(snsType) + ",\"snsID\":" + String(snsID) + "," + JSONbuilder_device(device) + "}";
+  const char* msgType = expiredRequest ? "snsReqExpired" : "sendSensorDataNow";
+  String tempJSON = "{\"msgType\":\"" + String(msgType) + "\",\"snsType\":" + String(snsType) + ",\"snsID\":" + String(snsID) + "," + JSONbuilder_device(device) + "}";
 
   if (forHTTP) JSONbuilder_encodeHTTP(tempJSON);
   snprintf(jsonBuffer, jsonBufferSize, "%s", tempJSON.c_str());
@@ -8458,6 +9641,174 @@ uint16_t JSONbuilder_encodeHTTP(String& jsonBuffer) {
 }
 
 //----------------------------- json handlers for receiving data -----------------------------
+int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
+
+static void formatMeshParamsJson(char* out, size_t outLen, const ArborysMeshParams& p, int ok) {
+  snprintf(out, outLen,
+      "{\"msgType\":\"meshGet\",\"ok\":%d,"
+      "\"ttlN\":%u,\"ttlC\":%u,\"burst\":%u,"
+      "\"gapMin\":%u,\"gapMax\":%u,\"supp\":%u,"
+      "\"ackMs\":%u,\"ackR\":%u,"
+      "\"rssiW\":%d,\"rssiS\":%d,"
+      "\"dlyW\":%u,\"dlyS\":%u,\"jitter\":%u,"
+      "\"critMin\":%u,\"critMax\":%u,\"reorder\":%u}",
+      ok,
+      (unsigned)p.ttlNormal, (unsigned)p.ttlCritical, (unsigned)p.criticalBurstCount,
+      (unsigned)p.criticalBurstGapMinMs, (unsigned)p.criticalBurstGapMaxMs, (unsigned)p.relaySuppressCount,
+      (unsigned)p.ackTimeoutMs, (unsigned)p.ackRetries,
+      (int)p.relayRssiWeakDbm, (int)p.relayRssiStrongDbm,
+      (unsigned)p.relayDelayWeakMs, (unsigned)p.relayDelayStrongMs, (unsigned)p.relayJitterMs,
+      (unsigned)p.criticalRelayMinMs, (unsigned)p.criticalRelayMaxMs, (unsigned)p.originReorderWindow);
+}
+
+static bool jsonFieldInRange(JsonObject o, const char* key, long lo, long hi, long& out) {
+  if (!o[key].is<int>()) return false;
+  long v = o[key].as<int>();
+  if (v < lo || v > hi) return false;
+  out = v;
+  return true;
+}
+
+static bool meshParamsFromJson(JsonObject o, ArborysMeshParams& p) {
+  long ttlN, ttlC, burst, gapMin, gapMax, supp, ackMs, ackR;
+  long rssiW, rssiS, dlyW, dlyS, jitter, critMin, critMax, reorder;
+  if (!jsonFieldInRange(o, "ttlN", 1, 15, ttlN)) return false;
+  if (!jsonFieldInRange(o, "ttlC", 1, 15, ttlC)) return false;
+  if (!jsonFieldInRange(o, "burst", 1, 8, burst)) return false;
+  if (!jsonFieldInRange(o, "gapMin", 0, 1000, gapMin)) return false;
+  if (!jsonFieldInRange(o, "gapMax", 0, 1000, gapMax)) return false;
+  if (!jsonFieldInRange(o, "supp", 1, 255, supp)) return false;
+  if (!jsonFieldInRange(o, "ackMs", 50, 10000, ackMs)) return false;
+  if (!jsonFieldInRange(o, "ackR", 0, 8, ackR)) return false;
+  if (!jsonFieldInRange(o, "rssiW", -100, -20, rssiW)) return false;
+  if (!jsonFieldInRange(o, "rssiS", -100, -20, rssiS)) return false;
+  if (!jsonFieldInRange(o, "dlyW", 0, 5000, dlyW)) return false;
+  if (!jsonFieldInRange(o, "dlyS", 0, 5000, dlyS)) return false;
+  if (!jsonFieldInRange(o, "jitter", 0, 1000, jitter)) return false;
+  if (!jsonFieldInRange(o, "critMin", 0, 1000, critMin)) return false;
+  if (!jsonFieldInRange(o, "critMax", 0, 1000, critMax)) return false;
+  if (!jsonFieldInRange(o, "reorder", 1, 4096, reorder)) return false;
+  p.ttlNormal = (uint8_t)ttlN;
+  p.ttlCritical = (uint8_t)ttlC;
+  p.criticalBurstCount = (uint8_t)burst;
+  p.criticalBurstGapMinMs = (uint16_t)gapMin;
+  p.criticalBurstGapMaxMs = (uint16_t)gapMax;
+  p.relaySuppressCount = (uint8_t)supp;
+  p.ackTimeoutMs = (uint16_t)ackMs;
+  p.ackRetries = (uint8_t)ackR;
+  p.relayRssiWeakDbm = (int8_t)rssiW;
+  p.relayRssiStrongDbm = (int8_t)rssiS;
+  p.relayDelayWeakMs = (uint16_t)dlyW;
+  p.relayDelayStrongMs = (uint16_t)dlyS;
+  p.relayJitterMs = (uint16_t)jitter;
+  p.criticalRelayMinMs = (uint16_t)critMin;
+  p.criticalRelayMaxMs = (uint16_t)critMax;
+  p.originReorderWindow = (uint16_t)reorder;
+  return meshParamsInRange(p);
+}
+
+static void processJSONMessage_meshParams(JsonObject root, String& responseMsg, bool doSet) {
+  char json[480];
+  int ok = 1;
+  if (doSet) {
+    ArborysMeshParams incoming;
+    if (!meshParamsFromJson(root, incoming)) ok = 0;
+    else meshSetParams(incoming);
+  }
+  formatMeshParamsJson(json, sizeof(json), meshParams(), ok);
+  responseMsg = json;
+}
+
+int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg);
+
+static void processJSONMessage_ExpiredDataRequest(JsonObject root, String& responseMsg) {
+#ifdef _USELOWPOWER
+  (void)root;
+  responseMsg = "lowpower";
+  return;
+#else
+  int16_t my = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(my);
+  if (me && bitRead(me->Flags, 2)) {
+    responseMsg = "lowpower";
+    return;
+  }
+  int16_t senderIndex = processJSONMessage_addDevice(root, responseMsg);
+  uint64_t mac = 0;
+  if (senderIndex >= 0) {
+    ArborysDevType* sender = Sensors.getDeviceByDevIndex(senderIndex);
+    if (sender) mac = sender->MAC;
+  }
+  noteExpiredDataRequest(mac);
+  responseMsg = "OK";
+#endif
+}
+
+// Copy a JSON string into dest, dropping quotes and newlines so the log line stays one field.
+static void copyErrorField(char* dest, size_t destLen, const char* src) {
+  if (!dest || destLen == 0) return;
+  dest[0] = '\0';
+  if (!src) return;
+  size_t j = 0;
+  for (size_t i = 0; src[i] != '\0' && j + 1 < destLen; ++i) {
+    char c = src[i];
+    if (c == '"' || c == '\\' || c == '\n' || c == '\r') c = ' ';
+    dest[j++] = c;
+  }
+  dest[j] = '\0';
+}
+
+// Shorter of "dev snsName" and "MAC snsType.snsID". Type is the numeric error code.
+static void formatHubErrorMessage(char* out, size_t outLen, uint16_t code,
+    const char* dev, const char* sns, const char* mac, int snsType, int snsID, const char* detail) {
+  if (!out || outLen == 0) return;
+  char byName[72];
+  char byId[40];
+  if (sns && sns[0]) snprintf(byName, sizeof(byName), "%s %s", dev ? dev : "", sns);
+  else snprintf(byName, sizeof(byName), "%s", dev ? dev : "");
+  if (mac && mac[0] && snsType >= 0 && snsID >= 0) snprintf(byId, sizeof(byId), "%s %d.%d", mac, snsType, snsID);
+  else snprintf(byId, sizeof(byId), "%s", mac ? mac : "");
+
+  const char* source = byName;
+  if (byId[0] && (byName[0] == '\0' || strlen(byId) < strlen(byName))) source = byId;
+  if (!source[0]) source = "?";
+
+  if (detail && detail[0]) snprintf(out, outLen, "[%u] %s %s", (unsigned)code, source, detail);
+  else snprintf(out, outLen, "[%u] %s", (unsigned)code, source);
+}
+
+static void processJSONMessage_errorLog(JsonObject root, String& responseMsg) {
+#if !_IS_SERVER_HUB
+  (void)root;
+  responseMsg = "ignored";
+  return;
+#else
+  const uint16_t code = root["code"].is<int>() ? (uint16_t)root["code"].as<int>() : (uint16_t)ERROR_UNDEFINED;
+  char dev[31];
+  char sns[31];
+  char mac[17];
+  char detail[100];
+  copyErrorField(dev, sizeof(dev), root["dev"].as<const char*>());
+  copyErrorField(sns, sizeof(sns), root["sns"].as<const char*>());
+  copyErrorField(mac, sizeof(mac), root["mac"].as<const char*>());
+  copyErrorField(detail, sizeof(detail), root["detail"].as<const char*>());
+  const int snsType = root["snsType"].is<int>() ? root["snsType"].as<int>() : -1;
+  const int snsID = root["snsID"].is<int>() ? root["snsID"].as<int>() : -1;
+
+  char msg[100];
+  // A peripheral storeError text is already the log line. Other reports get type and source here.
+  if (detail[0] == '[') {
+    strncpy(msg, detail, sizeof(msg) - 1);
+    msg[sizeof(msg) - 1] = '\0';
+  } else {
+    formatHubErrorMessage(msg, sizeof(msg), code, dev, sns, mac, snsType, snsID, detail);
+  }
+  storeError(msg, (ERRORCODES)code, true);
+  SerialPrint(String("errorLog stored: ") + msg, true);
+  responseMsg = "OK";
+#endif
+}
+
 //json handlers for receiving data
 void processJSONMessage(String& postData, String& responseMsg) {
  //this is called when json data is received.
@@ -8492,12 +9843,21 @@ void processJSONMessage(String& postData, String& responseMsg) {
     //we have received a request to send a single sensor
     processJSONMessage_DataRequest(root, responseMsg);
   }
+  else if (msgType == "snsReqExpired") {
+    processJSONMessage_ExpiredDataRequest(root, responseMsg);
+  }
+  else if (msgType == "errorLog") {
+    processJSONMessage_errorLog(root, responseMsg);
+  }
   else if (msgType == "helloPing" || msgType == "ackPing") {
     processJSONMessage_ping(root, responseMsg);
   }
   else if (msgType == "setFlagsReq") {
     //we have received a sensor request
     processJSONMessage_setFlagsReq(root, responseMsg);
+  }
+  else if (msgType == "setLimits") {
+    processJSONMessage_setLimits(root, responseMsg);
   }
   else if (msgType == "FirmwareRequest") {
     processJSONMessage_FirmwareRequest(root, responseMsg);
@@ -8513,6 +9873,19 @@ void processJSONMessage(String& postData, String& responseMsg) {
   }
   else if (msgType == "alarmsReq") {
     processJSONMessage_alarmsReq(root, responseMsg);
+  }
+  else if (msgType == "sunReq") {
+    processJSONMessage_sunReq(root, responseMsg);
+  }
+  else if (msgType == "meshGet" || msgType == "meshSet") {
+    processJSONMessage_meshParams(root, responseMsg, msgType == "meshSet");
+  }
+  else if (msgType == "cloudAck") {
+#if _IS_SERVER_HUB
+    processJSONMessage_cloudAck(root, responseMsg);
+#else
+    responseMsg = "ignored";
+#endif
   }
   else {
     SerialPrint("Unknown message type: " + msgType,true);
@@ -8558,6 +9931,7 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
     }
     //register the device sending me the request
     senderIndex = Sensors.addDevice(devMAC, devIP, devName.c_str(), 0, 0, devType, &devFirmware);
+    noteServerHeard(devType);
   } else {
     SerialPrint("Missing senderDevice in JSON message", true);
     responseMsg = "Missing senderDevice in JSON message";
@@ -8788,6 +10162,210 @@ void processJSONMessage_setFlagsReq(JsonObject root, String& responseMsg) {
   return;
 }
 
+void processJSONMessage_setLimits(JsonObject root, String& responseMsg) {
+#if _HAS_LOCAL_SENSORS
+  processJSONMessage_addDevice(root, responseMsg);
+
+  if (!root.containsKey("toMAC")) {
+    responseMsg = "Limit set: Missing toMAC";
+    storeError("Limit set: Missing toMAC", ERROR_JSON_PARSE, true);
+    return;
+  }
+  uint64_t toMAC = 0;
+  if (!stringToUInt64(root["toMAC"].as<String>(), &toMAC, true) || toMAC == 0) {
+    responseMsg = "Limit set: Invalid toMAC";
+    storeError("Limit set: Invalid toMAC", ERROR_JSON_PARSE, true);
+    return;
+  }
+  if (toMAC != ESP.getEfuseMac()) {
+    responseMsg = "Limit set: Not my MAC address";
+    storeError("Limit set: Not my MAC address", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  if (!root.containsKey("snsType") || !root.containsKey("snsID")) {
+    responseMsg = "Limit set: Missing snsType or snsID";
+    storeError("Limit set: Missing snsType or snsID", ERROR_JSON_PARSE, true);
+    return;
+  }
+  if (!root.containsKey("limitHigh") || !root.containsKey("limitLow") ||
+      root["limitHigh"].isNull() || root["limitLow"].isNull()) {
+    responseMsg = "Limit set: Missing limitHigh or limitLow";
+    storeError("Limit set: Missing limitHigh or limitLow", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  const uint8_t snsType = root["snsType"].as<uint8_t>();
+  const uint8_t snsID = root["snsID"].as<uint8_t>();
+  float limitHigh = root["limitHigh"].as<float>();
+  float limitLow = root["limitLow"].as<float>();
+  if (isnan(limitHigh) || isnan(limitLow) || isinf(limitHigh) || isinf(limitLow)) {
+    responseMsg = "Limit set: Invalid limit values";
+    storeError("Limit set: Invalid limit values", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  const int16_t sensorIndex = Sensors.findSensor(toMAC, snsType, snsID);
+  if (Sensors.isSensorIndexInvalid(sensorIndex, false) != 0) {
+    responseMsg = "Limit set: Sensor not found";
+    storeError("Limit set: Sensor not found", ERROR_JSON_PARSE, true);
+    return;
+  }
+  ArborysSnsType* S = Sensors.snsIndexToPointer(sensorIndex);
+  if (!S || !Sensors.isMySensor(sensorIndex)) {
+    responseMsg = "Limit set: Sensor not found";
+    storeError("Limit set: Sensor not found", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  const int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(sensorIndex);
+  if (prefsIndex < 0 || prefsIndex >= _SENSORNUM) {
+    responseMsg = "Limit set: Prefs index not found";
+    storeError("Limit set: Prefs index not found", ERROR_JSON_PARSE, true);
+    return;
+  }
+
+  uint32_t pollingInt = 0;
+  uint32_t sendingInt = 0;
+  bool havePoll = false;
+  bool haveSend = false;
+  if (root.containsKey("pollingInt") && !root["pollingInt"].isNull()) {
+    pollingInt = root["pollingInt"].as<uint32_t>();
+    if (pollingInt < 1 || pollingInt > 65535) {
+      responseMsg = "Limit set: Invalid interval values";
+      storeError("Limit set: Invalid interval values", ERROR_JSON_PARSE, true);
+      return;
+    }
+    havePoll = true;
+  }
+  if (root.containsKey("sendingInt") && !root["sendingInt"].isNull()) {
+    sendingInt = root["sendingInt"].as<uint32_t>();
+    if (sendingInt > 65535) {
+      responseMsg = "Limit set: Invalid interval values";
+      storeError("Limit set: Invalid interval values", ERROR_JSON_PARSE, true);
+      return;
+    }
+    haveSend = true;
+  }
+
+  Prefs.SNS_LIMIT_MAX[prefsIndex] = limitHigh;
+  Prefs.SNS_LIMIT_MIN[prefsIndex] = limitLow;
+  if (S->snsType == 200 &&
+      normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefsIndex], Prefs.SNS_LIMIT_MIN[prefsIndex])) {
+    limitHigh = Prefs.SNS_LIMIT_MAX[prefsIndex];
+    limitLow = Prefs.SNS_LIMIT_MIN[prefsIndex];
+  }
+  if (havePoll) {
+    Prefs.SNS_INTERVAL_POLL[prefsIndex] = (uint16_t)pollingInt;
+    S->PollingInt = pollingInt;
+  }
+  if (haveSend) {
+    Prefs.SNS_INTERVAL_SEND[prefsIndex] = (uint16_t)sendingInt;
+    S->SendingInt = sendingInt;
+  }
+  Prefs.isUpToDate = false;
+
+  const uint8_t lastflag = S->Flags;
+  S->limitHigh = limitHigh;
+  S->limitLow = limitLow;
+  applyAlarmFlags(S, limitHigh, limitLow, lastflag);
+  I.isUpToDate = false;
+
+#ifdef _USE_HEADER_INFO_ALERT
+  showSensorLanMsgBanner(S->snsName);
+#endif
+
+  SerialPrint("Limit set: " + String(S->snsName) + " high=" + String(limitHigh, 4) +
+      " low=" + String(limitLow, 4) + " poll=" + String(S->PollingInt) +
+      " send=" + String(S->SendingInt), true);
+  responseMsg = "OK";
+  return;
+#else
+  (void)root;
+  responseMsg = "Limit set: no local sensors";
+  return;
+#endif
+}
+
+#if _IS_SERVER_HUB
+void processJSONMessage_cloudAck(JsonObject root, String& responseMsg) {
+  // Peer hub notifies which sensors were uploaded: update timeCloudUpload; stub only if unknown.
+  responseMsg = "OK";
+  JsonArray arr = root["s"].as<JsonArray>();
+  if (arr.isNull()) {
+    responseMsg = "cloudAck: missing s";
+    return;
+  }
+
+  for (JsonObject item : arr) {
+    uint64_t mac = 0;
+    if (!item["m"].is<JsonVariantConst>() ||
+        !stringToUInt64(item["m"].as<String>(), &mac, true) || mac == 0) {
+      continue;
+    }
+    const uint8_t snsType = (uint8_t)(item["t"] | 0);
+    const uint8_t snsId = (uint8_t)(item["i"] | 0);
+    const uint32_t tcu = (uint32_t)(item["u"] | 0);
+    if (!snsType || !tcu) continue;
+
+    IPAddress ip(0, 0, 0, 0);
+    if (item["p"].is<JsonVariantConst>()) {
+      ip.fromString(item["p"].as<String>());
+    }
+
+    int16_t di = Sensors.findDevice(mac);
+    const bool deviceMissing = (di < 0);
+    // Known device: never re-stub (avoids overwriting a real name with "?").
+    if (deviceMissing) {
+      di = Sensors.addDevice(mac, ip, "?", 300, 0, 0);
+      if (di < 0) continue;
+    }
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d) continue;
+    if (ip != IPAddress(0, 0, 0, 0) && d->IP == IPAddress(0, 0, 0, 0)) {
+      d->IP = ip;
+    }
+
+    int16_t si = Sensors.findSensor(mac, snsType, snsId);
+    const bool sensorMissing = (si < 0);
+    if (sensorMissing) {
+      // Sensor stub only; use existing device name (or "?" for brand-new device stubs).
+      si = Sensors.addSensor(mac, ip, snsType, snsId, "", 0.0, 0, 0, 300, 0,
+                             d->devName[0] ? d->devName : "?",
+                             d->devType);
+    }
+    if (si < 0) continue;
+    ArborysSnsType* s = Sensors.snsIndexToPointer(si);
+    if (!s) continue;
+    // Never invent a newer timeRead; only advance cloud upload stamp.
+    if (tcu > s->timeCloudUpload) {
+      s->timeCloudUpload = tcu;
+    }
+
+    if ((deviceMissing || sensorMissing) && d->IP != IPAddress(0, 0, 0, 0)) {
+      const bool useUdp = deviceUdpPingRateAbove50(d);
+      sendMSG_DataRequest(d, -1, !useUdp);
+    }
+  }
+  noteServerHeard(100); // peer hub message
+}
+#endif
+
+void processJSONMessage_sunReq(JsonObject root, String& responseMsg) {
+  (void)root;
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
+  if (WeatherData.sunrise >= (uint32_t)TIMEZERO && WeatherData.sunset >= (uint32_t)TIMEZERO) {
+    responseMsg = "{\"msgType\":\"sunAck\",\"sunrise\":";
+    responseMsg += String(WeatherData.sunrise);
+    responseMsg += ",\"sunset\":";
+    responseMsg += String(WeatherData.sunset);
+    responseMsg += '}';
+    return;
+  }
+#endif
+  responseMsg = "{\"msgType\":\"sunAck\",\"error\":\"noSun\"}";
+}
+
 void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg) {
   (void)root;
 
@@ -8803,7 +10381,7 @@ void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg) {
   for (int16_t i = 0; i < NUMDEVICES; i++) {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
     if (!d || !d->IsSet) continue;
-    if (d->devType >= 100) {
+    if (IS_SERVER_DEVICE_TYPE(d->devType)) {
       if (d->IP == IPAddress(0, 0, 0, 0)) continue;
       if (serverCount > 0) serverIPs += ',';
       serverIPs += '"';
@@ -8823,7 +10401,7 @@ void processJSONMessage_networkStateReq(JsonObject root, String& responseMsg) {
   responseMsg += "],\"peripheralCount\":";
   responseMsg += String(peripheralCount);
   responseMsg += ",\"timestamp\":";
-  responseMsg += String((uint32_t)I.currentTime);
+  responseMsg += String((uint32_t)utcNow());
   responseMsg += '}';
 #endif
 }
@@ -8940,7 +10518,7 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
   if (sensor.containsKey("value")) {
     (sensor["value"].isNull()) ? value = NAN : value =  sensor["value"].as<double>();
   }
-  uint32_t timeRead   = sensor["timeRead"]   | I.currentTime;
+  uint32_t timeRead   = sensor["timeRead"]   | (uint32_t)utcNow();
   uint32_t sendingInt = sensor["sendingInt"] | 3600;
   uint8_t flags       = sensor["flags"]      | 0;
 
@@ -8958,11 +10536,21 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
 
   uint8_t ret = registerSensorData(
       dev->MAC, dev->IP, dev->devName, dev->devType, dev->Flags,
-      snsType, snsID, snsName, value, timeRead, I.currentTime, sendingInt, flags,
+      snsType, snsID, snsName, value, timeRead, (uint32_t)utcNow(), sendingInt, flags,
       limitHigh, limitLow, updateLimitHigh, updateLimitLow
   );
 
-  if (ret == 0) responseMsg = "Failed to add sensor";
+  if (ret == 0) {
+    responseMsg = "Failed to add sensor";
+    return;
+  }
+
+  if (sensor.containsKey("pollingInt") && !sensor["pollingInt"].isNull()) {
+    const uint32_t pollingInt = sensor["pollingInt"].as<uint32_t>();
+    const int16_t si = Sensors.findSensor(dev->MAC, snsType, snsID);
+    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+    if (S) S->PollingInt = pollingInt;
+  }
 
 }
 
@@ -8974,6 +10562,19 @@ void handleSingleSensor(ArborysDevType* dev, JsonObject sensor, String& response
    int16_t sensorIndex = -1;
    if (deviceMAC!=0 && snsType!=0 ) {
      if (devName.length() == 0) devName = "Unknown";
+
+#if _IS_SERVER_HUB
+     // Peripheral climate I2C failure sentinel (-999) ? store NaN and log.
+     if (snsValue <= -999.0 && snsValue > -10000.0 &&
+         (Sensors.isSensorOfType(snsType, "temperature") ||
+          Sensors.isSensorOfType(snsType, "humidity") ||
+          Sensors.isSensorOfType(snsType, "pressure"))) {
+       const String label = snsName.length() ? snsName : (String("sns ") + String(snsType) + "." + String(snsID));
+       storeError(label + " has no I2c", ERROR_SENSOR_INVALID, true);
+       SerialPrint(label + " has no I2c (value -999 ? NaN)", true);
+       snsValue = NAN;
+     }
+#endif
  
      //is this sensor already in the database?
      sensorIndex = Sensors.findSensor(deviceMAC, snsType, snsID);
@@ -9293,12 +10894,31 @@ void handlePostEnc() {
 
 //handlers for sending data
 bool checkThisSensorTime(ArborysSnsType* Si) {
-  //return true if it is time to send this sensor
+  // return true if it is time to send this sensor
   if (!Si || Si->deviceIndex != I.MY_DEVICE_INDEX) return false;
-  if (Si->timeLogged != 0 && Si->timeLogged < I.currentTime && I.currentTime - Si->timeLogged < 60*60*24 && bitRead(Si->Flags, 6) == 0 ) {
-    if (Si->timeLogged + Si->SendingInt > I.currentTime) return false; //not time
-  }
+#if _USEINTERRUPT
+  if (IS_INTERRUPT_SENSOR_TYPE(Si->snsType)) {
+    const time_t now = utcNow();
+    if (Si->SendingInt > 0 && Si->timeLogged != 0 && now >= (time_t)Si->timeLogged
+        && (uint32_t)(now - (time_t)Si->timeLogged) < Si->SendingInt) {
+      return false; // max send rate even if interrupts keep firing
+    }
+    if (bitRead(Si->Flags, 6) == 1) return true;
+    if (Si->timeLogged == 0 && Si->timeRead != 0) return true;
+    if (Si->SendingInt == 0) return false;
     return true;
+  }
+#endif
+  if (bitRead(Si->Flags, 6) == 1) return true; // alarm status changed
+  if (Si->SendingInt == 0) {
+    // Event-only: also send once after the first successful read so hubs can register the sensor.
+    if (Si->timeLogged == 0 && Si->timeRead != 0) return true;
+    return false;
+  }
+  if (Si->timeLogged != 0 && Si->timeLogged < utcNow() && utcNow() - Si->timeLogged < 60*60*24) {
+    if (Si->timeLogged + Si->SendingInt > utcNow()) return false; //not time
+  }
+  return true;
 }
 
 bool isSensorSendTime(int16_t snsIndex) {
@@ -9323,7 +10943,7 @@ bool isDeviceSendTime(ArborysDevType* D, bool forceSend) {
   if (!D || !D->IsSet) return false;
   if (D->IP==WiFi.localIP()) return false; //do not send to myself
   if (forceSend) return true;
-  if (D->devType < 100) return false; //not a server
+  if (!IS_SERVER_DEVICE_TYPE(D->devType)) return false; //not a server
 
   return true;
 }
@@ -9338,13 +10958,13 @@ void wrapupSendData(ArborysSnsType* S) {
       if (!S) continue;
       if (S->deviceIndex != I.MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
-      S->timeLogged = I.currentTime;
+      S->timeLogged = utcNow();
       S->expired = false;
     }
     return;
   }
   bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
-  S->timeLogged = I.currentTime;
+  S->timeLogged = utcNow();
   S->expired = false;
 }
 
@@ -9499,6 +11119,321 @@ static bool sendJsonViaPreferredHttp(IPAddress ip, const char* rawJson, const ch
   return sendHTTPJSON(ip, httpBody.c_str(), msgType, timeoutMs) == 200;
 }
 
+#if _IS_SERVER_HUB
+static bool postMeshJsonReadReply(IPAddress ip, const char* rawJson, String& reply) {
+  reply = "";
+  if (!rawJson || !rawJson[0] || !wifiReadyForNetwork()) return false;
+  if (ip == IPAddress(0, 0, 0, 0)) return false;
+
+  if (isValidLMKKey()) {
+    uint16_t payloadLen = (uint16_t)strlen(rawJson);
+    const uint16_t framedLen = payloadLen + 2;
+    uint8_t* framed = (uint8_t*)malloc(framedLen);
+    uint8_t* encBuf = framed ? (uint8_t*)malloc(LMK_HTTP_PING_MAX_CIPHER) : nullptr;
+    if (framed && encBuf) {
+      framed[0] = payloadLen & 0xFF;
+      framed[1] = (payloadLen >> 8) & 0xFF;
+      memcpy(framed + 2, rawJson, payloadLen);
+      uint16_t encLen = 0;
+      const bool encOk = BootSecure::encrypt(framed, framedLen, (char*)Prefs.KEYS.ESPNOW_KEY, encBuf, &encLen, 16) == 1
+          && encLen > 0 && encLen <= LMK_HTTP_PING_MAX_CIPHER;
+      free(framed);
+      framed = nullptr;
+      if (encOk) {
+        static char urlBuffer[64];
+        snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST_ENC", ip.toString().c_str());
+        WiFiClient client;
+        HTTPClient http;
+        client.setTimeout(4000);
+        http.begin(client, urlBuffer);
+        http.setTimeout(4000);
+        http.addHeader("Content-Type", "application/octet-stream");
+        esp_task_wdt_reset();
+        int httpCode = http.sendRequest("POST", encBuf, encLen);
+        esp_task_wdt_reset();
+        free(encBuf);
+        encBuf = nullptr;
+        if (httpCode >= 200 && httpCode < 400) {
+          uint8_t* respEnc = (uint8_t*)malloc(LMK_HTTP_PING_MAX_CIPHER);
+          if (respEnc) {
+            size_t respLen = readHttpEncResponseBody(http, respEnc, LMK_HTTP_PING_MAX_CIPHER, 4000);
+            if (respLen >= 32) decryptHttpCipherToPlain(respEnc, (uint16_t)respLen, reply);
+            free(respEnc);
+          }
+        }
+        http.end();
+        if (reply.length() > 0) return true;
+      }
+    }
+    if (framed) free(framed);
+    if (encBuf) free(encBuf);
+  }
+
+  String body = rawJson;
+  JSONbuilder_encodeHTTP(body);
+  static char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", ip.toString().c_str());
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(body.c_str());
+  M.timeout = 4000;
+  if (!M.initPayload(640)) return false;
+  if (!SendHTTPMessage(M) || !M.payload || !M.payload.get()) return false;
+  reply = M.payload.get();
+  return reply.length() > 0;
+}
+
+static bool parseMeshParamsReply(const String& reply, ArborysMeshParams& out, bool* accepted) {
+  StaticJsonDocument<512> doc;
+  if (deserializeJson(doc, reply) != DeserializationError::Ok) return false;
+  if (String(doc["msgType"] | "") != "meshGet") return false;
+  if (!meshParamsFromJson(doc.as<JsonObject>(), out)) return false;
+  if (accepted) *accepted = (int)(doc["ok"] | 0) != 0;
+  return true;
+}
+
+static bool hubExchangeMeshParams(ArborysDevType* device, bool doSet, const ArborysMeshParams* send, ArborysMeshParams& got, bool* accepted) {
+  if (accepted) *accepted = false;
+  if (!device) return false;
+  char json[480];
+  if (!doSet) {
+    snprintf(json, sizeof(json), "{\"msgType\":\"meshGet\"}");
+  } else {
+    if (!send || !meshParamsInRange(*send)) return false;
+    formatMeshParamsJson(json, sizeof(json), *send, 1);
+    // formatMeshParamsJson writes a meshGet reply. The set request uses meshSet.
+    char* type = strstr(json, "meshGet");
+    if (!type) return false;
+    memcpy(type, "meshSet", 7);
+  }
+  String reply;
+  if (!postMeshJsonReadReply(device->IP, json, reply)) return false;
+  return parseMeshParamsReply(reply, got, accepted);
+}
+#endif
+
+static bool readWebLong(const char* key, long& out) {
+  if (!server.hasArg(key)) return false;
+  out = server.arg(key).toInt();
+  return true;
+}
+
+static bool meshParamsFromWeb(ArborysMeshParams& p) {
+  long ttlN, ttlC, burst, gapMin, gapMax, supp, ackMs, ackR;
+  long rssiW, rssiS, dlyW, dlyS, jitter, critMin, critMax, reorder;
+  if (!readWebLong("ttlN", ttlN) || !readWebLong("ttlC", ttlC) || !readWebLong("burst", burst)) return false;
+  if (!readWebLong("gapMin", gapMin) || !readWebLong("gapMax", gapMax) || !readWebLong("supp", supp)) return false;
+  if (!readWebLong("ackMs", ackMs) || !readWebLong("ackR", ackR)) return false;
+  if (!readWebLong("rssiW", rssiW) || !readWebLong("rssiS", rssiS)) return false;
+  if (!readWebLong("dlyW", dlyW) || !readWebLong("dlyS", dlyS) || !readWebLong("jitter", jitter)) return false;
+  if (!readWebLong("critMin", critMin) || !readWebLong("critMax", critMax) || !readWebLong("reorder", reorder)) return false;
+  if (ttlN < 0 || ttlN > 255 || ttlC < 0 || ttlC > 255 || burst < 0 || burst > 255) return false;
+  if (supp < 0 || supp > 255 || ackR < 0 || ackR > 255) return false;
+  if (rssiW < -128 || rssiW > 127 || rssiS < -128 || rssiS > 127) return false;
+  if (gapMin < 0 || gapMin > 65535 || gapMax < 0 || gapMax > 65535) return false;
+  if (ackMs < 0 || ackMs > 65535 || dlyW < 0 || dlyW > 65535 || dlyS < 0 || dlyS > 65535) return false;
+  if (jitter < 0 || jitter > 65535 || critMin < 0 || critMin > 65535 || critMax < 0 || critMax > 65535) return false;
+  if (reorder < 0 || reorder > 65535) return false;
+  p.ttlNormal = (uint8_t)ttlN;
+  p.ttlCritical = (uint8_t)ttlC;
+  p.criticalBurstCount = (uint8_t)burst;
+  p.criticalBurstGapMinMs = (uint16_t)gapMin;
+  p.criticalBurstGapMaxMs = (uint16_t)gapMax;
+  p.relaySuppressCount = (uint8_t)supp;
+  p.ackTimeoutMs = (uint16_t)ackMs;
+  p.ackRetries = (uint8_t)ackR;
+  p.relayRssiWeakDbm = (int8_t)rssiW;
+  p.relayRssiStrongDbm = (int8_t)rssiS;
+  p.relayDelayWeakMs = (uint16_t)dlyW;
+  p.relayDelayStrongMs = (uint16_t)dlyS;
+  p.relayJitterMs = (uint16_t)jitter;
+  p.criticalRelayMinMs = (uint16_t)critMin;
+  p.criticalRelayMaxMs = (uint16_t)critMax;
+  p.originReorderWindow = (uint16_t)reorder;
+  return meshParamsInRange(p);
+}
+
+static void appendMeshNumberRow(const char* label, const char* name, bool known, long value) {
+  WEBHTML += "<tr><td style=\"padding: 8px; border: 1px solid #ddd; background-color: #f8f9fa; font-weight: bold;\">";
+  WEBHTML += label;
+  WEBHTML += "</td><td style=\"padding: 8px; border: 1px solid #ddd;\">";
+  if (!known) {
+    WEBHTML += "?";
+  } else {
+    WEBHTML += "<input type=\"number\" name=\"";
+    WEBHTML += name;
+    WEBHTML += "\" value=\"";
+    WEBHTML += String(value);
+    WEBHTML += "\" required style=\"width:8em;\">";
+  }
+  WEBHTML += "</td></tr>";
+}
+
+static void appendMeshSettingsTable(const ArborysMeshParams* p) {
+  const bool known = p != nullptr;
+  const ArborysMeshParams blank = {};
+  const ArborysMeshParams& v = known ? *p : blank;
+  WEBHTML += "<table style=\"width:100%; border-collapse:collapse; max-width:640px;\">";
+  appendMeshNumberRow("Normal TTL (1-15)", "ttlN", known, v.ttlNormal);
+  appendMeshNumberRow("Critical TTL (1-15)", "ttlC", known, v.ttlCritical);
+  appendMeshNumberRow("Critical burst count (1-8)", "burst", known, v.criticalBurstCount);
+  appendMeshNumberRow("Burst gap min ms (0-1000)", "gapMin", known, v.criticalBurstGapMinMs);
+  appendMeshNumberRow("Burst gap max ms (0-1000)", "gapMax", known, v.criticalBurstGapMaxMs);
+  appendMeshNumberRow("Relay suppress count (1-255)", "supp", known, v.relaySuppressCount);
+  appendMeshNumberRow("ACK timeout ms (50-10000)", "ackMs", known, v.ackTimeoutMs);
+  appendMeshNumberRow("ACK retries (0-8)", "ackR", known, v.ackRetries);
+  appendMeshNumberRow("Weak RSSI dBm (-100 to -20)", "rssiW", known, v.relayRssiWeakDbm);
+  appendMeshNumberRow("Strong RSSI dBm (-100 to -20)", "rssiS", known, v.relayRssiStrongDbm);
+  appendMeshNumberRow("Weak relay delay ms (0-5000)", "dlyW", known, v.relayDelayWeakMs);
+  appendMeshNumberRow("Strong relay delay ms (0-5000)", "dlyS", known, v.relayDelayStrongMs);
+  appendMeshNumberRow("Relay jitter ms (0-1000)", "jitter", known, v.relayJitterMs);
+  appendMeshNumberRow("Critical relay min ms (0-1000)", "critMin", known, v.criticalRelayMinMs);
+  appendMeshNumberRow("Critical relay max ms (0-1000)", "critMax", known, v.criticalRelayMaxMs);
+  appendMeshNumberRow("Origin reorder window (1-4096)", "reorder", known, v.originReorderWindow);
+  WEBHTML += "</table>";
+  WEBHTML += "<p>Strong RSSI must be above weak RSSI. Each maximum must be at least its matching minimum.</p>";
+}
+
+static void renderMeshSettingsPage(const char* notice, bool noticeOk, bool known, const ArborysMeshParams* params, int16_t devIndex, bool isThisDevice) {
+  WEBHTML = "";
+  serverTextHeader("Mesh Settings");
+  serverTextStreamBegin(200, true);
+  appendStandardPageNav();
+  if (notice && notice[0]) {
+    WEBHTML += noticeOk
+        ? "<div style=\"background-color: #d4edda; color: #155724; padding: 15px; margin: 10px 0; border: 1px solid #c3e6cb; border-radius: 4px;\">"
+        : "<div style=\"background-color: #f8d7da; color: #721c24; padding: 15px; margin: 10px 0; border: 1px solid #f5c6cb; border-radius: 4px;\">";
+    WEBHTML += notice;
+    WEBHTML += "</div>";
+  }
+  serverTextFlush(true);
+
+#if _IS_SERVER_HUB
+  WEBHTML += "<div style=\"background-color: #e8f5e8; color: #2e7d32; padding: 15px; margin: 10px 0; border: 1px solid #4caf50; border-radius: 4px;\">";
+  WEBHTML += "<form method=\"GET\" action=\"/MESH_SETTINGS\" style=\"margin: 0;\">";
+  WEBHTML += "<span style=\"font-size: 1.17em; font-weight: bold;\">Device </span>";
+  WEBHTML += "<select name=\"devIndex\" onchange=\"this.form.submit()\" style=\"font-size: 1em; padding: 4px 8px; margin: 0 4px; max-width: 70%;\">";
+  appendDeviceIndexOptions(devIndex);
+  WEBHTML += "</select>";
+  WEBHTML += "<span style=\"font-size: 1.17em; font-weight: bold;\"> of " + String(Sensors.getNumDevices()) + "</span>";
+  if (isThisDevice) WEBHTML += "<span style=\"font-size: 1.17em; font-weight: bold;\"> (this device)</span>";
+  WEBHTML += "</form>";
+  if (!isThisDevice) {
+    WEBHTML += "<div style=\"margin-top: 10px; text-align: center;\">";
+    appendRemoteDevicePingLinks();
+    WEBHTML += "</div>";
+  }
+  WEBHTML += "</div>";
+  serverTextFlush(true);
+#else
+  (void)devIndex;
+  (void)isThisDevice;
+#endif
+
+  WEBHTML += "<div style=\"background-color: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #dee2e6;\">";
+  WEBHTML += "<h4>ArborysMesh Settings</h4>";
+  WEBHTML += "<form method=\"POST\" action=\"/MESH_SETTINGS\">";
+#if _IS_SERVER_HUB
+  WEBHTML += "<input type=\"hidden\" name=\"devIndex\" value=\"" + String(devIndex) + "\">";
+#endif
+  appendMeshSettingsTable(known ? params : nullptr);
+  const char* dis = known ? "" : " disabled";
+  WEBHTML += "<button type=\"submit\" name=\"action\" value=\"apply\"";
+  WEBHTML += dis;
+  WEBHTML += " style=\"margin: 8px 8px 0 0; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px;\">Update</button>";
+  WEBHTML += "<button type=\"submit\" name=\"action\" value=\"defaults\"";
+  WEBHTML += dis;
+  WEBHTML += " style=\"margin-top: 8px; padding: 8px 16px; background-color: #FF9800; color: white; border: none; border-radius: 4px;\">Defaults</button>";
+  WEBHTML += "</form></div></body></html>";
+  serverTextClose(200, true);
+}
+
+void handleMESH_SETTINGS() {
+  registerHTTPMessage("MeshSet");
+  const char* notice = "";
+  bool noticeOk = false;
+
+  int16_t devIndex = CURRENT_DEVICEVIEWER_DEVINDEX;
+  if (server.hasArg("devIndex")) {
+    int16_t idx = server.arg("devIndex").toInt();
+    if (idx >= 0 && idx < NUMDEVICES && Sensors.isDeviceInit(idx)) {
+      devIndex = idx;
+      CURRENT_DEVICEVIEWER_DEVINDEX = idx;
+    }
+  }
+  const int16_t myIndex = (int16_t)Sensors.findMyDeviceIndex();
+  const bool isThisDevice = myIndex >= 0 && devIndex == myIndex;
+  ArborysDevType* device = Sensors.getDeviceByDevIndex(devIndex);
+
+  ArborysMeshParams shown = meshParams();
+  bool known = false;
+
+#if _IS_SERVER_HUB
+  auto loadShown = [&]() {
+    if (!device) { known = false; return; }
+    if (isThisDevice) {
+      shown = meshParams();
+      known = true;
+      return;
+    }
+    bool accepted = false;
+    known = hubExchangeMeshParams(device, false, nullptr, shown, &accepted);
+  };
+#else
+  auto loadShown = [&]() {
+    shown = meshParams();
+    known = true;
+  };
+#endif
+
+  if (server.method() == HTTP_POST && device) {
+    const bool wantDefaults = server.hasArg("action") && server.arg("action") == "defaults";
+    ArborysMeshParams next = {};
+    bool valuesOk = wantDefaults || meshParamsFromWeb(next);
+    if (!valuesOk) {
+      notice = "A value is outside the allowed range. Settings were not changed.";
+      noticeOk = false;
+      loadShown();
+    } else {
+#if _IS_SERVER_HUB
+      if (isThisDevice) {
+        meshSetParams(next);
+        shown = meshParams();
+        known = true;
+        notice = wantDefaults ? "Default mesh settings restored." : "Mesh settings updated.";
+        noticeOk = true;
+      } else {
+        bool accepted = false;
+        known = hubExchangeMeshParams(device, true, &next, shown, &accepted);
+        if (!known) {
+          notice = "Settings could not be sent to this device.";
+          noticeOk = false;
+        } else if (!accepted) {
+          notice = "This device rejected the settings.";
+          noticeOk = false;
+        } else {
+          notice = wantDefaults ? "Default mesh settings were sent." : "Mesh settings were sent.";
+          noticeOk = true;
+        }
+      }
+#else
+      meshSetParams(next);
+      shown = meshParams();
+      known = true;
+      notice = wantDefaults ? "Default mesh settings restored." : "Mesh settings updated.";
+      noticeOk = true;
+#endif
+    }
+  } else {
+    loadShown();
+    if (!known) notice = "Settings could not be read from this device.";
+  }
+
+  renderMeshSettingsPage(notice, noticeOk, known, known ? &shown : nullptr, devIndex, isThisDevice);
+}
+
 uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   //can use -1 to send to broadcast (if using HTTP, then send to all servers), or a specific device index to send to a specific device
   
@@ -9507,7 +11442,152 @@ uint8_t sendAllSensors(bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   
 }
 
+// Counted expiry requests today. 0–2: mesh only. 3–5: mesh + UDP. 6+: mesh + HTTP to each hub.
+static uint8_t s_expiredReqCount = 0;
+static uint32_t s_expiredReqLastCounted = 0;
+static bool s_expiredSendPending = false;
+
+static uint32_t peripheralSendIntervalSec() {
+  int16_t my = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(my);
+  if (me && me->SendingInt) return me->SendingInt;
+  return 300;
+}
+
+static uint8_t expiredSendLadder() {
+  if (s_expiredReqCount >= 6) return 2;
+  if (s_expiredReqCount >= 3) return 1;
+  return 0;
+}
+
+static const char* preferredCommunicationsLabel() {
+  // Hubs ask again when readings are missing. Repeated asks move this node off mesh.
+  if (expiredSendLadder() >= 2) return isValidLMKKey() ? "HTTPS" : "HTTP";
+  if (expiredSendLadder() >= 1) return "UDP";
+  return "arborysmesh";
+}
+
+void resetExpiredRequestLadder() {
+  s_expiredReqCount = 0;
+  s_expiredReqLastCounted = 0;
+  s_expiredSendPending = false;
+}
+
+void noteExpiredDataRequest(uint64_t hubMac) {
+  (void)hubMac;
+#ifdef _USELOWPOWER
+  return;
+#else
+  int16_t my = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(my);
+  if (me && bitRead(me->Flags, 2)) return;
+
+  const uint32_t now = (uint32_t)utcNow();
+  const uint32_t window = peripheralSendIntervalSec() * 2u;
+  if (s_expiredReqLastCounted != 0 && now <= s_expiredReqLastCounted + window) {
+    SerialPrint("Expiry request inside 2x send interval; not counted (count " + String(s_expiredReqCount) + ")", true);
+  } else {
+    if (s_expiredReqCount < 255) s_expiredReqCount++;
+    s_expiredReqLastCounted = now;
+    SerialPrint("Expiry request counted " + String(s_expiredReqCount) + " today", true);
+  }
+  s_expiredSendPending = true;
+#endif
+}
+
+static bool localSensorReadingIsStale(const ArborysSnsType* S) {
+  if (!S) return false;
+  const uint32_t poll = S->PollingInt ? S->PollingInt : S->SendingInt;
+  if (poll == 0) return false; // not a scheduled reading
+  if (S->timeRead == 0) return true;
+  const uint32_t now = (uint32_t)utcNow();
+  if (now <= S->timeRead) return false;
+  return (now - S->timeRead) > poll;
+}
+
+static void stripErrorText(char* s) {
+  if (!s) return;
+  for (char* p = s; *p; ++p) {
+    if (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r') *p = ' ';
+  }
+}
+
+void sendErrorLogToHubs(uint16_t code, const ArborysSnsType* sensor, const char* detail) {
+  const int16_t my = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(my);
+
+  char dev[31] = "";
+  char sns[31] = "";
+  char mac[17] = "";
+  char detailBuf[41] = "";
+  if (me) strncpy(dev, me->devName, sizeof(dev) - 1);
+  if (sensor) strncpy(sns, sensor->snsName, sizeof(sns) - 1);
+  if (me) {
+    String macStr = MACToString(me->MAC, '\0', true);
+    strncpy(mac, macStr.c_str(), sizeof(mac) - 1);
+  }
+  if (detail) strncpy(detailBuf, detail, sizeof(detailBuf) - 1);
+  stripErrorText(dev);
+  stripErrorText(sns);
+  stripErrorText(mac);
+  stripErrorText(detailBuf);
+
+  const int snsType = sensor ? (int)sensor->snsType : -1;
+  const int snsID = sensor ? (int)sensor->snsID : -1;
+  char msg[100];
+  formatHubErrorMessage(msg, sizeof(msg), code, dev, sns, mac, snsType, snsID, detailBuf);
+  // storeError forwards this line to hubs on a peripheral.
+  storeError(msg, (ERRORCODES)code, true);
+}
+
+void forwardPeripheralErrorToHubs(uint16_t code, const char* message) {
+  if (!message || !message[0] || !wifiReadyForNetwork()) return;
+
+  const int16_t my = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(my);
+  if (!me) return;
+
+  char dev[31] = "";
+  char mac[17] = "";
+  char detail[100] = "";
+  strncpy(dev, me->devName, sizeof(dev) - 1);
+  String macStr = MACToString(me->MAC, '\0', true);
+  strncpy(mac, macStr.c_str(), sizeof(mac) - 1);
+  strncpy(detail, message, sizeof(detail) - 1);
+  stripErrorText(dev);
+  stripErrorText(mac);
+  stripErrorText(detail);
+
+  char json[512];
+  snprintf(json, sizeof(json),
+      "{\"msgType\":\"errorLog\",\"code\":%u,\"dev\":\"%s\",\"sns\":\"\",\"mac\":\"%s\",\"snsType\":-1,\"snsID\":-1,\"detail\":\"%s\"}",
+      (unsigned)code, dev, mac, detail);
+
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet || !IS_SERVER_DEVICE_TYPE(d->devType)) continue;
+    if (d->IP == IPAddress(0, 0, 0, 0) || d->IP == WiFi.localIP()) continue;
+    sendJsonViaPreferredHttp(d->IP, json, "errorLog", 2500);
+    delay(10);
+  }
+}
+
+static void processDeferredExpiredDataRequest() {
+  if (!s_expiredSendPending) return;
+  s_expiredSendPending = false;
+
+  const int16_t my = Sensors.findMyDeviceIndex();
+  for (int16_t i = 0; i < NUMSENSORS; ++i) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(i);
+    if (!S || !S->IsSet || S->deviceIndex != my) continue;
+    if (!localSensorReadingIsStale(S)) continue;
+    sendErrorLogToHubs((uint16_t)ERROR_SENSOR_READ, S, "scheduled read failed");
+  }
+  SendData(-1, true, -1, false);
+}
+
 void processDeferredDataRequest() {
+  processDeferredExpiredDataRequest();
   if (!s_pendingDataRequest.pending) return;
   int16_t senderIndex = s_pendingDataRequest.senderIndex;
   int16_t snsIndex = s_pendingDataRequest.snsIndex;
@@ -9521,13 +11601,11 @@ void processDeferredDataRequest() {
 }
 
 
-static constexpr uint64_t LAN_SENSOR_BROADCAST_MAC = 0xFFFFFFFFFFFFULL;
-
 static void markAllServersDataSent() {
   for (int16_t i = 0; i < NUMDEVICES; ++i) {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-    if (d && d->IsSet && d->devType >= 100) {
-      d->dataSent = I.currentTime;
+    if (d && d->IsSet && IS_SERVER_DEVICE_TYPE(d->devType)) {
+      d->dataSent = utcNow();
     }
   }
 }
@@ -9535,51 +11613,99 @@ static void markAllServersDataSent() {
 static void backoffAllServersDataSent() {
   for (int16_t i = 0; i < NUMDEVICES; ++i) {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-    if (d && d->IsSet && d->devType >= 100) {
-      d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
+    if (d && d->IsSet && IS_SERVER_DEVICE_TYPE(d->devType)) {
+      d->dataSent = utcNow() - d->SendingInt + 10 * 60;
     }
   }
 }
 
-// ESP-NOW type 12: one frame per sensor (bundle sends each included sensor).
-static bool sendSensorDataLANBundle(ArborysDevType* d, const int16_t* snsIndices, uint8_t count) {
-  if (!d || !d->IsSet || !snsIndices || count == 0) {
-    return false;
-  }
-  const uint8_t tier = 1;
+// ArborysMesh: one TELEMETRY frame per sensor (device+sensor packed).
+static bool sendSensorDataMeshBundle(const int16_t* snsIndices, uint8_t count, bool alsoUdp) {
+  if (!snsIndices || count == 0) return false;
+  int16_t myIdx = Sensors.findMyDeviceIndex();
+  ArborysDevType* me = Sensors.getDeviceByDevIndex(myIdx);
+  if (!me) return false;
   bool ok = false;
   for (uint8_t i = 0; i < count; ++i) {
     ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
-    if (!S || !S->IsSet) {
-      continue;
-    }
-    if (sendLANSensorData(S, d->MAC, d->IP, tier)) {
-      ok = true;
-    }
+    if (!S || !S->IsSet) continue;
+    if (meshSendTelemetry(me, S, alsoUdp)) ok = true;
   }
   return ok;
 }
 
-static bool sendSensorDataLANBroadcastBundle(const int16_t* snsIndices, uint8_t count) {
-  const uint8_t tier = 1;
-  const IPAddress noIp(0, 0, 0, 0);
-  if (!snsIndices || count == 0) {
-    return false;
+static void pauseBetweenSensorJsonMessages() {
+  for (uint8_t sec = 0; sec < 10; ++sec) {
+    delay(1000);
+    esp_task_wdt_reset();
   }
-  bool ok = false;
-  for (uint8_t i = 0; i < count; ++i) {
-    ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
-    if (!S || !S->IsSet) {
+}
+
+// Prefix of list that fits in the JSON buffer. Sensor text length varies, so this builds the real string.
+static uint8_t countSensorsThatFitJson(const int16_t* list, uint8_t count, uint16_t jsonBufferSize) {
+  uint8_t n = 0;
+  while (n < count && sensorMSGFitsBuffer(list, (uint8_t)(n + 1), jsonBufferSize, false)) {
+    n++;
+  }
+  return n;
+}
+
+static bool postSensorJsonToTargets(const char* jsonBuffer, bool forceSend, ArborysDevType* oneDevice) {
+  if (oneDevice) {
+    if (!sendJsonViaPreferredHttp(oneDevice->IP, jsonBuffer, "snsMsg")) return false;
+    oneDevice->dataSent = utcNow();
+    return true;
+  }
+  bool any = false;
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!isDeviceSendTime(d, forceSend)) continue;
+    if (!IS_SERVER_DEVICE_TYPE(d->devType)) continue;
+    if (d->IP == IPAddress(0, 0, 0, 0)) continue;
+    if (sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsMsg")) {
+      d->dataSent = utcNow();
+      any = true;
+    }
+    delay(10);
+  }
+  return any;
+}
+
+// oneDevice null: each known hub. Otherwise that device only.
+// Successful chunks are marked sent. A sensor that cannot fit alone is logged and skipped.
+static bool sendSensorJsonInFittingMessages(const int16_t* sendList, uint8_t sendCount, bool forceSend,
+    char* jsonBuffer, uint16_t jsonBufferSize, ArborysDevType* oneDevice) {
+  if (!sendList || sendCount == 0 || !jsonBuffer || jsonBufferSize == 0) return false;
+  uint8_t offset = 0;
+  bool any = false;
+  bool sentOne = false;
+  while (offset < sendCount) {
+    const uint8_t n = countSensorsThatFitJson(sendList + offset, (uint8_t)(sendCount - offset), jsonBufferSize);
+    if (n == 0) {
+      JSONbuilder_sensorMSG_list(sendList + offset, 1, jsonBuffer, jsonBufferSize, false);
+      offset++;
       continue;
     }
-    if (sendLANSensorData(S, LAN_SENSOR_BROADCAST_MAC, noIp, tier)) {
-      ok = true;
+    if (sentOne) pauseBetweenSensorJsonMessages();
+    if (n < (uint8_t)(sendCount - offset) || offset > 0) {
+      SerialPrint("SendData: JSON message " + String(n) + " sensor(s), " + String(sendCount - offset - n) + " after this", true);
     }
+    if (!JSONbuilder_sensorMSG_list(sendList + offset, n, jsonBuffer, jsonBufferSize, false)) {
+      offset++;
+      continue;
+    }
+    if (postSensorJsonToTargets(jsonBuffer, forceSend, oneDevice)) {
+      wrapupSendDataList(sendList + offset, n);
+      any = true;
+    }
+    sentOne = true;
+    offset += n;
   }
-  if (ok) {
-    markAllServersDataSent();
-  }
-  return ok;
+  return any;
+}
+
+static bool sendListedSensorsHttpToHubs(const int16_t* sendList, uint8_t sendCount, bool forceSend, char* jsonBuffer, uint16_t jsonBufferSize) {
+  return sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, jsonBufferSize, nullptr);
 }
 
 static bool destinationNeedsLAN(const ArborysDevType* d, bool haveWifi) {
@@ -9631,7 +11757,7 @@ static uint8_t packSensorsForSend(int16_t* outIndices, uint8_t maxOut, bool forc
 
     if (isDue) {
       dueIndices[dueCount++] = i;
-    } else if (isSensorMonitored(S) && sensorHasFreshUnreadData(S)) {
+    } else if (S->SendingInt != 0 && isSensorMonitored(S) && sensorHasFreshUnreadData(S)) {
       freshIndices[freshCount++] = i;
     }
   }
@@ -9690,6 +11816,7 @@ static uint8_t packSensorsForSend(int16_t* outIndices, uint8_t maxOut, bool forc
 }
 
 bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
+  (void)useUDP;
   if (snsIndex >= 0 && !forceSend && !isSensorSendTime(snsIndex)) {
     return false;
   }
@@ -9698,117 +11825,67 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
   }
 
   const bool haveWifi = wifiReadyForNetwork();
-  // Pack against HTTP form size (larger); raw JSON is used for UDP/HTTPS.
   static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
   int16_t sendList[NUMSENSORS];
+  // Pack without JSON limit first for mesh; apply JSON limit only for HTTP fallback.
   const uint8_t sendCount = packSensorsForSend(sendList, NUMSENSORS, forceSend, snsIndex,
-      haveWifi, SNSDATA_JSON_BUFFER_SIZE, true);
+      false, SNSDATA_JSON_BUFFER_SIZE, false);
   if (sendCount == 0) {
     return false;
   }
 
   bool isGood = false;
 
-  // Directed send to one device (e.g. data-request response)
+  // Directed HTTP response to one device (data-request)
   if (sendToDeviceIndex >= 0) {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
-    if (!d) {
-      return false;
-    }
-    if (!isDeviceSendTime(d, forceSend)) {
-      return false;
-    }
+    if (!d) return false;
+    if (!isDeviceSendTime(d, forceSend)) return false;
 
-    if (destinationNeedsLAN(d, haveWifi)) {
-      isGood = sendSensorDataLANBundle(d, sendList, sendCount);
-    } else if (useUDP) {
-      if (!JSONbuilder_sensorMSG_list(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, false)) {
-        return false;
+    if (destinationNeedsLAN(d, haveWifi) || !haveWifi) {
+      isGood = sendSensorDataMeshBundle(sendList, sendCount, haveWifi && expiredSendLadder() == 1);
+      if (isGood) {
+        d->dataSent = utcNow();
+        wrapupSendDataList(sendList, sendCount);
       }
-      isGood = sendUDPMessage((uint8_t*)jsonBuffer, d->IP, strlen(jsonBuffer), "snsMsg");
     } else {
-      if (!JSONbuilder_sensorMSG_list(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, false)) {
-        return false;
-      }
-      isGood = sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsMsg");
+      isGood = sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, d);
     }
-    if (isGood) {
-      d->dataSent = I.currentTime;
-      wrapupSendDataList(sendList, sendCount);
-    } else {
+    if (!isGood) {
       I.makeBroadcast = true;
     }
     return isGood;
   }
 
-  // Send to all servers: always UDP broadcast, then HTTP/HTTPS only for servers
-  // whose UDP ping success rate is not above 50%.
-  if (haveWifi) {
-    if (!JSONbuilder_sensorMSG_list(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, false)) {
-      return false;
-    }
-
-    SerialPrint("SendData: UDP broadcast bundled sensor data", true);
-    if (sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0, 0, 0, 0), strlen(jsonBuffer), "snsBrdcst")) {
-      isGood = true;
-      #ifndef _USELOWPOWER
-      markAllServersDataSent();
-      #endif
-    }
-
-    for (int16_t i = 0; i < NUMDEVICES; ++i) {
-      ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-      if (!isDeviceSendTime(d, forceSend)) {
-        continue;
-      }
-      if (deviceUdpPingRateAbove50(d)) {
-        continue; // UDP broadcast is sufficient for this server
-      }
-
-      if (destinationNeedsLAN(d, haveWifi)) {
-        SerialPrint("SendData: LAN/ESP-NOW unicast to low-UDP-rate server " + String(d->devName), true);
-        if (sendSensorDataLANBundle(d, sendList, sendCount)) {
-          d->dataSent = I.currentTime;
-          isGood = true;
-        } else {
-          d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
-        }
-      } else {
-        SerialPrint("SendData: HTTP/HTTPS fallback to " + String(d->devName) +
-          " (UDP rate " + String(udpPingSuccessRatePercent(d)) + "%)", true);
-        if (sendJsonViaPreferredHttp(d->IP, jsonBuffer, "snsMsg")) {
-          d->dataSent = I.currentTime;
-          isGood = true;
-        } else {
-          d->dataSent = I.currentTime - d->SendingInt + 10 * 60;
-        }
-      }
-      delay(10);
-    }
-  } else {
-    bool anyServer = false;
-    for (int16_t i = 0; i < NUMDEVICES; ++i) {
-      ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
-      if (d && d->IsSet && d->devType >= 100 && isDeviceSendTime(d, false)) {
-        anyServer = true;
-        break;
-      }
-    }
-    if (anyServer) {
-      SerialPrint("SendData: no WiFi; ESP-NOW broadcast bundled sensor data to servers", true);
-      isGood = sendSensorDataLANBroadcastBundle(sendList, sendCount);
-      if (!isGood) {
-        backoffAllServersDataSent();
-      }
-    }
+  // 0: mesh broadcast. 1: mesh + UDP broadcast. 2: mesh + HTTP to each hub.
+  // No WiFi: mesh only. Mesh success does not skip the added leg.
+  const uint8_t ladder = expiredSendLadder();
+  const bool alsoUdp = haveWifi && ladder == 1;
+  SerialPrint(String("SendData: ArborysMesh TELEMETRY")
+      + (alsoUdp ? " + UDP" : "")
+      + ((ladder == 2 && haveWifi) ? " + HTTP hubs" : ""), true);
+  bool meshOk = sendSensorDataMeshBundle(sendList, sendCount, alsoUdp);
+  if (meshOk) {
+#ifndef _USELOWPOWER
+    markAllServersDataSent();
+#endif
   }
 
-  if (isGood) {
+  bool httpOk = false;
+  if (ladder == 2 && haveWifi) {
+    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE);
+  } else if (!meshOk && haveWifi && ladder == 0) {
+    // Radio send failed before the daily ladder has added a second path.
+    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE);
+  }
+
+  // Mesh already carried every sensor. HTTP marks only the chunks that were posted.
+  if (meshOk) {
     wrapupSendDataList(sendList, sendCount);
-  } else {
+  } else if (!httpOk) {
     I.makeBroadcast = true;
   }
-  return isGood;
+  return meshOk || httpOk;
 }
 
 
@@ -9863,6 +11940,62 @@ int16_t sendMSG_networkStateReq(IPAddress& serverIP, uint16_t timeoutMs) {
   }
   const int count = doc["serverCount"] | registered;
   return (int16_t)count;
+}
+
+int16_t sendMSG_sunReq(IPAddress& serverIP, uint32_t* sunriseUtc, uint32_t* sunsetUtc, uint16_t timeoutMs) {
+  if (sunriseUtc) *sunriseUtc = 0;
+  if (sunsetUtc) *sunsetUtc = 0;
+  if (serverIP == IPAddress(0, 0, 0, 0) || !wifiReadyForNetwork()) return -1;
+
+  String httpBody = "{\"msgType\":\"sunReq\"}";
+  JSONbuilder_encodeHTTP(httpBody);
+
+  char urlBuffer[64];
+  snprintf(urlBuffer, sizeof(urlBuffer), "http://%s/POST", serverIP.toString().c_str());
+
+  HTTPMessage M;
+  M.setUrl(urlBuffer);
+  M.setMethod("POST");
+  M.setContentType("application/x-www-form-urlencoded");
+  M.setBody(httpBody.c_str());
+  M.timeout = timeoutMs;
+  if (!M.initPayload(256)) return -1;
+
+  if (!SendHTTPMessage(M)) {
+    I.HTTP_OUTGOING_ERRORS++;
+    return -1;
+  }
+  registerHTTPSend(serverIP, "sunReq");
+
+  if (!M.payload || !M.payload.get() || M.payload.get()[0] != '{') return -1;
+
+  StaticJsonDocument<256> doc;
+  if (deserializeJson(doc, M.payload.get()) != DeserializationError::Ok) return -3;
+  if (strcmp(doc["msgType"] | "", "sunAck") != 0) return -3;
+  if (doc["error"].is<const char*>()) return -2;
+
+  const uint32_t rise = doc["sunrise"] | 0u;
+  const uint32_t set = doc["sunset"] | 0u;
+  if (rise < (uint32_t)TIMEZERO || set < (uint32_t)TIMEZERO) return -2;
+  if (sunriseUtc) *sunriseUtc = rise;
+  if (sunsetUtc) *sunsetUtc = set;
+  return 0;
+}
+
+int16_t requestSunTimesFromType100(uint32_t& sunriseUtc, uint32_t& sunsetUtc) {
+  sunriseUtc = 0;
+  sunsetUtc = 0;
+  bool haveServer = false;
+  int16_t idx = Sensors.nextServerIndex(0, true);
+  while (idx >= 0) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(idx);
+    if (d && d->IsSet && !d->expired && d->IP != IPAddress(0, 0, 0, 0)) {
+      haveServer = true;
+      if (sendMSG_sunReq(d->IP, &sunriseUtc, &sunsetUtc) == 0) return 1;
+    }
+    idx = Sensors.nextServerIndex(idx + 1, true);
+  }
+  return haveServer ? (int16_t)-1 : (int16_t)0;
 }
 
 int16_t sendMSG_alarmsReq(IPAddress& serverIP, String& responseOut, uint16_t timeoutMs) {
@@ -9997,7 +12130,7 @@ int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP) {
   JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), false, snsIndex);
   SerialPrint("sendMSG_DataRequest: " + String(jsonBuffer), true);
   SerialPrint("sendMSG_DataRequest sent to: " + String(d->IP.toString()), true);
-  d->dataSent = I.currentTime;
+  d->dataSent = utcNow();
   if (viaHTTP) {
     #if defined(_USE32)
     if (queueSnsReqHttp(d->IP, jsonBuffer)) {
@@ -10171,7 +12304,7 @@ bool closeUDP(bool returnStatus) {
   #ifdef _USEUDP
   LAN_UDP.clear(); //clear the buffer to avoid reading the same message twice
   if (returnStatus) {
-    I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+    I.UDP_LAST_INCOMINGMSG_TIME = utcNow();
     I.UDP_RECEIVES++;
   }
 
@@ -10203,22 +12336,6 @@ bool receiveUDPMessage() {
     SerialPrint("UDP message from: " + remoteIP.toString(), true);
     registerUDPMessage(remoteIP, 0);
 
-    bool isESPNOW = false;
-
-    if (packetSize != sizeof(ESPNOW_type)) {
-      // JSON UDP: local-sensor nodes always accept; hub-only builds require _MYTYPE >= 100
-      #if !_HAS_LOCAL_SENSORS && _IS_SERVER_HUB
-      if (_MYTYPE < 100) {
-        return closeUDP(true);
-      }
-      #endif
-
-    } else {
-      isESPNOW = true;
-    } 
-    
-    // Allocate buffer dynamically based on actual packet size
-    // This allows multi-sensor messages that exceed SNSDATA_JSON_BUFFER_SIZE
     char* buffer = (char*)malloc(packetSize + 1);
     if (!buffer) {
       SerialPrint("UDP message: Failed to allocate buffer for " + String(packetSize) + " bytes", true);
@@ -10226,7 +12343,6 @@ bool receiveUDPMessage() {
       snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "AllocFail");
       return closeUDP(false);
     }
-    // Read packet data and verify all bytes were read
     size_t bytesRead = LAN_UDP.read((uint8_t*)buffer, packetSize);
 
     if (bytesRead != packetSize) {
@@ -10237,15 +12353,21 @@ bool receiveUDPMessage() {
       return closeUDP(false);
     }
 
-    if (isESPNOW) {
-      ESPNOW_type msg;
-      memcpy(&msg, buffer, sizeof(ESPNOW_type));
-      processLANMessage(&msg);
-      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ESP type:%d", msg.msgType);
-      
+    // ArborysMesh binary (network_id 103) vs JSON
+    const bool isMesh = (packetSize >= ARBORYS_MESH_HEADER_SIZE &&
+                         (uint8_t)buffer[0] == ARBORYS_MESH_NETWORK_ID);
+
+    if (isMesh) {
+      meshOnRawFrame((const uint8_t*)buffer, (uint16_t)packetSize, true);
+      snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), "ArborysMesh");
     } else {
-      //process the json buffer
-      buffer[packetSize] = '\0';  // ensure null termination for String
+      #if !_HAS_LOCAL_SENSORS && _IS_SERVER_HUB
+      if (_I_AM_PERIPHERAL) {
+        free(buffer);
+        return closeUDP(true);
+      }
+      #endif
+      buffer[packetSize] = '\0';
       String responseMsg = "OK";
       String postData = (String)buffer;
       registerUdpMsgTypeFromJson(postData, remoteIP);
@@ -10254,9 +12376,7 @@ bool receiveUDPMessage() {
       popJsonPingReplyContext();
     }
 
-  
-    free(buffer);  // must free to avoid memory leak
-
+    free(buffer);
     return closeUDP(true);
 
   }
@@ -10323,20 +12443,20 @@ bool sendUDPMessage(const uint8_t* buffer,  IPAddress ip, uint16_t bufferSize, c
 void registerUDPMessage(IPAddress ip, const char* messageType) {
   I.UDP_LAST_INCOMINGMSG_FROM_IP = ip;
   if (messageType != 0)   snprintf(I.UDP_LAST_INCOMINGMSG_TYPE, sizeof(I.UDP_LAST_INCOMINGMSG_TYPE), messageType);
-  //I.UDP_LAST_INCOMINGMSG_TIME = I.currentTime;
+  //I.UDP_LAST_INCOMINGMSG_TIME = utcNow();
   //I.UDP_RECEIVES++;
 }
 
 void registerUDPSend(IPAddress ip, const char* messageType) {
   I.UDP_LAST_OUTGOINGMSG_TO_IP = ip;
   snprintf(I.UDP_LAST_OUTGOINGMSG_TYPE, sizeof(I.UDP_LAST_OUTGOINGMSG_TYPE), messageType);
-  I.UDP_LAST_OUTGOINGMSG_TIME = I.currentTime;  
+  I.UDP_LAST_OUTGOINGMSG_TIME = utcNow();  
   I.UDP_SENDS++;
 }
 
 void registerHTTPMessage(const char* messageType) {
   if (isHttpUiBrowseMessage(messageType)) return;
-  I.HTTP_LAST_INCOMINGMSG_TIME = I.currentTime;
+  I.HTTP_LAST_INCOMINGMSG_TIME = utcNow();
   snprintf(I.HTTP_LAST_INCOMINGMSG_TYPE, sizeof(I.HTTP_LAST_INCOMINGMSG_TYPE), "%s", messageType);
   I.HTTP_LAST_INCOMINGMSG_FROM_IP = server.client().remoteIP();
   I.HTTP_RECEIVES++;
@@ -10344,7 +12464,7 @@ void registerHTTPMessage(const char* messageType) {
 
 void registerHTTPSend(IPAddress ip, const char* messageType) {
   I.HTTP_LAST_OUTGOINGMSG_TO_IP = ip;
-  I.HTTP_LAST_OUTGOINGMSG_TIME = I.currentTime;
+  I.HTTP_LAST_OUTGOINGMSG_TIME = utcNow();
   I.HTTP_SENDS++;
   snprintf(I.HTTP_LAST_OUTGOINGMSG_TYPE, sizeof(I.HTTP_LAST_OUTGOINGMSG_TYPE), messageType);
 }

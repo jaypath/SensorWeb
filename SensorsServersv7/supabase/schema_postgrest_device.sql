@@ -164,6 +164,12 @@ begin
     raise exception 'device_not_owned' using errcode = '42501';
   end if;
 
+  if not public.device_sensor_slot_allowed(v_mac, p_sns_type, p_sns_id) then
+    raise exception 'sensor_limit'
+      using errcode = 'P0001',
+            hint = 'Device may have at most 10 sensor identities';
+  end if;
+
   begin
     v_ip := nullif(trim(p_device_ip), '')::inet;
   exception when others then
@@ -190,11 +196,11 @@ begin
   if coalesce(p_refresh_sensor, true) then
     insert into public.sensors (
       device_mac, sns_type, sns_id, user_id, sns_name, sns_value,
-      time_read, time_logged, sending_int, flags, expired, utc_offset, updated_at
+      time_read, time_logged, sending_int, flags, expired, utc_offset, updated_at, created_at
     ) values (
       v_mac, p_sns_type, p_sns_id, uid, coalesce(p_sns_name, ''), p_sns_value,
       p_time_read, coalesce(p_time_logged, now()), coalesce(p_sending_int, 300),
-      coalesce(p_flags, 0), coalesce(p_expired, false), coalesce(p_utc_offset, 0), now()
+      coalesce(p_flags, 0), coalesce(p_expired, false), coalesce(p_utc_offset, 0), now(), now()
     )
     on conflict (device_mac, sns_type, sns_id) do update set
       sns_name = excluded.sns_name,

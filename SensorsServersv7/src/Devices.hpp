@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <math.h>
+#include "device_roles.hpp"
+#include "FirmwareVersion.hpp"
 
 struct STRUCT_CORE;
 
@@ -20,14 +22,30 @@ struct STRUCT_CORE;
 102 - support analysis server with persistent storage
 */
 
-// Expiration grace: 1.25 × SendingInt (integer math: SendingInt + SendingInt/4).
+// Critical sensors and every local sensor: 1.25 × SendingInt (SendingInt + SendingInt/4).
+// Noncritical remote sensors: 2 × SendingInt.
 // Remotes use timeLogged (last received/logged update); local sensors use timeRead.
+// Sensor-box graphics wait until 2× even when the expired flag is set at 1.25×.
 inline uint32_t sensorExpiryGraceSec(uint32_t sendingInt) {
     return sendingInt + sendingInt / 4;
+}
+inline uint32_t sensorExpiryGraceFor(bool localOrCritical, uint32_t sendingInt) {
+    if (sendingInt == 0) return 0;
+    if (localOrCritical) return sensorExpiryGraceSec(sendingInt);
+    return sendingInt * 2;
 }
 inline uint32_t sensorExpirationTime(uint32_t freshnessTime, uint32_t sendingInt) {
     return freshnessTime + sensorExpiryGraceSec(sendingInt);
 }
+inline uint32_t sensorDisplayExpiryGraceSec(uint32_t sendingInt) {
+    return sendingInt * 2;
+}
+inline uint32_t sensorDisplayExpirationTime(uint32_t freshnessTime, uint32_t sendingInt) {
+    return freshnessTime + sensorDisplayExpiryGraceSec(sendingInt);
+}
+
+/** Stamp last contact from any server (devType 100–150). Used for peripheral orphan fallback. */
+void noteServerHeard(uint8_t senderDevType);
 
 // Peripherals: servers typically broadcast ~every 10 min. Cap "live server" grace so a
 // default SendingInt of 86400 does not delay APSTA debug access for ~30 hours.
@@ -47,11 +65,11 @@ struct ArborysDevType {
     char devName[30];       // Device name
     FirmwareVersion firmware; //firmware version
     uint8_t Flags;          // Device flags
-    uint32_t SendingInt;    // Sending interval
+    uint32_t SendingInt;    // Sending interval (seconds); shortest non-zero of attached sensors
     bool expired;           // Whether device has expired
     // Daily ping-response metrics (reset at midnight; not used for broadcasts)
-    uint8_t ping_att_ESPNow;     // ESPNow ping attempts to this device today
-    uint8_t ping_success_ESPNow; // ESPNow ping successes with this device today
+    uint8_t ping_att_ESPNow;     // ArborysMesh ping attempts today
+    uint8_t ping_success_ESPNow; // ArborysMesh ping successes today
     uint8_t ping_att_UDP;        // UDP ping attempts to this device today
     uint8_t ping_success_UDP;    // UDP ping successes with this device today
     uint8_t ping_att_HTTP;       // HTTP ping attempts to this device today
@@ -80,17 +98,16 @@ struct ArborysSnsType {
     uint8_t snsID;          // Sensor ID
     char snsName[30];       // Sensor name
     double snsValue;        // Current sensor value
-    uint32_t timeRead;      // Time sensor was read
-    uint32_t timeLogged;    // Time sensor data was logged
-    uint32_t timeWritten;     // Time sensor data was written to SD card
+    uint32_t timeRead;      // UTC unix: when sensor was sampled
+    uint32_t timeLogged;    // UTC unix: sent (local sns) or received (remote)
+    uint32_t timeWritten;     // UTC unix: written to SD card
     uint8_t Flags;          // Sensor flags... 
-    uint32_t SendingInt;    // Sending interval
+    uint32_t SendingInt;    // Sending interval (seconds); 0 = send only on alarm-status change or hub request
+    uint32_t PollingInt = 0; // Poll interval (seconds); 0 = unknown (hub remotes until reported)
     uint8_t IsSet;          // Whether this sensor is initialized
     bool expired;           // Whether sensor has expired
-    uint32_t lastCloudUploadTime; // Time sensor data was last uploaded to cloud
-    #ifdef _USESDCARD
-    uint32_t lastSDUploadTime; // Time sensor data was last uploaded to SD card    
-    #endif
+    uint32_t timeCloudUpload; // Last successful Supabase upload (UTC unix)
+    uint32_t lastSDUploadTime; // Last SD sensor-data write (unused on non-SD builds)
     int16_t snsPin = -9999;    // local sensor pin; -9999 = none / remote sensor
     int16_t powerPin = -9999;
     uint8_t OverrideFlags = 0; // hub ignore-bits for remote Flags (same RMB layout); local sensors unused
@@ -139,9 +156,11 @@ public:
     uint8_t countDev(uint8_t devType); // count the devices of the given type
     uint8_t countServers(); // count the servers
     int16_t nextServerIndex(int16_t startIndex=0, bool weatherServersOnly=false); // get the index of the next server
-    // True if at least one non-expired server (devType>=100) has been heard from recently.
+    // True if at least one non-expired server (devType 100–150) has been heard from recently.
     // Also refreshes server.expired flags. Used by peripherals to keep APSTA for debug access.
     bool hasLiveServer(time_t currentTime = 0);
+    // Drop remote entries with corrupt identity (bad LAN decrypt). No-op on hubs.
+    void scrubImplausibleRemoteDevices();
     // True if Flags bit is set and (for remotes) OverrideFlags does not ignore that bit.
     bool isSensorFlagBitUsed(int16_t index, uint8_t bit, bool useOverrideFlags = true);
     bool isOutsideSensor(int16_t index);
@@ -180,7 +199,7 @@ public:
     int16_t findOldestDevice();
     int16_t findOldestSensor();
     int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0, bool useOverrideFlags=true);
-    bool matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride = true);
+    bool matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride = true, bool expiredUsesDisplayGrace = false);
     uint16_t countMainScreenAlerts(bool respectRemoteOverride = true);
     uint16_t countMainScreenFlaggedAlerts(bool respectRemoteOverride = true);
     uint16_t countMainScreenCriticalExpiredAlerts(bool respectRemoteOverride = true);
@@ -188,10 +207,12 @@ public:
     String getSensorTypeFlaggedString(byte snstypeindex);
 
     uint8_t getSensorFlag(int16_t index);
+    bool isSensorPastExpiryThreshold(int16_t index, time_t currentTime = 0);
     byte checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
     ArborysDevType* getNextExpiredDevice(int16_t& startIndex);
     int16_t checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier);
     int16_t checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice);
+    bool isSensorExpiredForDisplay(int16_t index, time_t currentTime = 0);
     void checkDeviceFlags();
     void resetDailyPingCounters();
     uint8_t returnBatteryPercentage(ArborysSnsType* P);

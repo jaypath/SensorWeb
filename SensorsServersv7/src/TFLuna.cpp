@@ -16,6 +16,7 @@ bool setupTFLuna() {
   LocalTF.TFLUNASNS = Sensors.findSensor(I.MY_DEVICE_INDEX,7,1);
   if (LocalTF.TFLUNASNS == -1)  {
     SerialPrint("CheckTFLuna: failed to find TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
+    storeError("TFLuna sensor not registered", ERROR_SENSOR_NOT_FOUND, true);
     return TFLunaFailed();
   }
 
@@ -23,6 +24,7 @@ bool setupTFLuna() {
   ArborysSnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
   if (P == NULL || !P->IsSet) {
     SerialPrint("CheckTFLuna: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
+    storeError("TFLuna sensor record missing", ERROR_SENSOR_NOT_FOUND, true);
     return TFLunaFailed();
   }
 
@@ -30,6 +32,7 @@ bool setupTFLuna() {
   int16_t prefs_index = SensorHistory.getSensorHistoryIndex(P);
   if (prefs_index == -1) {
     SerialPrint("TFLunaUpdateMAX: failed to find sensor, and TFLUNASNS: " + String(LocalTF.TFLUNASNS),true);
+    storeError("TFLuna prefs index missing", ERROR_SENSOR_READ, true);
     LocalTF.TFLUNASNS = -1;
     return TFLunaFailed();
   }
@@ -67,6 +70,7 @@ uint32_t checkTFLuna(int16_t snsindex) {
     else           P->snsValue = tempval ; //in actual cm, apply offsets later
   } else {
     P->snsValue = -5000; //failed
+    storeError("TFLuna read failed", ERROR_SENSOR_READ, true);
   }
   uint32_t m = millis();
   LocalTF.LAST_DISTANCE_TIME = m;

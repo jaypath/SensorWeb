@@ -20,11 +20,11 @@
  */
 struct SupabaseConfig {
   char projectUrl[96];   // https://xxxx.supabase.co  (no trailing slash)
-  char anonKey[200];
+  char anonKey[256];     // must fit full JWT anon key (~208+); truncated key → gateway "Invalid API key"
   char deviceMac[16];    // AABBCCDDEEFF
   char apiKey[96];       // plaintext device API key from enroll/claim
   char userId[40];       // auth user uuid (from claim); optional for mint
-  char siteSlug[33];     // logical site (default "home")
+  char siteSlug[33];     // site label (default "home")
   char deviceIp[16];     // last known STA IP for identity on every call
   uint8_t devType;       // _MYTYPE
   int32_t utcOffsetSec;  // Prefs.TimeZoneOffset
@@ -42,7 +42,7 @@ struct SupabaseConfig {
     deviceIp[0] = '\0';
     devType = 0;
     utcOffsetSec = 0;
-    httpTimeoutMs = 20000;
+    httpTimeoutMs = 10000;
     apiVersion = SUPABASE_API_VERSION;
   }
 
@@ -52,7 +52,8 @@ struct SupabaseConfig {
   }
 
   bool isReady() const {
-    return hasBootstrap() && apiKey[0];
+    // JWT mint can recover via public IP when api_key is missing; bootstrap is enough.
+    return hasBootstrap();
   }
 
   void applyDefaults() {

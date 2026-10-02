@@ -2,6 +2,8 @@
 #if _HAS_LOCAL_SENSORS
 #include "globals.hpp"
 #include "sensors.hpp"
+#include <SensorEffectors.hpp>
+#include "interrupt_triggers.hpp"
 
 #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
 #include "NetworkMonitor.hpp"
@@ -122,6 +124,118 @@ int16_t STRUCT_SNSHISTORY::getSensorHistoryIndex(int16_t index) {
   return -1;
 }
 
+// Type 200/70/71 reuse powerPin as pull config (-100 pulldown, -99 pullup), not a GPIO rail.
+static bool isDioPullConfig(int16_t powerPin) {
+  return powerPin == SNS_DIO_PULLDOWN || powerPin == SNS_DIO_PULLUP;
+}
+
+static bool isRealPowerPin(int16_t powerPin) {
+  return powerPin != -9999 && powerPin != -1 && !isDioPullConfig(powerPin);
+}
+
+static bool isDioBinaryType(uint8_t snsType) {
+  return snsType == 70 || snsType == 71;
+}
+
+static bool isInterruptDioType(uint8_t snsType) {
+  return IS_INTERRUPT_SENSOR_TYPE(snsType);
+}
+
+static bool isTimerOutputType(uint8_t snsType) {
+  return snsType == 73 || snsType == 74;
+}
+
+static bool isClockOutputType(uint8_t snsType) {
+  return snsType == 75;
+}
+
+static bool isDrivenDioOutputType(uint8_t snsType) {
+  return isTimerOutputType(snsType) || isClockOutputType(snsType);
+}
+
+static bool humanPresenceLimitIsHigh(double v) {
+  return !isnan(v) && v != 0.0;
+}
+
+bool normalizeHumanPresenceLimits(double& limitHigh, double& limitLow) {
+  // Type 200: nonzero = HIGH, zero/NaN = LOW.
+  // high=0 and low≠0 is invalid (would be the 70/71 polarity); swap.
+  const bool highNz = humanPresenceLimitIsHigh(limitHigh);
+  const bool lowNz = humanPresenceLimitIsHigh(limitLow);
+  if (!highNz && lowNz) {
+    const double tmp = isnan(limitHigh) ? 0.0 : limitHigh;
+    limitHigh = limitLow;
+    limitLow = tmp;
+    return true;
+  }
+  return false;
+}
+
+void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag) {
+  if (!P) return;
+
+  // Type 73/74/75: Flags bit0 is DIO state (set by update), not an alarm-from-limits bit.
+  // Type 75 limits are schedule hours (on/off), not alarm thresholds.
+  if (isDrivenDioOutputType(P->snsType)) {
+    if (bitRead(lastflag, 0) != bitRead(P->Flags, 0)) {
+      bitWrite(P->Flags, 6, 1);
+      SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
+    }
+    return;
+  }
+
+  if (P->snsType == 200 || P->snsType == 220) {
+    normalizeHumanPresenceLimits(limitHigh, limitLow);
+    P->limitHigh = (float)limitHigh;
+    P->limitLow = (float)limitLow;
+    // Integer = daily count; fractional .1 = activity within last poll_interval.
+    const double frac = P->snsValue - floor(P->snsValue);
+    const bool recent = frac >= 0.05;
+    const bool highNz = humanPresenceLimitIsHigh(limitHigh);
+    const bool lowNz = humanPresenceLimitIsHigh(limitLow);
+    bool alarm = false;
+    if (highNz && !lowNz) {
+      alarm = recent;       // default: trigger on recent activity
+    } else if (highNz && lowNz) {
+      alarm = !recent;      // both nonzero: trigger when idle
+    }
+    // both zero: never alarm
+    bitWrite(P->Flags, 0, alarm ? 1 : 0);
+    bitWrite(P->Flags, 5, recent ? 1 : 0);
+  } else {
+    // Alarm if value > SNS_LIMIT_MAX or value < SNS_LIMIT_MIN (strict).
+    // DIO HIGH=1 LOW=0: MAX=0 MIN=0 → HIGH alarms; MAX=1 MIN=1 → LOW alarms; MAX=1 MIN=0 → never.
+    if (P->snsValue > limitHigh || P->snsValue < limitLow) {
+      bitWrite(P->Flags, 0, 1);
+      bitWrite(P->Flags, 5, (P->snsValue > limitHigh) ? 1 : 0);
+    } else {
+      bitWrite(P->Flags, 0, 0);
+    }
+  }
+
+  if (bitRead(lastflag, 0) != bitRead(P->Flags, 0)) {
+    bitWrite(P->Flags, 6, 1);
+    SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
+  }
+}
+
+static void setupDioSwitchPin(int16_t snsPin, int16_t powerPin) {
+  int8_t gpio = -1;
+  const uint8_t pintype = getPinType(snsPin, &gpio);
+  if (pintype == 0 || gpio < 0) return;
+
+  if (powerPin == SNS_DIO_PULLDOWN) {
+    pinMode(gpio, INPUT_PULLDOWN);
+    digitalWrite(gpio, LOW);
+  } else if (powerPin == SNS_DIO_PULLUP) {
+    pinMode(gpio, INPUT_PULLUP);
+    digitalWrite(gpio, HIGH);
+  } else {
+    pinMode(gpio, INPUT);
+    digitalWrite(gpio, LOW);
+  }
+}
+
 bool STRUCT_SNSHISTORY::recordSentValue(ArborysSnsType *S) {
   //get the hIndex, index to sensor history
   int16_t hIndex = SensorHistory.getSensorHistoryIndex(S);
@@ -183,8 +297,22 @@ int16_t powerPins[] = _POWERPINS;
   
 
 for (byte i=0;i<_SENSORNUM;i++) {
+  byte snsID = Sensors.countSensors(sensortypes[i],I.MY_DEVICE_INDEX)+1;
+
+  #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+       bool isVirtualSensor = (sensortypes[i] == 80) || NetworkMonitor.isSensorType(sensortypes[i]);
+  #else
+       bool isVirtualSensor = (sensortypes[i] == 80);
+  #endif
+
+
   bool sensorNeedsDefaults = false;
-  
+  const int16_t sensorPin = isVirtualSensor ? (int16_t)-9999 : snsPins[i];
+  const int16_t sensorPowerPin = isVirtualSensor ? (int16_t)-9999 : powerPins[i];
+
+  //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case.
+  // Seed timeRead/timeLogged so local sensors are not immediately expired before the first read/send cycle.
+  const uint32_t seedTime = (uint32_t)utcNow();
   // Check if this sensor's values are uninitialized (all zeros is invalid)
   if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) {
     sensorNeedsDefaults = true;
@@ -204,6 +332,92 @@ for (byte i=0;i<_SENSORNUM;i++) {
     Prefs.SNS_CALIB_MAX[i] = NAN;
     Prefs.isUpToDate = false;
   }
+
+  switch (sensortypes[i]) {
+    
+    case 53: //HVAC time - this is the total time. Note that sensor pin is not used
+      {
+      bitWrite(Prefs.SNS_FLAGS[i],3,1);
+      
+      break;
+      }
+
+    case 61: //battery percent
+      {
+        bitWrite(Prefs.SNS_FLAGS[i],3,1);
+      break;
+      }
+
+    case 80: // WiFi RSSI (universal; snsID 1=current, 2=low, 3=high)
+      break;
+
+    case 81: // Network Monitor - BSSID changes
+    case 82: // Network Monitor - local IP changes
+    case 83: // Network Monitor - DNS resolution
+    case 84: // Network Monitor - HTTP Tx failures
+    case 85: // Network Monitor - gateway ping avg RTT
+    case 86: // Network Monitor - gateway ping jitter
+    case 87: // Network Monitor - external ping avg RTT
+    case 88: // Network Monitor - external ping jitter
+    case 89: // Network Monitor - download speed (Mbps)
+      break;
+    case 200: // human presence (RCWL-0516)
+    case 220: // lights switch
+      if (normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[i], Prefs.SNS_LIMIT_MIN[i])) {
+        Prefs.isUpToDate = false;
+      }
+      break;
+
+    case 90: //Sleep info
+      {
+        bitWrite(Prefs.SNS_FLAGS[i],7,0); bitWrite(Prefs.SNS_FLAGS[i],3,1); bitWrite(Prefs.SNS_FLAGS[i],1,0);
+      break;
+      }
+  }
+
+  // Send-rate 0: leave timeLogged unset so the first successful read is sent (hub registration).
+  const uint32_t seedLogged = (Prefs.SNS_INTERVAL_SEND[i] == 0
+#if _USEINTERRUPT
+      || IS_INTERRUPT_SENSOR_TYPE(sensortypes[i])
+#endif
+      ) ? 0 : seedTime;
+  SensorHistory.sensorIndex[i] = Sensors.addSensor(
+      ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID,
+      String(myname + "_" + String(sensornames[i])).c_str(), 0, seedTime, seedLogged,
+      Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE,
+      sensorPin, sensorPowerPin,
+      (float)Prefs.SNS_LIMIT_MAX[i], (float)Prefs.SNS_LIMIT_MIN[i], true, true);
+  //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
+  SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
+  SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
+  ArborysSnsType* added = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+  if (added) {
+    added->PollingInt = Prefs.SNS_INTERVAL_POLL[i];
+  }
+
+  int8_t correctedPin = -1;
+  uint8_t pintype = 0;
+  if (!isVirtualSensor) {
+    //;pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin.
+    pintype = getPinType(snsPins[i], &correctedPin);
+    if (isDrivenDioOutputType(sensortypes[i])) {
+      if (correctedPin >= 0) {
+        pinMode((uint8_t)correctedPin, OUTPUT);
+        digitalWrite((uint8_t)correctedPin, LOW);
+        if (added) bitWrite(added->Flags, 0, 0);
+      }
+    } else if (isDioBinaryType(sensortypes[i]) || isInterruptDioType(sensortypes[i])) {
+      setupDioSwitchPin(snsPins[i], powerPins[i]);
+    } else if (pintype != 0 && pintype <= 4) {
+      pinMode(correctedPin, INPUT);
+    }
+  }
+
+#if _USEINTERRUPT
+  if (added && IS_INTERRUPT_SENSOR_TYPE(sensortypes[i])) {
+    InterruptTriggers_setup(added, correctedPin);
+  }
+#endif
 }
 
 
@@ -228,85 +442,10 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
     }
   #endif
 #endif
-  for (byte i=0;i<_SENSORNUM;i++) {
-    byte snsID = Sensors.countSensors(sensortypes[i],I.MY_DEVICE_INDEX)+1;
 
-#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
-    const bool isVirtualSensor = (sensortypes[i] == 80) || NetworkMonitor.isSensorType(sensortypes[i]);
-#else
-    const bool isVirtualSensor = (sensortypes[i] == 80);
-#endif
-
-    int8_t correctedPin = -1;
-    uint8_t pintype = 0;
-    if (!isVirtualSensor) {
-      //;pin number for the sensor, if applicable. 0-99 is anolog in pin, 100-199 is MUX address, 200-299 is digital in pin, 300-399 is SPI pin, 400-599 is an I2C address. Negative values mean the same, but that there is an associated power pin. -9999 means no pin.
-      pintype = getPinType(snsPins[i], &correctedPin);
-      if (pintype !=0) {
-        //set up pins
-        if (pintype <= 4) pinMode(correctedPin, INPUT);
-        //if pintype is even, then it has a power pin, and we need to set the pin to output and low
-        if (pintype % 2 == 0 && pintype <= 6) {
-          togglePowerPin(powerPins[i], 0);
-        } 
-      }
-    }
-
-    const int16_t sensorPin = isVirtualSensor ? (int16_t)-9999 : snsPins[i];
-    const int16_t sensorPowerPin = isVirtualSensor ? (int16_t)-9999 : powerPins[i];
-
-    //note that the ith sensor index is the same as the prefs index for the sensor... though I do not guarantee that this will always be the case.
-    // Seed timeRead/timeLogged so local sensors are not immediately expired before the first read/send cycle.
-    const uint32_t seedTime = I.currentTime;
-    SensorHistory.sensorIndex[i] = Sensors.addSensor(
-        ESP.getEfuseMac(), WiFi.localIP(), sensortypes[i], snsID,
-        String(myname + "_" + String(sensornames[i])).c_str(), 0, seedTime, seedTime,
-        Prefs.SNS_INTERVAL_SEND[i], Prefs.SNS_FLAGS[i], myname.c_str(), _MYTYPE,
-        sensorPin, sensorPowerPin,
-        (float)Prefs.SNS_LIMIT_MAX[i], (float)Prefs.SNS_LIMIT_MIN[i], true, true);
-    //SensorHistory.SensorID[i] = Sensors.makeSensorID(SensorHistory.sensorIndex[i]); 
-    SensorHistory.PrefsIndex[i] = i; //this is the index to the Prefs array for the sensor, at the start it is the same as sensorhistory index. In theory it might shift if a sensor were to be removed and then re-added. But since this is not currently implemented, it is not a problem.
-    SensorHistory.HistoryIndex[i] = 0; //start at the beginning of the history array
-
-    switch (sensortypes[i]) {
-      
-      case 53: //HVAC time - this is the total time. Note that sensor pin is not used
-        {
-        bitWrite(Prefs.SNS_FLAGS[i],3,1);
-        
-        break;
-        }
-
-      case 61: //battery percent
-        {
-          bitWrite(Prefs.SNS_FLAGS[i],3,1);
-        break;
-        }
-
-      case 80: // WiFi RSSI (universal; snsID 1=current, 2=low, 3=high)
-        break;
-
-      case 81: // Network Monitor - BSSID changes
-      case 82: // Network Monitor - local IP changes
-      case 83: // Network Monitor - DNS resolution
-      case 84: // Network Monitor - HTTP Tx failures
-      case 85: // Network Monitor - gateway ping avg RTT
-      case 86: // Network Monitor - gateway ping jitter
-      case 87: // Network Monitor - external ping avg RTT
-      case 88: // Network Monitor - external ping jitter
-      case 89: // Network Monitor - download speed (Mbps)
-        break;
-      case 90: //Sleep info
-        {
-          bitWrite(Prefs.SNS_FLAGS[i],7,0); bitWrite(Prefs.SNS_FLAGS[i],3,1); bitWrite(Prefs.SNS_FLAGS[i],1,0);
-        break;
-        }
-    }
-  }
-
-#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
-  NetworkMonitor.init();
-#endif
+  #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+    NetworkMonitor.init();
+  #endif
 
 
   #ifdef _USETFLUNA
@@ -316,6 +455,7 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   #endif
 
 
+  SensorEffectors_init();
   SerialPrint("Sensors setup complete",true);
 }
 
@@ -362,17 +502,14 @@ int8_t readAllSensors(bool forceRead) {
         #ifdef _USESERIAL
         SerialPrint((String) "Invalid sensor reading for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, true);
         #endif
-        storeError((String) "Invalid sensor reading for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, ERROR_SENSOR_READ, true);
       } else if (readResult == -1) {
           #ifdef _USESERIAL
           SerialPrint((String) "Could not find index to prefs or history for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, true);
           #endif
-          storeError((String) "Could not find index to prefs or history for " + (String) sensor->snsType + (String) "." + (String) sensor->snsID, ERROR_SENSOR_READ, true);
       } else if (readResult == -2) {
           #ifdef _USESERIAL
           SerialPrint((String) "Could not register" + (String) sensor->snsType + (String) "." + (String) sensor->snsID + " as a device.", true);
           #endif
-          storeError((String) "Could not register" + (String) sensor->snsType + (String) "." + (String) sensor->snsID + " as a device.", ERROR_DEVICE_ADD, true);
       } else if (readResult >0) { //success
         numGood++;
       }
@@ -392,6 +529,20 @@ bool sensorUsesScaling(uint8_t snsType) {
   return snsType == 3 || snsType == 33 || snsType == 34 || snsType == 35;
 }
 
+// DHT / AHT / BMP / BME / BME680 climate channels: on bus or read failure report -999 (still send).
+static bool isClimateEnvSensor(uint8_t snsType) {
+  switch (snsType) {
+    case 1: case 2:           // DHT
+    case 4: case 5:           // AHT
+    case 9: case 10: case 11: // BMP
+    case 13: case 14: case 15: case 16: // BME
+    case 17: case 18: case 19: case 20: // BME680
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Map raw → 0..100 via calib endpoints. If auto-zero is enabled and the scaled value
 // would be negative, move SNS_CALIB_MIN to the current raw reading so it becomes zero.
 static double applyScaledReading(int16_t prefs_index, double raw, double calibMin, double calibMax, bool calibWasUnset) {
@@ -407,6 +558,27 @@ static double applyScaledReading(int16_t prefs_index, double raw, double calibMi
   return scaled;
 }
 
+// Sticky per-address I2C begin() failure from initHardwareSensors (7-bit addr 0..127).
+static bool s_i2cInitFailed[128] = {false};
+
+static void setI2cInitFailed(uint8_t addr, bool failed) {
+  s_i2cInitFailed[addr & 0x7F] = failed;
+}
+
+static bool isI2cInitFailed(uint8_t addr) {
+  return s_i2cInitFailed[addr & 0x7F];
+}
+
+static bool isI2cSensorPin(int16_t snsPin, uint8_t* outAddr) {
+  int8_t corrected = -1;
+  const uint8_t pt = getPinType(snsPin, &corrected);
+  if ((pt == 9 || pt == 10) && corrected >= 0) {
+    if (outAddr) *outAddr = (uint8_t)corrected;
+    return true;
+  }
+  return false;
+}
+
 int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
   //return -10 if reading is invalid, -2 if I am not registered, -1 if not my sensor, 0 if not time to read, 1 if read successful
   
@@ -415,34 +587,74 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
   // need the index to the Prefs arrays for the sensor
   int16_t prefs_index = SensorHistory.getSensorHistoryIndex(P);
-  if (prefs_index == -2) return -2;
-  if (prefs_index == -1) return -1;
+  if (prefs_index == -2) {
+    storeError((String) "Could not register " + (String) P->snsType + "." + (String) P->snsID + " as a device.", ERROR_DEVICE_ADD, true);
+    return -2;
+  }
+  if (prefs_index == -1) {
+    storeError((String) "Could not find index to prefs or history for " + (String) P->snsType + "." + (String) P->snsID, ERROR_SENSOR_READ, true);
+    return -1;
+  }
 
   //is it time to read?
-  if (forceRead==false && !(P->timeRead==0 || P->timeRead>I.currentTime || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < I.currentTime || I.currentTime - P->timeRead >60*60*24 )) return 0;
+  const uint32_t nowUtc = (uint32_t)utcNow();
+  // Poll interval 0 = never auto-update (forceRead still allowed).
+  if (forceRead == false && Prefs.SNS_INTERVAL_POLL[prefs_index] == 0) return 0;
+  if (forceRead==false && !(P->timeRead==0 || P->timeRead>nowUtc || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < nowUtc || nowUtc - P->timeRead >60*60*24 )) return 0;
 
-  
-
-  // Use I.currentTime instead of local time_t t variable
-  byte nsamps; //only used for some sensors
-  double val;
-  uint8_t lastflag = P->Flags;
-  //reset adjustable flags
-  bitWrite(P->Flags,0,0);
-  bitWrite(P->Flags,5,0);
-  bitWrite(P->Flags,6,0);
+  bool turnOffPinAtEnd = false;
+  int8_t correctedPin=-1;
+  uint8_t pintype = getPinType(P->snsPin, &correctedPin);
 
   double LastsnsValue = P->snsValue;
   bool isInvalid = false;
+  bool i2cInitFailShortCircuit = false;
   time_t measuredReadTime = 0;
 
-  switch (P->snsType) {  
+  // I2C sensors (pin encoding 400–599): if begin() failed at init, report -999 and skip power/HW read.
+  {
+    uint8_t i2cAddr = 0;
+    if (isI2cSensorPin(P->snsPin, &i2cAddr) && isI2cInitFailed(i2cAddr)) {
+      P->snsValue = -999;
+      isInvalid = true;
+      i2cInitFailShortCircuit = true;
+    }
+  }
+
+  // Even pintype = powered sensor; use P->powerPin (GPIO), not correctedPin (addr/channel).
+  // DIO types store pull config in powerPin (-99/-100); never treat that as a rail.
+  if (!i2cInitFailShortCircuit &&
+      !isDioBinaryType(P->snsType) &&
+      pintype != 0 && (pintype % 2 == 0) && isRealPowerPin(P->powerPin)) {
+    togglePowerPin(P->powerPin, 1);
+    turnOffPinAtEnd = true;
+    //delay appropriately so that sensor stabilizes
+    if (pintype == 10) {
+      delay(100); //wait 100 ms for I2c devices reading to settle
+    } else     delay(50); //wait X ms for reading to settle
+  }
+
+  // Use utcNow() for stamps (I.currentTime is local wall for display only)
+  byte nsamps; //only used for some sensors
+  double val;
+  uint8_t lastflag = P->Flags;
+  //reset adjustable flags (driven DIO outputs keep bit0 as DIO state until update sets it)
+  if (!isDrivenDioOutputType(P->snsType)) {
+    bitWrite(P->Flags,0,0);
+  }
+  bitWrite(P->Flags,5,0);
+  bitWrite(P->Flags,6,0);
+
+  if (!i2cInitFailShortCircuit) switch (P->snsType) {  
     case 1: //DHT temp
       {
         #ifdef DHTTYPE
         //DHT Temp
         P->snsValue =  (dht.readTemperature()*9/5+32);
-        if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+        if (isTempValid(P->snsValue,false)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
       #endif
       
       break;
@@ -450,9 +662,12 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     case 2: //DHT RH
       {
         #ifdef DHTTYPE
-        //DHT Temp
+        //DHT RH
         P->snsValue = dht.readHumidity();
-        if (isRHValid(P->snsValue)==false) isInvalid=true;
+        if (isRHValid(P->snsValue)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
       #endif
       
       break;
@@ -561,19 +776,33 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
           val = aht.readTemperature();
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
-            P->snsValue = (100*(val*9/5+32))/100;                       
+            P->snsValue = (100*(val*9/5+32))/100;
+            if (isTempValid(P->snsValue,false)==false) {
+              P->snsValue = -999;
+              isInvalid=true;
+            }
           }
           else
           {
             SerialPrint("AHT Temperature Error",true);
+            P->snsValue = -999;
+            isInvalid=true;
           }
       #endif
       #ifdef _USEAHTADA
         //aht temperature
           sensors_event_t humidity, temperature;
-          aht.getEvent(&humidity,&temperature);
-          P->snsValue = (100*(temperature.temperature*9/5+32))/100; 
-          if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+          if (!aht.getEvent(&humidity,&temperature)) {
+            SerialPrint("AHT Temperature Error",true);
+            P->snsValue = -999;
+            isInvalid=true;
+          } else {
+            P->snsValue = (100*(temperature.temperature*9/5+32))/100;
+            if (isTempValid(P->snsValue,false)==false) {
+              P->snsValue = -999;
+              isInvalid=true;
+            }
+          }
 
       #endif
 
@@ -586,20 +815,34 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
         #ifdef _USEAHTADA
           //AHT
             sensors_event_t humidity, temperature;
-            aht.getEvent(&humidity,&temperature);
-            P->snsValue = (100*(humidity.relative_humidity))/100;            
+            if (!aht.getEvent(&humidity,&temperature)) {
+              SerialPrint("AHT Humidity Error",true);
+              P->snsValue = -999;
+              isInvalid=true;
+            } else {
+              P->snsValue = (100*(humidity.relative_humidity))/100;
+              if (isRHValid(P->snsValue)==false) {
+                P->snsValue = -999;
+                isInvalid=true;
+              }
+            }
         #endif
         #ifdef _USEAHT
           val = aht.readHumidity();
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
-            P->snsValue = (val*100)/100;             
+            P->snsValue = (val*100)/100;
+            if (isRHValid(P->snsValue)==false) {
+              P->snsValue = -999;
+              isInvalid=true;
+            }
           }
           else
           {
             SerialPrint("AHT Humidity Error",true);
+            P->snsValue = -999;
+            isInvalid=true;
           }
-          if (isRHValid(P->snsValue)==false) isInvalid=true;
           #endif
       break;
       }
@@ -669,19 +912,22 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
          
         #ifdef _USEBARPRED
           //adjust critical values based on history, if available
-          if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
+          if (isPressureValid(P->snsValue) && P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
             //pressure is low, but rising
             Prefs.SNS_LIMIT_MIN[prefs_index] = 1000;
-          } else {
+          } else if (isPressureValid(P->snsValue)) {
             Prefs.SNS_LIMIT_MIN[prefs_index] = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < I.currentTime) {
+          if (isPressureValid(P->snsValue) && LAST_BAR_READ+60*60 < (uint32_t)utcNow()) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = I.currentTime;          
+            LAST_BAR_READ = (uint32_t)utcNow();          
           }
         #endif
-        if (isPressureValid(P->snsValue)==false) isInvalid=true;
+        if (isPressureValid(P->snsValue)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
 
       #endif
           
@@ -691,6 +937,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         #ifdef _USEBMP
         P->snsValue = ( bmp.readTemperature()*9/5+32);
+        if (isTempValid(P->snsValue,false)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
       #endif
       
       break;
@@ -699,6 +949,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         #ifdef _USEBMP
          P->snsValue = (bmp.readAltitude(1013.25)); //meters
+         if (isnan(P->snsValue)) {
+           P->snsValue = -999;
+           isInvalid=true;
+         }
       #endif
       
       break;
@@ -775,22 +1029,25 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     case 13: //BME pres
       {
         #ifdef _USEBME
-         P->snsValue = bme.readPressure(); //in Pa
-        if (isPressureValid(P->snsValue)==false) isInvalid=true;
+         P->snsValue = bme.readPressure()/100.0; //in hPa
         #ifdef _USEBARPRED
           //adjust critical values based on history, if available
-          if (P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
+          if (isPressureValid(P->snsValue) && P->snsValue<1009 && BAR_HX[0] < P->snsValue  && BAR_HX[0] > BAR_HX[2] ) {
             //pressure is low, but rising
             Prefs.SNS_LIMIT_MIN[prefs_index] = 1000;
-          } else {
+          } else if (isPressureValid(P->snsValue)) {
             Prefs.SNS_LIMIT_MIN[prefs_index] = 1009;
           }
 
-          if (LAST_BAR_READ+60*60 < I.currentTime) {
+          if (isPressureValid(P->snsValue) && LAST_BAR_READ+60*60 < (uint32_t)utcNow()) {
             pushDoubleArray(BAR_HX,24,P->snsValue);
-            LAST_BAR_READ = I.currentTime;          
+            LAST_BAR_READ = (uint32_t)utcNow();          
           }
         #endif
+        if (isPressureValid(P->snsValue)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
       #endif
       
       break;
@@ -799,7 +1056,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         #ifdef _USEBME
         P->snsValue = (( bme.readTemperature()*9/5+32) );
-        if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+        if (isTempValid(P->snsValue,false)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
       #endif
       
       break;
@@ -809,7 +1069,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
         #ifdef _USEBME
       
           P->snsValue = ( bme.readHumidity() );
-          if (isRHValid(P->snsValue)==false) isInvalid=true;
+          if (isRHValid(P->snsValue)==false) {
+            P->snsValue = -999;
+            isInvalid=true;
+          }
         #endif
       
       break;
@@ -818,6 +1081,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         #ifdef _USEBME
          P->snsValue = (bme.readAltitude(1013.25)); //meters
+         if (isnan(P->snsValue)) {
+           P->snsValue = -999;
+           isInvalid=true;
+         }
 
       #endif
       break;
@@ -827,27 +1094,40 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         read_BME680();
       P->snsValue = (double) (( ((double) temperature/100) *9/5)+32); //degrees F
-      if (isTempValid(P->snsValue,false)==false) isInvalid=true;
+      if (isTempValid(P->snsValue,false)==false) {
+        P->snsValue = -999;
+        isInvalid=true;
+      }
       break;
       }
     case 18: //bme680 humidity
       {
         read_BME680();
         P->snsValue = ((double) humidity/1000); //RH%
-        if (isRHValid(P->snsValue)==false) isInvalid=true;
+        if (isRHValid(P->snsValue)==false) {
+          P->snsValue = -999;
+          isInvalid=true;
+        }
         break;
       }
     case 19: //bme680 air pressure
       {
         read_BME680();
       P->snsValue = ((double) pressure/100); //hPa
-      if (isPressureValid(P->snsValue)==false) isInvalid=true;
+      if (isPressureValid(P->snsValue)==false) {
+        P->snsValue = -999;
+        isInvalid=true;
+      }
       break;
       }
     case 20: //bme680 gas
       {
         read_BME680();
       P->snsValue = (gas); //milliohms
+      if (P->snsValue <= 0) {
+        P->snsValue = -999;
+        isInvalid=true;
+      }
       break;
       }
     #endif
@@ -856,7 +1136,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
       case 50: //total HVAC time        
         {
-          if (Sensors.countFlagged(55,0b00000001,0b00000001,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0)>0) {
+          if (Sensors.countFlagged(55,0b00000001,0b00000001,0,false,false,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0,false,false,0)>0) {
             P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC  systems were on
             bitWrite(P->Flags,0,1); //currently flagged
           }
@@ -998,17 +1278,56 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
       #endif
 
-      case 70: //Leak detection
+      case 73: // timer DIO OUTPUT: snsValue = remaining seconds; bit0 = DIO state
       {
+#if _USEINTERRUPT
+        const uint32_t pollSec = (prefs_index >= 0) ? Prefs.SNS_INTERVAL_POLL[prefs_index] : P->PollingInt;
+        InterruptTriggers_updateTimerOutput(P, correctedPin, pollSec);
+#else
+        if (correctedPin >= 0) {
+          const bool on = P->snsValue > 0.0;
+          pinMode((uint8_t)correctedPin, OUTPUT);
+          digitalWrite((uint8_t)correctedPin, on ? HIGH : LOW);
+          bitWrite(P->Flags, 0, on ? 1 : 0);
+        }
+#endif
+        break;
+      }
+
+      case 75: // clock-window DIO OUTPUT: on between limitMin and limitMax (hours / dawn / dusk)
+      {
+        const double onSpec = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : P->limitLow;
+        const double offSpec = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : P->limitHigh;
+        InterruptTriggers_updateClockDio(P, correctedPin, onSpec, offSpec);
+        break;
+      }
+
+      case 200: // RCWL: daily detection count + .1 if recent within poll_interval
+      case 220: // button: daily push count + .1 if recent within poll_interval
+      {
+#if _USEINTERRUPT
+        const uint32_t pollSec = (prefs_index >= 0) ? Prefs.SNS_INTERVAL_POLL[prefs_index] : P->PollingInt;
+        InterruptTriggers_updateCountSensor(P, pollSec);
+#else
+        P->snsValue = floor(P->snsValue);
+#endif
+        break;
+      }
+      case 70: // leak DIO (HIGH=1, LOW=0); alarms via Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN
+      case 71: // binary DIO high/low
+      {
+        int8_t dioGpio = correctedPin;
         #ifdef _USELEAK
-        digitalWrite(_USELEAK, HIGH);
-        if (digitalRead(_USELEAK)==HIGH) P->snsValue =1;
-        else P->snsValue =0;
-        digitalWrite(_USELEAK, LOW);
-
-      #endif
-
-      break;
+        if (P->snsType == 70 && dioGpio < 0) {
+          dioGpio = (int8_t)_USELEAK;
+        }
+        #endif
+        if (dioGpio < 0) {
+          isInvalid = true;
+          break;
+        }
+        P->snsValue = (digitalRead(dioGpio) == HIGH) ? 1.0 : 0.0;
+        break;
       }
     case 80: // WiFi RSSI from STRUCT_CORE (snsID 1=current, 2=low, 3=high)
       {
@@ -1071,12 +1390,26 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
   }
 
   if (isInvalid) {
-    //the reading is considered invalid. Set the lastread time such that the next read will be 25% of typical interval.
-    int shortDelay = (Prefs.SNS_INTERVAL_POLL[prefs_index] * 0.25);
-    if (shortDelay < 60 && Prefs.SNS_INTERVAL_POLL[prefs_index] > 60) shortDelay = 60; //minimum 1 minute
-    if (shortDelay > 60*10) shortDelay = 60*10; //maximum 10 minutes
-    P->timeRead = I.currentTime - shortDelay;
-    return -10;
+    if (isClimateEnvSensor(P->snsType) || i2cInitFailShortCircuit) {
+      // Bus / read / init failure: still stamp, history, and send so hubs see -999.
+      P->snsValue = -999;
+      if (i2cInitFailShortCircuit) {
+        storeError((String) "I2C init failed (reporting -999) for " + (String) P->snsType + (String) "." + (String) P->snsID, ERROR_SENSOR_READ, true);
+      } else {
+        storeError((String) "Climate sensor read failed (reporting -999) for " + (String) P->snsType + (String) "." + (String) P->snsID, ERROR_SENSOR_READ, true);
+      }
+    } else {
+      //the reading is considered invalid. Set the lastread time such that the next read will be 25% of typical interval.
+      int shortDelay = (Prefs.SNS_INTERVAL_POLL[prefs_index] * 0.25);
+      if (shortDelay < 60 && Prefs.SNS_INTERVAL_POLL[prefs_index] > 60) shortDelay = 60; //minimum 1 minute
+      if (shortDelay > 60*10) shortDelay = 60*10; //maximum 10 minutes
+      P->timeRead = (uint32_t)utcNow() - shortDelay;
+      if (turnOffPinAtEnd) {
+        togglePowerPin(P->powerPin, 0);
+      }
+      storeError((String) "Invalid sensor reading for " + (String) P->snsName + " " + (String) P->snsType + "." + (String) P->snsID, ERROR_SENSOR_READ, true);
+      return -10;
+    }
   }
 
 
@@ -1090,34 +1423,40 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     if (bitRead(P->Flags,0) != bitRead(lastflag,0)) { //flags changed
       bitWrite(P->Flags,6,1); //change in flag status
       if (bitRead(P->Flags,0) == 1) bitWrite(P->Flags,5,1); //value is high
+      SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
     } else {
       //no change in flag status. bit 6 is already 0.
     }
-    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : I.currentTime; //localtime
+    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : (uint32_t)utcNow();
 
     //add to sensor history
     SensorHistory.recordSentValue(P);     
   }  else  {
     //set flag status
 
-    double limitUpper = (prefs_index>=0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : -9999999;
-    double limitLower = (prefs_index>=0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : 9999999;
-    if (prefs_index >= 0) {
-      P->limitHigh = (float)Prefs.SNS_LIMIT_MAX[prefs_index];
-      P->limitLow = (float)Prefs.SNS_LIMIT_MIN[prefs_index];
+    double limitHigh = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : P->limitHigh;
+    double limitLow = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : P->limitLow;
+
+    if (isDioBinaryType(P->snsType)) {
+      P->snsValue = (P->snsValue >= 0.5) ? 1.0 : 0.0;
     }
 
-    if (P->snsValue>limitUpper || P->snsValue<limitLower) {
-      bitWrite(P->Flags,0,1); //flagged
-      if (P->snsValue>limitUpper) bitWrite(P->Flags,5,1); //value is high
-      else bitWrite(P->Flags,5,0); //value is low
+    if ((P->snsType == 200 || P->snsType == 220) && prefs_index >= 0 &&
+        normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefs_index], Prefs.SNS_LIMIT_MIN[prefs_index])) {
+      limitHigh = Prefs.SNS_LIMIT_MAX[prefs_index];
+      limitLow = Prefs.SNS_LIMIT_MIN[prefs_index];
+      Prefs.isUpToDate = false;
+      storeError("Type 200/220 limits were inverted; swapped high/low", ERROR_SENSOR_INVALID, true);
+    }
+
+    if (prefs_index >= 0) {
+      P->limitHigh = (float)limitHigh;
+      P->limitLow = (float)limitLow;
+      applyAlarmFlags(P, limitHigh, limitLow, lastflag);
     } else {
-      bitWrite(P->Flags,0,0); //not flagged
+      bitWrite(P->Flags, 0, 0);
     }
-    if (bitRead(lastflag,0)!=bitRead(P->Flags,0)) {     
-      bitWrite(P->Flags,6,1); //flag changed
-    }
-    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : I.currentTime; //localtime
+    P->timeRead = (measuredReadTime > 0) ? measuredReadTime : (uint32_t)utcNow();
     //add to sensor history
     SensorHistory.recordSentValue(P);  
   }
@@ -1130,6 +1469,10 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
   // Successful local read refreshes the expiry clock; clear sticky expired.
   P->expired = false;
 
+  if (turnOffPinAtEnd) {
+    togglePowerPin(P->powerPin, 0);
+  }
+
   return 1;
 }
 
@@ -1139,6 +1482,7 @@ void togglePowerPin(int16_t powerPin, bool on) {
   //low power mode does not turn on power pins, this is done at startup
   return;
   #endif
+  if (!isRealPowerPin(powerPin)) return;
   powerPin = abs(powerPin);
   pinMode(powerPin, OUTPUT);
   digitalWrite(powerPin, on ? HIGH : LOW);
@@ -1220,13 +1564,16 @@ void initHardwareSensors() {
     oled.println("Sns setup.");
   #endif
 
-  #ifdef _USEAHT
-  if (!aht.begin()) SerialPrint("AHT not connected",true);
-  #endif
-  #ifdef _USEAHTADA
-  if (!aht.begin()) SerialPrint("AHT not connected",true);
-  #endif
-  
+  // Energize all configured sensor power rails so I2C/SPI begin() can see devices.
+  {
+    const int16_t powerPinsInit[] = _POWERPINS;
+    for (byte i = 0; i < _SENSORNUM; i++) {
+      if (isRealPowerPin(powerPinsInit[i])) {
+        togglePowerPin(powerPinsInit[i], 1);
+      }
+    }
+    delay(200);
+  }
 
   #ifdef _USEBME680_BSEC
     iaqSensor.begin(BME68X_I2C_ADDR_LOW, Wire);
@@ -1255,17 +1602,29 @@ void initHardwareSensors() {
   #endif
 
   #ifdef _USEBME680
-    while (!BME680.begin(I2C_STANDARD_MODE)) {  // Start BME680 using I2C, use first device found
-      #ifdef _DEBUG
-        Serial.println("-  Unable to find BME680. Trying again in 5 seconds.\n");
-      #endif
-      delay(5000);
+    {
+      byte retry = 0;
+      while (!BME680.begin(I2C_STANDARD_MODE) && retry < 20) {  // Start BME680 using I2C, use first device found
+        #ifdef _DEBUG
+          Serial.println("-  Unable to find BME680. Retrying without delay.\n");
+        #endif
+        retry++;
+      }
+      if (retry >= 20) {
+        SerialPrint("BME680 failed to connect after 20 attempts (will report -999 on read)", true);
+        storeError("BME680 failed to connect after 20 attempts", ERROR_SENSOR_READ, true);
+        setI2cInitFailed(0x76, true);
+        setI2cInitFailed(0x77, true);
+      } else {
+        setI2cInitFailed(0x76, false);
+        setI2cInitFailed(0x77, false);
+        BME680.setOversampling(TemperatureSensor, Oversample16);
+        BME680.setOversampling(HumiditySensor, Oversample16);
+        BME680.setOversampling(PressureSensor, Oversample16);
+        BME680.setIIRFilter(IIR4);
+        BME680.setGas(320, 150);  // 320°c for 150 milliseconds
+      }
     }
-    BME680.setOversampling(TemperatureSensor, Oversample16);
-    BME680.setOversampling(HumiditySensor, Oversample16);
-    BME680.setOversampling(PressureSensor, Oversample16);
-    BME680.setIIRFilter(IIR4);
-    BME680.setGas(320, 150);  // 320°c for 150 milliseconds
   #endif
 
   #ifdef DHTTYPE
@@ -1295,18 +1654,28 @@ void initHardwareSensors() {
       delay(250);
       retry++;
     }
-    if (retry >= 10) SerialPrint("ADS1115 failed to connect after 10 attempts",true);
-    else SerialPrint("ADS1115 connected after " + String(retry) + " attempts",true);
+    if (retry >= 10) {
+      SerialPrint("ADS1115 failed to connect after 10 attempts",true);
+      storeError("ADS1115 failed to connect after 10 attempts", ERROR_SENSOR_READ, true);
+      setI2cInitFailed((uint8_t)_USEADS1115, true);
+    } else {
+      SerialPrint("ADS1115 connected after " + String(retry) + " attempts",true);
+      setI2cInitFailed((uint8_t)_USEADS1115, false);
+    }
   
     ads.setGain(_USE_ADS_GAIN);
   #endif
 
-  // Initialize AHT sensor
+  // Initialize AHT sensor (screen/retry without blocking delays on failure)
   #if defined(_USEAHT) || defined(_USEAHTADA)
     retry = 0;
-    while (!isI2CDeviceReady(AHTXX_ADDRESS_X38) && retry < 100) {
+    #if defined(AHTXX_ADDRESS_X38)
+      const byte ahtAddr = AHTXX_ADDRESS_X38;
+    #else
+      const byte ahtAddr = 0x38;
+    #endif
+    while (!isI2CDeviceReady(ahtAddr) && retry < 100) {
       SerialPrint("AHT not ready or connected. Retry number " + String(retry),true);
-      delay(100);
       retry++;
     }
     retry = 0;
@@ -1320,11 +1689,16 @@ void initHardwareSensors() {
         oled.setCursor(0,0);  
         oled.printf("No aht x%d!", retry);          
       #endif
-      delay(250);
       retry++;
     }
-    if (retry >= 10) SerialPrint("AHT failed to connect after 10 attempts",true);
-    else SerialPrint("AHT connected after " + String(retry) + " attempts",true);
+    if (retry >= 10) {
+      SerialPrint("AHT failed to connect after 10 attempts (will report -999 on read)",true);
+      storeError("AHT failed to connect after 10 attempts", ERROR_SENSOR_READ, true);
+      setI2cInitFailed(ahtAddr, true);
+    } else {
+      SerialPrint("AHT connected after " + String(retry) + " attempts",true);
+      setI2cInitFailed(ahtAddr, false);
+    }
   #endif
 
   #ifdef _USEBMP
@@ -1340,7 +1714,6 @@ void initHardwareSensors() {
 
     while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
       SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
-      delay(100);
       retry++;
     }
 
@@ -1349,14 +1722,15 @@ void initHardwareSensors() {
       if (BMPaddress == 0x76) BMPaddress = 0x77;
       else BMPaddress = 0x76;
       SerialPrint(" " + String(BMPaddress), true);
+      retry = 0;
       while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
         SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
-        delay(100);
         retry++;
       }
       if (!isI2CDeviceReady(BMPaddress)) {
         isBMPgood = false;
         SerialPrint("BMP not ready/detected at all known addresses.",true);
+        storeError("BMP not detected at known addresses", ERROR_SENSOR_READ, true);
       } else {
         SerialPrint("BMP ready at address " + String(BMPaddress),true);
       }
@@ -1376,12 +1750,17 @@ void initHardwareSensors() {
           oled.printf("BMP fail at %d.\nRetry number %d\n", BMPaddress, retry);          
         #endif
 
-        delay(100);
         retry++;
       }
-      if (retry >= 20) SerialPrint("BMP failed to connect after 20 attempts",true);
-      else {
+      if (retry >= 20) {
+        SerialPrint("BMP failed to connect after 20 attempts (will report -999 on read)",true);
+        storeError("BMP failed to connect after 20 attempts", ERROR_SENSOR_READ, true);
+        setI2cInitFailed(BMPaddress, true);
+        setI2cInitFailed(0x76, true);
+        setI2cInitFailed(0x77, true);
+      } else {
         SerialPrint("BMP connected after " + String(retry) + " attempts",true);
+        setI2cInitFailed(BMPaddress, false);
         /* Default settings from datasheet. */
         bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
                         Adafruit_BMP280::SAMPLING_X2,
@@ -1389,41 +1768,94 @@ void initHardwareSensors() {
                       Adafruit_BMP280::FILTER_X16,
                       Adafruit_BMP280::STANDBY_MS_500);
         }
+    } else {
+      setI2cInitFailed(0x76, true);
+      setI2cInitFailed(0x77, true);
+      setI2cInitFailed((uint8_t)_USEBMP, true);
     }
   #endif
   
   #ifdef _USEBME
     retry = 0;
-    while (!bme.begin() && retry < 20) {
+    // Screen common BME280 addresses (0x76 / 0x77) without blocking delays.
+    byte BMEaddress = 0;
+    if (isI2CDeviceReady(0x76)) BMEaddress = 0x76;
+    else if (isI2CDeviceReady(0x77)) BMEaddress = 0x77;
+    else BMEaddress = 0x76;
+
+    while (!isI2CDeviceReady(BMEaddress) && retry < 50) {
+      SerialPrint("BME not ready at address " + String(BMEaddress) + ". Retry number " + String(retry),true);
+      retry++;
+    }
+    if (!isI2CDeviceReady(BMEaddress)) {
+      byte alt = (BMEaddress == 0x76) ? 0x77 : 0x76;
+      SerialPrint("BME not at " + String(BMEaddress) + ", trying " + String(alt), true);
+      BMEaddress = alt;
+      retry = 0;
+      while (!isI2CDeviceReady(BMEaddress) && retry < 50) {
+        SerialPrint("BME not ready at address " + String(BMEaddress) + ". Retry number " + String(retry),true);
+        retry++;
+      }
+    }
+
+    retry = 0;
+    while (!bme.begin(BMEaddress) && retry < 20) {
       #ifdef _USESSD1306
-        oled.println("BME failed.");
-        delay(500);
         oled.clear();
         oled.setCursor(0,0);
-        delay(500);
+        oled.printf("BME fail %d x%d", BMEaddress, retry);
       #else
-        SerialPrint("BME failed. Retry number " + String(retry),true);
-        digitalWrite(2, HIGH);
-        delay(100);
-        digitalWrite(2, LOW);
-        delay(100);
+        SerialPrint("BME failed at " + String(BMEaddress) + ". Retry number " + String(retry),true);
       #endif
       retry++;
     }
+    if (retry >= 20) {
+      SerialPrint("BME failed to connect after 20 attempts (will report -999 on read)", true);
+      storeError("BME failed to connect after 20 attempts", ERROR_SENSOR_READ, true);
+      setI2cInitFailed(BMEaddress, true);
+      setI2cInitFailed(0x76, true);
+      setI2cInitFailed(0x77, true);
+    } else {
+      setI2cInitFailed(BMEaddress, false);
+      /* Default settings from datasheet. */
+      bme.setSampling(Adafruit_BME280::MODE_NORMAL,
+                      Adafruit_BME280::SAMPLING_X2,
+                      Adafruit_BME280::SAMPLING_X16,
+                      Adafruit_BME280::FILTER_X16,
+                      Adafruit_BME280::STANDBY_MS_500);
+    }
+  #endif
 
-    /* Default settings from datasheet. */
-    bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                    Adafruit_BME280::SAMPLING_X2,
-                    Adafruit_BME280::SAMPLING_X16,
-                    Adafruit_BME280::FILTER_X16,
-                    Adafruit_BME280::STANDBY_MS_500);
+  #ifdef _USETFLUNA
+    {
+      const uint8_t tfAddr = (uint8_t)_USETFLUNA;
+      // No dedicated begin() here; mark failed if the device does not ACK on the bus.
+      if (!isI2CDeviceReady(tfAddr)) {
+        SerialPrint("TFLuna not ready at I2C " + String(tfAddr) + " (will report -999 on read)", true);
+        setI2cInitFailed(tfAddr, true);
+      } else {
+        setI2cInitFailed(tfAddr, false);
+      }
+    }
   #endif
 
   // Initialize barometric prediction globals
 
   // Call sensor-specific setup
   setupSensors();
-  
+
+  // Powered sensors use negative snsPin encoding: turn their rails back OFF for low power.
+  // ReadData will pulse them on around each poll.
+  {
+     int16_t snsPinsInit[] = _SNSPINS;
+     int16_t powerPinsInit[] = _POWERPINS;
+    for (byte i = 0; i < _SENSORNUM; i++) {
+      if (snsPinsInit[i] < 0 && snsPinsInit[i] != -9999 &&
+          isRealPowerPin(powerPinsInit[i])) {
+        togglePowerPin(powerPinsInit[i], 0);
+      }
+    }
+  }
 }
 
 
@@ -1476,11 +1908,11 @@ uint8_t getPinType(int16_t pin, int8_t* correctedPin) {
     *correctedPin = -1*pin-300;
     return 8;
   }
-  if (pin >= 400 && pin < 500) {
+  if (pin >= 400 && pin < 600) {
     *correctedPin = pin-400;
     return 9;
   }
-  if (pin >= -499 && pin <= -400) {
+  if (pin >= -599 && pin <= -400) {
     *correctedPin = -1*pin-400;
     return 10;
   }
@@ -1538,12 +1970,6 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
   int8_t correctedPin=-1;
   uint8_t pintype = getPinType(pin, &correctedPin);
       
-  //has power pin?
-  if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
-    togglePowerPin(powerPin, 1);
-    delay(50); //wait X ms for reading to settle
-  }
-
   if (pintype == 1 || pintype == 2) {
     val = readAnalogVoltage(pin, nsamps);
   }
@@ -1559,10 +1985,6 @@ float readPinValue(int16_t pin, byte nsamps, int16_t powerPin) {
     #endif
   }
 
-  //has power pin?
-  if (pintype % 2 == 0 && pintype <= 6 && powerPin != -1) { //6 is the max pintype for a power pin
-    togglePowerPin(powerPin, 0);
-  }
 
   return val; 
 }

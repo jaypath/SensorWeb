@@ -102,14 +102,15 @@ struct SupabaseFirmwareOffer {
 
 struct SupabaseSiteDto {
   char id[40];
-  char slug[33];
-  char name[64];
+  char slug[25];   // site label (max 24)
+  char name[65];   // site description (max 64)
   uint16_t deviceCount;
 };
 
 struct SupabaseQueryFilter {
   const char* table;       // "sensors" | "devices" | "sensor_readings" | "sites"
-  const char* deviceMac;   // optional
+  const char* deviceMac;   // optional single MAC
+  const char* deviceMacIn; // optional CSV for device_mac=in.(...)
   const char* deviceIp;    // optional
   const char* site;        // optional site slug (null/empty = all sites for user)
   int16_t snsType;         // -1 = any
@@ -117,6 +118,16 @@ struct SupabaseQueryFilter {
   uint32_t timeStartUnix;  // 0 = none
   uint32_t timeEndUnix;    // 0 = none
   uint16_t limit;
+  uint16_t offset;         // pagination (hub inventory)
 };
+
+/** Soft cap for ArborysNet locations returned / allowed per user. */
+#ifndef ARBORYSNET_MAX_SITES
+#define ARBORYSNET_MAX_SITES 10
+#endif
+/** Hub inventory page size (devices per request). */
+#ifndef ARBORYSNET_HUB_DEVICE_PAGE
+#define ARBORYSNET_HUB_DEVICE_PAGE 20
+#endif
 
 #endif // _USESUPABASE

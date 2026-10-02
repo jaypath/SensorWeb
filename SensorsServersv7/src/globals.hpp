@@ -59,25 +59,39 @@ typedef enum {
   EVENT_REBOOT_TRIGGERED, //reboot triggered
   EVENT_BOOT_WARNING, //boot warning - any non error occured
   EVENT_BOOT_COMPLETE, //boot complete
-  EVENT_FIRMWARE_UPDATED //firmware updated
+  EVENT_FIRMWARE_UPDATED, //firmware updated
+  EVENT_ARBORYSNET, // generic ArborysNet / cloud event
+  EVENT_ARBORYSNET_CLAIMED, // device claim succeeded
+  EVENT_ARBORYSNET_LOCATION, // locations listed / assigned / changed
+  EVENT_ARBORYSNET_UPLOAD // reading or keepalive uploaded
   } SYSTEMEVENTS;
 
 void logSystemEvent(const char* description, SYSTEMEVENTS code = EVENT_DEFAULT);
 void logSystemEvent(String description, SYSTEMEVENTS code = EVENT_DEFAULT);
+/** Most recent logSystemEvent text (RAM only; for STATUS page). */
+const char* getLastSystemLogMessage();
+time_t getLastSystemLogTime();
 
 //potential reset issues
 typedef enum {
-  RESET_DEFAULT, //reset due to some unknown fault, where the reset state could not be set (probably triggered by a hang and watchdog timer kicked)
-  RESET_SD, //reset because of SD card ... this can't be saved so it's actually pointless :)
-  RESET_WEATHER, //reset because couldn't get weather
-  RESET_USER, //user reset
-  RESET_OTA, //ota reset
-  RESET_WIFI, //no wifi so reset
-  RESET_TIME, //time based reset 
-  RESET_UNKNOWN, //unexpected reboot/crash detected
-  RESET_NEWWIFI, //new wifi credentials
-  RESET_MEMORY_LOW, //memory low
-  RESET_MEMORY_FRAGMENTED, //memory fragmented
+  RESET_DEFAULT, // cause was never recorded
+  RESET_SD, // SD card failure
+  RESET_WEATHER, // weather fetch failed
+  RESET_USER, // manual reboot
+  RESET_OTA, // firmware update
+  RESET_WIFI, // Wi-Fi recovery gave up
+  RESET_TIME, // time-based reset
+  RESET_UNKNOWN, // unexpected reboot, cause not identified
+  RESET_NEWWIFI, // new Wi-Fi credentials or setup finished
+  RESET_MEMORY_LOW, // free heap under 1 KB
+  RESET_MEMORY_FRAGMENTED, // heap too fragmented to continue
+  RESET_WATCHDOG, // task, interrupt, or other watchdog (chip does not need three enums)
+  RESET_PANIC, // abort or other panic (failed allocation, assert)
+  RESET_BROWNOUT, // supply dip
+  RESET_POWERON, // chip powered on; RTC may have been cleared
+  RESET_DEEPSLEEP, // woke from deep sleep
+  RESET_SDIO, // reset over SDIO
+  RESET_EXTERNAL, // external reset pin
   } RESETCAUSE;
 
   
@@ -132,10 +146,15 @@ typedef enum {
     ERROR_SD_ERRORFILESIZE, //error data file was the wrong size
     ERROR_DEVICE_ADD, //could not add a device
     ERROR_SENSOR_ADD, //could not add a sensor
-    ERROR_ESPNOW_GENERAL, //ESPNow general error
-    ERROR_ESPNOW_SEND, //could not send ESPNow message
-    ERROR_ESPNOW_SEND_UDP, //could not send ESPNow message via UDP
-    ERROR_ESPNOW_SEND_ESPNOW, //could not send ESPNow message via ESPNow
+    ERROR_MESH_GENERAL, // ArborysMesh general error
+    ERROR_MESH_SEND, // could not send ArborysMesh message
+    ERROR_MESH_SEND_UDP, // could not send ArborysMesh via UDP
+    ERROR_MESH_SEND_ESPNOW, // could not send ArborysMesh via ESP-NOW radio
+    // Legacy names
+    ERROR_ESPNOW_GENERAL = ERROR_MESH_GENERAL,
+    ERROR_ESPNOW_SEND = ERROR_MESH_SEND,
+    ERROR_ESPNOW_SEND_UDP = ERROR_MESH_SEND_UDP,
+    ERROR_ESPNOW_SEND_ESPNOW = ERROR_MESH_SEND_ESPNOW,
     ERROR_GSHEET_CREATE, //failed to create spreadsheet
     ERROR_GSHEET_UPLOAD, //failed to upload data to spreadsheet
     ERROR_GSHEET_DELETE, //failed to delete spreadsheet
@@ -174,28 +193,20 @@ typedef enum {
     ERROR_BMP_PLANES, //BMP error with planes
     ERROR_BMP_BITDEPTH, //BMP error with bitDepth
     ERROR_BMP_COMPRESSION, //BMP error with compression
-    ERROR_WEATHER_TIMEOUT //weather error
+    ERROR_WEATHER_TIMEOUT, //weather error
+    ERROR_ARBORYSNET, // ArborysNet / cloud general failure
+    ERROR_ARBORYSNET_AUTH, // invalid API key, mint JWT, auth rejected
+    ERROR_ARBORYSNET_CLAIM, // claim-device failed
+    ERROR_ARBORYSNET_SYNC, // location sync / inventory / keepalive failed
+    ERROR_ARBORYSNET_UPLOAD // reading upload failed
   } ERRORCODES;
 
 
 
-  
-  // Firmware major.minor.patch — each element 0-255; compare byte 0, then 1, then 2.
-  struct FirmwareVersion {
-    uint8_t v[3];
-
-    void clear();
-    bool isUnset() const;
-    bool fromText(const char* text);
-    void toChar(char* out, size_t outLen) const;
-    void toBinPathSegment(char* out, size_t outLen) const;
-    int compare(const uint8_t other[3]) const;
-    int compare(const FirmwareVersion& other) const;
-    static int compareBytes(const uint8_t a[3], const uint8_t b[3]);
-  };
+#include "FirmwareVersion.hpp"
 
   struct STRUCT_KEYS {
-    uint8_t ESPNOW_KEY[17]; // espnow PMK key, only 16 bytes are used
+    uint8_t ESPNOW_KEY[17]; // LMK for ArborysMesh AES (16 bytes used; name kept for Prefs layout)
   };
 
   struct STRUCT_PrefsH {        
@@ -245,18 +256,20 @@ typedef enum {
 
     #ifdef _USESUPABASE
     char SUPABASE_PROJECT_URL[96] = {0};
-    char SUPABASE_ANON_KEY[200] = {0};
+    char SUPABASE_ANON_KEY[256] = {0}; // JWT anon keys are ~208+ chars; 200 truncated → "Invalid API key"
     char SUPABASE_API_KEY[96] = {0};
     char SUPABASE_USER_ID[40] = {0};
     char SITE_SLUG[33] = {'h','o','m','e','\0'};
     bool SUPABASE_CLAIMED = false;
+    // Hub default true / peripheral default false; set in BootSecure when Prefs wiped or first boot.
+    bool UPLOAD_TO_SUPABASE = false;
     #endif
   };
   
   struct ERROR_STRUCT {
     char errorMessage[100];
     ERRORCODES errorCode;
-    time_t errorTime;
+    time_t errorTime; // UTC unix
   };
   
 
@@ -265,12 +278,16 @@ typedef enum {
 
     int16_t MY_DEVICE_INDEX; // local stored index of this device in Sensors
       bool makeBroadcast=false;
+      // ArborysMesh info
+      bool espNowFailed=false; // ArborysMesh: no hub ACK — also UDP-broadcast telemetry
+      bool makeCloudUpload=false; // hub: upload readings this 10-minute slot (random second)
       time_t lastStoreCoreDataTime;
       bool isUpToDate;  // Core has been saved to memory
       RESETCAUSE resetInfo;
       time_t lastResetTime;
       byte rebootsToday=0;
       time_t ALIVESINCE;
+      time_t lastServerHeardTime; // last message from any server (devType 100–150), incl. broadcasts
       uint8_t wifiFailCount; // consecutive associated-without-IP recovery attempts (reset on GOT_IP)
       time_t wifiDownSince;
       bool initialSetupFinalized; // initial wizard submitted (or already configured at boot)
@@ -321,7 +338,7 @@ typedef enum {
       uint8_t localBatteryIndex; // index of outside battery_li sensor (255 = none)
       #endif
   
-      //espnow info
+      // ArborysMesh radio stats (ESP-NOW transport)
       uint8_t TEMP_AES[32]; // [0..15]=key, [16..31]=IV
       uint32_t TEMP_AES_TIME; // unixtime of TEMP_AES creation
       uint64_t TEMP_AES_MAC; // expected server MAC for WiFi PW response
@@ -352,25 +369,24 @@ typedef enum {
       IPAddress HTTP_LAST_OUTGOINGMSG_TO_IP; // IP address of last HTTP message target
       uint8_t HTTP_OUTGOING_ERRORS; //number of HTTP outgoing errors since midnight
       
-    //for messages received
-    uint16_t ESPNOW_RECEIVES; //number of ESPNow receives since midnight
-    uint32_t ESPNOW_LAST_INCOMINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
-      uint64_t ESPNOW_LAST_INCOMINGMSG_FROM_MAC; // MAC of last ESPnow message sender
-      IPAddress ESPNOW_LAST_INCOMINGMSG_FROM_IP; // IP address of last ESPnow message sender
-      uint8_t ESPNOW_LAST_INCOMINGMSG_FROM_TYPE; // type of device that sent the message      
-      uint8_t ESPNOW_LAST_INCOMINGMSG_TYPE; // type of message sent
-      char ESPNOW_LAST_INCOMINGMSG_PAYLOAD[64]; // text portion of payload of last ESPnow message received
-      uint8_t ESPNOW_INCOMING_ERRORS; //number of ESPNow incoming errors since midnight
+    // ArborysMesh stats (ESP-NOW transport only; UDP mesh twin uses UDP_* counters)
+    uint16_t MESH_RECEIVES;
+    uint32_t MESH_LAST_INCOMINGMSG_TIME;
+      uint64_t MESH_LAST_INCOMINGMSG_FROM_MAC;
+      IPAddress MESH_LAST_INCOMINGMSG_FROM_IP;
+      uint8_t MESH_LAST_INCOMINGMSG_FROM_TYPE;
+      uint8_t MESH_LAST_INCOMINGMSG_TYPE;
+      char MESH_LAST_INCOMINGMSG_PAYLOAD[64];
+      uint8_t MESH_INCOMING_ERRORS;
     
-    //for messages sent
-    uint16_t ESPNOW_SENDS; //number of ESPNow sends since midnight
-    uint32_t ESPNOW_LAST_OUTGOINGMSG_TIME; // time of last server (type 100) broadcast. Will be 0 if no server or have registered the server
-      uint64_t ESPNOW_LAST_OUTGOINGMSG_TO_MAC; // MAC of last ESPnow message sender
-      uint8_t ESPNOW_LAST_OUTGOINGMSG_TYPE; // type of last ESPnow message sender
-      char  ESPNOW_LAST_OUTGOINGMSG_PAYLOAD[64]; //text portion of payload of last ESPnow message received
-      uint8_t ESPNOW_OUTGOING_ERRORS; //number of ESPNow outgoing errors since midnight
+    uint16_t MESH_SENDS;
+    uint32_t MESH_LAST_OUTGOINGMSG_TIME;
+      uint64_t MESH_LAST_OUTGOINGMSG_TO_MAC;
+      uint8_t MESH_LAST_OUTGOINGMSG_TYPE;
+      char  MESH_LAST_OUTGOINGMSG_PAYLOAD[64];
+      uint8_t MESH_OUTGOING_ERRORS;
 
-      uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for ESPNow WiFi recovery
+      uint8_t WIFI_RECOVERY_NONCE[8]; // Nonce for WiFi recovery (legacy)
       uint8_t WIFI_RECOVERY_STAGE; // 0=Prefs, 1=cycling
       uint8_t WIFI_RECOVERY_SERVER_INDEX; // index for cycling through servers
           
@@ -401,7 +417,6 @@ typedef enum {
 
       int8_t SerialPrintLevel=0; //negative values... print only that level, 0=print everything, 1=print outputs and worse, 2=print info and worse, 3=print errors and worse, 4=print serious faults, 5=print critical only
   
-  
   };
   
 
@@ -429,7 +444,7 @@ struct DeviceVal {
 //5 - RH, AHT21
 //6 - 
 //7 - distance, HC-SR04
-//8 - human presence (mm wave)
+//8 - 
 //9 - BMP pressure
 //10 - BMP temp
 //11 - BMP altitude
@@ -442,7 +457,8 @@ struct DeviceVal {
 18 - BME680 rh
 19 - BME680 air press
 20  - BME680 gas sensor
-21 - human present (mmwave)
+21 - 
+30 -
 50 - any binary, 1=yes/true/on
 51 = any on/off switch
 52 = any yes/no switch
@@ -457,12 +473,15 @@ struct DeviceVal {
 70 - leak sensor 
 98 - clock
 99 = any numerical value
-100+ is a server type sensor, to which other sensors will send their data
+100-150 - server type sensors, to which other sensors will send their data
 100 = any server (receives data), disregarding subtype
 101 - weather display server with local persistent storage (ie SD card)
 102 = any weather server that has no persistent storage
 103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
 104 = any server without local persistent storage that uploads data cloud storage
+200-255 - interrupt-driven sensors
+200 - human presence (mm-wave RCWL-0516); snsValue = +light sec remaining, or -motion-ignore sec remaining
+220 - momentary lights switch; snsValue same shared timer (+on / -ignore / 0 idle)
  
 
 */
@@ -499,7 +518,7 @@ class LGFX;
 #endif
 
 
-#include "AddESPNOW.hpp"
+#include "ArborysMesh.hpp"
 #include "BootSecure.hpp"
 
 #ifdef _HAS_LOCAL_SENSORS
@@ -510,8 +529,9 @@ class LGFX;
 #include "GsheetUpload.hpp"
 #endif
 
-#ifdef _USESUPABASE
+#if _SUPABASE_RUNTIME
 #include <SupabaseClient.hpp>
+#include "supabase_prefs.hpp"
 #endif
 
 #ifdef _USEFIREBASE
@@ -529,7 +549,9 @@ class LGFX;
 #include <TimeLib.h>
 #include <time.h>
 #include <SPI.h>
+#ifdef _USESDCARD
 #include <SD.h>
+#endif
 #include <string>
 #if defined(_USETFT) && _IS_SERVER_HUB
 #include <LovyanGFX.hpp>

@@ -193,7 +193,7 @@ int16_t loadAverageSensorDataFromFile(uint64_t deviceMAC, uint8_t sensorType, ui
   if (timeEnd==0) timeEnd=-1;
   if (timeStart==0) timeStart=0;
 
-  if (timeEnd==UINT32_MAX) timeEnd=I.currentTime; //UINT32_MAX is some huge number
+  if (timeEnd==UINT32_MAX) timeEnd=(uint32_t)utcNow(); //UINT32_MAX is some huge number
 
 
   if (timeStart>=timeEnd) {
@@ -437,7 +437,7 @@ bool storeScreenInfoSD() {
         return false;
     }
     I.isUpToDate = true;
-    I.lastStoreCoreDataTime = I.currentTime;
+    I.lastStoreCoreDataTime = utcNow();
 
     // AP session timing is runtime-only; never persist across reboots.
     STRUCT_CORE snapshot = I;
@@ -984,7 +984,7 @@ bool sdRemoveDirectoryRecursive(const char* path) {
 extern STRUCT_GOOGLESHEET GSheetInfo;
 
 bool storeGsheetInfoSD() {
-    if (GSheetInfo.lastGsheetSDSaveTime+60>I.currentTime) return true; //only save if it's been more than 60 seconds since last save
+    if (GSheetInfo.lastGsheetSDSaveTime+60>(uint32_t)utcNow()) return true; //only save if it's been more than 60 seconds since last save
     String filename = "/Data/GsheetInfo.dat";
     File f = SD.open(filename, FILE_WRITE); //overwrite the file
     if (f==false) {
@@ -992,7 +992,7 @@ bool storeGsheetInfoSD() {
         f.close();
         return false;
     }
-    GSheetInfo.lastGsheetSDSaveTime = I.currentTime;
+    GSheetInfo.lastGsheetSDSaveTime = (uint32_t)utcNow();
     f.write((uint8_t*)&GSheetInfo, sizeof(STRUCT_GOOGLESHEET));
     f.close();
     

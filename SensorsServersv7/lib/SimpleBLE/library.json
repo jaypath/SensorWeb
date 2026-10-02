@@ -1,0 +1,7 @@
+{
+  "name": "SimpleBLE",
+  "version": "0.0.1",
+  "description": "Header-only stub shadowing Arduino-ESP32 SimpleBLE. WiFiProv includes SimpleBLE.h but uses none of it; the real SimpleBLE.cpp needs NimBLE host headers that HybridCompile does not add to the Arduino include paths.",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

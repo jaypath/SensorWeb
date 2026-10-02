@@ -130,6 +130,9 @@ bool weatherLiteUnpackFile(const char* path) {
         return false;
     }
 
+    const bool timesUtc = (flags & WPKG_FLAG_TIMES_UTC) != 0;
+    WeatherData.normalizePackagedTimestampsToUtc(timesUtc);
+
     // Replace Events directory contents
     deleteFiles("*", "/Data/Events");
     for (uint8_t e = 0; e < eventCount; e++) {
@@ -178,13 +181,16 @@ bool weatherLiteUnpackFile(const char* path) {
     storeWeatherDataSD();
 
     WeatherLite.lastPackagePackagedAt = packagedAt;
-    WeatherLite.lastPackageReceivedAt = isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : packagedAt;
+    WeatherLite.lastPackageReceivedAt = isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : packagedAt;
     WeatherLite.lastPackageMarkedStale = (flags & WPKG_FLAG_DATA_STALE) != 0;
     weatherLiteApplyIFlagsFromPackage();
     updateCurrentOutsideConditions();
 
     SerialPrint("weatherLiteUnpack: OK packagedAt=" + String(packagedAt) +
         " lastUpdateT=" + String(WeatherData.lastUpdateT) +
+        " hourBase=" + String(WeatherData.getHourBase()) +
+        " hourBaseLocal=" + String(dateifyLocal(WeatherData.getHourBase(), "mm/dd hh:nn")) +
+        " timesUtcFlag=" + String(timesUtc ? 1 : 0) +
         " staleFlag=" + String(WeatherLite.lastPackageMarkedStale ? 1 : 0) +
         " events=" + String(eventCount), true);
     return true;
@@ -194,7 +200,7 @@ bool weatherLiteRequestFromServer(IPAddress ip) {
     if (!wifiReadyForNetwork()) return false;
     if (ip == IPAddress(0, 0, 0, 0)) return false;
 
-    WeatherLite.lastRequestAttemptAt = isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : WeatherLite.lastRequestAttemptAt;
+    WeatherLite.lastRequestAttemptAt = isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : WeatherLite.lastRequestAttemptAt;
 
     char url[64];
     snprintf(url, sizeof(url), "http://%s/WEATHERPKG", ip.toString().c_str());
@@ -298,9 +304,9 @@ bool weatherLiteRequestFromAnyWeatherServer() {
 void serviceWeatherLite(bool minuteTick) {
     if (!minuteTick) return;
     if (!wifiReadyForNetwork()) return;
-    if (!isTimeValid(I.currentTime)) return;
+    if (!isTimeValid((uint32_t)utcNow())) return;
 
-    const uint32_t now = (uint32_t)I.currentTime;
+    const uint32_t now = (uint32_t)utcNow();
     if (WeatherLite.lastRequestAttemptAt != 0 &&
         now < WeatherLite.lastRequestAttemptAt + WEATHER_LITE_MIN_REQUEST_SEC) {
         return; // rate limit (failed or still-stale producer packages)

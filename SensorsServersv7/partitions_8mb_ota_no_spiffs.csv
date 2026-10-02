@@ -1,0 +1,9 @@
+# OTA partitions for 8MB flash (e.g. UM TinyS3) — no SPIFFS
+# Larger equal slots so WiFiProv/BLE (~2.4MB app) fits alongside SoftAP firmware.
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+# 0x3F0000 (4128768) each — ends at 0x800000
+ota_0,    app,  ota_0,   0x10000,  0x3F0000,
+ota_1,    app,  ota_1,   0x400000, 0x3F0000,

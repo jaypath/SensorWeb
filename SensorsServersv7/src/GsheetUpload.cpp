@@ -94,7 +94,7 @@ void startGsheet() {
         }
 
       // Only initialize GSheet when WiFi is connected and time is set, as token generation requires valid time
-        if (wifiReadyForNetwork() && I.currentTime > 1000) {
+        if (wifiReadyForNetwork() && I.UTCTime >= TIMEZERO) {
             initGsheet();
         } else {
             tftPrint("GSHEET NOT READY - WiFi not connected or time not set", true, TFT_RED);
@@ -147,7 +147,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
         response.toString(responseString,true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: %s",responseString.c_str());
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_deleteSpreadsheetByID");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         SerialPrint("ERROR: failed to delete spreadsheet",true);
         storeError("Gsheet: failed to delete spreadsheet",ERROR_GSHEET_DELETE,true);
         return false;
@@ -180,7 +180,7 @@ bool file_deleteSpreadsheetByID(const char* fileID) {
     if (deleteCount >= MAX_DELETE_ATTEMPTS) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: Too many delete attempts");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_deleteSpreadsheetByName");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         SerialPrint("ERROR: Too many delete attempts",true);
         storeError("Gsheet: too many delete attempts",ERROR_GSHEET_DELETE,true);
         return false;
@@ -362,14 +362,14 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     if (!wifiReadyForNetwork()) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
         snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_ensureMonthlySpreadsheet");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         return -4;
     }
 
-    if (!isTimeValid(I.currentTime)) {
+    if (!isTimeValid((uint32_t)utcNow())) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: invalid time");
         snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_ensureMonthlySpreadsheet");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         storeError("Gsheet: invalid time for monthly spreadsheet name", ERROR_GSHEET_CREATE, true);
         return -6;
     }
@@ -412,20 +412,20 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     if (rc == -4) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "GSHEET ERROR: no Wifi");
         storeError("Gsheet: no Wifi", ERROR_GSHEET_CREATE, true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         return -4;
     }
     if (rc == -5) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "GSHEET ERROR: failed to list files");
         storeError("Gsheet: failed to list files", ERROR_GSHEET_CREATE, true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         return -5;
     }
     if (rc == 0 || GSheetInfo.GsheetID[0] == '\0' || strncmp(GSheetInfo.GsheetID, "ERROR", 5) == 0) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR:%s", GSheetInfo.GsheetID);
         snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "file_createSpreadsheet");
         storeError("Gsheet: failed to create spreadsheet", ERROR_GSHEET_CREATE, true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         return 0;
     }
 
@@ -504,7 +504,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         response.toString(outcome,true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: %s",outcome.c_str());
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createSpreadsheet");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         response.clear(); // Clean up FirebaseJson
         spreadsheet.clear(); // Clean up FirebaseJson
         SerialPrint(" ERROR: failed to create spreadsheet",true);
@@ -518,7 +518,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     if (!wifiReadyForNetwork()) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
         snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "file_createHeaders");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         storeError("Gsheet: no Wifi", ERROR_GSHEET_CREATE, true);
         SerialPrint(" ERROR: no WiFi", true);
         return false;
@@ -527,7 +527,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: no valid file ID");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
         storeError("Gsheet: no valid file ID for headers",ERROR_GSHEET_CREATE,true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         SerialPrint(" ERROR: no valid file ID",true);
         return false;
     }
@@ -561,7 +561,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: failed to create headers");
         snprintf(GSheetInfo.lastGsheetFunction,30,"file_createHeaders");
         storeError("Gsheet: failed to create headers",ERROR_GSHEET_CREATE,true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         SerialPrint(" ERROR: failed to create headers",true);
         return false;
     }
@@ -574,7 +574,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     if (!wifiReadyForNetwork()) {
         snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: no WiFi");
         snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_uploadSensorDataFunction");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         GSheetInfo.lastGsheetUploadSuccess = -4;
         return false;
     }
@@ -602,7 +602,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
             snprintf(GSheetInfo.lastGsheetResponse, sizeof(GSheetInfo.lastGsheetResponse), "ERROR: failed to create headers");
             snprintf(GSheetInfo.lastGsheetFunction, sizeof(GSheetInfo.lastGsheetFunction), "Gsheet_uploadSensorDataFunction");
             storeError(GSheetInfo.lastGsheetResponse, ERROR_GSHEET_HEADERS, true);
-            GSheetInfo.lastErrorTime = I.currentTime;
+            GSheetInfo.lastErrorTime = utcNow();
             GSheetInfo.lastGsheetUploadSuccess = -2;
             SerialPrint(" ERROR: failed to create headers", true);
             return false;
@@ -617,20 +617,20 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(currentPosition);    
         if (sensor && sensor->IsSet) {
             ArborysDevType* device = Sensors.getDeviceBySnsIndex(sensor->deviceIndex);
-            if (device && device->IsSet && sensor->timeLogged > sensor->lastCloudUploadTime && sensor->lastCloudUploadTime < I.currentTime-(GSheetInfo.uploadGsheetIntervalMinutes*60)) { //only upload if the last upload was more than the interval minutes ago and the last read time is greater than the last upload time
+            if (device && device->IsSet && sensor->timeLogged > 0 &&
+                sensor->timeLogged > (uint32_t)(utcNow() - (GSheetInfo.uploadGsheetIntervalMinutes * 60))) {
                 valueRange.add("majorDimension", "ROWS");
                 valueRange.set("values/[" + (String) rowInd + "]/[0]", (String) device->MAC);
                 valueRange.set("values/[" + (String) rowInd + "]/[1]", device->IP.toString());
                 valueRange.set("values/[" + (String) rowInd + "]/[2]", (String) sensor->snsType + "." + (String) sensor->snsID); 
                 valueRange.set("values/[" + (String) rowInd + "]/[3]", (String) sensor->snsName);
-                valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) (sensor->timeLogged ? (I.UTCTime - (I.currentTime - sensor->timeLogged)) : 0)); // UTC unix
-                valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) (sensor->timeRead ? (I.UTCTime - (I.currentTime - sensor->timeRead)) : 0)); // UTC unix
-                valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) dateify(sensor->timeLogged,"mm/dd/yy hh:nn:ss")); // local wall clock (pseudo-local)
+                valueRange.set("values/[" + (String) rowInd + "]/[4]", (String) (sensor->timeLogged ? sensor->timeLogged : 0)); // UTC unix
+                valueRange.set("values/[" + (String) rowInd + "]/[5]", (String) (sensor->timeRead ? sensor->timeRead : 0)); // UTC unix
+                valueRange.set("values/[" + (String) rowInd + "]/[6]", (String) dateifyLocal(sensor->timeLogged,"mm/dd/yy hh:nn:ss")); // local wall clock (pseudo-local)
                 valueRange.set("values/[" + (String) rowInd + "]/[7]", (String) bitRead(sensor->Flags,0)); //Flagged
                 valueRange.set("values/[" + (String) rowInd + "]/[8]", (String) (sensor->expired ? 1 : 0)); //expired
                 valueRange.set("values/[" + (String) rowInd + "]/[9]", (String) bitRead(sensor->Flags,7)); //critical
                 valueRange.set("values/[" + (String) rowInd + "]/[10]", (String) sensor->snsValue); //Measurement value
-                sensor->lastCloudUploadTime = I.currentTime;
                 rowInd++;
             }
         }
@@ -646,12 +646,12 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
     
     if (success) {
         SerialPrint("Uploaded " + (String) rowInd + " rows",true);
-        GSheetInfo.lastGsheetUploadTime = I.currentTime; 
+        GSheetInfo.lastGsheetUploadTime = utcNow(); 
     } else {
         snprintf(GSheetInfo.lastGsheetResponse,100,"GSHEET UPDATE: %s",GSheetInfo.GsheetID);
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadSensorData");
         storeError(GSheetInfo.lastGsheetResponse,ERROR_GSHEET_UPLOAD,true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         GSheetInfo.lastGsheetUploadSuccess = -2;
         SerialPrint(" ERROR: failed to upload data",true);
 
@@ -698,25 +698,25 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         SerialPrint("ERROR: GSheet not ready - no Wifi",true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet not ready - no Wifi");
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         GSheetInfo.lastGsheetUploadSuccess = -4;
-        GSheetInfo.lastGsheetUploadTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadTime = utcNow();
         return -4;
     }
-    if (!isTimeValid(I.currentTime)) {
+    if (!isTimeValid((uint32_t)utcNow())) {
         SerialPrint("ERROR: GSheet not ready - invalid time",true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet invalid time");
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         GSheetInfo.lastGsheetUploadSuccess = -6;
-        GSheetInfo.lastGsheetUploadTime = I.currentTime;
+        GSheetInfo.lastGsheetUploadTime = utcNow();
         return -6;
     }
 
     // Status-specific reattempt interval (success and failure modes).
     if (GSheetInfo.lastGsheetUploadTime > 0) {
         const uint32_t intervalSec = gsheetRetryIntervalSec(GSheetInfo.lastGsheetUploadSuccess);
-        if ((uint32_t)(I.currentTime - GSheetInfo.lastGsheetUploadTime) < intervalSec) {
+        if ((uint32_t)(utcNow() - GSheetInfo.lastGsheetUploadTime) < intervalSec) {
             SerialPrint("Gsheet_uploadData... Not time to upload (status "
                 + String(GSheetInfo.lastGsheetUploadSuccess) + ", wait "
                 + String(intervalSec) + "s)", true);
@@ -735,7 +735,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
         SerialPrint("ERROR: GSheet not ready",true);
         snprintf(GSheetInfo.lastGsheetResponse,100,"ERROR: GSheet not ready");
         snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         GSheetInfo.lastGsheetUploadSuccess = -1;
         GSheetInfo.uploadGsheetFailCount++;
     } else {
@@ -746,7 +746,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
                 snprintf(GSheetInfo.lastGsheetFunction,30,"Gsheet_uploadData");
                 GSheetInfo.lastGsheetUploadSuccess = -2;
             }
-            GSheetInfo.lastErrorTime = I.currentTime;
+            GSheetInfo.lastErrorTime = utcNow();
             GSheetInfo.uploadGsheetFailCount++;
         } else {
             GSheetInfo.lastGsheetUploadSuccess = 1;
@@ -754,7 +754,7 @@ int8_t Gsheet_ensureMonthlySpreadsheet(bool* needsHeaders) {
             storeGsheetInfoSD();
         }
     }
-    GSheetInfo.lastGsheetUploadTime = I.currentTime;
+    GSheetInfo.lastGsheetUploadTime = utcNow();
     SerialPrint(" (1=OK, otherwise=ERROR): " + (String) GSheetInfo.lastGsheetUploadSuccess,true);
     return GSheetInfo.lastGsheetUploadSuccess;
 }
@@ -850,7 +850,7 @@ bool file_createUserPermission(String fileID, bool notify, const char* message) 
     } else {
         SerialPrint(" ERROR: file_createUserPermission failed",true);
         storeError("Gsheet: file_createUserPermission failed",ERROR_GSHEET_CREATE,true);
-        GSheetInfo.lastErrorTime = I.currentTime;
+        GSheetInfo.lastErrorTime = utcNow();
         return false;
     }
 }

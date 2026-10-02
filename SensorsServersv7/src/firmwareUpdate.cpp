@@ -366,6 +366,7 @@ uint8_t pruneOlderSDFirmwareAfterUpload(const char* uploadedPath) {
 
 static bool writeFirmwareFileToOTASlot(const char* filePath, const FirmwareVersion& newVersion) {
     if (!filePath || newVersion.isUnset()) return false;
+    persistStateForOta();
     File firmware = SD.open(filePath, FILE_READ);
     if (!firmware) {
         logFirmwareTransferError("SD firmware: failed to open " + String(filePath));
@@ -516,6 +517,11 @@ static bool writeEncryptedStreamFrame(WiFiClient& client, const uint8_t* data, u
 }
 
 static bool streamFirmwareFileEncrypted(WiFiClient& client, const char* filePath) {
+    #ifndef _USESDCARD
+    (void)client;
+    (void)filePath;
+    return false;
+    #else
     File firmware = SD.open(filePath, FILE_READ);
     if (!firmware) return false;
     uint8_t buf[FW_ENC_PLAIN_CHUNK];
@@ -531,6 +537,7 @@ static bool streamFirmwareFileEncrypted(WiFiClient& client, const char* filePath
     firmware.close();
     uint8_t eofHdr[2] = {0, 0};
     return client.write(eofHdr, 2) == 2;
+    #endif
 }
 
 static bool readExact(WiFiClient& client, uint8_t* buf, size_t len, uint32_t timeoutMs) {
@@ -837,8 +844,8 @@ static uint32_t chunkStallTimeoutSec() {
 static void scheduleChunkRetry() {
     const uint32_t dueMs = millis() + (FW_CHUNK_RETRY_SEC * 1000UL);
     s_chunk.nextRetryDueMs = dueMs;
-    if (isTimeValid(I.currentTime)) {
-        s_chunk.nextRetryDue = I.currentTime + (time_t)FW_CHUNK_RETRY_SEC;
+    if (isTimeValid((uint32_t)utcNow())) {
+        s_chunk.nextRetryDue = utcNow() + (time_t)FW_CHUNK_RETRY_SEC;
     } else {
         s_chunk.nextRetryDue = 0;
     }
@@ -908,6 +915,8 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
     uint16_t expectedCrc, uint32_t expectedSize) {
     if (expectedSize == 0 || version.isUnset()) return false;
 
+    persistStateForOta();
+
     const esp_partition_t* part = esp_ota_get_next_update_partition(NULL);
     if (!part) {
         storeError("FW chunk: no OTA partition", ERROR_UNDEFINED, true);
@@ -940,10 +949,10 @@ static bool startChunkSession(IPAddress serverIP, const FirmwareVersion& version
     s_chunk.sessionStartMs = nowMs;
     s_chunk.lastSuccessMs = nowMs;
     s_chunk.nextRetryDueMs = nowMs; // pull immediately
-    if (isTimeValid(I.currentTime)) {
-        s_chunk.sessionStartTime = I.currentTime;
-        s_chunk.lastSuccessTime = I.currentTime;
-        s_chunk.nextRetryDue = I.currentTime; // pull immediately
+    if (isTimeValid((uint32_t)utcNow())) {
+        s_chunk.sessionStartTime = utcNow();
+        s_chunk.lastSuccessTime = utcNow();
+        s_chunk.nextRetryDue = utcNow(); // pull immediately
     } else {
         s_chunk.sessionStartTime = 0;
         s_chunk.lastSuccessTime = 0;
@@ -1059,8 +1068,8 @@ static bool requestOneFirmwareBlock() {
     s_chunk.currentBlockIndex++;
     s_chunk.lastSuccessMs = millis();
     s_chunk.nextRetryDueMs = 0;
-    if (isTimeValid(I.currentTime)) {
-        s_chunk.lastSuccessTime = I.currentTime;
+    if (isTimeValid((uint32_t)utcNow())) {
+        s_chunk.lastSuccessTime = utcNow();
         s_chunk.nextRetryDue = 0;
     }
     s_chunk.reconnectFailures = 0;
@@ -1085,8 +1094,8 @@ void processChunkFirmwareTick() {
     if (!wifiReadyForNetwork()) return;
 
     const uint32_t nowMs = millis();
-    const bool haveClock = isTimeValid(I.currentTime);
-    const time_t now = haveClock ? I.currentTime : 0;
+    const bool haveClock = isTimeValid((uint32_t)utcNow());
+    const time_t now = haveClock ? utcNow() : 0;
 
     // Prefer wall clock when session was stamped with it; otherwise use millis.
     bool sessionExpired = false;
@@ -1364,7 +1373,7 @@ void processJSONMessage_FirmwareRequest(JsonObject root, String& responseMsg) {
     char reply[320];
     buildFirmwareUnavailableJson(reply, sizeof(reply), "notHub");
 
-    if (_MYTYPE < 100) {
+    if (_I_AM_PERIPHERAL) {
         responseMsg = reply;
         return;
     }

@@ -1,0 +1,9 @@
+{
+  "name": "SensorEffectors",
+  "version": "1.0.0",
+  "description": "Local reactions to sensor alarm-status changes (GPIO, relays, etc.)",
+  "keywords": "sensors, effectors, alarms",
+  "authors": { "name": "SensorWeb" },
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

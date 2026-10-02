@@ -2,7 +2,7 @@ import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import { verifyApiKey } from "../_shared/crypto.ts";
 import { mintUserJwt, DEFAULT_EXPIRES_IN } from "../_shared/jwt.ts";
 import { normalizeMac } from "../_shared/mac.ts";
-import { enforceRateLimits } from "../_shared/ratelimit.ts";
+import { clientIp, enforceRateLimits } from "../_shared/ratelimit.ts";
 import { serviceClient } from "../_shared/supabase.ts";
 
 type MintBody = {
@@ -11,6 +11,20 @@ type MintBody = {
   /** Optional override; clamped to 60..86400 seconds. */
   expires_in?: number;
 };
+
+function parseClientInet(ip: string): string | null {
+  const s = (ip || "").trim();
+  if (!s || s === "unknown") return null;
+  if (s.length > 64) return null;
+  return s;
+}
+
+/** Compare Edge client IP to devices.last_auth_public_ip (inet may include /prefix). */
+function ipsEqual(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s.trim().toLowerCase().replace(/\/\d+$/, "");
+  return norm(a) === norm(b);
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return optionsResponse();
@@ -33,8 +47,8 @@ Deno.serve(async (req) => {
     }
 
     const apiKey = typeof body.api_key === "string" ? body.api_key.trim() : "";
-    if (!deviceMac || !apiKey) {
-      return jsonResponse({ error: "device_mac and api_key are required" }, 400);
+    if (!deviceMac) {
+      return jsonResponse({ error: "device_mac is required" }, 400);
     }
 
     let expiresIn = DEFAULT_EXPIRES_IN;
@@ -42,10 +56,13 @@ Deno.serve(async (req) => {
       expiresIn = Math.min(86400, Math.max(60, Math.floor(body.expires_in)));
     }
 
+    const publicIpRaw = clientIp(req);
+    const publicIp = parseClientInet(publicIpRaw);
+
     const admin = serviceClient();
     const { data: device, error: findErr } = await admin
       .from("devices")
-      .select("id, user_id, device_mac, api_key_hash, is_active")
+      .select("id, user_id, device_mac, api_key_hash, is_active, last_auth_public_ip")
       .eq("device_mac", deviceMac)
       .maybeSingle();
 
@@ -54,9 +71,32 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Failed to look up device" }, 500);
     }
 
-    // Same generic error for missing/inactive/bad key (avoid MAC enumeration).
-    if (!device || !device.is_active || !verifyApiKey(apiKey, device.api_key_hash)) {
-      return jsonResponse({ error: "Invalid device credentials" }, 401);
+    // Same generic error for missing/inactive (avoid MAC enumeration).
+    if (!device || !device.is_active) {
+      return jsonResponse({
+        error: "Invalid device credentials",
+        code: "invalid_device",
+      }, 401);
+    }
+
+    const keyOk = apiKey.length > 0 && verifyApiKey(apiKey, device.api_key_hash);
+    let method: "api_key" | "ip_recovery" | null = null;
+
+    if (keyOk) {
+      method = "api_key";
+    } else {
+      const lastIp = device.last_auth_public_ip
+        ? String(device.last_auth_public_ip).trim()
+        : "";
+      if (publicIp && lastIp && ipsEqual(publicIp, lastIp)) {
+        method = "ip_recovery";
+      } else {
+        // Key missing/wrong and IP does not match last successful mint → re-claim.
+        return jsonResponse({
+          error: "Re-claim required: public IP does not match last auth for this device",
+          code: "reclaim_required",
+        }, 401);
+      }
     }
 
     const token = await mintUserJwt({
@@ -65,12 +105,32 @@ Deno.serve(async (req) => {
       expiresInSec: expiresIn,
     });
 
-    // Best-effort last_seen update; do not fail the mint if this errors.
+    const nowIso = new Date().toISOString();
+    const deviceUpdate: Record<string, unknown> = {
+      last_seen_at: nowIso,
+      last_auth_at: nowIso,
+    };
+    // Always refresh last_auth_public_ip on successful api_key mint.
+    // On IP recovery, IP is already matching; still refresh last_auth_at.
+    if (method === "api_key" && publicIp) {
+      deviceUpdate.last_auth_public_ip = publicIp;
+    } else if (method === "ip_recovery" && publicIp && !device.last_auth_public_ip) {
+      deviceUpdate.last_auth_public_ip = publicIp;
+    }
+
     const { error: seenErr } = await admin
       .from("devices")
-      .update({ last_seen_at: new Date().toISOString() })
+      .update(deviceUpdate)
       .eq("id", device.id);
-    if (seenErr) console.error("mint-device-jwt last_seen:", seenErr);
+    if (seenErr) console.error("mint-device-jwt device update:", seenErr);
+
+    const { error: logErr } = await admin.from("device_auth_log").insert({
+      device_mac: device.device_mac,
+      user_id: device.user_id,
+      public_ip: publicIp,
+      method,
+    });
+    if (logErr) console.error("mint-device-jwt auth_log:", logErr);
 
     return jsonResponse({
       access_token: token.accessToken,
@@ -79,6 +139,7 @@ Deno.serve(async (req) => {
       expires_at: token.expiresAt,
       user_id: device.user_id,
       device_mac: device.device_mac,
+      auth_method: method,
     });
   } catch (e) {
     console.error("mint-device-jwt:", e);

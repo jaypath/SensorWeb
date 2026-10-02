@@ -1,0 +1,11 @@
+# OTA partitions for 16MB flash (WT32-SC01 Plus / ESP32-S3-WROVER-N16R2) - no SPIFFS
+# Two equal app slots (64KB-aligned) use all flash; remaining 64KB holds the core dump
+# (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y in the prebuilt S3 libs).
+# Name,   Type, SubType,  Offset,    Size,     Flags
+nvs,      data, nvs,      0x9000,    0x4000,
+otadata,  data, ota,      0xd000,    0x2000,
+phy_init, data, phy,      0xf000,    0x1000,
+# 0x7F0000 (8323072) each
+ota_0,    app,  ota_0,    0x10000,   0x7F0000,
+ota_1,    app,  ota_1,    0x800000,  0x7F0000,
+coredump, data, coredump, 0xFF0000,  0x10000,

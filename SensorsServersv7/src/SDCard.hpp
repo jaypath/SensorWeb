@@ -22,19 +22,19 @@ struct STRUCT_GOOGLESHEET;
 extern STRUCT_CORE I;
 
 
-// Common data structure for sensor data points
+// Common data structure for sensor data points (all times are UTC unix)
 struct SensorDataPoint {
     uint64_t deviceMAC;
     uint16_t deviceIndex;
     uint8_t snsType;
     uint8_t snsID;
     double snsValue;
-    uint32_t timeRead;
-    uint32_t timeLogged;
+    uint32_t timeRead;            // UTC: sample time
+    uint32_t timeLogged;          // UTC: send/receive time
     uint8_t Flags;
     uint32_t SendingInt;
     char snsName[30];
-    uint32_t fileWriteTimestamp;  // When this data was written to the file
+    uint32_t fileWriteTimestamp;  // UTC: when written to SD
 };
 
 

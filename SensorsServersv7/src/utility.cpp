@@ -1,13 +1,15 @@
 #include "globals.hpp"
 #include "utility.hpp"
 #include "BootSecure.hpp"
+#include "ble_provision.hpp"
 #include "firmwareUpdate.hpp"
 #include "server.hpp"
-#ifdef _USESUPABASE
+#if _SUPABASE_RUNTIME
 #include "supabase_prefs.hpp"
 #endif
 #include <esp_app_format.h>
 #include "esp_ota_ops.h"
+#include <esp_system.h>
 
 #ifdef _USETFT
 extern LGFX tft;
@@ -58,6 +60,7 @@ static constexpr uint32_t ARDUINO_OTA_MAX_MS = 600000;
 static constexpr uint32_t ARDUINO_OTA_STALL_MS = 90000;
 
 void beginArduinoOtaFocus() {
+  persistStateForOta();
   s_arduinoOtaFocus.active = true;
   s_arduinoOtaFocus.startMs = millis();
   s_arduinoOtaFocus.lastProgressMs = s_arduinoOtaFocus.startMs;
@@ -132,6 +135,7 @@ void systemHousekeeping(bool fullHousekeeping) {
   //this should run on every loop cycle
   updateTime();
   serviceESPNOWRecvQueue();
+  bleProvisionService();
 
   if (softApRunning()) {
     serviceAPStationMode();
@@ -155,27 +159,32 @@ void systemHousekeeping(bool fullHousekeeping) {
     }
     
     // minFreeHeap is a lifetime watermark (lowest since boot), not current fragmentation.
-    // Only warn when both watermark and current free heap are critically low.
-    if (minFreeHeap < 5000 && freeHeap < 15000) {
+    // A largest-block under 1 KB while total free is higher is real fragmentation.
+    if (ESP.getMaxAllocHeap() < 1000 && freeHeap >= 1000) {
+      SerialPrint("CRITICAL: Heap fragmented, restarting system", true);
+      storeError("CRITICAL: Heap fragmented, restarting system", ERROR_HARDWARE_MEMORY, true);
+      delay(1000);
+      controlledReboot("Heap fragmented, restarting system", RESET_MEMORY_FRAGMENTED, true);
+    } else if (minFreeHeap < 5000 && freeHeap < 15000) {
       SerialPrint("WARNING: Heap critically low (min=" + String(minFreeHeap) + " free=" + String(freeHeap) + ")", true);
     }
 
 
-    if (isTimeValid(I.ALIVESINCE)==false) I.ALIVESINCE = I.currentTime; //if ALIVESINCE is not valid, set it to the current time
+    if (isTimeValid(I.ALIVESINCE)==false) I.ALIVESINCE = utcNow(); //if ALIVESINCE is not valid, set it to the current time
 
-    if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = I.currentTime; //if lastResetTime is not valid, set it to the current time
+    if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = utcNow(); //if lastResetTime is not valid, set it to the current time
 
     if (wifiReadyForNetwork() && I.UTCTime >= TIMEZERO) {
       if (I.lastTimezoneRefresh == 0
-          || (I.currentTime >= I.lastTimezoneRefresh
-              && I.currentTime - I.lastTimezoneRefresh >= TIMEZONE_REFRESH_INTERVAL_SEC)) {
+          || ((uint32_t)utcNow() >= (uint32_t)I.lastTimezoneRefresh
+              && (uint32_t)utcNow() - (uint32_t)I.lastTimezoneRefresh >= TIMEZONE_REFRESH_INTERVAL_SEC)) {
         refreshTimezoneFromNetwork(TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
       }
     }
 
     CheckWifiStatus(WIFI_CHECK_NORMAL);
 
-    #if _MYTYPE < 100
+    #if _I_AM_PERIPHERAL
     // Peripheral: APSTA while no live server so AP portal stays available for debug.
     servicePeripheralServerApMode();
     #endif
@@ -211,7 +220,7 @@ void systemHousekeeping(bool fullHousekeeping) {
   esp_task_wdt_reset();
 
   #ifdef _USEUDP
-  receiveUDPMessage(); //receive ESPNow UDP messages, which are sent in parallel to ESPNow
+  receiveUDPMessage(); // receive ArborysMesh/JSON UDP
   #endif
 
   processDeferredDataRequest();
@@ -352,7 +361,7 @@ bool initSystem() {
       SerialPrint("Will redefine Prefs struct later...", true,5);
   } else SerialPrint("Prefs loaded successfully, my name is: " + String(Prefs.DEVICENAME),true,5);
 
-  #ifdef _USESUPABASE
+  #if _SUPABASE_RUNTIME
   supabaseBeginFromPrefs();
   #endif
 
@@ -433,6 +442,8 @@ bool initSystem() {
 
   CheckWifiStatus(WIFI_CHECK_BOOT);
   syncInitialSetupState();
+  // BLE portal (Espressif app) only while unprovisioned and within 30 minutes of boot.
+  bleProvisionBeginIfNeeded();
 
   #ifdef _USEUDP
   if (wifiReadyForNetwork() && !connectUDP()) {
@@ -461,6 +472,7 @@ bool initSystem() {
   I.MY_DEVICE_INDEX = devIndex;
   Sensors.updateMyDeviceVersion();
   syncDeviceIPFromWifi();
+  Sensors.scrubImplausibleRemoteDevices();
 
   tftPrint("Init server... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   if (!softApRunning()) {
@@ -470,18 +482,18 @@ bool initSystem() {
 
 
 
-  tftPrint("Initializing ESPNow... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+  tftPrint("Initializing ArborysMesh... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   int8_t errorCode = initESPNOW();
   if (errorCode == 1) {
       tftPrint("OK.", true, TFT_GREEN);
-      if (_MYTYPE >= 100) {
+      if (_I_AM_SERVER) {
         broadcastServerPresence(false);
       } 
       
 
   } else {
       tftPrint("FAILED with code " + String(errorCode) + ".", true, TFT_RED);
-      storeError("ESPNow init error: " + String(errorCode));
+      storeError("ArborysMesh init error: " + String(errorCode));
   }
 
   // Early NTP when WiFi is already up; setupTime() in main handles full path + ESP-NOW fallback.
@@ -516,7 +528,7 @@ int8_t initSDCard() {
       
       delay(5000);
       I.resetInfo = RESET_SD;
-      I.lastResetTime = I.currentTime;
+      I.lastResetTime = utcNow();
       controlledReboot("SD Card failed", RESET_SD, true);
       return 0;
   }
@@ -570,12 +582,48 @@ bool loadSensorData() {
 
 
 bool isTimeValid(uint32_t time) {
+  // Validates a UTC unix stamp (stored times are UTC after hard cutover).
   if (time < TIMEZERO) return false;
-  if (time > I.currentTime) return false;
+  const time_t nowu = utcNow();
+  if (!nowu) return true; // clock unset: accept any post-TIMEZERO stamp
+  // Allow small forward skew (LAN latency / peer clock).
+  if (time > (uint32_t)nowu + 300UL) return false;
+  return true;
+}
+
+bool isPlausibleDeviceIdentity(IPAddress ip, uint8_t devType, const char* devName,
+                               const FirmwareVersion* firmware) {
+  // Zero IP = "unset / do not update" — allowed.
+  if (ip != IPAddress(0, 0, 0, 0)) {
+    const uint8_t a = ip[0];
+    const uint8_t b = ip[1];
+    const bool priv = (a == 10) ||
+                      (a == 192 && b == 168) ||
+                      (a == 172 && b >= 16 && b <= 31);
+    if (!priv) return false;
+  }
+
+  // Known roles: peripherals 1–99, servers 100–150. 0 = unset.
+  if (devType != 0 && !IS_PERIPHERAL_DEVICE_TYPE(devType) && !IS_SERVER_DEVICE_TYPE(devType)) return false;
+
+  if (devName && devName[0]) {
+    size_t len = 0;
+    for (const unsigned char* p = (const unsigned char*)devName; *p; ++p, ++len) {
+      if (*p < 0x20 || *p > 0x7E) return false;
+      if (len >= 48) return false;
+    }
+  }
+
+  // Project firmware is ~9–10.x; reject CBC-garbage majors like 85.
+  if (firmware && !firmware->isUnset()) {
+    if (firmware->v[0] < 1 || firmware->v[0] > 50) return false;
+  }
+
   return true;
 }
 
 bool isTempValid(double temp, bool extremeTemp) {
+  if (isnan(temp)) return false;
   if (extremeTemp) {
     if (temp < -10 || temp > 650) return false;
   } else {
@@ -585,21 +633,25 @@ bool isTempValid(double temp, bool extremeTemp) {
 }
 
 bool isRHValid(double rh) {
+  if (isnan(rh)) return false;
   if (rh < 0 || rh > 100) return false;
   return true;
 }
 
 bool isSoilCapacitanceValid(double soil) {
+  if (isnan(soil)) return false;
   if (soil < -100 || soil > 400) return false;
   return true;
 }
 
 bool isSoilResistanceValid(double soil) {
+  if (isnan(soil)) return false;
   if (soil < 0 || soil > 50000) return false;
   return true;
 }
 
 bool isPressureValid(double pressure) {
+  if (isnan(pressure)) return false;
   if (pressure < 890 || pressure > 1070) return false;
   return true;
 }
@@ -705,7 +757,7 @@ int16_t loadAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t sensorType, 
   if (timeEnd==0) timeEnd=-1;
   if (timeStart==0) timeStart=0;
 
-  if (timeEnd==UINT32_MAX) timeEnd=I.currentTime; //UINT32_MAX is some huge number
+  if (timeEnd==UINT32_MAX) timeEnd=(uint32_t)utcNow(); //UINT32_MAX is some huge number
 
 
   if (timeStart>=timeEnd) {
@@ -899,7 +951,11 @@ void initScreenFlags(bool completeInit) {
 
   
   #ifdef _USETFT
+  #ifdef _ISCLOCK480X480
+  initClock480X480Graphics();
+  #else
   initGraphics();
+  #endif
   #endif
 
   #if defined(_USETFT) && _IS_SERVER_HUB
@@ -915,21 +971,21 @@ void initScreenFlags(bool completeInit) {
   I.WiFiLastEvent = ARDUINO_EVENT_WIFI_READY;
   I.WifiChannel = 0;
   I.makeBroadcast = true;
-  I.ESPNOW_SENDS = 0;
-  I.ESPNOW_RECEIVES = 0;
+  I.MESH_SENDS = 0;
+  I.MESH_RECEIVES = 0;
 
-  I.ESPNOW_LAST_INCOMINGMSG_FROM_MAC=0;
-  I.ESPNOW_LAST_INCOMINGMSG_TYPE=0;
-  memset(I.ESPNOW_LAST_INCOMINGMSG_PAYLOAD,0,80);
-  I.ESPNOW_LAST_INCOMINGMSG_TIME=0;
-  I.ESPNOW_INCOMING_ERRORS = 0;
+  I.MESH_LAST_INCOMINGMSG_FROM_MAC=0;
+  I.MESH_LAST_INCOMINGMSG_TYPE=0;
+  memset(I.MESH_LAST_INCOMINGMSG_PAYLOAD,0,80);
+  I.MESH_LAST_INCOMINGMSG_TIME=0;
+  I.MESH_INCOMING_ERRORS = 0;
 
 
-  I.ESPNOW_LAST_OUTGOINGMSG_TO_MAC=0;
-  I.ESPNOW_LAST_OUTGOINGMSG_TYPE=0;
-  memset(I.ESPNOW_LAST_OUTGOINGMSG_PAYLOAD,0,80);
-  I.ESPNOW_LAST_OUTGOINGMSG_TIME=0;
-  I.ESPNOW_OUTGOING_ERRORS = 0;
+  I.MESH_LAST_OUTGOINGMSG_TO_MAC=0;
+  I.MESH_LAST_OUTGOINGMSG_TYPE=0;
+  memset(I.MESH_LAST_OUTGOINGMSG_PAYLOAD,0,80);
+  I.MESH_LAST_OUTGOINGMSG_TIME=0;
+  I.MESH_OUTGOING_ERRORS = 0;
 
 
   I.UDP_LAST_INCOMINGMSG_TIME = 0;
@@ -956,8 +1012,8 @@ void initScreenFlags(bool completeInit) {
   I.RSSIhigh = -999;
   I.lastRSSItime = 0;
 
-  I.lastResetTime=I.currentTime;
-  I.ALIVESINCE=I.currentTime;
+  I.lastResetTime=utcNow();
+  I.ALIVESINCE=utcNow();
   I.wifiFailCount=0;
   I.isFlagged = false;
 
@@ -1184,20 +1240,41 @@ void storeError(String E, ERRORCODES CODE, bool writeToSD) {
   storeError(E.c_str(), CODE, writeToSD);
 }
 
+static bool s_forwardingPeripheralError = false;
+
 void storeError(const char* E, ERRORCODES CODE, bool writeToSD) {
   ERROR_STRUCT LASTERROR;
-  strncpy(LASTERROR.errorMessage, E, 99);
+  strncpy(LASTERROR.errorMessage, E ? E : "", 99);
+  LASTERROR.errorMessage[99] = '\0';
   LASTERROR.errorCode = CODE;
-  LASTERROR.errorTime = I.currentTime;
+  LASTERROR.errorTime = utcNow();
 
   #ifdef _USESDCARD
   if (writeToSD && sdCardReady()) writeErrorToSD(LASTERROR);
   #endif
 
   strncpy(I.lastError, LASTERROR.errorMessage, 75);
+  I.lastError[75] = '\0';
   I.lastErrorCode = LASTERROR.errorCode;
   I.lastErrorTime = LASTERROR.errorTime;
 
+#if _I_AM_PERIPHERAL
+  // Hubs keep the SD copy. Peripherals also post the same text so a hub can store it.
+  if (!s_forwardingPeripheralError && LASTERROR.errorMessage[0]) {
+    char keepMsg[76];
+    strncpy(keepMsg, I.lastError, 75);
+    keepMsg[75] = '\0';
+    const ERRORCODES keepCode = I.lastErrorCode;
+    const time_t keepTime = I.lastErrorTime;
+    s_forwardingPeripheralError = true;
+    forwardPeripheralErrorToHubs((uint16_t)CODE, LASTERROR.errorMessage);
+    s_forwardingPeripheralError = false;
+    strncpy(I.lastError, keepMsg, 75);
+    I.lastError[75] = '\0';
+    I.lastErrorCode = keepCode;
+    I.lastErrorTime = keepTime;
+  }
+#endif
 }
 
 static void sanitizeSystemLogField(char* dest, const char* src, size_t maxLen) {
@@ -1211,23 +1288,28 @@ static void sanitizeSystemLogField(char* dest, const char* src, size_t maxLen) {
   dest[j] = '\0';
 }
 
+static char s_lastSystemLogMsg[76] = "";
+static time_t s_lastSystemLogTime = 0;
+
+const char* getLastSystemLogMessage() { return s_lastSystemLogMsg; }
+time_t getLastSystemLogTime() { return s_lastSystemLogTime; }
+
 void logSystemEvent(const char* description, SYSTEMEVENTS code) {
+  char descBuf[76];
+  sanitizeSystemLogField(descBuf, description ? description : "", 75);
+  strncpy(s_lastSystemLogMsg, descBuf, sizeof(s_lastSystemLogMsg) - 1);
+  s_lastSystemLogMsg[sizeof(s_lastSystemLogMsg) - 1] = '\0';
+  s_lastSystemLogTime = utcNow();
+  (void)code;
+
   #ifdef _USESDCARD
   if (!sdCardReady()) return;
 
-  char descBuf[61];
-  sanitizeSystemLogField(descBuf, description, 60);
-
-  char timeBuf[32];
-  if (isTimeValid(I.currentTime)) {
-    strncpy(timeBuf, dateify(I.currentTime, "yyyy-mm-dd hh:nn:ss"), sizeof(timeBuf) - 1);
-  } else {
-    strncpy(timeBuf, "???", sizeof(timeBuf) - 1);
-  }
-  timeBuf[sizeof(timeBuf) - 1] = '\0';
+  // Store UTC unix (not local wall clock). Web UI converts with dateifyLocal().
+  const uint32_t nowUtc = isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : 0;
 
   char line[128];
-  snprintf(line, sizeof(line), "%s|%s|%d\n", timeBuf, descBuf, (int)code);
+  snprintf(line, sizeof(line), "%lu|%s|%d\n", (unsigned long)nowUtc, descBuf, (int)code);
 
   if (!SD.exists("/Data")) SD.mkdir("/Data");
   File file = SD.open("/Data/systemlog.txt", FILE_APPEND);
@@ -1237,9 +1319,6 @@ void logSystemEvent(const char* description, SYSTEMEVENTS code) {
   }
   file.print(line);
   file.close();
-  #else
-  (void)description;
-  (void)code;
   #endif
 }
 
@@ -1247,6 +1326,16 @@ void logSystemEvent(String description, SYSTEMEVENTS code) {
   logSystemEvent(description.c_str(), code);
 }
 
+
+void persistStateForOta() {
+  BootSecure bootSecure;
+  bootSecure.setPrefs(false);
+
+#ifdef _USESDCARD
+  storeScreenInfoSD();
+  storeDevicesSensorsSD();
+#endif
+}
 
 void storeCoreData(bool forceStore) {
   //force core data to be stored to SD
@@ -1273,7 +1362,7 @@ void storeCoreData(bool forceStore) {
   if (ret>0) setupTFLuna();
   #endif
 
-  if (forceStore || (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < I.currentTime)) { //store if out of date and more than 5 minutes since last store
+  if (forceStore || (!I.isUpToDate && I.lastStoreCoreDataTime + 300 < utcNow())) { //store if out of date and more than 5 minutes since last store
     I.isUpToDate = true;
     #ifdef _USESDCARD
     storeScreenInfoSD();
@@ -1284,10 +1373,11 @@ void storeCoreData(bool forceStore) {
 
 
 void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
+  recordRebootIssue(R);
   storeError(E);
   logSystemEvent(E, EVENT_REBOOT_TRIGGERED);
   I.resetInfo = R;
-  I.lastResetTime = I.currentTime;
+  I.lastResetTime = utcNow();
 
   storeCoreData();
   
@@ -1298,9 +1388,75 @@ void controlledReboot(const char* E, RESETCAUSE R,bool doreboot) {
   }
 }
 
+static constexpr uint32_t REBOOT_ISSUE_MAGIC = 0x4C524253u; // lastRebootIssue was published by a boot
+static constexpr uint32_t REBOOT_ISSUE_ARMED = 0x41524D44u; // recordRebootIssue ran and restart has not been classified yet
+RTC_NOINIT_ATTR uint32_t lastRebootIssueMagic;
+RTC_NOINIT_ATTR uint32_t lastRebootIssue;
+RTC_NOINIT_ATTR uint32_t rebootIssueArmMagic;
+RTC_NOINIT_ATTR uint32_t rebootIssueArmed;
+
+static bool armedRebootIssue(RESETCAUSE* out) {
+  if (rebootIssueArmMagic != REBOOT_ISSUE_ARMED || rebootIssueArmed > (uint32_t)RESET_EXTERNAL) return false;
+  *out = (RESETCAUSE)rebootIssueArmed;
+  return true;
+}
+
+void recordRebootIssue(RESETCAUSE cause) {
+  rebootIssueArmed = (uint32_t)cause;
+  rebootIssueArmMagic = REBOOT_ISSUE_ARMED;
+}
+
+void commitBootRebootIssue() {
+  // Chip reason names the kind of reset. The armed value is used only when the chip says
+  // this firmware called restart. A leftover lastRebootIssue from the previous boot is not a cause.
+  const esp_reset_reason_t rr = esp_reset_reason();
+  RESETCAUSE armed = RESET_UNKNOWN;
+  const bool haveArmed = armedRebootIssue(&armed);
+  RESETCAUSE cause = RESET_UNKNOWN;
+  switch (rr) {
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_WDT:
+      cause = RESET_WATCHDOG;
+      break;
+    case ESP_RST_PANIC:
+      cause = RESET_PANIC;
+      break;
+    case ESP_RST_BROWNOUT:
+      cause = RESET_BROWNOUT;
+      break;
+    case ESP_RST_POWERON:
+      cause = RESET_POWERON;
+      break;
+    case ESP_RST_DEEPSLEEP:
+      cause = RESET_DEEPSLEEP;
+      break;
+    case ESP_RST_SDIO:
+      cause = RESET_SDIO;
+      break;
+    case ESP_RST_EXT:
+      cause = RESET_EXTERNAL;
+      break;
+    case ESP_RST_SW:
+    case ESP_RST_UNKNOWN:
+    default:
+      cause = haveArmed ? armed : RESET_UNKNOWN;
+      break;
+  }
+  lastRebootIssue = (uint32_t)cause;
+  lastRebootIssueMagic = REBOOT_ISSUE_MAGIC;
+  rebootIssueArmMagic = 0;
+  I.resetInfo = cause;
+  if (isTimeValid((uint32_t)utcNow())) I.lastResetTime = utcNow();
+}
+
 String lastReset2String(bool addtime) {
   String output = "";
-  switch (I.resetInfo) {
+  RESETCAUSE cause = RESET_UNKNOWN;
+  if (lastRebootIssueMagic == REBOOT_ISSUE_MAGIC && lastRebootIssue <= (uint32_t)RESET_EXTERNAL) {
+    cause = (RESETCAUSE)lastRebootIssue;
+  }
+  switch (cause) {
     case RESET_DEFAULT: output = "Default"; break;
     case RESET_SD: output = "SD Card"; break;
     case RESET_WEATHER: output = "Weather"; break;
@@ -1309,11 +1465,21 @@ String lastReset2String(bool addtime) {
     case RESET_WIFI: output = "WiFi"; break;
     case RESET_TIME: output = "Time"; break;
     case RESET_UNKNOWN: output = "Unexpected Error"; break;
+    case RESET_NEWWIFI: output = "New WiFi"; break;
+    case RESET_MEMORY_LOW: output = "Low Memory"; break;
+    case RESET_MEMORY_FRAGMENTED: output = "Fragmented Memory"; break;
+    case RESET_WATCHDOG: output = "Watchdog"; break;
+    case RESET_PANIC: output = "Panic"; break;
+    case RESET_BROWNOUT: output = "Brownout"; break;
+    case RESET_POWERON: output = "Power On"; break;
+    case RESET_DEEPSLEEP: output = "Deep Sleep"; break;
+    case RESET_SDIO: output = "SDIO"; break;
+    case RESET_EXTERNAL: output = "External Pin"; break;
     default: output = "Unknown"; break;
   }
   
   if (addtime) {
-    output += " at " + String(I.lastResetTime ? dateify(I.lastResetTime) : "???");
+    output += " at " + String(I.lastResetTime ? dateifyLocal(I.lastResetTime) : "???");
   }
   
   return output;
@@ -1323,11 +1489,11 @@ String lastReset2String(bool addtime) {
 String getRebootDebugInfo() {
   String info = "Reboot Debug Info:\n";
   info += "Reset Cause: " + lastReset2String(false) + "\n";
-  info += "Last Reset Time: " + String(I.lastResetTime ? dateify(I.lastResetTime) : "Never") + "\n";
-  info += "ALIVESINCE: " + String(I.ALIVESINCE ? dateify(I.ALIVESINCE) : "Never") + "\n";
+  info += "Last Reset Time: " + String(I.lastResetTime ? dateifyLocal(I.lastResetTime) : "Never") + "\n";
+  info += "ALIVESINCE: " + String(I.ALIVESINCE ? dateifyLocal(I.ALIVESINCE) : "Never") + "\n";
   info += "Current Time: " + String(I.currentTime ? dateify(I.currentTime) : "Not Set") + "\n";
-  if (I.lastResetTime != 0 && I.ALIVESINCE != 0 && I.currentTime != 0) {
-    time_t timeDiff = I.currentTime - I.ALIVESINCE;
+  if (I.lastResetTime != 0 && I.ALIVESINCE != 0 && utcNow() != 0) {
+    time_t timeDiff = utcNow() - I.ALIVESINCE;
     info += "Time Difference: " + String(timeDiff) + " seconds\n";
   }
   return info;
@@ -1719,6 +1885,7 @@ bool check_and_switch_to_newer_firmware(bool verbose,bool doswitch) {
     shoutThis("Switching to newer firmware...", true);
   }
   if (esp_ota_set_boot_partition(next) == ESP_OK) {
+    recordRebootIssue(RESET_OTA);
     esp_restart();
   }
   return true;

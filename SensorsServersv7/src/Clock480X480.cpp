@@ -124,7 +124,7 @@ void fcnDrawPic(byte luminosity) {
 
     //choose a new random picture
     myScreen.lastPic = random(0,myScreen.num_images-1);
-    myScreen.time_lastPic=I.currentTime;
+    myScreen.time_lastPic=utcNow();
 
     String fn;
     fn= "/PICS/" + getNthFileName("/PICS",myScreen.lastPic);
@@ -154,7 +154,7 @@ void checkTouchScreen() {
         if (myScreen.screenNum==0) {
           //touched the main clock screen
           myScreen.screenNum=1;
-          myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
+          myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + utcNow();
         }
         else if (myScreen.screenNum==1) {
 
@@ -184,13 +184,13 @@ void checkTouchScreen() {
           } else {
             //touched the status screen but not the button
             myScreen.screenNum=2;
-            myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
+            myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + utcNow();
           }
         }
         else if (myScreen.screenNum==2) {
           //touched the weather screen
           myScreen.screenNum=0;
-          myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + I.currentTime;
+          myScreen.screenChangeTimer=myScreen.screenChangeTimerMax + utcNow();
         }
       }
     }
@@ -212,7 +212,7 @@ void fcnCheckScreen() {
   // Something after init (e.g. shared tftPrint/clear/setTextFont) can alter panel state.
   tft.setColorDepth(16);
 
-  if (myScreen.screenChangeTimer<I.currentTime && myScreen.screenNum!=0) myScreen.screenNum=0;
+  if (myScreen.screenChangeTimer<utcNow() && myScreen.screenNum!=0) myScreen.screenNum=0;
 
 //decide what to draw now. Ignore screen 0, as it is the main clock screen and is the default.
   switch (myScreen.screenNum) {
@@ -256,9 +256,9 @@ myScreen.oldScreenNum = 1;
   y += tft.fontHeight(&fonts::Font0)+2;
   tft.drawString("Report Time: " + (String) dateify(I.currentTime,"mm/dd/yyyy hh:nn:ss"),0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
-  tft.drawString("Alive Since: " + (String) dateify(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"),0,y);
+  tft.drawString("Alive Since: " + (String) dateifyLocal(I.ALIVESINCE,"mm/dd/yyyy hh:nn:ss"),0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
-  tft.drawString("Last Reset Time: " + (String) dateify(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"),0,y);
+  tft.drawString("Last Reset Time: " + (String) dateifyLocal(I.lastResetTime,"mm/dd/yyyy hh:nn:ss"),0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
   
   tft.drawString("-----------------------\n",0,y);
@@ -308,7 +308,7 @@ myScreen.oldScreenNum = 1;
 
 byte fcnDrawWeatherScreen() {
 
-  if ((myScreen.screenNum==2 && myScreen.oldScreenNum!=2 && myScreen.screenChangeTimer>I.currentTime) ) {
+  if ((myScreen.screenNum==2 && myScreen.oldScreenNum!=2 && myScreen.screenChangeTimer>utcNow()) ) {
     myScreen.oldScreenNum=myScreen.screenNum;
   }   else return 0;
 
@@ -330,7 +330,7 @@ byte fcnDrawWeatherScreen() {
   y += tft.fontHeight(&fonts::Font0)+2;
   tft.drawString("Daily Precipitation: " + (String) myScreen.wthr_DailyPoP + "%",0,y);
   y += tft.fontHeight(&fonts::Font0)+2;
-  tft.drawString("Weather read at: " + (String) dateify(myScreen.time_lastWeather,"hh:nn"),0,y);
+  tft.drawString("Weather read at: " + (String) dateifyLocal(myScreen.time_lastWeather,"hh:nn"),0,y);
 
   
   return 1;
@@ -343,11 +343,11 @@ byte fcnDrawClock() {
   //2. the screen number is 0, and we're in a new minute since last draw (avoids missing second()==0 if loop is busy)
   //3. the screen number is not 0, and the screen change timer has expired
 
-  if ((myScreen.screenNum==0 && myScreen.oldScreenNum!=0) || (myScreen.screenNum==0 && (myScreen.lastclockChange==0 || minute(I.currentTime) != minute(myScreen.lastclockChange))) || (myScreen.screenNum!=0 && myScreen.screenChangeTimer<I.currentTime)) {
+  if ((myScreen.screenNum==0 && myScreen.oldScreenNum!=0) || (myScreen.screenNum==0 && (myScreen.lastclockChange==0 || minute(utcNow()) != minute(myScreen.lastclockChange))) || (myScreen.screenNum!=0 && myScreen.screenChangeTimer<utcNow())) {
     myScreen.screenNum=0;
     myScreen.oldScreenNum=myScreen.screenNum;
     myScreen.screenChangeTimer=0;
-    myScreen.lastclockChange=I.currentTime;    
+    myScreen.lastclockChange=utcNow();    
   }   else return 0;
 
   fcnDrawPic();
@@ -427,7 +427,7 @@ byte fcnDrawClock() {
   
 
   tft.setTextDatum(TL_DATUM);
-  myScreen.time_lastClock=I.currentTime;
+  myScreen.time_lastClock=utcNow();
 
   return 1;
 }
@@ -664,7 +664,7 @@ String weatherID2string(uint16_t weatherID) {
       
 
 bool getWeather() {
-    if (myScreen.time_lastWeather>0 && I.currentTime-myScreen.time_lastWeather < myScreen.int_Weather_MIN*60 ) return false; //not time to update
+    if (myScreen.time_lastWeather>0 && utcNow()-myScreen.time_lastWeather < myScreen.int_Weather_MIN*60 ) return false; //not time to update
 
     int16_t weatherServerIndex = Sensors.nextServerIndex(0, true);
     if (weatherServerIndex == -1) return false;
@@ -715,7 +715,7 @@ bool getWeather() {
 
     myScreen.wthr_sunset = payload.substring(0, payload.indexOf(";",0)).toInt();
 
-    myScreen.time_lastWeather = I.currentTime;
+    myScreen.time_lastWeather = utcNow();
     return true;
 }
 

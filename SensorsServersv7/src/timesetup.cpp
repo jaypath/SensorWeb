@@ -76,17 +76,12 @@ bool syncNtpAndApplyDST() {
   return (I.UTCTime >= TIMEZERO);
 }
 
-static void applyTimeFromServerPing(uint32_t serverLocalTime) {
-  time_t utc = serverLocalTime;
-  if (timezonePrefsValid()) {
-    utc -= Prefs.TimeZoneOffset;
-    if (Prefs.DST > 0) utc -= (Prefs.DST - 1) * Prefs.DSTOffset;
-  }
-  setTimeAndSyncPosix(utc);
+static void applyTimeFromServerPing(uint32_t serverUtcTime) {
+  // Hard cutover: LAN server ping timestamp is UTC (not local wall).
+  if (serverUtcTime < TIMEZERO) return;
+  setTimeAndSyncPosix((time_t)serverUtcTime);
   I.UTCTime = now();
-  I.currentTime = serverLocalTime;
-  I.currentSecond = second();
-  if (Prefs.DST > 0) DSTsetup();
+  applyLocalTimeFromPrefs();
 }
 
 static constexpr uint32_t ESPNOW_TIME_SYNC_INTERVAL_MS = 600000; // 10 minutes between ESP-NOW sync sessions
@@ -125,12 +120,12 @@ static bool setupTimeFromEspNowServerPing() {
       delay(50);
       esp_task_wdt_reset();
 
-      uint32_t serverLocalTime = 0;
-      if (takeServerPingTimeSync(serverLocalTime)) {
+      uint32_t serverUtcTime = 0;
+      if (takeServerPingTimeSync(serverUtcTime)) {
         endServerPingTimeSync();
-        applyTimeFromServerPing(serverLocalTime);
-        SerialPrint("setupTime: time set from ESP-NOW server ping: " + String(serverLocalTime), true);
-        return (I.currentTime >= TIMEZERO);
+        applyTimeFromServerPing(serverUtcTime);
+        SerialPrint("setupTime: time set from ESP-NOW server ping (UTC): " + String(serverUtcTime), true);
+        return (I.UTCTime >= TIMEZERO);
       }
     }
   }
@@ -150,7 +145,8 @@ bool refreshTimezoneFromNetwork(uint16_t timeoutMs) {
   if (!wifiReadyForNetwork()) return false;
   if (!getTimezoneInfo(timeoutMs)) return false;
   applyLocalTimeFromPrefs();
-  I.lastTimezoneRefresh = I.currentTime;
+  I.lastTimezoneRefresh = (time_t)utcNow();
+
   return true;
 }
 
@@ -168,7 +164,8 @@ bool setupTime(void) {
       DSTsetup();
     }
     if (I.lastTimezoneRefresh == 0 && I.currentTime >= TIMEZERO) {
-      I.lastTimezoneRefresh = I.currentTime;
+      I.lastTimezoneRefresh = (time_t)utcNow();
+
     }
     I.isUpToDate = false;
     return (I.currentTime >= TIMEZERO);
@@ -202,11 +199,11 @@ bool setupTime(void) {
   if (timezonePrefsValid()) {
     DSTsetup();
     applyLocalTimeFromPrefs();
-    if (I.lastTimezoneRefresh == 0) I.lastTimezoneRefresh = I.currentTime;
+    if (I.lastTimezoneRefresh == 0) I.lastTimezoneRefresh = (time_t)utcNow();
   } else {
     bool tzOk = getTimezoneInfo(TIMEZONE_BOOT_HTTP_TIMEOUT_MS);
     applyLocalTimeFromPrefs();
-    if (tzOk) I.lastTimezoneRefresh = I.currentTime;
+    if (tzOk) I.lastTimezoneRefresh = (time_t)utcNow();
     #ifdef _USETFT
     tftPrint(tzOk ? " OK." : " FAIL.", true, tzOk ? TFT_GREEN : TFT_RED);
     #endif
@@ -345,7 +342,8 @@ void DSTsetup(void) {
   if (DST_old != Prefs.DST) {
     SerialPrint("DST changed from " + String(DST_old) + " to " + String(Prefs.DST), true);
     if (getTimezoneInfo()) {
-      I.lastTimezoneRefresh = I.currentTime;
+      I.lastTimezoneRefresh = (time_t)utcNow();
+
     }
     Prefs.isUpToDate = false;
   }
@@ -561,6 +559,25 @@ time_t iso8601ToUnix(String iso) {
 }
 
 time_t unixToLocal(time_t unixTime) {
-  //convert a UTC time to local time
+  //convert a UTC time to local wall (same domain as I.currentTime)
   return unixTime + (Prefs.DST>0?(Prefs.DST-1)*Prefs.DSTOffset:0) + Prefs.TimeZoneOffset;
+}
+
+time_t localToUnix(time_t localTime) {
+  // inverse of unixToLocal
+  return localTime - (Prefs.DST>0?(Prefs.DST-1)*Prefs.DSTOffset:0) - Prefs.TimeZoneOffset;
+}
+
+time_t utcNow() {
+  if (I.UTCTime >= TIMEZERO) return I.UTCTime;
+  time_t n = now();
+  if (n >= TIMEZERO) return n;
+  n = (time_t)time(nullptr);
+  return (n >= TIMEZERO) ? n : 0;
+}
+
+char* dateifyLocal(time_t utc, String dateformat) {
+  // Format a UTC stamp as local wall. utc==0 → show I.currentTime (already local; no double offset).
+  if (utc == 0) return dateify(I.currentTime, dateformat);
+  return dateify(unixToLocal(utc), dateformat);
 }

@@ -3,6 +3,14 @@
 #include "utility.hpp"
 #include <TimeLib.h>
 
+void noteServerHeard(uint8_t senderDevType) {
+    if (!IS_SERVER_DEVICE_TYPE(senderDevType)) return;
+    const time_t nowu = utcNow();
+    if (nowu >= TIMEZERO) {
+        I.lastServerHeardTime = (uint32_t)nowu;
+    }
+}
+
 static void setDeviceFirmware(ArborysDevType* device, const FirmwareVersion& fw) {
     if (!device) return;
     device->firmware = fw;
@@ -21,14 +29,14 @@ static bool isLocalDeviceMAC(uint64_t MAC) {
     return MAC == (uint64_t)ESP.getEfuseMac();
 }
 
-// Non-hub nodes: local device + servers (devType >= 100) only. Hub nodes: all devices.
+// Non-hub nodes: local device + servers (devType 100–150) only. Hub nodes: all devices.
 static bool shouldAcceptRemoteDevice(uint64_t MAC, uint8_t devType, const ArborysDevType* existing) {
     if (isLocalDeviceMAC(MAC)) return true;
 #if _IS_SERVER_HUB
     return true;
 #else
-    if (devType >= 100) return true;
-    if (existing && existing->IsSet && existing->devType >= 100) return true;
+    if (IS_SERVER_DEVICE_TYPE(devType)) return true;
+    if (existing && existing->IsSet && IS_SERVER_DEVICE_TYPE(existing->devType)) return true;
     return false;
 #endif
 }
@@ -56,7 +64,7 @@ int16_t Devices_Sensors::addServerPlaceholder(IPAddress IP) {
     const int16_t existingIp = findDevice(IP);
     if (existingIp >= 0) {
         ArborysDevType* d = getDeviceByDevIndex(existingIp);
-        if (d && d->IsSet && d->devType >= 100) {
+        if (d && d->IsSet && IS_SERVER_DEVICE_TYPE(d->devType)) {
             // Known server (real or placeholder) already owns this IP — do not overwrite.
             return existingIp;
         }
@@ -90,15 +98,30 @@ static void enforceStoragePolicy(Devices_Sensors& sensors) {
         ArborysDevType* D = sensors.devIndexToPointer(i);
         if (!D || !D->IsSet) continue;
         if (D->MAC == myMac) continue;
-        if (D->devType >= 100) continue;
-        D->IsSet = 0;
-        D->expired = false;
+        if (!IS_SERVER_DEVICE_TYPE(D->devType)) {
+            D->IsSet = 0;
+            D->expired = false;
+            continue;
+        }
+        // Drop servers whose stored identity is CBC-garbage / corrupt.
+        if (!isPlausibleDeviceIdentity(D->IP, D->devType, D->devName, &D->firmware)) {
+            D->IsSet = 0;
+            D->expired = false;
+            D->devName[0] = '\0';
+            D->firmware.clear();
+        }
     }
 
     sensors.getNumDevices();
     sensors.getNumSensors();
 }
 #endif
+
+void Devices_Sensors::scrubImplausibleRemoteDevices() {
+#if !_IS_SERVER_HUB
+    enforceStoragePolicy(*this);
+#endif
+}
 
 // Global instance
 Devices_Sensors Sensors;
@@ -131,6 +154,7 @@ Devices_Sensors::Devices_Sensors() {
         sensors[i].deviceIndex = -1;
         sensors[i].limitHigh = NAN;
         sensors[i].limitLow = NAN;
+        sensors[i].PollingInt = 0;
     }
 }
 
@@ -154,11 +178,20 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
         return -1;
     }
 
+    // AES-CBC LAN decrypt has no MAC/tag: wrong LMK still "succeeds" with random
+    // plaintext. Refuse non-private IP / non-ASCII name / absurd type or firmware
+    // so garbage cannot overwrite a real server entry (seen on peripherals).
+    if (!isLocalDeviceMAC(MAC)) {
+        if (!isPlausibleDeviceIdentity(IP, devType, devName, firmware)) {
+            return (existingIndex >= 0) ? existingIndex : -1;
+        }
+    }
+
     // Self-registering hub may upgrade an IP-only networkState placeholder in place.
     if (existingIndex < 0 && IP != IPAddress(0, 0, 0, 0) && !isServerPlaceholderMac(MAC)) {
         const int16_t byIp = findDevice(IP);
         if (byIp >= 0 && isServerPlaceholderMac(devices[byIp].MAC)
-            && (devType >= 100 || devices[byIp].devType >= 100)) {
+            && (IS_SERVER_DEVICE_TYPE(devType) || IS_SERVER_DEVICE_TYPE(devices[byIp].devType))) {
             existingIndex = byIp;
             devices[byIp].MAC = MAC;
             existing = &devices[byIp];
@@ -167,7 +200,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
     // Do not let a placeholder overwrite a real server already known at this IP.
     if (existingIndex < 0 && isServerPlaceholderMac(MAC) && IP != IPAddress(0, 0, 0, 0)) {
         const int16_t byIp = findDevice(IP);
-        if (byIp >= 0 && devices[byIp].IsSet && devices[byIp].devType >= 100
+        if (byIp >= 0 && devices[byIp].IsSet && IS_SERVER_DEVICE_TYPE(devices[byIp].devType)
             && !isServerPlaceholderMac(devices[byIp].MAC)) {
             return byIp;
         }
@@ -176,7 +209,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
     if (existingIndex >= 0) {
         //check if existing device has all the same parameters as the new device
         ArborysDevType* device = &devices[existingIndex];
-        device->dataReceived = I.currentTime;
+        device->dataReceived = (uint32_t)utcNow();
 
         if (device->IP == IP && strcmp(device->devName, devName) == 0 && device->Flags == flags && device->SendingInt == sendingInt && device->devType == devType) {
             //device already exists with all the same parameters (other than the time received), so return the existing index
@@ -219,7 +252,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             devices[i].MAC = MAC;
             devices[i].IP = IP;
             devices[i].dataSent = 0; //time logged is set to 0, because we have not sent data to this device yet
-            devices[i].dataReceived = I.currentTime;
+            devices[i].dataReceived = (uint32_t)utcNow();
             devices[i].IsSet = 1;
             if (devName) {
                 strncpy(devices[i].devName, devName, sizeof(devices[i].devName) - 1);
@@ -382,7 +415,7 @@ uint8_t Devices_Sensors::countServers() {
     //returns the number of sensors of the given type
     uint8_t count = 0;
     for (int16_t i = 0; i < NUMDEVICES ; i++) {
-        if (devices[i].IsSet && devices[i].devType >= 100) {
+        if (devices[i].IsSet && IS_SERVER_DEVICE_TYPE(devices[i].devType)) {
             count++;
         }
     }
@@ -393,7 +426,7 @@ int16_t Devices_Sensors::nextServerIndex(int16_t startIndex, bool weatherServers
     //returns the index of the next server
     if (startIndex < 0) startIndex = 0;
     for (int16_t i = startIndex; i < NUMDEVICES ; i++) {
-        if (devices[i].IsSet && devices[i].devType >= 100) {
+        if (devices[i].IsSet && IS_SERVER_DEVICE_TYPE(devices[i].devType)) {
             if (weatherServersOnly == true && devices[i].devType != 100) continue;
             return i;
         }
@@ -402,13 +435,13 @@ int16_t Devices_Sensors::nextServerIndex(int16_t startIndex, bool weatherServers
 }
 
 bool Devices_Sensors::hasLiveServer(time_t currentTime) {
-    if (currentTime == 0) currentTime = I.currentTime;
+    if (currentTime == 0) currentTime = utcNow();
 
     uint8_t serverCount = 0;
     uint8_t liveCount = 0;
 
     for (int16_t i = 0; i < NUMDEVICES; i++) {
-        if (!devices[i].IsSet || devices[i].devType < 100) continue;
+        if (!devices[i].IsSet || !IS_SERVER_DEVICE_TYPE(devices[i].devType)) continue;
         serverCount++;
 
         // Without valid time, keep known servers "live" so we do not thrash APSTA on clock glitches.
@@ -523,7 +556,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
         sensor->SendingInt = sendingInt;
         sensor->expired = false;
         sensor->IsSet=true;
-        Sensors.lastUpdatedTime = I.currentTime;
+        Sensors.lastUpdatedTime = (uint32_t)utcNow();
         if (snsPin != 0 && snsPin != -9999) {
             sensor->snsPin = snsPin;
             sensor->powerPin = powerPin;
@@ -551,8 +584,10 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].timeRead = timeRead;
             sensors[i].timeLogged = timeLogged;
             sensors[i].timeWritten = 0;
+            sensors[i].timeCloudUpload = 0;
             sensors[i].Flags = flags;
             sensors[i].SendingInt = sendingInt;
+            sensors[i].PollingInt = 0;
             sensors[i].IsSet = 1;
             sensors[i].expired = false;
             sensors[i].snsPin = snsPin;
@@ -561,7 +596,7 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].limitHigh = updateLimitHigh ? limitHigh : NAN;
             sensors[i].limitLow = updateLimitLow ? limitLow : NAN;
             numSensors++;
-            Sensors.lastUpdatedTime = I.currentTime;
+            Sensors.lastUpdatedTime = (uint32_t)utcNow();
             return i;
         }
     }
@@ -773,7 +808,8 @@ void Devices_Sensors::initSensor(int16_t index) {
 
     if (index > 255) {
         const uint32_t maxAgeSec = (uint32_t)(index - 255) * 60UL;
-        const uint32_t cutoff = (I.currentTime > maxAgeSec) ? (I.currentTime - maxAgeSec) : 0;
+        const uint32_t nowUtc = (uint32_t)utcNow();
+        const uint32_t cutoff = (nowUtc > maxAgeSec) ? (nowUtc - maxAgeSec) : 0;
         for (int16_t i = 0; i < NUMSENSORS; i++) {
             if (!sensors[i].IsSet || !sensors[i].expired) continue;
             if (sensors[i].timeLogged > 0 && sensors[i].timeLogged >= cutoff) continue;
@@ -903,7 +939,7 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 
 }
 
-bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride) {
+bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride, bool expiredUsesDisplayGrace) {
     if (isSensorIndexInvalid(snsIndex, false) != 0) return false;
 
     constexpr uint16_t kAllTypes = 1; // optionalsnsflags bit 0 = all sensor types
@@ -911,6 +947,11 @@ bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemot
     // Monitored + flagged (remote OverrideFlags respected when respectRemoteOverride).
     if (isSensorFlagged(snsIndex, kAllTypes, 3, 3, 0, false, false, 0, respectRemoteOverride) == 1) {
         return true;
+    }
+
+    // Graphics boxes wait until 2× SendingInt; header EXP still uses 1.25× via countMainScreenCriticalExpiredAlerts.
+    if (expiredUsesDisplayGrace && !isSensorExpiredForDisplay(snsIndex)) {
+        return false;
     }
 
     // Monitored + critical + expired.
@@ -923,7 +964,7 @@ bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemot
 uint16_t Devices_Sensors::countMainScreenAlerts(bool respectRemoteOverride) {
     uint16_t count = 0;
     for (int16_t i = 0; i < NUMSENSORS; ++i) {
-        if (matchesMainScreenAlert(i, respectRemoteOverride)) {
+        if (matchesMainScreenAlert(i, respectRemoteOverride, true)) {
             ++count;
         }
     }
@@ -957,7 +998,7 @@ uint16_t Devices_Sensors::countMainScreenCriticalExpiredAlerts(bool respectRemot
 
 int8_t Devices_Sensors::countFlagged(int16_t snsType, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint16_t optionalsnsflags) { 
      //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
-     //if snstype is 1-200 then count all sensors of that type (meeting the flagsthatmatter criteria)
+     //if snstype is 1-255 then count all sensors of that type (meeting the flagsthatmatter criteria)
     //if snsType is 0, then count all sensors (meeting the flagsthatmatter criteria)
     //if snsType is -1, then count all temperature sensors (meeting the flag criteria)
     //if snsType is -2, then count all humidity sensors (meeting the flag criteria)
@@ -1097,6 +1138,7 @@ int16_t Devices_Sensors::findSnsOfType(const char* snstype, bool newest, int16_t
     //if snstype is "server", then find a server sensor
     //if snstype is "dist", then find a distance sensor
     //if snstype is "binary", then find a binary sensor
+    //if snstype is "human" or "human detection", then find a human presence sensor
     //if snstype is "battery", then find a battery sensor
     //if snstype is "battery_li", then find a weather sensor
     //if snstype is "network", then find a network monitor sensor (types 80-89)
@@ -1160,10 +1202,11 @@ int16_t Devices_Sensors::storeAllSensorsSD(uint8_t intervalMinutes) {
     uint8_t count = 0;
 
     if (intervalMinutes==0) intervalMinutes=10;//never write to SD card more than once per minute
-    if (Sensors.lastSensorSaveTime+intervalMinutes*60<I.currentTime) { 
-        Sensors.lastSensorSaveTime = I.currentTime;    
+    const uint32_t nowUtc = (uint32_t)utcNow();
+    if (Sensors.lastSensorSaveTime+intervalMinutes*60<nowUtc) { 
+        Sensors.lastSensorSaveTime = nowUtc;    
         for (int16_t i = 0; i < NUMSENSORS; i++) {
-            if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < I.currentTime) {
+            if (Sensors.isSensorIndexInvalid(i)==0 && sensors[i].timeWritten + 3600 < nowUtc) {
               storeSensorDataSD(i);
               count++;
             }
@@ -1181,7 +1224,7 @@ bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritte
     if (isSensorIndexInvalid(sensorIndex)!=0) {
         return false;
     }
-    if (timeWritten == 0) sensors[sensorIndex].timeWritten = I.currentTime;
+    if (timeWritten == 0) sensors[sensorIndex].timeWritten = (uint32_t)utcNow();
     else sensors[sensorIndex].timeWritten = timeWritten;
 
     return true;
@@ -1190,8 +1233,9 @@ bool Devices_Sensors::setWriteTimestamp(int16_t sensorIndex, uint32_t timeWritte
 uint8_t Devices_Sensors::storeDevicesSensorsArrayToSD(uint8_t intervalMinutes) {
     //stores devicesensors array to sd
     if (intervalMinutes==0) intervalMinutes=1;//never write to SD card more than once per minute
-    if (lastSDSaveTime+intervalMinutes*60<I.currentTime) {
-        lastSDSaveTime = I.currentTime;    
+    const uint32_t nowUtc = (uint32_t)utcNow();
+    if (lastSDSaveTime+intervalMinutes*60<nowUtc) {
+        lastSDSaveTime = nowUtc;    
         if (storeDevicesSensorsSD()==false) return -1; //failed to save
         return 1;
     }
@@ -1364,13 +1408,10 @@ void Devices_Sensors::resetDailyPingCounters() {
     }
 }
 
-//there are two ways to check expiration of device:
-//1. check if any sensors are expired at freshness + 1.25 × SendingInt; may also label the device expired
-//   (local sensors use timeRead; remotes use timeLogged). Sticky expired is cleared when within grace.
-//1a. call checkExpirationAllSensors(currentTime, onlyCritical, multiplier, expireDevice)
-//1b. then call any device expiration checker function, such as checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
-//2. check the device directly, assuming that sendingInt has been registered as the shortest sending interval of all attached sensors. If the last read was multiplier x the sending interval ago then label the device expired. This is simpler and faster, but may miss a sensor if others are present.
-//2a. call checkExpirationDevice(index, currentTime, onlyCritical, multiplier)
+// Expiration: local sensors and critical remotes at freshness + 1.25 × SendingInt.
+// Noncritical remotes at freshness + 2 × SendingInt.
+// Local sensors use timeRead; remotes use timeLogged. Sticky expired clears when back inside grace.
+// Hubs do not set the flag on a non-low-power peripheral here; the expiry probe does that after snsReqExpired.
 int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier) {
 
     ArborysDevType* device = &devices[index];
@@ -1378,11 +1419,11 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
     (void)onlyCritical;
     (void)multiplier;
 
-    if (currentTime == 0) currentTime = I.currentTime;
+    if (currentTime == 0) currentTime = utcNow();
 
     uint32_t grace = sensorExpiryGraceSec(device->SendingInt ? device->SendingInt : PERIPH_SERVER_STALE_SEC);
     // Cap server stale window so default 86400 SendingInt does not delay recovery for ~30h.
-    if (device->devType >= 100 && grace > PERIPH_SERVER_STALE_SEC) {
+    if (IS_SERVER_DEVICE_TYPE(device->devType) && grace > PERIPH_SERVER_STALE_SEC) {
         grace = PERIPH_SERVER_STALE_SEC;
     }
 
@@ -1396,53 +1437,100 @@ int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime
     return 0;
 }
 
+bool Devices_Sensors::isSensorPastExpiryThreshold(int16_t index, time_t currentTime) {
+    if (isSensorIndexInvalid(index) != 0) return false;
+
+    const uint16_t sendint = sensors[index].SendingInt;
+    if (sendint == 0) return false;
+
+    const bool isMine = isMySensor(index);
+    const uint32_t freshnessTime = isMine ? sensors[index].timeRead : sensors[index].timeLogged;
+    // A local sensor that has never been read is not expired.
+    if (isMine && freshnessTime == 0) return false;
+    if (currentTime == 0) currentTime = utcNow();
+    if (!isMine && freshnessTime == 0) return true;
+
+    const bool localOrCritical = isMine || isSensorFlagBitUsed(index, 7);
+    const uint32_t expirationTime = freshnessTime + sensorExpiryGraceFor(localOrCritical, sendint);
+    return (uint32_t)currentTime > expirationTime;
+}
+
 byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
-    byte count = 0;
+    if (currentTime == 0) currentTime = utcNow();
+    for (int16_t i = 0; i < NUMSENSORS; i++) {
+        checkExpirationSensor(i, currentTime, onlyCritical, multiplier, expireDevice);
+    }
     // Recompute device.expired from sensors so recovered devices do not stay sticky.
+    // Server-to-server staleness is applied elsewhere and is preserved when this device has no sensors.
     if (expireDevice) {
         for (int16_t i = 0; i < NUMDEVICES; i++) {
-            if (devices[i].IsSet) devices[i].expired = false;
+            if (!devices[i].IsSet) continue;
+            bool anySensor = false;
+            bool anyExpired = false;
+            for (int16_t j = 0; j < NUMSENSORS; j++) {
+                if (!sensors[j].IsSet || sensors[j].deviceIndex != i) continue;
+                anySensor = true;
+                if (sensors[j].expired) anyExpired = true;
+            }
+            if (anySensor) devices[i].expired = anyExpired;
         }
     }
+    byte count = 0;
     for (int16_t i = 0; i < NUMSENSORS; i++) {
-        if (checkExpirationSensor(i, currentTime, onlyCritical, multiplier, expireDevice) == 1)    count++;
-        
+        if (sensors[i].IsSet && sensors[i].expired && isSensorFlagBitUsed(i, 7)) count++;
     }
     return count;
 }
 
 int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
-    //returns -1 if invalid (out of bounds), -2 if not set, -3 if expired,-5 if this is not a critical sensor and onlyCritical is true, -10 if indeterminate (no sending interval set), 0 if valid not expired, 1 if expired
-    
+    //returns -1 if invalid (out of bounds), -2 if not set, -5 if this is not a critical sensor and onlyCritical is true,
+    //-10 if indeterminate (no sending interval set), 0 if valid not expired, 1 if expired
+
     int16_t result = isSensorIndexInvalid(index);
     if (result != 0) return -1*result;
     if (onlyCritical && !isSensorFlagBitUsed(index, 7)) return -5;
-    (void)multiplier; // legacy param; expiration uses 1.25 × SendingInt
+    (void)multiplier;
 
-    uint16_t sendint = sensors[index].SendingInt;
-    if (sendint==0) return -10;
+    if (sensors[index].SendingInt == 0) return -10;
+    if (currentTime == 0) currentTime = utcNow();
 
-    const bool isMine = isMySensor(index);
-    // Local sensors: last successful read. Remotes: last logged/received update.
-    const uint32_t freshnessTime = isMine ? sensors[index].timeRead : sensors[index].timeLogged;
-
-    // Local sensor that has never been read yet should not be treated as expired.
-    if (isMine && freshnessTime == 0) {
+    if (!isSensorPastExpiryThreshold(index, currentTime)) {
         sensors[index].expired = false;
         return 0;
     }
 
-    uint32_t expirationTime = sensorExpirationTime(freshnessTime, sendint);
-
-    if (currentTime > expirationTime) {
-        if (expireDevice) devices[sensors[index].deviceIndex].expired = true;
-        sensors[index].expired = true;
-        return 1;
+    // Hubs ask a non-low-power peripheral for data before setting this flag.
+#if _IS_SERVER_HUB
+    if (!isMySensor(index)) {
+        const int16_t di = sensors[index].deviceIndex;
+        if (di >= 0 && di < NUMDEVICES && devices[di].IsSet
+            && !IS_SERVER_DEVICE_TYPE(devices[di].devType)
+            && bitRead(devices[di].Flags, 2) == 0) {
+            return sensors[index].expired ? 1 : 0;
+        }
     }
+#endif
 
-    // Within grace: clear sticky expired flag after recovery.
-    sensors[index].expired = false;
-    return 0;
+    if (expireDevice) {
+        const int16_t di = sensors[index].deviceIndex;
+        if (di >= 0 && di < NUMDEVICES) devices[di].expired = true;
+    }
+    sensors[index].expired = true;
+    return 1;
+}
+
+bool Devices_Sensors::isSensorExpiredForDisplay(int16_t index, time_t currentTime) {
+    if (isSensorIndexInvalid(index) != 0) return false;
+
+    uint16_t sendint = sensors[index].SendingInt;
+    if (sendint == 0) return false;
+
+    const bool isMine = isMySensor(index);
+    const uint32_t freshnessTime = isMine ? sensors[index].timeRead : sensors[index].timeLogged;
+    if (isMine && freshnessTime == 0) return false;
+
+    if (currentTime == 0) currentTime = utcNow();
+    return (uint32_t)currentTime > sensorDisplayExpirationTime(freshnessTime, sendint);
 }
 
 uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
@@ -1469,6 +1557,10 @@ String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
     if (snsType >= 50 && snsType < 60) return "HVAC";
     if (snsType == 3 || snsType == 33) return "soil";
     if (snsType == 70) return "leak";
+    if (snsType == 200) return "human detection";
+    if (snsType == 220) return "switch lights";
+    if (snsType == 73) return "timer dio";
+    if (snsType == 75) return "clock dio";
     if (snsType == 8) return "human";
     if (snsType == 7) return "distance";
     if (snsType == 12 ) return "weather";
@@ -1476,7 +1568,8 @@ String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
     if (snsType == 98) return "clock";
     if (snsType == 71) return "binary";
     if (snsType >= 80 && snsType <= 89) return "network";
-    if (snsType >= 100) return "server";
+    if (IS_INTERRUPT_SENSOR_TYPE(snsType)) return "interrupt";
+    if (IS_SERVER_SENSOR_TYPE(snsType)) return "server";
     return "unknown";
 }
 
@@ -1523,8 +1616,17 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "leak") {//leak
         return (snsType == 70);
     }
-    if (type == "human") {//human
-        return (snsType == 8);
+    if (type == "human" || type == "human detection") {//human presence
+        return (snsType == 200 || snsType == 8);
+    }
+    if (type == "switch" || type == "lights" || type == "switch lights") {
+        return (snsType == 220 || snsType == 73 || snsType == 75);
+    }
+    if (type == "timer" || type == "timer dio") {
+        return (snsType == 73 || snsType == 74);
+    }
+    if (type == "clock" || type == "clock dio") {
+        return (snsType == 75 || snsType == 98);
     }
     if (type == "dist" || type == "distance") {//distance
         return (snsType == 7);
@@ -1535,17 +1637,17 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "altitude") {//altitude
         return (snsType == 11 || snsType == 16);
     }
-    if (type == "clock") {//clock
-        return (snsType == 98);
-    }
     if (type == "network") {//network monitor (RSSI + network tests)
         return (snsType >= 80 && snsType <= 89);
     }
     if (type == "server") {//server-side sensor slot
-        return (snsType >= 100);
+        return IS_SERVER_SENSOR_TYPE(snsType);
     }
     if (type == "binary") {//binary
         return (snsType == 71);
+    }
+    if (type == "interrupt") {//GPIO interrupt sensors (200-255)
+        return IS_INTERRUPT_SENSOR_TYPE(snsType);
     }
     
     if (type == "all" || type == "any") {//all

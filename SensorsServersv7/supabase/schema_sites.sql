@@ -8,7 +8,7 @@ create table if not exists public.sites (
   name        text not null,
   created_at  timestamptz not null default now(),
   constraint sites_user_slug_unique unique (user_id, slug),
-  constraint sites_slug_format check (slug ~ '^[a-z0-9][a-z0-9_-]{0,31}$')
+  constraint sites_slug_format check (slug ~ '^[a-z0-9][a-z0-9_-]{0,23}$')
 );
 
 create index if not exists sites_user_id_idx on public.sites (user_id);
@@ -57,8 +57,8 @@ begin
   if s is null or s = '' then
     s := 'home';
   end if;
-  if char_length(s) > 32 then
-    s := left(s, 32);
+  if char_length(s) > 24 then
+    s := left(s, 24);
   end if;
   return s;
 end;
@@ -67,7 +67,7 @@ $$;
 revoke all on function public.normalize_site_slug(text) from public;
 grant execute on function public.normalize_site_slug(text) to authenticated, service_role;
 
--- Ensure a site exists for user; returns site id. Default slug/name = home.
+-- Ensure a site exists for user; returns site id. Default label/description = home.
 create or replace function public.ensure_site(
   p_user_id uuid,
   p_slug text default 'home',
@@ -85,6 +85,9 @@ declare
 begin
   if v_name is null then
     v_name := v_slug;
+  end if;
+  if char_length(v_name) > 64 then
+    v_name := left(v_name, 64);
   end if;
 
   select id into v_id

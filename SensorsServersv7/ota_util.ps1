@@ -1,12 +1,13 @@
 # OTA helper for ota_all.bat
 # Modes:
-#   targets  - list OTA envs matching IP prefix that need an update (env|ip)
+#   targets  - list OTA envs matching IP prefix (OTA|..., SKIP|..., EXCLUDE|... for ;not for automation)
 #   record   - upsert a successful OTA into the record file
 #   version  - print CONFIG_APP_PROJECT_VER from platformio.ini
+#   coredir  - print PLATFORMIO_CORE_DIR for -EnvName (NimBLE core if the env sets custom_sdkconfig, else empty)
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('targets', 'record', 'version')]
+    [ValidateSet('targets', 'record', 'version', 'coredir')]
     [string]$Mode,
 
     [string]$IpPrefix = '',
@@ -76,28 +77,66 @@ function Test-NeedsUpdate {
     }
 }
 
+# HybridCompile envs (custom_sdkconfig) get their own PlatformIO core so their rebuilt IDF libs
+# never replace the stock libs used by other envs (no framework reinstall / lib rebuild on switch).
+function Get-CoreDirForEnv {
+    param([string]$Path, [string]$Env)
+    $inEnv = $false
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*\[([^\]]+)\]') {
+            $inEnv = ($Matches[1].Trim() -eq "env:$Env")
+            continue
+        }
+        if ($inEnv -and $line -match '^\s*custom_sdkconfig\s*=') {
+            return (Join-Path $env:USERPROFILE '.platformio-nimble')
+        }
+    }
+    return ''
+}
+
+function Test-NotForAutomationComment {
+    param([string]$Line)
+    return [bool]($Line -match '^\s*;\s*not for automation\b')
+}
+
 function Get-OtaEnvsFromIni {
     param([string]$Path)
     $envs = New-Object System.Collections.Generic.List[object]
     $currentEnv = $null
     $protocol = $null
     $portIp = $null
+    $skipAutomation = $false
+    $pendingSkip = $false
 
     function Flush-Env {
         if ($currentEnv -and $protocol -eq 'espota' -and $portIp) {
-            $envs.Add([pscustomobject]@{ Name = $currentEnv; Ip = $portIp }) | Out-Null
+            $envs.Add([pscustomobject]@{
+                Name            = $currentEnv
+                Ip              = $portIp
+                SkipAutomation  = $skipAutomation
+            }) | Out-Null
         }
     }
 
     foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*$') { continue }
+        if (Test-NotForAutomationComment $line) {
+            $pendingSkip = $true
+            continue
+        }
         if ($line -match '^\[env:([^\]]+)\]') {
             Flush-Env
             $currentEnv = $Matches[1].Trim()
             $protocol = $null
             $portIp = $null
+            $skipAutomation = $pendingSkip
+            $pendingSkip = $false
             continue
         }
         if ($line -match '^\s*;') { continue }
+        # Marker inside this env (before real keys) applies here, not to the next env.
+        if ($pendingSkip -and $currentEnv) { $skipAutomation = $true }
+        $pendingSkip = $false
         if ($line -match '^\s*upload_protocol\s*=\s*(\S+)') {
             $protocol = $Matches[1].Trim()
             continue
@@ -123,6 +162,10 @@ switch ($Mode) {
         $all = Get-OtaEnvsFromIni -Path $IniPath
         foreach ($e in $all) {
             if (-not $e.Ip.StartsWith($prefix)) { continue }
+            if ($e.SkipAutomation) {
+                Write-Output ("EXCLUDE|{0}|{1}|not for automation" -f $e.Name, $e.Ip)
+                continue
+            }
             if (-not (Test-NeedsUpdate -CurrentVersion $fwVer -Record $record -Env $e.Name)) {
                 $prev = $record[$e.Name].Version
                 Write-Output ("SKIP|{0}|{1}|already {2}" -f $e.Name, $e.Ip, $prev)
@@ -172,5 +215,9 @@ switch ($Mode) {
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllLines($RecordPath, $lines, $utf8NoBom)
         Write-Output "Recorded $EnvName -> $Version ($Ip)"
+    }
+    'coredir' {
+        if (-not $EnvName) { throw 'EnvName is required for coredir mode' }
+        Write-Output (Get-CoreDirForEnv -Path $IniPath -Env $EnvName)
     }
 }

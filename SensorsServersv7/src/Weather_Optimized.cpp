@@ -91,20 +91,31 @@ TimeInterval WeatherInfoOptimized::parseNOAAInterval(String tm) {
         }        
     }
 
-    // Parse ISO8601 date/time (required)
+    // Parse ISO8601 date/time (required) — keep as UTC unix
     ti.start = iso8601ToUnix(tm);
-    ti.start = unixToLocal(ti.start);
 
     return ti;
 }
 #endif // _USEWEATHER
 
 uint32_t WeatherInfoOptimized::localMidnightToday() {
-    time_t localNow = I.currentTime;
-    return unixToLocal(makeUnixTime((byte)(year(localNow) - 2000), month(localNow), day(localNow), 0, 0, 0, false));
+    // UTC unix of midnight at the start of the *local calendar* day.
+    time_t loc = I.currentTime;
+    if (loc < (time_t)TIMEZERO) {
+        const time_t u = utcNow();
+        if (u < (time_t)TIMEZERO) return 0;
+        loc = unixToLocal(u);
+    }
+    tmElements_t tm;
+    breakTime(loc, tm);
+    tm.Hour = 0;
+    tm.Minute = 0;
+    tm.Second = 0;
+    return (uint32_t)localToUnix(makeTime(tm));
 }
 
 int32_t WeatherInfoOptimized::nwsDayOffsetFromMidnight(time_t t) {
+    // t is UTC. Day boundaries follow local calendar midnight (also as UTC).
     uint32_t midnightToday = localMidnightToday();
     int32_t dayOffset = (int32_t)((t - 21600 - midnightToday) / 86400);
     if (dayOffset < 0) dayOffset = 0;
@@ -126,6 +137,60 @@ int16_t WeatherInfoOptimized::hourSlot(time_t targetTime) const {
 time_t WeatherInfoOptimized::hourTime(int16_t slot) const {
     if (!isHourlyValid() || slot < 0 || slot >= NUM_HOURLY) return 0;
     return (time_t)hourBase + (time_t)slot * 3600;
+}
+
+void WeatherInfoOptimized::normalizePackagedTimestampsToUtc(bool packageMarkedUtc) {
+    // New packages set WPKG_FLAG_TIMES_UTC — trust the blob as UTC.
+    if (packageMarkedUtc) return;
+    if (!isHourlyValid()) return;
+    if (!timezonePrefsValid()) return;
+
+    const time_t nowU = floorToHour(utcNow());
+    if (nowU < (time_t)TIMEZERO) return;
+    const time_t nowL = floorToHour(unixToLocal(nowU));
+    if (nowL == nowU) return; // cannot distinguish domains without a TZ offset
+
+    auto absDiff = [](time_t a, time_t b) -> int32_t {
+        int64_t d = (int64_t)a - (int64_t)b;
+        if (d < 0) d = -d;
+        if (d > 0x7FFFFFFFLL) return 0x7FFFFFFF;
+        return (int32_t)d;
+    };
+
+    const int32_t dU = absDiff((time_t)hourBase, nowU);
+    const int32_t dL = absDiff((time_t)hourBase, nowL);
+    // hourBase nearer local-pseudo "now" than UTC now → pre-UTC local-domain package.
+    if (!(dL + 5400 < dU)) return;
+
+    SerialPrint("WeatherData: packaged times look local-pseudo; converting to UTC (hourBase was " +
+                String(hourBase) + ")", true);
+
+    auto toUtc = [](uint32_t& t) {
+        if (t != 0) t = (uint32_t)localToUnix((time_t)t);
+    };
+    auto toUtcTimeT = [](time_t& t) {
+        if (t != 0) t = localToUnix(t);
+    };
+
+    toUtc(hourBase);
+    toUtc(periodBaseStart);
+    toUtc(lastUpdateT);
+    toUtc(lastUpdateError);
+    toUtc(fetchedAt);
+    toUtc(sunrise);
+    toUtc(sunset);
+    toUtc(lastAlertFetchTime);
+    toUtc(lastAlertUpdateTime);
+    toUtc(lastWeatherPackageGeneratedAt);
+    toUtcTimeT(alertInfo.time_start);
+    toUtcTimeT(alertInfo.time_end);
+    for (uint16_t i = 0; i < NUM_PERIODS; i++) {
+        toUtc(periods[i].start);
+        toUtc(periods[i].end);
+    }
+    for (uint8_t i = 0; i < WC_COUNT; i++) {
+        toUtc(componentStatus[i].lastAttemptT);
+    }
 }
 
 void WeatherInfoOptimized::ensureHourBaseFromTimestamp(time_t t) {
@@ -173,7 +238,7 @@ int16_t WeatherInfoOptimized::periodSlotForDayDiff(int32_t dayDiff, bool wantDay
 }
 
 int16_t WeatherInfoOptimized::getPeriodSlotForDaysFromToday(uint8_t daysfromnow, bool wantDaytime) const {
-    int32_t todayDayOffset = nwsDayOffsetFromMidnight(I.currentTime);
+    int32_t todayDayOffset = nwsDayOffsetFromMidnight(utcNow());
     int32_t dayDiff = (todayDayOffset + (int32_t)daysfromnow) - periodAnchorDayOffset;
     return periodSlotForDayDiff(dayDiff, wantDaytime);
 }
@@ -309,8 +374,8 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
     #endif
 
     if (fullSuccess) {
-        this->lastUpdateT = I.currentTime;
-        this->fetchedAt = I.currentTime;
+        this->lastUpdateT = (uint32_t)utcNow();
+        this->fetchedAt = (uint32_t)utcNow();
         saveToCache();
 
         uint32_t response_time = millis() - start_time;
@@ -333,7 +398,7 @@ bool WeatherInfoOptimized::hasUsableGrid() const {
 
 bool WeatherInfoOptimized::hasHourWindow(uint16_t hoursNeeded) const {
     if (!isHourlyValid() || hoursNeeded == 0) return false;
-    time_t nowHour = floorToHour((time_t)I.currentTime);
+    time_t nowHour = floorToHour((time_t)utcNow());
     for (uint16_t h = 0; h < hoursNeeded; h++) {
         if (hourSlot(nowHour + (time_t)h * 3600) < 0) return false;
     }
@@ -342,7 +407,7 @@ bool WeatherInfoOptimized::hasHourWindow(uint16_t hoursNeeded) const {
 
 bool WeatherInfoOptimized::hasHourlyCoverage(uint16_t hoursNeeded) const {
     if (!isHourlyValid() || hoursNeeded == 0) return false;
-    time_t nowHour = floorToHour((time_t)I.currentTime);
+    time_t nowHour = floorToHour((time_t)utcNow());
     for (uint16_t h = 0; h < hoursNeeded; h++) {
         int16_t idx = hourSlot(nowHour + (time_t)h * 3600);
         if (idx < 0 || !hourly[idx].isValid()) return false;
@@ -392,8 +457,8 @@ bool WeatherInfoOptimized::isForwardDailyFresh(uint8_t numDays) const {
 bool WeatherInfoOptimized::isSunDataFresh() const {
     // Fresh when the next sunrise or sunset (whichever comes first) is still in the future.
     uint32_t nextEvent = 0;
-    if (sunrise > I.currentTime) nextEvent = sunrise;
-    if (sunset > I.currentTime && (nextEvent == 0 || sunset < nextEvent)) nextEvent = sunset;
+    if (sunrise > (uint32_t)utcNow()) nextEvent = sunrise;
+    if (sunset > (uint32_t)utcNow() && (nextEvent == 0 || sunset < nextEvent)) nextEvent = sunset;
     return nextEvent != 0;
 }
 
@@ -433,17 +498,17 @@ void updateCurrentOutsideConditions() {
     I.haveOutsideTemperatureSensor = false;
 
     if (Sensors.hasOutsideSensors("temperature")) {
-        I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", I.currentTime - 900);
+        I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", (uint32_t)utcNow() - 900);
         if (isTempValid(I.currentOutsideTemp)) I.haveOutsideTemperatureSensor = true;
     }
     if (Sensors.hasOutsideSensors("humidity")) {
-        I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", I.currentTime - 300);
+        I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", (uint32_t)utcNow() - 300);
     }
     if (Sensors.hasOutsideSensors("pressure")) {
-        I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", I.currentTime - 300);
+        I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", (uint32_t)utcNow() - 300);
     }
 
-    const int8_t forecastTemp = WeatherData.getTemperature(I.currentTime);
+    const int8_t forecastTemp = WeatherData.getTemperature((uint32_t)utcNow());
     if (!I.haveOutsideTemperatureSensor || !isTempValid(I.currentOutsideTemp)) {
         I.currentOutsideTemp = forecastTemp;
         I.haveOutsideTemperatureSensor = false;
@@ -459,7 +524,7 @@ void updateCurrentOutsideConditions() {
     int16_t batteryIndex = Sensors.findOutsideSensorByType("battery_li");
     if (batteryIndex >= 0 && batteryIndex < 255) {
         ArborysSnsType* sensor = Sensors.snsIndexToPointer(batteryIndex);
-        if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > I.currentTime) {
+        if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > (uint32_t)utcNow()) {
             I.localBatteryIndex = batteryIndex;
         }
     }
@@ -483,19 +548,19 @@ bool WeatherInfoOptimized::isComponentDue(WeatherComponent c, uint16_t synctime,
     // Stale → retry every 3 minutes.
     uint32_t waitSec = fresh ? (uint32_t)synctime : (uint32_t)WEATHER_STALE_RETRY_SEC;
     if (waitSec == 0) waitSec = fresh ? 3600UL : (uint32_t)WEATHER_STALE_RETRY_SEC;
-    return I.currentTime >= st.lastAttemptT + waitSec;
+    return utcNow() >= st.lastAttemptT + waitSec;
 }
 
 void WeatherInfoOptimized::recordComponentAttempt(WeatherComponent c, bool ok) {
     if (c >= WC_COUNT) return;
     WeatherComponentStatus& st = componentStatus[c];
-    st.lastAttemptT = I.currentTime;
+    st.lastAttemptT = (uint32_t)utcNow();
     st.lastSucceeded = ok;
     if (ok) {
         st.failRetrySec = 0;
     } else {
         st.failRetrySec = WEATHER_STALE_RETRY_SEC;
-        this->lastUpdateError = I.currentTime;
+        this->lastUpdateError = (uint32_t)utcNow();
     }
 }
 
@@ -527,7 +592,7 @@ bool WeatherInfoOptimized::fetchGridCoordinatesHelper() {
             return true;
         } else {
             storeError("Grid coordinates Json had incorrect format", ERROR_JSON_BOX,true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
         }
     }
     return false;
@@ -580,7 +645,7 @@ bool WeatherInfoOptimized::processHourlyData(JsonObject& properties) {
     if (processedCount > 0) return true;
 
     storeError("Could not parse Hourly JSON", ERROR_JSON_HOURLY, true);
-    this->lastUpdateError = I.currentTime;
+    this->lastUpdateError = (uint32_t)utcNow();
     return false;
 }
 
@@ -593,7 +658,7 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
 
     if (!hasWbgtField && !hasRainField && !hasIceField && !hasSnowField) {
         storeError("Grid JSON missing expected fields", ERROR_JSON_GRID, true);
-        this->lastUpdateError = I.currentTime;
+        this->lastUpdateError = (uint32_t)utcNow();
         return false;
     }
 
@@ -658,7 +723,7 @@ bool WeatherInfoOptimized::processGridData(JsonObject& properties) {
     }
 
     storeError("Could not parse Grid JSON", ERROR_JSON_GRID, true);
-    this->lastUpdateError = I.currentTime;
+    this->lastUpdateError = (uint32_t)utcNow();
     return false;
 }
 
@@ -778,14 +843,14 @@ void WeatherInfoOptimized::updateGridCoordinatesCache() {
     cache[cache_index].grid_x = Grid_x;
     cache[cache_index].grid_y = Grid_y;
     strncpy(cache[cache_index].grid_id, Grid_id, sizeof(cache[cache_index].grid_id));
-    cache[cache_index].timestamp = I.currentTime;
+    cache[cache_index].timestamp = (uint32_t)utcNow();
     cache[cache_index].valid = true;
 }
 
 bool WeatherInfoOptimized::loadFromCache() {
     // Check if we have valid cached data
     for (int i = 0; i < WEATHER_CACHE_SIZE; i++) {
-        if (cache[i].valid && cache[i].last_successful_update + 3600 > I.currentTime) {
+        if (cache[i].valid && cache[i].last_successful_update + 3600 > (uint32_t)utcNow()) {
             // Cache is still valid, restore grid coordinates
             Grid_x = cache[i].grid_x;
             Grid_y = cache[i].grid_y;
@@ -798,7 +863,7 @@ bool WeatherInfoOptimized::loadFromCache() {
 }
 
 void WeatherInfoOptimized::saveToCache() {
-    cache[cache_index].last_successful_update = I.currentTime;
+    cache[cache_index].last_successful_update = (uint32_t)utcNow();
     cache_index = (cache_index + 1) % WEATHER_CACHE_SIZE;
 }
 
@@ -809,7 +874,7 @@ bool WeatherInfoOptimized::handleApiError(const String& operation, int httpCode)
         Serial.printf("API error in %s: HTTP %d\n", operation.c_str(), httpCode);
     #endif
     storeError(("API error: " + operation + " HTTP " + String(httpCode)).c_str());
-    this->lastUpdateError = I.currentTime;
+    this->lastUpdateError = (uint32_t)utcNow();
     return false;
 }
 
@@ -830,7 +895,7 @@ bool WeatherInfoOptimized::retryWithBackoff(const String& operation, std::functi
     }
     
     storeError(("Failed " + operation + " after " + String(MAX_RETRY_ATTEMPTS) + " attempts").c_str());
-    this->lastUpdateError = I.currentTime;
+    this->lastUpdateError = (uint32_t)utcNow();
     return false;
 }
 
@@ -845,7 +910,7 @@ void WeatherInfoOptimized::getPerformanceStats(uint32_t& total_calls, uint32_t& 
 void WeatherInfoOptimized::optimizeMemoryUsage() {
     // Clear unused cache entries
     for (int i = 0; i < WEATHER_CACHE_SIZE; i++) {
-        if (cache[i].valid && cache[i].last_successful_update + 7200 < I.currentTime) {
+        if (cache[i].valid && cache[i].last_successful_update + 7200 < (uint32_t)utcNow()) {
             cache[i].valid = false;
         }
     }
@@ -899,7 +964,7 @@ bool WeatherInfoOptimized::fetchHourlyForecast() {
             SerialPrint("Hourly request failed",true);
             SerialPrint("HTTP Code: " + String(M.httpCode),true);
             storeError("Hourly request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
         }
         return false;
     });
@@ -948,7 +1013,7 @@ bool WeatherInfoOptimized::fetchGridForecast() {
             SerialPrint("Grid request failed",true);
             SerialPrint("HTTP Code: " + String(M.httpCode),true);
             storeError("Grid request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
         }
 
         return false;
@@ -994,7 +1059,7 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
             SerialPrint("Daily request failed",true);
             SerialPrint("HTTP Code: " + String(M.httpCode),true);
             storeError("Daily request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
         }
         return false;
     });
@@ -1002,12 +1067,15 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
 
 bool WeatherInfoOptimized::fetchSunriseSunset() {
     auto requestSunForDate = [&](const char* dateYmd) -> bool {
-        char cbuf[128];
+        // time_format=unix → sunrise/sunset are UTC unix strings (avoids local AM/PM parse + Prefs TZ races).
+        char cbuf[160];
         if (dateYmd && dateYmd[0]) {
-            snprintf(cbuf, sizeof(cbuf), "https://api.sunrisesunset.io/json?lat=%f&lng=%f&date=%s",
+            snprintf(cbuf, sizeof(cbuf),
+                     "https://api.sunrisesunset.io/json?lat=%f&lng=%f&date=%s&time_format=unix",
                      Prefs.LATITUDE, Prefs.LONGITUDE, dateYmd);
         } else {
-            snprintf(cbuf, sizeof(cbuf), "https://api.sunrisesunset.io/json?lat=%f&lng=%f",
+            snprintf(cbuf, sizeof(cbuf),
+                     "https://api.sunrisesunset.io/json?lat=%f&lng=%f&time_format=unix",
                      Prefs.LATITUDE, Prefs.LONGITUDE);
         }
 
@@ -1028,7 +1096,7 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
             SerialPrint("Sunrise Sunset request failed", true);
             SerialPrint("HTTP Code: " + String(M.httpCode), true);
             storeError("Sunrise Sunset request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE, true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
             return false;
         }
 
@@ -1039,28 +1107,51 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
         if (!doc["results"].is<JsonVariantConst>()) {
             SerialPrint("Sunrise Sunset Json had incorrect format", true);
             storeError("Sunrise Sunset Json had incorrect format", ERROR_JSON_SUNRISE, true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
             return false;
         }
 
         JsonObject results = doc["results"];
-        const char* srise = results["sunrise"];
-        const char* sset = results["sunset"];
-        const char* sdat = results["date"];
-        if (!srise || !sset || !sdat) {
-            SerialPrint("Sunrise Sunset Json missing fields", true);
-            storeError("Sunrise Sunset Json missing fields", ERROR_JSON_SUNRISE, true);
-            this->lastUpdateError = I.currentTime;
+        // time_format=unix: fields are UTC unix (string or number depending on encoder).
+        // Do NOT use isTimeValid() here — it rejects stamps >now+300s, but sunset/sunrise
+        // are routinely hours (or tomorrow) in the future.
+        auto parseUnixField = [](JsonVariantConst v) -> uint32_t {
+            if (v.isNull()) return 0;
+            if (v.is<const char*>()) {
+                const char* s = v.as<const char*>();
+                if (!s || !*s) return 0;
+                return (uint32_t)strtoul(s, nullptr, 10);
+            }
+            if (v.is<long>() || v.is<unsigned long>() || v.is<int>() || v.is<uint32_t>()) {
+                return v.as<uint32_t>();
+            }
+            // ArduinoJson may expose numeric strings as JsonString / generic string.
+            const char* s = v.as<const char*>();
+            if (s && *s) return (uint32_t)strtoul(s, nullptr, 10);
+            return 0;
+        };
+        auto isPlausibleSunEvent = [](uint32_t t) -> bool {
+            if (t < TIMEZERO) return false;
+            const time_t nowu = utcNow();
+            if (!nowu) return true;
+            // Allow yesterday (already past) through day-after-tomorrow fetches.
+            if (t + 86400UL < (uint32_t)nowu) return false;
+            if (t > (uint32_t)nowu + 3UL * 86400UL) return false;
+            return true;
+        };
+
+        const uint32_t riseUtc = parseUnixField(results["sunrise"]);
+        const uint32_t setUtc = parseUnixField(results["sunset"]);
+        if (!isPlausibleSunEvent(riseUtc) || !isPlausibleSunEvent(setUtc) || setUtc <= riseUtc) {
+            SerialPrint("Sunrise Sunset unix fields invalid (rise=" + String(riseUtc) +
+                        " set=" + String(setUtc) + ")", true);
+            storeError("Sunrise Sunset unix fields invalid", ERROR_JSON_SUNRISE, true);
+            this->lastUpdateError = (uint32_t)utcNow();
             return false;
         }
 
-        String sun = String(sdat) + " " + String(srise);
-        this->sunrise = convertStrTime(sun, true);
-        this->sunrise = unixToLocal(this->sunrise);
-
-        sun = String(sdat) + " " + String(sset);
-        this->sunset = convertStrTime(sun, true);
-        this->sunset = unixToLocal(this->sunset);
+        this->sunrise = riseUtc; // UTC unix
+        this->sunset = setUtc;   // UTC unix
         return true;
     };
 
@@ -1070,7 +1161,7 @@ bool WeatherInfoOptimized::fetchSunriseSunset() {
     if (isSunDataFresh()) return true;
 
     char tomorrowDate[11];
-    strncpy(tomorrowDate, dateify(I.currentTime + 86400UL, "yyyy-mm-dd"), sizeof(tomorrowDate) - 1);
+    strncpy(tomorrowDate, dateifyLocal(utcNow() + 86400UL, "yyyy-mm-dd"), sizeof(tomorrowDate) - 1);
     tomorrowDate[sizeof(tomorrowDate) - 1] = '\0';
     SerialPrint(("Sunrise/sunset for today already past; fetching " + String(tomorrowDate)).c_str(), true);
     return requestSunForDate(tomorrowDate);
@@ -1089,7 +1180,7 @@ int8_t WeatherInfoOptimized::getTemperature(uint32_t dt, bool wetbulb, bool asin
         return hourly[dt].temperature;
     }
 
-    if (dt == 0) dt = I.currentTime;
+    if (dt == 0) dt = (uint32_t)utcNow();
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
 
@@ -1098,14 +1189,14 @@ int8_t WeatherInfoOptimized::getTemperature(uint32_t dt, bool wetbulb, bool asin
 }
 
 int8_t WeatherInfoOptimized::getHumidity(uint32_t dt) {
-    if (dt == 0) dt = I.currentTime;
+    if (dt == 0) dt = (uint32_t)utcNow();
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
     return hourly[i].humidity;
 }
 
 int16_t WeatherInfoOptimized::getWeatherID(uint32_t dt) {
-    if (dt == 0) dt = I.currentTime;
+    if (dt == 0) dt = (uint32_t)utcNow();
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
     return hourly[i].weatherID;
@@ -1114,7 +1205,7 @@ int16_t WeatherInfoOptimized::getWeatherID(uint32_t dt) {
 int8_t WeatherInfoOptimized::getPoP(uint32_t dt) {
     if (dt == 0) {
         double totalPOP = 1;
-        int16_t start = hourSlot(I.currentTime);
+        int16_t start = hourSlot(utcNow());
         if (start < 0) start = 0;
         for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
             double tmp = hourly[j].PoP;
@@ -1131,7 +1222,7 @@ int8_t WeatherInfoOptimized::getPoP(uint32_t dt) {
 int16_t WeatherInfoOptimized::getRain(uint32_t dt) {
     if (dt == 0) {
         int16_t totalrain = 0;
-        int16_t start = hourSlot(I.currentTime);
+        int16_t start = hourSlot(utcNow());
         if (start < 0) start = 0;
         for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
             int16_t tmp = hourly[j].rainMm;
@@ -1148,7 +1239,7 @@ int16_t WeatherInfoOptimized::getRain(uint32_t dt) {
 int16_t WeatherInfoOptimized::getSnow(uint32_t dt) {
     if (dt == 0) {
         int16_t total = 0;
-        int16_t start = hourSlot(I.currentTime);
+        int16_t start = hourSlot(utcNow());
         if (start < 0) start = 0;
         for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
             int16_t tmp = hourly[j].snowMm;
@@ -1165,7 +1256,7 @@ int16_t WeatherInfoOptimized::getSnow(uint32_t dt) {
 int16_t WeatherInfoOptimized::getIce(uint32_t dt) {
     if (dt == 0) {
         int16_t total = 0;
-        int16_t start = hourSlot(I.currentTime);
+        int16_t start = hourSlot(utcNow());
         if (start < 0) start = 0;
         for (int16_t j = start; j < start + 24 && j < NUM_HOURLY; j++) {
             int16_t tmp = hourly[j].iceMm;
@@ -1180,14 +1271,14 @@ int16_t WeatherInfoOptimized::getIce(uint32_t dt) {
 }
 
 int8_t WeatherInfoOptimized::getDewPoint(uint32_t dt) {
-    if (dt == 0) dt = I.currentTime;
+    if (dt == 0) dt = (uint32_t)utcNow();
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
     return hourly[i].dewPoint;
 }
 
 int16_t WeatherInfoOptimized::getWindSpeed(uint32_t dt) {
-    if (dt == 0) dt = I.currentTime;
+    if (dt == 0) dt = (uint32_t)utcNow();
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
     return hourly[i].windSpeed;
@@ -1368,7 +1459,7 @@ bool WeatherInfoOptimized::initWeather() {
 }
 
 uint16_t WeatherInfoOptimized::getDailyRain(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    uint32_t MN0 = localMidnightToday();
     return getDailyRain(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
@@ -1386,7 +1477,7 @@ uint16_t WeatherInfoOptimized::getDailyRain(uint32_t starttime, uint32_t endtime
 }
 
 uint16_t WeatherInfoOptimized::getDailySnow(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    uint32_t MN0 = localMidnightToday();
     return getDailySnow(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
@@ -1404,7 +1495,7 @@ uint16_t WeatherInfoOptimized::getDailySnow(uint32_t starttime, uint32_t endtime
 }
 
 uint16_t WeatherInfoOptimized::getDailyIce(uint8_t daysfromnow) {
-    uint32_t MN0 = unixToLocal(makeUnixTime(year() - 2000, month(), day(), 0, 0, 0, false));
+    uint32_t MN0 = localMidnightToday();
     return getDailyIce(MN0 + daysfromnow * 86400UL, MN0 + daysfromnow * 86400UL + 86400UL);
 }
 
@@ -1469,7 +1560,7 @@ void WeatherInfoOptimized::getDailyTemp(uint8_t daysfromnow, int8_t* temp) {
     }
 
     if (daysfromnow == 0 && temp[0] == WEATHER_INVALID_TEMP) {
-        temp[0] = getTemperature(I.currentTime);
+        temp[0] = getTemperature((uint32_t)utcNow());
     }
 }
 
@@ -1496,7 +1587,7 @@ bool WeatherInfoOptimized::clearCache() {
 
 bool WeatherInfoOptimized::isCacheValid() {
     for (int i = 0; i < WEATHER_CACHE_SIZE; i++) {
-        if (cache[i].valid && cache[i].last_successful_update + 3600 > I.currentTime) {
+        if (cache[i].valid && cache[i].last_successful_update + 3600 > (uint32_t)utcNow()) {
             return true;
         }
     }
@@ -1533,7 +1624,7 @@ String WeatherInfoOptimized::getAlertName(const char* phenomenon) {
 
     // --- Flooding ---
     if (strcmp(phenomenon, "FF") == 0) return "Flash Flood";
-    if (strcmp(phenomenon, "FA") == 0) return "Areal Flood";
+    if (strcmp(phenomenon, "FA") == 0) return "Flood Watch";
     if (strcmp(phenomenon, "FL") == 0) return "Flood";
     if (strcmp(phenomenon, "HY") == 0) return "Hydrologic";
     if (strcmp(phenomenon, "CF") == 0) return "Coastal Flood";
@@ -1636,8 +1727,8 @@ bool WeatherInfoOptimized::parseVTEC(const char* vtec, char* office, char* pheno
 
     // 7. Parse Dates (Indices: Start at 22, End at 36)
     // Format: YYMMDDTHHMMZ
-    *start = unixToLocal(vtecTimeToUnix(vtec + 22));
-    *end   = unixToLocal(vtecTimeToUnix(vtec + 35));
+    *start = vtecTimeToUnix(vtec + 22);
+    *end   = vtecTimeToUnix(vtec + 35);
 
     return true;
 }
@@ -1687,8 +1778,8 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
 
         bool success = SendHTTPMessage(M);
         if (success) {
-            this->lastAlertUpdateTime = unixToLocal(iso8601ToUnix(doc["updated"].as<String>()));
-            this->lastAlertFetchTime = I.currentTime;
+            this->lastAlertUpdateTime = (uint32_t)iso8601ToUnix(doc["updated"].as<String>());
+            this->lastAlertFetchTime = (uint32_t)utcNow();
 
             if (M.httpCode == 304) {
                 //no changes
@@ -1804,7 +1895,7 @@ bool WeatherInfoOptimized::fetchWeatherAlerts() {
             SerialPrint("Alert request failed",true);
             SerialPrint("HTTP Code: " + String(M.httpCode),true);
             storeError("Alert request failed with code: " + String(M.httpCode), ERROR_HTTP_RESPONSE,true);
-            this->lastUpdateError = I.currentTime;
+            this->lastUpdateError = (uint32_t)utcNow();
             return false;
         }
 
@@ -1828,7 +1919,7 @@ bool WeatherInfoOptimized::loadNextWeatherAlert() {
     WeatherEventFile fileData;
 
     if (!readAnythingFromSD(filename, &fileData, sizeof(WeatherEventFile))) return false;
-    if (fileData.time_end < I.currentTime) return false; //alert is in the past, so no longer active
+    if (fileData.time_end < (uint32_t)utcNow()) return false; // alert end is UTC
 
     this->alertInfo.E_severity = parseSeverity(fileData.severity);
     this->alertInfo.E_certainty = parseCertainty(fileData.certainty);
@@ -1981,7 +2072,7 @@ bool WeatherInfoOptimized::buildWeatherPackageFile(bool forceRebuild) {
     uint16_t hdrBytes = WEATHER_PKG_HEADER_BYTES;
     memcpy(header + 2, &hdrBytes, sizeof(hdrBytes));
 
-    uint32_t packagedAt = isTimeValid(I.currentTime) ? (uint32_t)I.currentTime : 0;
+    uint32_t packagedAt = isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : 0;
     memcpy(header + 4, &packagedAt, 4);
     memcpy(header + 8, &totalSize, 4);
     uint16_t storeVer = WEATHER_STORE_VERSION;
@@ -1989,9 +2080,9 @@ bool WeatherInfoOptimized::buildWeatherPackageFile(bool forceRebuild) {
     memcpy(header + 12, &storeVer, 2);
     memcpy(header + 14, &objSize, 2);
     header[16] = sectionCount;
-    uint8_t flags = 0;
+    uint8_t flags = WPKG_FLAG_TIMES_UTC; // hourBase / sun / alerts / lastUpdateT are UTC
     if (anyWeatherComponentStale() || lastUpdateT == 0 ||
-        (isTimeValid(I.currentTime) && lastUpdateT + 7200 < (uint32_t)I.currentTime)) {
+        (isTimeValid((uint32_t)utcNow()) && lastUpdateT + 7200 < (uint32_t)utcNow())) {
         flags |= WPKG_FLAG_DATA_STALE;
     }
     header[17] = flags;
@@ -2034,7 +2125,10 @@ bool WeatherInfoOptimized::buildWeatherPackageFile(bool forceRebuild) {
     sdDeleteFile(WEATHER_PKG_TMP_PATH);
 
     lastWeatherPackageGeneratedAt = packagedAt;
-    SerialPrint("Weather package built: " + String(totalSize) + " bytes, sections=" + String(sectionCount), true);
+    SerialPrint("Weather package built: " + String(totalSize) + " bytes, sections=" + String(sectionCount) +
+                " hourBase=" + String(hourBase) +
+                " hourBaseLocal=" + String(dateifyLocal(hourBase, "mm/dd hh:nn")) +
+                " flags=0x" + String(flags, HEX), true);
     return true;
 }
 #endif // _USEWEATHER package

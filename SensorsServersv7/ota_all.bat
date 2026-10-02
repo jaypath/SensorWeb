@@ -5,6 +5,10 @@ rem Sequentially OTA-upload every PlatformIO espota environment whose upload_por
 rem IP starts with the given prefix, skipping devices already recorded at the
 rem current CONFIG_APP_PROJECT_VER (or newer).
 rem
+rem To omit an env from this batch, put this comment immediately above [env:...]
+rem or anywhere in that env section in platformio.ini:
+rem   ;not for automation
+rem
 rem Usage:
 rem   ota_all.bat 192.168.1.
 rem   ota_all.bat 192.168.68.
@@ -12,6 +16,8 @@ rem   ota_all.bat                  (prompts for prefix)
 rem
 rem Record file: ota_record.txt  (env|ip|version|timestamp)
 rem Helper:      ota_util.ps1
+rem Envs with custom_sdkconfig (NimBLE classic ESP32) run with PLATFORMIO_CORE_DIR=%USERPROFILE%\.platformio-nimble
+rem so they never trigger a framework reinstall / IDF lib rebuild against the stock S3 libs.
 
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
@@ -45,6 +51,7 @@ set "FW_VER="
 set "OK_COUNT=0"
 set "FAIL_COUNT=0"
 set "SKIP_COUNT=0"
+set "EXCLUDE_COUNT=0"
 set "MATCH_COUNT=0"
 
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%UTIL%" -Mode version`) do set "FW_VER=%%V"
@@ -68,7 +75,10 @@ if errorlevel 1 (
 )
 
 for /f "usebackq tokens=1-4 delims=|" %%A in ("%TARGET_LIST%") do (
-  if /i "%%A"=="SKIP" (
+  if /i "%%A"=="EXCLUDE" (
+    set /a EXCLUDE_COUNT+=1
+    echo EXCLUDE: %%B ^(%%C^) — %%D
+  ) else if /i "%%A"=="SKIP" (
     set /a SKIP_COUNT+=1
     set /a MATCH_COUNT+=1
     echo SKIP: %%B ^(%%C^) — %%D
@@ -84,6 +94,7 @@ echo.
 echo === Done ===
 echo Firmware version: !FW_VER!
 echo Matched prefix:   !MATCH_COUNT!
+echo Excluded:         !EXCLUDE_COUNT!
 echo Skipped ^(current^): !SKIP_COUNT!
 echo Successful:       !OK_COUNT!
 echo Failed:           !FAIL_COUNT!
@@ -104,6 +115,15 @@ echo.
 echo ----------------------------------------
 echo OTA: !ENV! @ !IP!  ^(!WHY! -^> !FW_VER!^)
 echo ----------------------------------------
+
+set "PLATFORMIO_CORE_DIR="
+for /f "usebackq delims=" %%C in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%UTIL%" -Mode coredir -EnvName "!ENV!"`) do set "PLATFORMIO_CORE_DIR=%%C"
+if defined PLATFORMIO_CORE_DIR echo PlatformIO core: !PLATFORMIO_CORE_DIR!
+rem IDF component manager fails with Access denied if it has to remove a stale managed_components tree
+if defined PLATFORMIO_CORE_DIR if exist "managed_components" (
+    attrib -r -s -h "managed_components\*" /s /d >nul 2>&1
+    rmdir /s /q "managed_components" >nul 2>&1
+)
 
 "%PIO%" run --target upload --environment !ENV!
 if errorlevel 1 (

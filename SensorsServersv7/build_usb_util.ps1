@@ -1,12 +1,13 @@
 # Build helper for build_all_usb.bat
 # Modes:
-#   list    - print non-OTA PlatformIO envs as env|deviceName (one per line)
+#   list    - print non-OTA PlatformIO envs (BUILD|env|device, or EXCLUDE|... for ;not for automation)
 #   device  - print device name for -EnvName (from _MYDEVICENAME in platformio.ini)
 #   version - print CONFIG_APP_PROJECT_VER from platformio.ini
+#   coredir - print PLATFORMIO_CORE_DIR for -EnvName (NimBLE core if the env sets custom_sdkconfig, else empty)
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('list', 'device', 'version')]
+    [ValidateSet('list', 'device', 'version', 'coredir')]
     [string]$Mode,
 
     [string]$EnvName = '',
@@ -28,10 +29,33 @@ function Get-FwVersion {
     throw "Could not read CONFIG_APP_PROJECT_VER from $Path"
 }
 
+# HybridCompile envs (custom_sdkconfig) get their own PlatformIO core so their rebuilt IDF libs
+# never replace the stock libs used by other envs (no framework reinstall / lib rebuild on switch).
+function Get-CoreDirForEnv {
+    param([string]$Path, [string]$Env)
+    $inEnv = $false
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*\[([^\]]+)\]') {
+            $inEnv = ($Matches[1].Trim() -eq "env:$Env")
+            continue
+        }
+        if ($inEnv -and $line -match '^\s*custom_sdkconfig\s*=') {
+            return (Join-Path $env:USERPROFILE '.platformio-nimble')
+        }
+    }
+    return ''
+}
+
+function Test-NotForAutomationComment {
+    param([string]$Line)
+    return [bool]($Line -match '^\s*;\s*not for automation\b')
+}
+
 function Get-EnvSectionsFromIni {
     param([string]$Path)
     $sections = New-Object System.Collections.Generic.List[object]
     $current = $null
+    $pendingSkip = $false
 
     function Flush {
         if ($null -ne $current) {
@@ -40,17 +64,27 @@ function Get-EnvSectionsFromIni {
     }
 
     foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*$') { continue }
+        if (Test-NotForAutomationComment $line) {
+            $pendingSkip = $true
+            continue
+        }
         if ($line -match '^\[env:([^\]]+)\]') {
             Flush
             $current = [pscustomobject]@{
-                Name           = $Matches[1].Trim()
-                UploadProtocol = $null
-                DeviceName     = $null
+                Name            = $Matches[1].Trim()
+                UploadProtocol  = $null
+                DeviceName      = $null
+                SkipAutomation  = $pendingSkip
             }
+            $pendingSkip = $false
             continue
         }
         if ($null -eq $current) { continue }
         if ($line -match '^\s*;') { continue }
+        # Marker inside this env (before real keys) applies here, not to the next env.
+        if ($pendingSkip) { $current.SkipAutomation = $true }
+        $pendingSkip = $false
         if ($line -match '^\s*upload_protocol\s*=\s*(\S+)') {
             $current.UploadProtocol = $Matches[1].Trim()
             continue
@@ -90,9 +124,10 @@ function Get-UsbBuildTargets {
         if (Test-IsOtaEnv -Section $sec) { continue }
         $device = Get-DeviceNameForEnv -Section $sec
         $out.Add([pscustomobject]@{
-            Name       = $sec.Name
-            DeviceName = $device
+            Name              = $sec.Name
+            DeviceName        = $device
             HasExplicitDevice = [bool]$sec.DeviceName
+            SkipAutomation    = [bool]$sec.SkipAutomation
         }) | Out-Null
     }
     return $out
@@ -104,7 +139,11 @@ switch ($Mode) {
     }
     'list' {
         foreach ($t in (Get-UsbBuildTargets -Path $IniPath)) {
-            Write-Output ("{0}|{1}" -f $t.Name, $t.DeviceName)
+            if ($t.SkipAutomation) {
+                Write-Output ("EXCLUDE|{0}|{1}|not for automation" -f $t.Name, $t.DeviceName)
+            } else {
+                Write-Output ("BUILD|{0}|{1}" -f $t.Name, $t.DeviceName)
+            }
         }
     }
     'device' {
@@ -119,5 +158,9 @@ switch ($Mode) {
         } else {
             Write-Output $hit.DeviceName
         }
+    }
+    'coredir' {
+        if (-not $EnvName) { throw 'EnvName is required for coredir mode' }
+        Write-Output (Get-CoreDirForEnv -Path $IniPath -Env $EnvName)
     }
 }

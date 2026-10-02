@@ -2,6 +2,13 @@
 
 // Shared weather package format for full (_USEWEATHER) producers and lite (_USEWEATHERLITE) consumers.
 //
+// Time domain: the WeatherData object blob is a raw memcpy of WeatherInfoOptimized.
+// After UTC cutover, all timestamps inside that object are UTC unix (same as NOAA parse /
+// utcNow on the producer). There is NO local/UTC conversion during HTTP transfer.
+// Consumers must query with utcNow() / UTC keys and only dateifyLocal() for display.
+// WPKG_FLAG_TIMES_UTC marks packages built by UTC-aware producers; older packages without
+// the flag may still carry local-pseudo hourBase and need normalizePackagedTimestampsToUtc().
+//
 // SECURITY: Package transfer uses plain HTTP on the LAN (GET/POST /WEATHERPKG).
 // Anyone who can reach the device can read or inject weather packages. Do not expose
 // these endpoints beyond a trusted local network; prefer firewall/VLAN isolation.
@@ -11,7 +18,7 @@
 #if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
 
 static constexpr uint8_t WEATHER_PKG_VER_MAJOR = 1;
-static constexpr uint8_t WEATHER_PKG_VER_MINOR = 0;
+static constexpr uint8_t WEATHER_PKG_VER_MINOR = 1; // minor 1+: WPKG_FLAG_TIMES_UTC always set on pack
 
 // Section types
 static constexpr uint8_t WPKG_SEC_WEATHERDATA = 1;
@@ -19,6 +26,9 @@ static constexpr uint8_t WPKG_SEC_EVENT = 2;
 // 3+ reserved (e.g. daily detail bins — not packaged today)
 
 static constexpr uint8_t WPKG_FLAG_DATA_STALE = 0x01; // producer marks NOAA/data stale at pack time
+// All WeatherInfoOptimized time fields in the blob (hourBase, sunrise/sunset, lastUpdateT,
+// period start/end, alert times, component lastAttemptT, …) are UTC unix seconds.
+static constexpr uint8_t WPKG_FLAG_TIMES_UTC = 0x02;
 
 static constexpr uint16_t WEATHER_PKG_MAX_SECTIONS = 64;
 static constexpr uint32_t WEATHER_PKG_MAX_BYTES = 50u * 1024u;

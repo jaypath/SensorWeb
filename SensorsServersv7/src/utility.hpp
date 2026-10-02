@@ -33,6 +33,9 @@ bool retrieveMovingAverageSensorDataFromMemory(uint64_t deviceMAC, uint8_t snsTy
 #endif
 
 bool isTimeValid(uint32_t time);
+/** Reject garbage LAN/decrypt identity (non-private IP, non-ASCII name, absurd type/fw). */
+bool isPlausibleDeviceIdentity(IPAddress ip, uint8_t devType, const char* devName,
+                               const FirmwareVersion* firmware = nullptr);
 bool isTempValid(double temp, bool extremeTemp=false);
 bool isRHValid(double rh);
 bool isSoilCapacitanceValid(double soil);
@@ -65,6 +68,12 @@ uint32_t deleteDataFiles(bool deleteFlags, bool deleteWeather, bool deleteGsheet
 void failedToRegister();
 void initScreenFlags(bool completeInit = false);
 void storeCoreData(bool forceStore = true);
+/** Arm the cause of an upcoming software restart. A watchdog or power loss does not call this. */
+void recordRebootIssue(RESETCAUSE cause);
+/** Publish one reboot cause into lastRebootIssue. Chip reason wins except for a software restart, which uses the armed cause. */
+void commitBootRebootIssue();
+/** Prefs only if stale; always write core struct and devices/sensors to SD. */
+void persistStateForOta();
 void handleStoreCoreData();
 void storeError(String E, ERRORCODES CODE=ERROR_UNDEFINED, bool writeToSD = true);
 void storeError(const char* E, ERRORCODES Z=ERROR_UNDEFINED, bool writeToSD = true);
