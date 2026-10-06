@@ -26,6 +26,8 @@ void weatherLiteApplyIFlagsFromPackage();
 bool weatherLiteUnpackFile(const char* path);
 bool weatherLiteRequestFromServer(IPAddress ip);
 bool weatherLiteRequestFromAnyWeatherServer();
+// Empty after a successful pull. Set when the last request or unpack returned false.
+const char* weatherLiteLastRequestError();
 void serviceWeatherLite(bool minuteTick);
 
 #endif

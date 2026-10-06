@@ -10,6 +10,17 @@
 
 WeatherLiteState WeatherLite;
 
+static char s_weatherLiteFail[80];
+
+const char* weatherLiteLastRequestError() {
+    return s_weatherLiteFail;
+}
+
+static void weatherLiteFail(const char* why) {
+    snprintf(s_weatherLiteFail, sizeof(s_weatherLiteFail), "%s", why ? why : "request failed");
+    SerialPrint(String("weatherLite: ") + s_weatherLiteFail, true);
+}
+
 void weatherLiteApplyIFlagsFromPackage() {
     // Derive alert UI flags from packaged object (not transferred via I).
     if (WeatherData.NumWeatherEvents > 0) {
@@ -43,6 +54,7 @@ bool weatherLiteUnpackFile(const char* path) {
     if (!path) path = WEATHER_PKG_PATH;
     File f = SD.open(path, FILE_READ);
     if (!f) {
+        weatherLiteFail("could not open package");
         storeError("weatherLiteUnpack: open failed", ERROR_SD_WEATHERDATAREAD, true);
         return false;
     }
@@ -51,15 +63,18 @@ bool weatherLiteUnpackFile(const char* path) {
     uint16_t headerBytes = 0;
     if (!readExact(f, &verMajor, 1) || !readExact(f, &verMinor, 1) || !readExact(f, &headerBytes, 2)) {
         f.close();
+        weatherLiteFail("package header short");
         return false;
     }
     if (verMajor > WEATHER_PKG_VER_MAJOR) {
         f.close();
+        weatherLiteFail("package version unsupported");
         storeError("weatherLiteUnpack: incompatible major version", ERROR_SD_WEATHERDATAREAD, true);
         return false;
     }
     if (headerBytes < WEATHER_PKG_HEADER_CORE || headerBytes > 4096) {
         f.close();
+        weatherLiteFail("package header invalid");
         return false;
     }
 
@@ -67,6 +82,7 @@ bool weatherLiteUnpackFile(const char* path) {
     uint8_t header[WEATHER_PKG_HEADER_BYTES];
     if (headerBytes > sizeof(header) || headerBytes < WEATHER_PKG_HEADER_CORE) {
         f.close();
+        weatherLiteFail("package header invalid");
         return false;
     }
     header[0] = verMajor;
@@ -75,6 +91,7 @@ bool weatherLiteUnpackFile(const char* path) {
     if (headerBytes > 4) {
         if (!readExact(f, header + 4, headerBytes - 4)) {
             f.close();
+            weatherLiteFail("package header short");
             return false;
         }
     }
@@ -90,15 +107,18 @@ bool weatherLiteUnpackFile(const char* path) {
 
     if (storeVer != WEATHER_STORE_VERSION || objSize != (uint16_t)sizeof(WeatherInfoOptimized)) {
         f.close();
+        weatherLiteFail("weather data size mismatch");
         storeError("weatherLiteUnpack: WeatherData ABI mismatch", ERROR_SD_WEATHERDATAREAD, true);
         return false;
     }
     if (sectionCount == 0 || sectionCount > WEATHER_PKG_MAX_SECTIONS) {
         f.close();
+        weatherLiteFail("package sections invalid");
         return false;
     }
     if (totalSize > WEATHER_PKG_MAX_BYTES || totalSize < headerBytes) {
         f.close();
+        weatherLiteFail("package size invalid");
         return false;
     }
 
@@ -117,23 +137,29 @@ bool weatherLiteUnpackFile(const char* path) {
     }
     if (weatherIdx < 0) {
         f.close();
+        weatherLiteFail("package missing weather");
         return false;
     }
 
     // Stream WeatherData object into memory
     if (!f.seek(sections[weatherIdx].start)) {
         f.close();
+        weatherLiteFail("package seek failed");
         return false;
     }
     if (!readExact(f, &WeatherData, sizeof(WeatherInfoOptimized))) {
         f.close();
+        weatherLiteFail("weather object short");
         return false;
     }
 
     const bool timesUtc = (flags & WPKG_FLAG_TIMES_UTC) != 0;
     WeatherData.normalizePackagedTimestampsToUtc(timesUtc);
 
-    // Replace Events directory contents
+    // SD.open does not create parent directories. A package with alerts fails
+    // here when /Data/Events was never created on this device.
+    if (!SD.exists("/Data")) SD.mkdir("/Data");
+    if (!SD.exists("/Data/Events")) SD.mkdir("/Data/Events");
     deleteFiles("*", "/Data/Events");
     for (uint8_t e = 0; e < eventCount; e++) {
         uint8_t si = eventIdxs[e];
@@ -147,6 +173,7 @@ bool weatherLiteUnpackFile(const char* path) {
         uint32_t len = end - start;
         if (!f.seek(start)) {
             f.close();
+            weatherLiteFail("alert seek failed");
             return false;
         }
         char evPath[32];
@@ -154,6 +181,7 @@ bool weatherLiteUnpackFile(const char* path) {
         File ef = SD.open(evPath, FILE_WRITE);
         if (!ef) {
             f.close();
+            weatherLiteFail("could not save alert");
             return false;
         }
         uint8_t buf[256];
@@ -163,11 +191,13 @@ bool weatherLiteUnpackFile(const char* path) {
             if (!readExact(f, buf, n)) {
                 ef.close();
                 f.close();
+                weatherLiteFail("alert read failed");
                 return false;
             }
             if (ef.write(buf, n) != n) {
                 ef.close();
                 f.close();
+                weatherLiteFail("alert write failed");
                 return false;
             }
             left -= n;
@@ -186,6 +216,7 @@ bool weatherLiteUnpackFile(const char* path) {
     weatherLiteApplyIFlagsFromPackage();
     updateCurrentOutsideConditions();
 
+    s_weatherLiteFail[0] = '\0';
     SerialPrint("weatherLiteUnpack: OK packagedAt=" + String(packagedAt) +
         " lastUpdateT=" + String(WeatherData.lastUpdateT) +
         " hourBase=" + String(WeatherData.getHourBase()) +
@@ -197,8 +228,14 @@ bool weatherLiteUnpackFile(const char* path) {
 }
 
 bool weatherLiteRequestFromServer(IPAddress ip) {
-    if (!wifiReadyForNetwork()) return false;
-    if (ip == IPAddress(0, 0, 0, 0)) return false;
+    if (!wifiReadyForNetwork()) {
+        weatherLiteFail("Wi-Fi not ready");
+        return false;
+    }
+    if (ip == IPAddress(0, 0, 0, 0)) {
+        weatherLiteFail("weather hub has no IP");
+        return false;
+    }
 
     WeatherLite.lastRequestAttemptAt = isTimeValid((uint32_t)utcNow()) ? (uint32_t)utcNow() : WeatherLite.lastRequestAttemptAt;
 
@@ -208,21 +245,38 @@ bool weatherLiteRequestFromServer(IPAddress ip) {
     WiFiClient client;
     HTTPClient http;
     client.setTimeout(15000);
-    if (!http.begin(client, url)) return false;
+    if (!http.begin(client, url)) {
+        weatherLiteFail("HTTP client failed");
+        return false;
+    }
     http.setTimeout(15000);
     esp_task_wdt_reset();
     int code = http.GET();
     esp_task_wdt_reset();
     if (code != 200) {
         http.end();
-        SerialPrint("weatherLiteRequest: HTTP " + String(code) + " from " + ip.toString(), true);
+        char msg[80];
+        if (code < 0) snprintf(msg, sizeof(msg), "could not reach %s", ip.toString().c_str());
+        else snprintf(msg, sizeof(msg), "HTTP %d from %s", code, ip.toString().c_str());
+        weatherLiteFail(msg);
         return false;
     }
 
-    int len = http.getSize();
+    const int len = http.getSize();
+    if (len == 0 || (len > 0 && (uint32_t)len > WEATHER_PKG_MAX_BYTES) || (len > 0 && (uint32_t)len < WEATHER_PKG_HEADER_CORE)) {
+        http.end();
+        weatherLiteFail(len == 0 ? "empty weather package" : "weather package size rejected");
+        return false;
+    }
+    // HTTPClient::connected() stays true while unread bytes remain. WiFiClient::connected()
+    // does not: after the hub sends Connection: close, the socket can already look dead
+    // while the body is still in the receive buffer. The old loop sampled available()
+    // once, waited 1 ms, then quit on !connected() with that stale count, so a 200
+    // response was saved as an empty file.
     WiFiClient* stream = http.getStreamPtr();
     if (!stream) {
         http.end();
+        weatherLiteFail("no HTTP body");
         return false;
     }
 
@@ -230,74 +284,112 @@ bool weatherLiteRequestFromServer(IPAddress ip) {
     File out = SD.open(WEATHER_PKG_RECV_TMP_PATH, FILE_WRITE);
     if (!out) {
         http.end();
+        weatherLiteFail("could not write package");
         return false;
     }
 
     uint8_t buf[512];
     uint32_t written = 0;
-    const uint32_t maxBytes = WEATHER_PKG_MAX_BYTES;
-    uint32_t startMs = millis();
-    while ((len > 0 && written < (uint32_t)len) || (len < 0 && stream->available())) {
+    const uint32_t expect = (len > 0) ? (uint32_t)len : 0;
+    const uint32_t startMs = millis();
+    uint32_t lastDataMs = startMs;
+    bool sdWriteFailed = false;
+    while (written < WEATHER_PKG_MAX_BYTES && (expect == 0 || written < expect)) {
         if (millis() - startMs > 30000) break;
-        size_t avail = stream->available();
-        if (avail == 0) {
-            delay(1);
-            if (!stream->connected() && avail == 0) break;
-            continue;
+        esp_task_wdt_reset();
+        int avail = stream->available();
+        if (avail <= 0) {
+            if (http.connected() && millis() - lastDataMs < 15000) {
+                delay(2);
+                continue;
+            }
+            break;
         }
-        size_t n = avail > sizeof(buf) ? sizeof(buf) : avail;
-        if (written + n > maxBytes) n = maxBytes - written;
-        int r = stream->readBytes(buf, n);
-        if (r <= 0) break;
+        size_t n = (size_t)avail > sizeof(buf) ? sizeof(buf) : (size_t)avail;
+        if (expect > 0 && written + n > expect) n = (size_t)(expect - written);
+        if (written + n > WEATHER_PKG_MAX_BYTES) n = (size_t)(WEATHER_PKG_MAX_BYTES - written);
+        int r = stream->read(buf, n);
+        if (r <= 0) {
+            if (http.connected() && millis() - lastDataMs < 15000) {
+                delay(2);
+                continue;
+            }
+            break;
+        }
         if (out.write(buf, (size_t)r) != (size_t)r) {
-            out.close();
-            http.end();
-            sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
-            return false;
+            sdWriteFailed = true;
+            break;
         }
         written += (uint32_t)r;
-        if (written >= maxBytes) break;
-        esp_task_wdt_reset();
+        lastDataMs = millis();
     }
     out.close();
     http.end();
 
-    if (written < WEATHER_PKG_HEADER_CORE) {
+    if (sdWriteFailed) {
         sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+        weatherLiteFail("SD write failed");
+        return false;
+    }
+    if ((expect > 0 && written != expect) || written < WEATHER_PKG_HEADER_CORE) {
+        sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "short package %lu/%ld bytes", (unsigned long)written, (long)len);
+        weatherLiteFail(msg);
         return false;
     }
 
     sdDeleteFile(WEATHER_PKG_PATH);
-    // Move recv tmp -> package path via copy
     File src = SD.open(WEATHER_PKG_RECV_TMP_PATH, FILE_READ);
     File dst = SD.open(WEATHER_PKG_PATH, FILE_WRITE);
     if (!src || !dst) {
         if (src) src.close();
         if (dst) dst.close();
         sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+        weatherLiteFail("could not save package");
         return false;
     }
+    uint32_t copied = 0;
+    bool copyFailed = false;
     while (src.available()) {
         int r = src.read(buf, sizeof(buf));
         if (r <= 0) break;
-        dst.write(buf, (size_t)r);
+        if (dst.write(buf, (size_t)r) != (size_t)r) {
+            copyFailed = true;
+            break;
+        }
+        copied += (uint32_t)r;
     }
     src.close();
     dst.close();
     sdDeleteFile(WEATHER_PKG_RECV_TMP_PATH);
+    if (copyFailed || copied != written) {
+        sdDeleteFile(WEATHER_PKG_PATH);
+        weatherLiteFail("package copy failed");
+        return false;
+    }
 
     return weatherLiteUnpackFile(WEATHER_PKG_PATH);
 }
 
 bool weatherLiteRequestFromAnyWeatherServer() {
-    int16_t idx = Sensors.nextServerIndex(0, true); // type 100 only
-    while (idx >= 0) {
-        ArborysDevType* d = Sensors.getDeviceByDevIndex(idx);
-        if (d && d->IsSet && !d->expired && d->IP != IPAddress(0, 0, 0, 0)) {
-            if (weatherLiteRequestFromServer(d->IP)) return true;
+    // Presence expiry is not reachability. A type-100 hub with a stale dataReceived
+    // still serves GET /WEATHERPKG. Try live entries first, then expired ones.
+    bool tried = false;
+    for (int pass = 0; pass < 2; pass++) {
+        int16_t idx = Sensors.nextServerIndex(0, true);
+        while (idx >= 0) {
+            ArborysDevType* d = Sensors.getDeviceByDevIndex(idx);
+            const bool want = d && d->IsSet && d->IP != IPAddress(0, 0, 0, 0)
+                && ((pass == 0 && !d->expired) || (pass == 1 && d->expired));
+            if (want) {
+                tried = true;
+                if (weatherLiteRequestFromServer(d->IP)) return true;
+            }
+            idx = Sensors.nextServerIndex(idx + 1, true);
         }
-        idx = Sensors.nextServerIndex(idx + 1, true);
     }
+    if (!tried) weatherLiteFail("no type-100 weather server");
     return false;
 }
 

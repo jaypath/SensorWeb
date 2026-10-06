@@ -3,9 +3,11 @@
 #if defined(_USETFT) && _IS_SERVER_HUB
 
 #include "graphics.hpp"
+#include "actuators.hpp"
 #include "BootSecure.hpp"
 #include "utility.hpp"
 #include "server.hpp"
+#include "ble_provision.hpp"
 
 
 //for drawing sensors. The maximum number of sensors on a screen is 48.
@@ -484,7 +486,7 @@ void drawBox(int16_t sensorIndex, int X, int Y, byte boxsize_x,byte boxsize_y) {
         box_fill = set_color(200, 200, 200);
         text_color = set_color(55, 55, 55);
       } else {
-        if (sensor->snsType == 89) {
+        if (sensor->snsType == SNS_NET_LAST) {
           snprintf(tempbuf, sizeof(tempbuf), "%.0fMb", sensor->snsValue);
         } else {
           snprintf(tempbuf, sizeof(tempbuf), "%.0f", sensor->snsValue);
@@ -878,10 +880,17 @@ static byte fcnGetMainScreenAlarms(byte rows, byte cols, bool useOverrideFlags) 
   return alarmArrayInd;
 }
 
+static bool sensorSummaryIncludes(int16_t i) {
+  if (Sensors.isSensorIndexInvalid(i, false) != 0) return false;
+  ArborysSnsType* s = Sensors.getSensorBySnsIndex(i);
+  if (s && s->snsType == SNS_AGGREGATE) return Sensors.listsForGraphics(i, true, nullptr);
+  return true;
+}
+
 static uint8_t sensorSummaryValidCount() {
   uint8_t total = 0;
   for (int16_t i = 0; i < NUMSENSORS; i++) {
-    if (Sensors.isSensorIndexInvalid(i, false) == 0) total++;
+    if (sensorSummaryIncludes(i)) total++;
   }
   return total;
 }
@@ -910,7 +919,7 @@ static byte fcnFillAllSensorBoxes(byte rows, byte cols) {
   byte alarmArrayInd = 0;
 
   for (int16_t i = 0; i < NUMSENSORS && alarmArrayInd < alarmsToDisplay; i++) {
-    if (Sensors.isSensorIndexInvalid(i, false) != 0) continue;
+    if (!sensorSummaryIncludes(i)) continue;
     if (seen < skip) {
       seen++;
       continue;
@@ -970,8 +979,23 @@ static bool weatherDataIsFresh() {
 }
 
 void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
-  // print air pressure
-  double tempval = Sensors.getAverageOutsideParameterValue("pressure", utcNow() - 3600); //get the average pressure in the last hour
+  // Outside pressure is the local outdoor aggregate on weather hubs.
+  // When that live feed is absent, use the current NOAA station pressure.
+  double tempval = -127;
+  bool fromLive = false;
+#if defined(_USEWEATHER) || defined(_USEWEATHERLITE)
+  ArborysSnsType* pressure = Actuators_findLocalAggregate("pressure", 2);
+  if (pressure && !pressure->expired && isPressureValid(pressure->snsValue)) {
+    tempval = pressure->snsValue;
+    fromLive = true;
+  } else {
+    const int16_t noaaHpa = WeatherData.getPressure();
+    if (isPressureValid((double)noaaHpa)) tempval = noaaHpa;
+  }
+#else
+  tempval = Sensors.getAverageOutsideParameterValue("pressure", utcNow() - 3600);
+  fromLive = (tempval != -127);
+#endif
 
   if (tempval == -127) {
     snprintf(tempPres,10,"");
@@ -979,20 +1003,19 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
     *bg=BG_COLOR;
     return;
   }
-  if (tempval>LAST_BAR+.5) {
+  // Trend arrows follow the local sensor history. NOAA has no local trend.
+  if (fromLive && tempval>LAST_BAR+.5) {
     snprintf(tempPres,10,"%dhPa^",(int) tempval);
     *fg=tft.color565(255,0,0);
     *bg=BG_COLOR;
+  } else if (fromLive && tempval<LAST_BAR-.5) {
+    snprintf(tempPres,10,"%dhPa_",(int) tempval);
+    *fg=tft.color565(0,0,255);
+    *bg=BG_COLOR;
   } else {
-    if (tempval<LAST_BAR-.5) {
-      snprintf(tempPres,10,"%dhPa_",(int) tempval);
-      *fg=tft.color565(0,0,255);
-      *bg=BG_COLOR;
-    } else {
-      snprintf(tempPres,10,"%dhPa-",(int) tempval);
-      *fg=FG_COLOR;
-      *bg=BG_COLOR;
-    }
+    snprintf(tempPres,10,"%dhPa-",(int) tempval);
+    *fg=FG_COLOR;
+    *bg=BG_COLOR;
   }
 
   if (tempval>=1022) {
@@ -1003,6 +1026,46 @@ void fcnPressureTxt(char* tempPres, uint16_t* fg, uint16_t* bg) {
   if (tempval<=1000) {
     *fg=tft.color565(0,0,255);
     *bg=tft.color565(255,0,0);
+  }
+}
+
+// Pressure keeps its value colors. The " / NN%RH" suffix stays in the normal foreground.
+// The line is centered on the combined width, and RH starts where the pressure text ends.
+static void drawPressureRhLine(const char* pressureTxt, uint16_t pressureFg, uint16_t pressureBg,
+                               int rhPercent, bool haveRh, byte fontSz, int centerX, int centerY, int16_t maxWidth) {
+  char rhTxt[12] = "";
+  if (haveRh) snprintf(rhTxt, sizeof(rhTxt), "%d%%RH", rhPercent);
+
+  const bool havePres = pressureTxt && pressureTxt[0];
+  String pres = havePres ? String(pressureTxt) : String();
+  String rest;
+  if (haveRh) rest = havePres ? (String(" / ") + rhTxt) : String(rhTxt);
+  if (!pres.length() && !rest.length()) return;
+
+  String combined = pres + rest;
+  uint32_t FH = setFont(fontSz);
+  if (maxWidth > 0 && tft.textWidth(combined) > maxWidth && fontSz != 1) {
+    fontSz = 1;
+    FH = setFont(fontSz);
+  }
+  int presW = pres.length() ? tft.textWidth(pres) : 0;
+  int totalW = presW + (rest.length() ? tft.textWidth(rest) : 0);
+
+  int x = centerX - totalW / 2;
+  if (x < 0) x = 0;
+  int y = centerY - (int)FH / 2;
+  if (y < 0) y = 0;
+
+  tft.setTextDatum(TL_DATUM);
+  tft.setCursor(x, y);
+  if (pres.length()) {
+    tft.setTextColor(pressureFg, pressureBg);
+    tft.print(pres);
+  }
+  if (rest.length()) {
+    tft.setCursor(x + presW, y);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    tft.print(rest);
   }
 }
 
@@ -1573,7 +1636,7 @@ void fcnDrawMainScreen(int16_t index) {
 
     GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
     uint16_t flaggedAlerts = Sensors.countMainScreenFlaggedAlerts(true);
-    uint16_t expiredAlerts = Sensors.countMainScreenCriticalExpiredAlerts(true);
+    uint16_t expiredAlerts = Sensors.countMainScreenNonCriticalExpiredAlerts(true);
     if (flaggedAlerts>0) {
       if (isBit(GRAPHICS.StatusFlags,2)==false) setBit(GRAPHICS.StatusFlagsChanged,2);
       setBit(GRAPHICS.StatusFlags,2);
@@ -1982,131 +2045,403 @@ void fcnDrawClock(int16_t index) {
 }
 //-----------------------------------------------------------
 
+// Case-insensitive substring match for sensor labels (Temp_Indoor, RH_Indoor, TH_Indoor).
+static bool nameContainsCI(const char* name, const char* token) {
+  if (!name || !token || !token[0]) return false;
+  const size_t n = strlen(token);
+  for (const char* p = name; *p; ++p) {
+    size_t i = 0;
+    for (; i < n; ++i) {
+      char a = p[i];
+      if (!a) break;
+      char b = token[i];
+      if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+      if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+      if (a != b) break;
+    }
+    if (i == n) return true;
+  }
+  return false;
+}
+
+static bool indoorActuatorUsable(const ArborysSnsType* s, int16_t me) {
+  if (!s || !s->IsSet || s->deviceIndex != me || s->expired) return false;
+  if (s->snsType < 170 || s->snsType > 219) return false;
+  if (isnan(s->snsValue)) return false;
+  return true;
+}
+
+// Flag bit 0 is out of range. Bit 5 is high when that is set, otherwise low.
+static int8_t indoorLimitBand(const ArborysSnsType* s) {
+  if (!s || bitRead(s->Flags, 0) == 0) return 0;
+  return bitRead(s->Flags, 5) ? 1 : -1;
+}
+
+static void indoorTempColors(int8_t band, uint16_t* fg, uint16_t* bg) {
+  if (band > 0) {
+    *fg = set_color(0, 0, 255);
+    *bg = set_color(255, 165, 0);
+  } else if (band < 0) {
+    *fg = TFT_WHITE;
+    *bg = set_color(0, 0, 255);
+  } else {
+    *fg = TFT_GREEN;
+    *bg = TFT_BLACK;
+  }
+}
+
+static void indoorRhColors(int8_t band, uint16_t* fg, uint16_t* bg) {
+  if (band > 0) {
+    *fg = TFT_BLACK;
+    *bg = set_color(173, 216, 230);
+  } else if (band < 0) {
+    *fg = TFT_WHITE;
+    *bg = set_color(80, 42, 18);
+  } else {
+    *fg = FG_COLOR;
+    *bg = BG_COLOR;
+  }
+}
+
+// "Indoor:" stays the panel default. The temperature and humidity values each
+// take their own foreground and background, same as the pressure / RH line.
+static void drawIndoorClimateLine(bool haveTemp, int tempF, int8_t tempBand,
+                                  bool haveRh, int rh, int8_t rhBand,
+                                  byte fontSz, int centerX, int centerY) {
+  char tempTxt[8] = "";
+  char rhTxt[12] = "";
+  if (haveTemp) snprintf(tempTxt, sizeof(tempTxt), "%dF", tempF);
+  if (haveRh) snprintf(rhTxt, sizeof(rhTxt), "%d%%RH", rh);
+
+  uint16_t tempFg = FG_COLOR, tempBg = BG_COLOR, rhFg = FG_COLOR, rhBg = BG_COLOR;
+  if (haveTemp) indoorTempColors(tempBand, &tempFg, &tempBg);
+  if (haveRh) indoorRhColors(rhBand, &rhFg, &rhBg);
+
+  const char* label = "Indoor: ";
+  const char* sep = (haveTemp && haveRh) ? " / " : "";
+  setFont(fontSz);
+  const int labelW = tft.textWidth(label);
+  const int tempW = tempTxt[0] ? tft.textWidth(tempTxt) : 0;
+  const int sepW = sep[0] ? tft.textWidth(sep) : 0;
+  const int rhW = rhTxt[0] ? tft.textWidth(rhTxt) : 0;
+  const uint32_t FH = tft.fontHeight(tft.getFont());
+
+  int x = centerX - (labelW + tempW + sepW + rhW) / 2;
+  if (x < 0) x = 0;
+  int y = centerY - (int)FH / 2;
+  if (y < 0) y = 0;
+  tft.setTextDatum(TL_DATUM);
+
+  tft.setCursor(x, y);
+  tft.setTextColor(FG_COLOR, BG_COLOR);
+  tft.print(label);
+  x += labelW;
+  if (tempW) {
+    tft.setCursor(x, y);
+    tft.setTextColor(tempFg, tempBg);
+    tft.print(tempTxt);
+    x += tempW;
+  }
+  if (sepW) {
+    tft.setCursor(x, y);
+    tft.setTextColor(FG_COLOR, BG_COLOR);
+    tft.print(sep);
+    x += sepW;
+  }
+  if (rhW) {
+    tft.setCursor(x, y);
+    tft.setTextColor(rhFg, rhBg);
+    tft.print(rhTxt);
+  }
+}
+
+// Local-hub actuators named Temp_Indoor (temperature), RH_Indoor (humidity),
+// or TH_Indoor (temperature or humidity, from the aggregate kind).
+// tempBand and rhBand are 1 high, -1 low, 0 inside the sensor limits.
+static void readLocalIndoorClimate(int* tempF, bool* haveTemp, int8_t* tempBand,
+                                  int* rh, bool* haveRh, int8_t* rhBand) {
+  *tempF = -127;
+  *rh = -127;
+  *haveTemp = false;
+  *haveRh = false;
+  *tempBand = 0;
+  *rhBand = 0;
+  const int16_t me = Sensors.findMyDeviceIndex();
+  if (me < 0) return;
+
+  ArborysSnsType* thUnknown = nullptr;
+  for (int16_t i = 0; i < NUMSENSORS; i++) {
+    ArborysSnsType* s = Sensors.getSensorBySnsIndex(i);
+    if (!indoorActuatorUsable(s, me)) continue;
+    const bool namedTemp = nameContainsCI(s->snsName, "Temp_Indoor");
+    const bool namedRh = nameContainsCI(s->snsName, "RH_Indoor");
+    const bool namedTh = nameContainsCI(s->snsName, "TH_Indoor");
+    if (!namedTemp && !namedRh && !namedTh) continue;
+
+    const char* kind = Actuators_aggregateKind(s);
+    const bool kindHum = kind && strcmp(kind, "humidity") == 0;
+    const bool kindTemp = kind && strcmp(kind, "temperature") == 0;
+
+    if (namedTemp || (namedTh && kindTemp)) {
+      if (!*haveTemp && isTempValid(s->snsValue)) {
+        *tempF = (int)s->snsValue;
+        *haveTemp = true;
+        *tempBand = indoorLimitBand(s);
+      }
+      continue;
+    }
+    if (namedRh || (namedTh && kindHum)) {
+      if (!*haveRh && isRHValid(s->snsValue)) {
+        *rh = (int)(s->snsValue + 0.5);
+        *haveRh = true;
+        *rhBand = indoorLimitBand(s);
+      }
+      continue;
+    }
+    if (namedTh && !thUnknown) thUnknown = s;
+  }
+
+  if (!thUnknown) return;
+  if (!*haveTemp && isTempValid(thUnknown->snsValue)) {
+    *tempF = (int)thUnknown->snsValue;
+    *haveTemp = true;
+    *tempBand = indoorLimitBand(thUnknown);
+  } else if (!*haveRh && isRHValid(thUnknown->snsValue)) {
+    *rh = (int)(thUnknown->snsValue + 0.5);
+    *haveRh = true;
+    *rhBand = indoorLimitBand(thUnknown);
+  }
+}
+
+static byte fontFittingWidth(const char* text, byte preferred, int16_t maxWidth) {
+  const byte smaller[] = {4, 2, 1, 0};
+  byte fonts[5];
+  uint8_t n = 0;
+  fonts[n++] = preferred;
+  for (uint8_t i = 0; i < sizeof(smaller); i++) {
+    if (smaller[i] >= preferred) continue;
+    fonts[n++] = smaller[i];
+  }
+  for (uint8_t i = 0; i < n; i++) {
+    setFont(fonts[i]);
+    if (!text || !text[0] || (int)tft.textWidth(text) <= maxWidth) return fonts[i];
+  }
+  return fonts[n - 1];
+}
+
+static byte smallerTextFont(byte fontSz) {
+  if (fontSz >= 4) return 2;
+  if (fontSz == 2) return 1;
+  if (fontSz == 1) return 0;
+  return 0;
+}
+
+static int columnPixels(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f, byte spacer) {
+  const uint32_t parts[] = {a, b, c, d, e, f};
+  uint32_t h = 0;
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < 6; i++) {
+    if (!parts[i]) continue;
+    h += parts[i];
+    n++;
+  }
+  if (n > 1) h += (uint32_t)spacer * (n - 1);
+  return (int)h;
+}
+
 //redraw  current weather text --------------------------------------------------------
 void fcnDrawCurrentWeatherText(int16_t index) {
   int16_t timernum = helper_runScreenElementFunction(index, true); 
   if (timernum<0) return; //this is an error condition
 
   //clear the current weather text area, which is on screen 0, and is element 3
-    GRAPHICS.clearScreenArea(index);
+  GRAPHICS.clearScreenArea(index);
 
-  int FNTSZ = 8;
-  uint32_t FH = setFont(FNTSZ);
-  int16_t X = GRAPHICS.SCREEN_DATA[index].X + GRAPHICS.SCREEN_DATA[index].W/2; //middle of the area
-  int16_t Y = GRAPHICS.SCREEN_DATA[index].Y;
+  const int16_t boxW = GRAPHICS.SCREEN_DATA[index].W;
+  const int16_t boxTop = GRAPHICS.SCREEN_DATA[index].Y;
+  const int16_t boxH = GRAPHICS.SCREEN_DATA[index].H;
+  const int16_t X = GRAPHICS.SCREEN_DATA[index].X + boxW / 2;
 
-  String st = "";
-  byte section_spacer = 3;
+  char sourceBuf[32];
+  snprintf(sourceBuf, sizeof(sourceBuf), "%s",
+           I.haveOutsideTemperatureSensor ? "Local Outdoor" : "Web Outdoor");
 
-  //see if we have local weather 
-  if (I.haveOutsideTemperatureSensor==true) {
-
-    st = "Local:" ;
-
-    #ifdef _MONITOROUTDOORBATTERYSENSORS
-    if (I.localBatteryIndex<255) {
-      ArborysSnsType* sensor = Sensors.snsIndexToPointer(I.localBatteryIndex);
-      if (sensor && sensor->IsSet && sensor->timeLogged + 3600>utcNow()) {        
-        st += " Bat" + (String) (returnLiBatteryPercentage(sensor->snsValue)) + "%";
+#ifdef _MONITOROUTDOORBATTERYSENSORS
+  if (I.haveOutsideTemperatureSensor && I.localBatteryIndex < 255) {
+    ArborysSnsType* sensor = Sensors.snsIndexToPointer(I.localBatteryIndex);
+    if (sensor && sensor->IsSet && sensor->timeLogged + 3600 > utcNow()) {
+      char withBat[40];
+      snprintf(withBat, sizeof(withBat), "%s Bat%u%%", sourceBuf,
+               (unsigned)returnLiBatteryPercentage(sensor->snsValue));
+      setFont(1);
+      if ((int)tft.textWidth(withBat) <= boxW) {
+        snprintf(sourceBuf, sizeof(sourceBuf), "%s", withBat);
       }
     }
-    #endif
-
-    FH = setFont(1);
-    tft.setCursor(X,Y);
-    tft.setTextColor(FG_COLOR,BG_COLOR);
-    fcnPrintTxtCenter(st,1,X,Y+FH/2);    
-    Y=Y+FH+section_spacer;
   }
-  
+#endif
 
-  // draw current temp
-  FH = setFont(FNTSZ);
-  fcnPrintTxtCenter(I.currentOutsideTemp,FNTSZ,X,Y+FH/2,tempDisplayColor(I.currentOutsideTemp),tempDisplayColor(I.currentOutsideTemp),BG_COLOR);
-  Y=Y+FH+section_spacer;
+  int inTemp = -127;
+  int inRh = -127;
+  bool haveInTemp = false;
+  bool haveInRh = false;
+  int8_t inTempBand = 0;
+  int8_t inRhBand = 0;
+  readLocalIndoorClimate(&inTemp, &haveInTemp, &inTempBand, &inRh, &haveInRh, &inRhBand);
+  char indoorBuf[28] = "";
+  if (haveInTemp && haveInRh) snprintf(indoorBuf, sizeof(indoorBuf), "Indoor: %dF / %d%%RH", inTemp, inRh);
+  else if (haveInTemp) snprintf(indoorBuf, sizeof(indoorBuf), "Indoor: %dF", inTemp);
+  else if (haveInRh) snprintf(indoorBuf, sizeof(indoorBuf), "Indoor: %d%%RH", inRh);
 
-  //print today max / min
-    FNTSZ = 4;  
-    FH = setFont(FNTSZ);
-    if (!weatherDataIsFresh()) {
-      fcnPrintTxtCenter("?/?", FNTSZ, X, Y + FH / 2, FG_COLOR, FG_COLOR, BG_COLOR);
-    } else {
-      int8_t tempMaxmin[2];
-      WeatherData.getDailyTemp(0,tempMaxmin);
-      if (isTempValid(tempMaxmin[0])==false) tempMaxmin[0] = WeatherData.getTemperature((uint32_t)utcNow());
-      //does local max/min trump reported?
-      if (!isUnsetDisplayTemp(I.currentOutsideTemp)) {
-        if (tempMaxmin[0]<I.currentOutsideTemp) tempMaxmin[0]=I.currentOutsideTemp;
-        if (tempMaxmin[1]>I.currentOutsideTemp) tempMaxmin[1]=I.currentOutsideTemp;
+  uint16_t predFg = FG_COLOR, predBg = BG_COLOR;
+  char predBuf[15] = "";
+  fcnPredictionTxt(predBuf, &predFg, &predBg);
+
+  uint16_t presFg = FG_COLOR, presBg = BG_COLOR;
+  char presBuf[15] = "";
+  fcnPressureTxt(presBuf, &presFg, &presBg);
+  const bool haveOutsideRh = isRHValid(I.currentOutsideHumidity);
+
+  uint16_t precipFg = FG_COLOR, precipBg = BG_COLOR;
+  char precipBuf[15] = "";
+  if (WeatherData.flag_snow) {
+    snprintf(precipBuf, sizeof(precipBuf), "Snow: %u%%", WeatherData.getDailyPoP(0));
+    precipFg = tft.color565(100, 100, 255);
+    precipBg = TFT_WHITE;
+  } else if (WeatherData.flag_ice) {
+    snprintf(precipBuf, sizeof(precipBuf), "Ice: %u%%", WeatherData.getDailyPoP(0));
+    precipFg = tft.color565(255, 100, 100);
+    precipBg = TFT_WHITE;
+  } else if (WeatherData.getDailyPoP(0) > 20) {
+    snprintf(precipBuf, sizeof(precipBuf), "Rain: %u%%", WeatherData.getDailyPoP(0));
+    precipFg = tft.color565(255, 0, 0);
+    precipBg = tft.color565(0, 0, 255);
+  }
+
+  const byte sourceFont = 1;
+  const uint32_t sourceH = setFont(sourceFont);
+  const byte tempFont = 8;
+  const uint32_t tempH = setFont(tempFont);
+  const byte pairFont = 4;
+  const uint32_t pairH = setFont(pairFont);
+
+  byte predFont = 4;
+  uint32_t predH = predBuf[0] ? setFont(predFont) : 0;
+  const byte presFont = 2;
+  const uint32_t presH = (presBuf[0] || haveOutsideRh) ? setFont(presFont) : 0;
+
+  byte precipFont = precipBuf[0] ? 4 : 0;
+  uint32_t precipH = precipFont ? setFont(precipFont) : 0;
+
+  byte indoorFont = 2;
+  uint32_t indoorH = 0;
+  if (indoorBuf[0]) {
+    indoorFont = fontFittingWidth(indoorBuf, 2, boxW);
+    indoorH = setFont(indoorFont);
+  }
+
+  // Indoor is a footer. Rain/snow/ice sits just above it and shrinks first so both fit.
+  byte spacer = 3;
+  while (true) {
+    int footer = 0;
+    if (indoorH) footer += (int)indoorH + 1;
+    if (precipH && indoorH) footer += (int)precipH + 1;
+    const uint32_t flowPrecipH = (indoorBuf[0] || !precipH) ? 0 : precipH;
+    const int used = columnPixels(sourceH, tempH, pairH, predH, presH, flowPrecipH, spacer) + footer;
+    if (used <= boxH) break;
+
+    if (precipFont > 0) {
+      const byte smaller = smallerTextFont(precipFont);
+      if (smaller != precipFont) {
+        precipFont = smaller;
+        precipH = setFont(precipFont);
+        continue;
       }
-      I.Tmax = tempMaxmin[0];
-      I.Tmin = tempMaxmin[1];
-
-      fcnPrintTxtCenterTempPair(I.Tmax, I.Tmin, FNTSZ, X, Y + FH / 2, BG_COLOR);
     }
-    
-    Y=Y+FH+section_spacer;
-
-  //print pressure info
-    uint16_t fg,bg;
-    FNTSZ = 4;
-    FH = setFont(FNTSZ);
-    char tempbuf[15]="";
-    fcnPredictionTxt(tempbuf,&fg,&bg);
-    if (tempbuf[0]!=0) {// prediction made
-      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+FH/2,fg,fg,bg);
-      Y=Y+FH+section_spacer;
+    if (spacer > 0) {
+      spacer--;
+      continue;
     }
-    FNTSZ=2;    
-    FH = setFont(FNTSZ);
-    tempbuf[0]=0;
-    fcnPressureTxt(tempbuf,&fg,&bg);
-
-    if (tempbuf[0]!=0) {
-      fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+FH/2,fg,fg,bg);
-      Y=Y+FH+section_spacer;
-    }
-    FNTSZ = 4;
-    FH = setFont(FNTSZ);
-    if (WeatherData.flag_snow) {
-      snprintf(tempbuf,14,"Snow: %u%%",WeatherData.getDailyPoP(0));
-      fg = tft.color565(100,100,255);
-      bg = TFT_WHITE;
-    }
-    else {
-      if (WeatherData.flag_ice) {
-        snprintf(tempbuf,14,"Ice: %u%%",WeatherData.getDailyPoP(0));
-        fg = tft.color565(255,100,100);;
-        bg = TFT_WHITE;
-      }
-      else {
-        if (WeatherData.getDailyPoP(0)>20)  {
-          snprintf(tempbuf,14,"Rain: %u%%",WeatherData.getDailyPoP(0));
-          fg = tft.color565(255,0,0);
-          bg = tft.color565(0,0,255);
-        }
-        else {
-          tempbuf[0] = 0;
-          fg = FG_COLOR;
-          bg = BG_COLOR;
-        }
+    if (predH && predFont > 0) {
+      const byte smaller = smallerTextFont(predFont);
+      if (smaller != predFont) {
+        predFont = smaller;
+        predH = setFont(predFont);
+        continue;
       }
     }
+    break;
+  }
 
-    fcnPrintTxtCenter(tempbuf,FNTSZ,X,Y+2+FH/2,fg,fg,bg);
+  // Precip joins the top stack only when there is no indoor footer.
+  const bool precipInFlow = precipBuf[0] && !indoorBuf[0];
+  const bool moreAfterPair = predBuf[0] || presBuf[0] || haveOutsideRh || precipInFlow;
+  const bool moreAfterPred = presBuf[0] || haveOutsideRh || precipInFlow;
 
-  //end current wthr
+  int16_t y = boxTop;
+  uint32_t fh = setFont(sourceFont);
+  fcnPrintTxtCenter(String(sourceBuf), sourceFont, X, y + (int)fh / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+  y += (int)fh + spacer;
+
+  fh = setFont(tempFont);
+  fcnPrintTxtCenter(I.currentOutsideTemp, tempFont, X, y + (int)fh / 2,
+                    tempDisplayColor(I.currentOutsideTemp), tempDisplayColor(I.currentOutsideTemp), BG_COLOR);
+  y += (int)fh + spacer;
+
+  fh = setFont(pairFont);
+  if (!weatherDataIsFresh()) {
+    fcnPrintTxtCenter("?/?", pairFont, X, y + (int)fh / 2, FG_COLOR, FG_COLOR, BG_COLOR);
+  } else {
+    int8_t tempMaxmin[2];
+    WeatherData.getDailyTemp(0, tempMaxmin);
+    if (isTempValid(tempMaxmin[0]) == false) tempMaxmin[0] = WeatherData.getTemperature((uint32_t)utcNow());
+    if (!isUnsetDisplayTemp(I.currentOutsideTemp)) {
+      if (tempMaxmin[0] < I.currentOutsideTemp) tempMaxmin[0] = I.currentOutsideTemp;
+      if (tempMaxmin[1] > I.currentOutsideTemp) tempMaxmin[1] = I.currentOutsideTemp;
+    }
+    I.Tmax = tempMaxmin[0];
+    I.Tmin = tempMaxmin[1];
+    fcnPrintTxtCenterTempPair(I.Tmax, I.Tmin, pairFont, X, y + (int)fh / 2, BG_COLOR);
+  }
+  y += (int)fh;
+  if (moreAfterPair) y += spacer;
+
+  if (predBuf[0]) {
+    fh = setFont(predFont);
+    fcnPrintTxtCenter(predBuf, predFont, X, y + (int)fh / 2, predFg, predFg, predBg);
+    y += (int)fh;
+    if (moreAfterPred) y += spacer;
+  }
+
+  if (presBuf[0] || haveOutsideRh) {
+    fh = setFont(presFont);
+    drawPressureRhLine(presBuf, presFg, presBg, I.currentOutsideHumidity, haveOutsideRh,
+                       presFont, X, y + (int)fh / 2, boxW);
+    y += (int)fh;
+    if (precipInFlow) y += spacer;
+  }
+
+  if (indoorBuf[0]) {
+    const int16_t indoorTop = boxTop + boxH - (int)indoorH;
+    const int16_t indoorCenter = indoorTop + (int)indoorH / 2;
+    if (precipBuf[0]) {
+      fh = setFont(precipFont);
+      const int16_t precipCenter = indoorTop - 1 - (int)fh / 2;
+      fcnPrintTxtCenter(precipBuf, precipFont, X, precipCenter, precipFg, precipFg, precipBg);
+    }
+    drawIndoorClimateLine(haveInTemp, inTemp, inTempBand, haveInRh, inRh, inRhBand,
+                          indoorFont, X, indoorCenter);
+  } else if (precipBuf[0]) {
+    fh = setFont(precipFont);
+    fcnPrintTxtCenter(precipBuf, precipFont, X, y + (int)fh / 2, precipFg, precipFg, precipBg);
+  }
+
   I.lastCurrentOutsideTemp = I.currentOutsideTemp;
-
-  //reset the timer
   GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
-
-  return;
 }
 
-static bool isApProvisioningWithoutCredentials() {
-  if (!softApRunning() || wifiReadyForNetwork()) return false;
-  return !Prefs.HAVECREDENTIALS || Prefs.WIFISSID[0] == '\0';
+static bool isApRecoveryDisplay() {
+  return softApRunning() && !wifiReadyForNetwork();
 }
 
 // AP provisioning info in the 180x180 icon/alert slot
@@ -2149,6 +2484,17 @@ static void fcnDrawAPInfo(int16_t X, int16_t Y, int16_t W, int16_t H) {
 
   fh = setFont(1);
   tft.setTextFont(1);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setCursor(cx, cy);
+  tft.print("BLE: ");
+  tft.print(bleProvisionServiceName());
+  cy += fh + 2;
+  tft.setCursor(cx, cy);
+  tft.print("PoP: same as PWD");
+  cy += fh + 2;
+
+  fh = setFont(1);
+  tft.setTextFont(1);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setCursor(cx, cy);
   tft.print("website: ");
@@ -2160,7 +2506,7 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   int16_t timernum = helper_runScreenElementFunction(index, true); 
   if (timernum<0) return; //this is an error condition
 
-  if (isApProvisioningWithoutCredentials()) {
+  if (isApRecoveryDisplay()) {
     if ((GRAPHICS.SCREEN_DATA[index].Local_Code & 0b00000111) == 2) {
       GRAPHICS.GRAPHICS_TIMERS.Timers[timernum] = GRAPHICS.SCREEN_DATA[index].Timer_RESET;
       return;
@@ -2184,7 +2530,8 @@ void fcnDrawCurrentWeatherIconOrAlert(int16_t index) {
   GRAPHICS.SCREEN_DATA[index].Screen_Next = SCREEN_SENSORS; // touch icon/alert area -> sensor screen (alert text is on temp pane)
 
   if (isBit(IconFlags,0)) {
-    if (GRAPHICS.alarmCount > 0 || (softApRunning() && !wifiReadyForNetwork())) {
+    // Monitored sensors open this view. Critical sensors are drawn with them and do not open it.
+    if (Sensors.countMainScreenIconTriggers(true) > 0 || (softApRunning() && !wifiReadyForNetwork())) {
       IconFlags = 2; //was showing icon, now showing sensor alerts or AP info
     }
     else {
@@ -2732,7 +3079,7 @@ void fcnDrawDailyDetailScreen(int16_t index) {
 
     GRAPHICS.alarmCount = Sensors.countMainScreenAlerts(true);
     uint16_t flaggedAlerts = Sensors.countMainScreenFlaggedAlerts(true);
-    uint16_t expiredAlerts = Sensors.countMainScreenCriticalExpiredAlerts(true);
+    uint16_t expiredAlerts = Sensors.countMainScreenNonCriticalExpiredAlerts(true);
     if (flaggedAlerts > 0) {
       if (isBit(GRAPHICS.StatusFlags, 2) == false) setBit(GRAPHICS.StatusFlagsChanged, 2);
       setBit(GRAPHICS.StatusFlags, 2);
@@ -2791,7 +3138,7 @@ void fcnDrawSensorScreen(int16_t index) {
   //now assign the screen elements, based on subscreen info
   //subscreen 0 = sensor summary
   //subscreen 1 = sensor details
-  //subscreen 114 = sensor options (OverrideFlags ignore bits)
+  //subscreen 114 = sensor options (OverrideFlags clear bits)
   //subscreen 110 = del sensor confirm
   //subscreen 100 = del sensor
   //subscreen 107 = broadcast
@@ -3080,21 +3427,21 @@ void fcnDrawSensorDetailsSubscreen(int16_t index) {
   return;
 }
 
-// Sensor Options layout: title + 8 OverrideFlags rows (ignore bits). Shared by draw/touch.
+// Sensor Options layout: title + 8 OverrideFlags rows. Shared by draw/touch.
 static const int16_t SNSOPT_BOX = 30;
 static const int16_t SNSOPT_ROW_H = 45;
 static const int16_t SNSOPT_ROWS_TOP = 40; // below title
 static const int16_t SNSOPT_BOX_X = 320 - 10 - SNSOPT_BOX; // right-aligned with 10px margin
-// Same RMB layout as Flags; checked = ignore that Flags bit for remotes
+// Same RMB layout as Flags. Checked forces that flag bit to 0.
 static const char* const SNSOPT_LABELS[8] = {
-  "ignore flagged",
-  "ignore monitored",
-  "ignore low power",
-  "ignore derived",
-  "ignore outside",
-  "ignore high/low",
-  "ignore changed",
-  "ignore critical"
+  "clear flagged",
+  "clear monitored",
+  "clear low power",
+  "clear derived",
+  "clear outside",
+  "clear high/low",
+  "clear changed",
+  "clear critical"
 };
 
 static void helper_drawSensorOptionCheckbox(uint8_t bit, uint8_t overrideFlags) {
@@ -3358,6 +3705,8 @@ void fcnDrawStatusWeatherUpdate(int16_t index) {
     tft.println("Weather package received");
   } else {
     tft.println("Weather package request failed");
+    const char* why = weatherLiteLastRequestError();
+    if (why && why[0]) tft.println(why);
   }
 #else
   tft.println("Weather not enabled");

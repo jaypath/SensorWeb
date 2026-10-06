@@ -24,10 +24,13 @@
 #define MAX_RETRY_ATTEMPTS 3
 #define WEATHER_HTTP_TIMEOUT_MS 60000
 #define WEATHER_HTTP_TIMEOUT_SHORT_MS 30000
-#define WEATHER_STORE_VERSION 4
+#define WEATHER_STORE_VERSION 5
 #define WEATHER_INVALID_TEMP -120
+#define WEATHER_INVALID_PRESSURE -1
 #define WEATHER_UNKNOWN_ID 999
 #define WEATHER_STALE_RETRY_SEC 180 // retry every 3 minutes when component data is stale
+#define WEATHER_PRESSURE_MAX_AGE_SEC (3u * 3600u) // station obs are hourly; drop after 3 hours
+#define WEATHER_PRESSURE_STATION_TRIES 4
 //#define PARALLEL_REQUESTS_ENABLED 1
 
 enum WeatherComponent : uint8_t {
@@ -37,6 +40,7 @@ enum WeatherComponent : uint8_t {
     WC_DAILY,
     WC_ALERTS,
     WC_SUN,
+    WC_PRESSURE, // current station observation, not a forecast timepoint
     WC_COUNT
 };
 
@@ -290,6 +294,10 @@ private:
     char Grid_id[10] = "";
     int16_t Grid_x = 0;
     int16_t Grid_y = 0;
+    // Nearest NWS station that last reported a usable pressure (ICAO / station id).
+    char pressureStationId[8] = "";
+    int16_t pressureHpa = WEATHER_INVALID_PRESSURE; // sea-level hPa when NOAA provides it
+    uint32_t pressureObservedAt = 0; // UTC unix of that observation
 
     // Optimization features
     //WeatherResult weatherResult; //memory storage for json trees
@@ -330,6 +338,8 @@ private:
     bool isTodayWeatherFresh() const;
     bool isForwardDailyFresh(uint8_t numDays) const;
     bool isSunDataFresh() const;
+    bool isPressureDataFresh() const;
+    void initPressureData();
 
 #ifdef _USEWEATHER
     bool fetchGridCoordinatesHelper();
@@ -338,6 +348,9 @@ private:
     bool fetchDailyForecast();
     bool fetchSunriseSunset();
     bool fetchWeatherAlerts();
+    bool fetchStationPressure();
+    bool appendNearestStationIds(char ids[][8], uint8_t cap, uint8_t& count);
+    bool readStationPressure(const char* stationId);
 
     // Caching methods
     bool isGridCoordinatesValid();
@@ -404,6 +417,10 @@ public:
     int16_t getIce(uint32_t dt=0);
     int8_t getDewPoint(uint32_t dt);
     int16_t getWindSpeed(uint32_t dt);
+    // Current nearest-station pressure in hPa. Not a forecast timepoint.
+    // WEATHER_INVALID_PRESSURE when missing or older than WEATHER_PRESSURE_MAX_AGE_SEC.
+    int16_t getPressure() const;
+    uint32_t getPressureObservedAt() const { return pressureObservedAt; }
 
     int16_t getHourSlot(time_t t) const { return hourSlot(t); }
     uint32_t getHourBase() const { return hourBase; } // UTC unix of hourly[0]
@@ -458,14 +475,22 @@ public:
     // Weather package (streamed to SD; plain HTTP distribution — see WeatherPkg.hpp)
     bool buildWeatherPackageFile(bool forceRebuild = false);
     bool weatherPackageFileExists() const;
-    // Ensure /Data/weatherdata.pkg exists (build if missing). Returns true if file ready.
+    // Rebuild when the file is missing, the ABI does not match, or NOAA in memory is newer.
     bool ensureWeatherPackageFile();
+    // 0 = package ABI matches or there is no package file.
+    // 1 = a size/version mismatch was deleted, NOAA was fetched, and a new package was written.
+    // 2 = mismatch deleted, rebuild not finished (no Wi-Fi/time, or SD write failed). Retry soon.
+    uint8_t recoverCorruptWeatherPackage(bool setupProgress);
 #endif
 };
 
 // Shared by full (_USEWEATHER) and lite (_USEWEATHERLITE): prefer live outside sensors,
-// else NOAA hourly forecast via getTemperature(utcNow()).
+// else NOAA hourly forecast via getTemperature(utcNow()) / getHumidity(utcNow()).
 void updateCurrentOutsideConditions();
+
+// Absolute humidity in g/m^3. tempF is degrees Fahrenheit (same unit as outside temp).
+// Pass NAN for either argument to use the current outside value. Returns NAN if RH or temp is invalid.
+double absoluteHumidity(double relativeHumidity = NAN, double tempF = NAN);
 
 extern String WEBHTML;
 

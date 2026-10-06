@@ -1005,7 +1005,8 @@ bool meshUnpackTelemetryToSensors(const ArborysMeshDevWire& d, const ArborysMesh
     ArborysSnsType* S = Sensors.snsIndexToPointer(si);
     if (S) {
         S->PollingInt = s.PollingInt;
-        S->OverrideFlags = s.OverrideFlags;
+        // OverrideFlags are this hub's choice. The sender's value is not applied,
+        // so a first-registration default and later user edits both stay.
         S->timeLogged = (uint32_t)utcNow();
     }
     return true;
@@ -1124,11 +1125,25 @@ bool meshSendHubSweep() {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(my);
     if (!d) return false;
 
-    const uint8_t homeCh = (I.WifiChannel >= 1 && I.WifiChannel <= 14) ? I.WifiChannel : (uint8_t)WiFi.channel();
+    // Read the associated radio before the hop. I.WifiChannel can be a leftover scan channel.
+    uint8_t homeCh = 0;
+    uint8_t homeBssid[6] = {0};
+    bool haveBssid = false;
     const bool wasConnected = (WiFi.status() == WL_CONNECTED);
+    if (wasConnected) {
+        const int liveCh = WiFi.channel();
+        const uint8_t* liveBssid = WiFi.BSSID();
+        if (liveCh >= 1 && liveCh <= 14 && liveBssid) {
+            homeCh = (uint8_t)liveCh;
+            memcpy(homeBssid, liveBssid, 6);
+            haveBssid = true;
+        }
+    }
+    if (homeCh == 0 && I.WifiChannel >= 1 && I.WifiChannel <= 14) homeCh = I.WifiChannel;
 
-    // Brief hop to channel 1
-    WiFi.disconnect(false, false);
+    // Brief hop to channel 1. Rejoin must name the channel and BSSID; a bare begin() scans
+    // and leaves the radio on whatever channel the scan finished on.
+    if (wasConnected) WiFi.disconnect(false, false);
     delay(20);
     setWifiRfChannel(1);
     meshEnsure();
@@ -1148,9 +1163,11 @@ bool meshSendHubSweep() {
 
     bool ok = buildAndSend(MSG_BROADCAST_NO_ACK, BROADCAST_MAC, plain, plainLen, s_params.ttlCritical, nullptr, false);
 
-    if (homeCh >= 1 && homeCh <= 14) setWifiRfChannel(homeCh);
-    if (wasConnected) {
-        WiFi.begin(Prefs.WIFISSID, Prefs.WIFIPWD);
+    if (haveBssid) {
+        WiFi.begin(Prefs.WIFISSID, Prefs.WIFIPWD, homeCh, homeBssid, true);
+        WiFi.setSleep(WIFI_PS_NONE);
+    } else if (homeCh >= 1 && homeCh <= 14) {
+        setWifiRfChannel(homeCh);
     }
     return ok;
 #endif

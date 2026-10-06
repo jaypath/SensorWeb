@@ -3,6 +3,80 @@
 
 byte prefs_set = 0;
 
+// Sensor arrays sit between FIRMWARE and the Supabase fields. Growing
+// _SENSORNUM shifts that tail, so an older blob is copied field-by-field.
+#if _HAS_LOCAL_SENSORS && defined(_USESUPABASE)
+struct PrefsMigrateStep {
+    size_t plain;
+    size_t sensors;
+};
+#if (_MYTYPE) == 100 && (_SENSORNUM) == 21
+#define PREFS_MIGRATE_AGGREGATES 1
+static constexpr PrefsMigrateStep kPrefsMigrate[] = {
+    {1160, 10},
+    {1464, 18},
+};
+static constexpr size_t kPrefsMigrateMaxPlain = 1464;
+#elif (_MYTYPE) == 101 && (_SENSORNUM) == 11
+#define PREFS_MIGRATE_AGGREGATES 1
+static constexpr PrefsMigrateStep kPrefsMigrate[] = {
+    {768, 0},
+    {1080, 8},
+};
+static constexpr size_t kPrefsMigrateMaxPlain = 1080;
+#elif (_MYTYPE) == 102 && (_SENSORNUM) == 20
+#define PREFS_MIGRATE_AGGREGATES 1
+static constexpr PrefsMigrateStep kPrefsMigrate[] = {
+    {1312, 14},
+    {1384, 16},
+};
+static constexpr size_t kPrefsMigrateMaxPlain = 1384;
+#endif
+#endif
+
+static constexpr size_t prefsSensorRegionBytes(size_t n) {
+    const size_t afterU16 = (16u * n) + (6u * n);
+    const size_t calib = (afterU16 + 7u) & ~size_t(7);
+    return calib + (16u * n);
+}
+
+#ifdef PREFS_MIGRATE_AGGREGATES
+static bool migratePrefsBlob(const uint8_t* oldPlain, size_t oldN, size_t oldBytes) {
+    memset(&Prefs, 0, sizeof(Prefs));
+    const size_t sensorAt = offsetof(STRUCT_PrefsH, SNS_LIMIT_MAX);
+    const size_t supabaseAt = offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL);
+    const size_t headerEnd = offsetof(STRUCT_PrefsH, FIRMWARE) + sizeof(FirmwareVersion);
+    if (oldN == 0) {
+        if (oldBytes < headerEnd + 523) return false;
+        memcpy(&Prefs, oldPlain, headerEnd);
+        memcpy((uint8_t*)&Prefs + supabaseAt, oldPlain + headerEnd, 523);
+    } else {
+        const size_t oldSensorAt = sensorAt;
+        const size_t oldSupabaseAt = oldSensorAt + prefsSensorRegionBytes(oldN);
+        if (oldSupabaseAt + 523 > oldBytes) return false;
+        memcpy(&Prefs, oldPlain, oldSensorAt);
+        const uint8_t* src = oldPlain + oldSensorAt;
+        uint8_t* dst = (uint8_t*)&Prefs + sensorAt;
+        const size_t newN = _SENSORNUM;
+        memcpy(dst, src, 8u * oldN);
+        memcpy(dst + 8u * newN, src + 8u * oldN, 8u * oldN);
+        const size_t srcU16 = 16u * oldN;
+        const size_t dstU16 = 16u * newN;
+        memcpy(dst + dstU16, src + srcU16, 2u * oldN);
+        memcpy(dst + dstU16 + 2u * newN, src + srcU16 + 2u * oldN, 2u * oldN);
+        memcpy(dst + dstU16 + 4u * newN, src + srcU16 + 4u * oldN, 2u * oldN);
+        const size_t srcCalib = (srcU16 + 6u * oldN + 7u) & ~size_t(7);
+        const size_t dstCalib = (dstU16 + 6u * newN + 7u) & ~size_t(7);
+        memcpy(dst + dstCalib, src + srcCalib, 8u * oldN);
+        memcpy(dst + dstCalib + 8u * newN, src + srcCalib + 8u * oldN, 8u * oldN);
+        memcpy((uint8_t*)&Prefs + supabaseAt, oldPlain + oldSupabaseAt, 523);
+    }
+    if (Prefs.PROCID != ESP.getEfuseMac()) return false;
+    Prefs.isUpToDate = false;
+    return true;
+}
+#endif
+
 // Encrypted NVS blob length for a given plaintext prefs size (AES-CBC padding + 16-byte IV).
 static uint16_t prefsEncryptedLength(size_t plainSize) {
     uint8_t padding = 0;
@@ -109,10 +183,64 @@ int8_t BootSecure::getPrefs() {
     const uint16_t storedLen = p.getBytesLength("Boot");
     const uint16_t currentLen = prefsEncryptedLength(sizeof(STRUCT_PrefsH));
 
+#ifdef PREFS_MIGRATE_AGGREGATES
+    static_assert(offsetof(STRUCT_PrefsH, FIRMWARE) + sizeof(FirmwareVersion) == 243, "prefs header before aggregates");
+    static_assert(offsetof(STRUCT_PrefsH, SNS_LIMIT_MAX) == 248, "prefs sensor array alignment");
+#if (_MYTYPE) == 100
+    static_assert(sizeof(STRUCT_PrefsH) == 1576, "main server prefs size");
+    static_assert(offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL) == 1048, "main server cloud fields");
+#elif (_MYTYPE) == 101
+    static_assert(sizeof(STRUCT_PrefsH) == 1200, "weather lite prefs size");
+    static_assert(offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL) == 672, "weather lite cloud fields");
+#elif (_MYTYPE) == 102
+    static_assert(sizeof(STRUCT_PrefsH) == 1536, "bryant prefs size");
+    static_assert(offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL) == 1008, "bryant cloud fields");
+    static_assert(248 + prefsSensorRegionBytes(16) + (sizeof(STRUCT_PrefsH) - offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL)) == 1384, "bryant 16-sensor prefs");
+    static_assert(248 + prefsSensorRegionBytes(14) + (sizeof(STRUCT_PrefsH) - offsetof(STRUCT_PrefsH, SUPABASE_PROJECT_URL)) == 1312, "bryant 14-sensor prefs");
+#endif
+#endif
+
     if (storedLen != currentLen) {
-        storeError("BootSecure::getPrefs: Boot length mismatch, prefs failed to load", ERROR_FAILED_PREFS, false);
+#ifdef PREFS_MIGRATE_AGGREGATES
+        bool migrated = false;
+        bool closed = false;
+        for (const PrefsMigrateStep& step : kPrefsMigrate) {
+            if (storedLen != prefsEncryptedLength(step.plain)) continue;
+            if (step.plain > kPrefsMigrateMaxPlain || storedLen > kPrefsMigrateMaxPlain + 32) break;
+            uint8_t oldBlob[kPrefsMigrateMaxPlain + 32];
+            uint8_t oldPlainBuf[kPrefsMigrateMaxPlain + 32];
+            memset(oldBlob, 0, sizeof(oldBlob));
+            memset(oldPlainBuf, 0, sizeof(oldPlainBuf));
+            p.getBytes("Boot", oldBlob, storedLen);
+            p.end();
+            closed = true;
+            const int8_t dec = BootSecure::decrypt(oldBlob, (char*)BOOTKEY, oldPlainBuf, storedLen, 32);
+            BootSecure::zeroize(oldBlob, sizeof(oldBlob));
+            migrated = (dec == 1) && migratePrefsBlob(oldPlainBuf, step.sensors, step.plain);
+            BootSecure::zeroize(oldPlainBuf, sizeof(oldPlainBuf));
+            break;
+        }
+        if (migrated) {
+            SerialPrint("Prefs kept while adding sensor slots", true);
+            BootSecure bs;
+            bs.setPrefs(true);
+            return 1;
+        }
+        if (!closed) {
+            p.remove("Boot");
+            p.end();
+        } else {
+            Preferences pFail;
+            if (pFail.begin("STARTUP", false)) {
+                pFail.remove("Boot");
+                pFail.end();
+            }
+        }
+#else
         p.remove("Boot");
         p.end();
+#endif
+        storeError("BootSecure::getPrefs: Boot length mismatch, prefs failed to load", ERROR_FAILED_PREFS, false);
         memset(&Prefs, 0, sizeof(Prefs));
         Prefs.isUpToDate = false;
         return -1;

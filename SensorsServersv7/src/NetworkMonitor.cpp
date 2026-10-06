@@ -207,15 +207,15 @@ bool NetworkMonitor_type::isSensorType(uint8_t snsType) {
 
 int8_t NetworkMonitor_type::runTestIndexFromSensorType(uint8_t snsType) {
     switch (snsType) {
-        case 81: return NM_TEST_BSSID;
-        case 82: return NM_TEST_LOCAL_IP;
-        case 83: return NM_TEST_DNS;
-        case 84: return NM_TEST_TX_FAILURES;
-        case 85:
-        case 86: return NM_TEST_GATEWAY_LATENCY;
-        case 87:
-        case 88: return NM_TEST_EXTERNAL_PING;
-        case 89: return NM_TEST_DOWNLOAD;
+        case SNS_NET_FIRST + 0: return NM_TEST_BSSID;
+        case SNS_NET_FIRST + 1: return NM_TEST_LOCAL_IP;
+        case SNS_NET_FIRST + 2: return NM_TEST_DNS;
+        case SNS_NET_FIRST + 3: return NM_TEST_TX_FAILURES;
+        case SNS_NET_FIRST + 4:
+        case SNS_NET_FIRST + 5: return NM_TEST_GATEWAY_LATENCY;
+        case SNS_NET_FIRST + 6:
+        case SNS_NET_FIRST + 7: return NM_TEST_EXTERNAL_PING;
+        case SNS_NET_LAST: return NM_TEST_DOWNLOAD;
         default: return -1;
     }
 }
@@ -256,31 +256,31 @@ bool NetworkMonitor_type::runTest(uint8_t testIndex) {
 
 bool NetworkMonitor_type::readSensorValue(uint8_t snsType, double& value) const {
     switch (snsType) {
-        case 81:
+        case SNS_NET_FIRST + 0:
             value = bssid.changeCount;
             return true;
-        case 82:
+        case SNS_NET_FIRST + 1:
             value = localIp.changeCount;
             return true;
-        case 83:
+        case SNS_NET_FIRST + 2:
             value = dns.resolutionMs;
             return true;
-        case 84:
+        case SNS_NET_FIRST + 3:
             value = txFailures.failureCount;
             return true;
-        case 85:
+        case SNS_NET_FIRST + 4:
             value = gatewayLatency.ping.avgRttMs;
             return true;
-        case 86:
+        case SNS_NET_FIRST + 5:
             value = gatewayLatency.ping.jitterMs;
             return true;
-        case 87:
+        case SNS_NET_FIRST + 6:
             value = externalPing.wan.avgRttMs;
             return true;
-        case 88:
+        case SNS_NET_FIRST + 7:
             value = externalPing.wan.jitterMs;
             return true;
-        case 89:
+        case SNS_NET_LAST:
             if (!download.success || download.durationMs == 0) {
                 value = -1;
                 return true;
@@ -294,21 +294,21 @@ bool NetworkMonitor_type::readSensorValue(uint8_t snsType, double& value) const 
 
 time_t NetworkMonitor_type::readSensorTime(uint8_t snsType) const {
     switch (snsType) {
-        case 81:
+        case SNS_NET_FIRST + 0:
             return bssid.lastAttemptTime;
-        case 82:
+        case SNS_NET_FIRST + 1:
             return localIp.lastAttemptTime;
-        case 83:
+        case SNS_NET_FIRST + 2:
             return dns.lastAttemptTime;
-        case 84:
+        case SNS_NET_FIRST + 3:
             return txFailures.lastAttemptTime;
-        case 85:
-        case 86:
+        case SNS_NET_FIRST + 4:
+        case SNS_NET_FIRST + 5:
             return gatewayLatency.lastAttemptTime;
-        case 87:
-        case 88:
+        case SNS_NET_FIRST + 6:
+        case SNS_NET_FIRST + 7:
             return externalPing.lastAttemptTime;
-        case 89:
+        case SNS_NET_LAST:
             return download.lastRunTime != 0 ? download.lastRunTime : download.lastAttemptTime;
         default:
             return 0;
@@ -317,13 +317,13 @@ time_t NetworkMonitor_type::readSensorTime(uint8_t snsType) const {
 
 bool NetworkMonitor_type::isSensorValueInvalid(uint8_t snsType, double value) {
     switch (snsType) {
-        case 83:
-        case 85:
-        case 86:
-        case 87:
-        case 88:
+        case SNS_NET_FIRST + 2:
+        case SNS_NET_FIRST + 4:
+        case SNS_NET_FIRST + 5:
+        case SNS_NET_FIRST + 6:
+        case SNS_NET_FIRST + 7:
             return value < 0;
-        case 89:
+        case SNS_NET_LAST:
             return value < 0;
         default:
             return false;

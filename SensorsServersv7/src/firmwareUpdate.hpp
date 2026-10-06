@@ -44,10 +44,23 @@ void processJSONMessage_FirmwareAvailable(JsonObject root, String& responseMsg);
 void processJSONMessage_FirmwareUnavailable(JsonObject root, String& responseMsg);
 void handleFirmwareBlock();
 void handleFirmwareEnc();
+void handleFirmwarePut();
+#ifdef _USE32
+void handleFirmwarePutRaw();
+#endif
+void processJSONMessage_FirmwareUpload(JsonObject root, String& responseMsg);
+/**
+ * HTTPS (LMK POST_ENC) upload of a local SD bin to a hub's /Firmware folder.
+ * firmwareName is the file name, e.g. "Device-1.2.3.bin".
+ * Returns 1 success, 0 failure, -2 file exists and is in use, -1 transport error.
+ */
+int8_t uploadFirmwareFileHTTPS(IPAddress& hubIP, const char* firmwareName, const char* localFilePath);
 #ifdef _USE32
 void handleFirmwareEncRaw();
 #endif
 /** Empty when no OTA download is in progress; else ", received packet N/M for x.y.z from a.b.c.d" */
 String getFirmwareReceiveProgressSuffix();
+/** Hub table cell suffix. Empty, or ", sending x.y.z (N / M blocks sent)" for this device. */
+String firmwareTransferStatusForDevice(const char* deviceName);
 
 #endif

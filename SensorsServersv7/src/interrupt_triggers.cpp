@@ -4,6 +4,7 @@
 #include "sensors.hpp"
 #include "Devices.hpp"
 #include "server.hpp"
+#include "actuators.hpp"
 
 #ifndef TIMEZERO
 #define TIMEZERO 1735689600
@@ -62,6 +63,20 @@ static bool clockDioInOnWindow(int onMin, int offMin, int nowMin) {
   return nowMin >= onMin || nowMin < offMin;
 }
 
+bool InterruptTriggers_inClockWindow(double limitLowOn, double limitHighOff) {
+  const time_t nowUtc = utcNow();
+  if (nowUtc < (time_t)TIMEZERO) return false;
+  int onMin = 0;
+  int offMin = 0;
+  if (!clockDioResolveMinutes((int)limitLowOn, onMin) ||
+      !clockDioResolveMinutes((int)limitHighOff, offMin)) {
+    return false;
+  }
+  const time_t nowLocal = unixToLocal(nowUtc);
+  const int nowMin = (int)hour(nowLocal) * 60 + (int)minute(nowLocal);
+  return clockDioInOnWindow(onMin, offMin, nowMin);
+}
+
 static constexpr uint8_t kMaxWebForces = 8;
 
 struct WebForceState {
@@ -97,7 +112,7 @@ static void driveSensorDio(ArborysSnsType* sensor, bool on) {
   digitalWrite((uint8_t)gpio, on ? HIGH : LOW);
   sensor->snsValue = on ? 1.0 : 0.0;
   bitWrite(sensor->Flags, 0, on ? 1 : 0);
-  bitWrite(sensor->Flags, 6, 1);
+  if (bitRead(sensor->Flags, 1)) bitWrite(sensor->Flags, 6, 1);
 }
 
 static WebForceState* findWebForce(const ArborysSnsType* sensor) {
@@ -134,23 +149,23 @@ static bool webForceExpired(const WebForceState* wf) {
 
 static void restoreAutoAfterWebForce(ArborysSnsType* sensor) {
   if (!sensor) return;
+  if (sensor->snsType == SNS_SWITCH) {
+    Actuators_restoreSwitch(sensor);
+    return;
+  }
   const int8_t gpio = sensorGpio(sensor);
   if (gpio < 0) return;
-  if (sensor->snsType == 75) {
-    InterruptTriggers_updateClockDio(sensor, gpio, sensor->limitLow, sensor->limitHigh);
-  } else if (sensor->snsType == 73 || sensor->snsType == 74) {
-    // Countdown types already track state in snsValue; just sync the pin.
+  if (sensor->snsType == SNS_COUNTDOWN || sensor->snsType == SNS_COUNTDOWN_INV) {
     const bool on = sensor->snsValue > 0.0;
     pinMode((uint8_t)gpio, OUTPUT);
     digitalWrite((uint8_t)gpio, on ? HIGH : LOW);
     bitWrite(sensor->Flags, 0, on ? 1 : 0);
   } else {
-    // Non-timer outputs: return low (safe idle) when web pulse ends.
     pinMode((uint8_t)gpio, OUTPUT);
     digitalWrite((uint8_t)gpio, LOW);
     sensor->snsValue = 0.0;
     bitWrite(sensor->Flags, 0, 0);
-    bitWrite(sensor->Flags, 6, 1);
+    if (bitRead(sensor->Flags, 1)) bitWrite(sensor->Flags, 6, 1);
   }
 }
 
@@ -205,7 +220,7 @@ bool InterruptTriggers_webSetOutput(ArborysSnsType* sensor, bool on, uint8_t sec
   if (!isSwitchStateOutputType(sensor->snsType)) return false;
 
   // Timer-countdown outputs: write snsValue; automatic countdown / button / motion still apply.
-  if (sensor->snsType == 73 || sensor->snsType == 74) {
+  if (sensor->snsType == SNS_COUNTDOWN || sensor->snsType == SNS_COUNTDOWN_INV) {
     if (on) {
       if (seconds == 0) return false;
       sensor->snsValue = (double)seconds;
@@ -219,7 +234,7 @@ bool InterruptTriggers_webSetOutput(ArborysSnsType* sensor, bool on, uint8_t sec
       digitalWrite((uint8_t)gpio, isOn ? HIGH : LOW);
       bitWrite(sensor->Flags, 0, isOn ? 1 : 0);
     }
-    bitWrite(sensor->Flags, 6, 1);
+    if (bitRead(sensor->Flags, 1)) bitWrite(sensor->Flags, 6, 1);
     return true;
   }
 
@@ -284,11 +299,6 @@ static IrqSensorState s_irqStates[kMaxIrqSensors];
 static uint8_t s_irqCount = 0;
 static bool s_rcwlEnableReady = false;
 
-static ArborysSnsType* associatedSensor(int prefsIndex) {
-  if (prefsIndex < 0 || prefsIndex >= (int)_SENSORNUM) return nullptr;
-  return Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[prefsIndex]);
-}
-
 static IrqSensorState* findState(ArborysSnsType* sensor) {
   if (!sensor) return nullptr;
   for (uint8_t i = 0; i < s_irqCount; i++) {
@@ -318,50 +328,25 @@ static int32_t localDayKey(time_t utc) {
   return (int32_t)year(local) * 512 + (int32_t)month(local) * 32 + (int32_t)day(local);
 }
 
-static bool associatedIsOff(const ArborysSnsType* lights) {
-  if (!lights || !lights->IsSet) return true;
-  return bitRead(lights->Flags, 0) == 0 && lights->snsValue <= 0.0;
-}
-
 static void bumpCountWithRecent(ArborysSnsType* sensor, IrqSensorState* st) {
   if (!sensor || !st) return;
   const double count = floor(sensor->snsValue);
   sensor->snsValue = count + 1.0 + 0.1;
   st->lastActivityMs = millis();
-  bitWrite(sensor->Flags, 6, 1);
+  if (bitRead(sensor->Flags, 1)) bitWrite(sensor->Flags, 6, 1);
 }
 
 static void handleButtonRising(ArborysSnsType* button, IrqSensorState* st) {
   if (!button) return;
-
-  const uint32_t armSec = sensorPollSec(button);
-  ArborysSnsType* lights = associatedSensor(_BUTTON_ASSOCIATED_SNS);
-  if (lights && lights->IsSet) {
-    if (bitRead(lights->Flags, 0) == 1) {
-      lights->snsValue = 0.0;
-      bitWrite(lights->Flags, 6, 1);
-      return;
-    }
-    if (lights->snsValue <= 0.0) {
-      lights->snsValue = (double)armSec;
-      bitWrite(lights->Flags, 6, 1);
-      bumpCountWithRecent(button, st);
-    }
+  if (Actuators_onButtonRise(button)) {
+    bumpCountWithRecent(button, st);
   }
 }
 
 static void handleMotionRising(ArborysSnsType* motion, IrqSensorState* st) {
   if (!motion || !st) return;
-
   bumpCountWithRecent(motion, st);
-
-  ArborysSnsType* lights = associatedSensor(_RCWL_ASSOCIATED_SNS);
-  if (associatedIsOff(lights)) return;
-  if (lights->snsValue >= (double)_MOTION_EXTEND_CAP_SEC) return;
-
-  const uint32_t pollSec = sensorPollSec(motion);
-  lights->snsValue += (double)(pollSec + 5u);
-  bitWrite(lights->Flags, 6, 1);
+  Actuators_onMotionRise(motion);
 }
 
 static void ensureRcwlEnablePin() {
@@ -386,12 +371,12 @@ void IRAM_ATTR InterruptTriggers_isr(void* arg) {
 void InterruptTriggers_setup(ArborysSnsType* sensor, int8_t irqGpio) {
   if (!sensor) return;
 
-  if (sensor->snsType == 200) {
+  if (sensor->snsType == SNS_PRESENCE) {
     ensureRcwlEnablePin();
   }
 
   if (irqGpio < 0) return;
-  if (sensor->snsType != 200 && sensor->snsType != 220) return;
+  if (sensor->snsType != SNS_PRESENCE && sensor->snsType != SNS_BUTTON) return;
 
   IrqSensorState* st = allocState(sensor);
   if (!st) return;
@@ -403,7 +388,7 @@ void InterruptTriggers_setup(ArborysSnsType* sensor, int8_t irqGpio) {
   st->lastActivityMs = 0;
   st->lastLocalDayKey = -1;
 
-  if (sensor->snsType == 220) {
+  if (sensor->snsType == SNS_BUTTON) {
     pinMode((uint8_t)irqGpio, INPUT_PULLDOWN);
   } else {
     pinMode((uint8_t)irqGpio, INPUT);
@@ -426,14 +411,14 @@ void serviceInterruptSensors() {
     interrupts();
     if (!pending) continue;
 
-    if (st->snsType == 220) {
+    if (st->snsType == SNS_BUTTON) {
       const uint32_t elapsed = riseMs - st->lastAcceptedRiseMs;
       if (st->lastAcceptedRiseMs != 0 && elapsed < (uint32_t)_INTERRUPT_DEBOUNCE_MS) {
         continue;
       }
       st->lastAcceptedRiseMs = riseMs;
       handleButtonRising(st->sensor, st);
-    } else if (st->snsType == 200) {
+    } else if (st->snsType == SNS_PRESENCE) {
       const uint32_t pollSec = sensorPollSec(st->sensor);
       if (pollSec > 0 && st->lastAcceptedRiseMs != 0) {
         const uint32_t elapsed = riseMs - st->lastAcceptedRiseMs;
@@ -507,11 +492,11 @@ bool InterruptTriggers_simulateRisingEdge(ArborysSnsType* sensor) {
   }
   if (!st) return false;
 
-  if (sensor->snsType == 220) {
+  if (sensor->snsType == SNS_BUTTON) {
     handleButtonRising(sensor, st);
     return true;
   }
-  if (sensor->snsType == 200) {
+  if (sensor->snsType == SNS_PRESENCE) {
     handleMotionRising(sensor, st);
     return true;
   }

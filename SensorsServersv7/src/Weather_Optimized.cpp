@@ -4,6 +4,7 @@
 
 #include "Weather_Optimized.hpp"
 #include "timesetup.hpp"
+#include "actuators.hpp"
 #ifdef _USEWEATHER
 #include "server.hpp"
 #endif
@@ -182,6 +183,7 @@ void WeatherInfoOptimized::normalizePackagedTimestampsToUtc(bool packageMarkedUt
     toUtc(lastAlertFetchTime);
     toUtc(lastAlertUpdateTime);
     toUtc(lastWeatherPackageGeneratedAt);
+    toUtc(pressureObservedAt);
     toUtcTimeT(alertInfo.time_start);
     toUtcTimeT(alertInfo.time_end);
     for (uint16_t i = 0; i < NUM_PERIODS; i++) {
@@ -294,6 +296,7 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
     bool dailyOk = componentStatus[WC_DAILY].lastSucceeded;
     bool alertsOk = componentStatus[WC_ALERTS].lastSucceeded;
     bool sunOk = componentStatus[WC_SUN].lastSucceeded;
+    bool pressureOk = componentStatus[WC_PRESSURE].lastSucceeded;
 
     auto runComponent = [&](WeatherComponent c, const char* label, bool needsGrid, std::function<bool()> fetchFn) -> bool {
         if (!isComponentDue(c, synctime, forceStaleRefresh)) return componentStatus[c].lastSucceeded;
@@ -344,6 +347,8 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
         [this]() { return fetchWeatherAlerts(); });
     sunOk = runComponent(WC_SUN, "Sunrise/sunset", false,
         [this]() { return fetchSunriseSunset(); });
+    pressureOk = runComponent(WC_PRESSURE, "Station pressure", true,
+        [this]() { return fetchStationPressure(); });
 
     if (!anyDue) {
         const bool stale = anyWeatherComponentStale();
@@ -363,10 +368,11 @@ byte WeatherInfoOptimized::updateWeatherOptimized(uint16_t synctime, bool setupP
         return stale ? 2 : 3;
     }
 
-    bool fullSuccess = hasUsableGrid() && hourlyOk && gridOk && dailyOk && alertsOk && sunOk;
+    bool fullSuccess = hasUsableGrid() && hourlyOk && gridOk && dailyOk && alertsOk && sunOk && pressureOk;
 
     SerialPrint(("Weather fetch results: hourly=" + String(hourlyOk) + " grid=" + String(gridOk) +
-        " daily=" + String(dailyOk) + " alerts=" + String(alertsOk) + " sun=" + String(sunOk)).c_str(), true);
+        " daily=" + String(dailyOk) + " alerts=" + String(alertsOk) + " sun=" + String(sunOk) +
+        " pressure=" + String(pressureOk)).c_str(), true);
 
     // Persist whenever we attempted anything so per-component retry state survives reboot
     #ifdef _USESDCARD
@@ -481,9 +487,25 @@ bool WeatherInfoOptimized::isComponentDataFresh(WeatherComponent c) const {
             return componentStatus[WC_ALERTS].lastSucceeded;
         case WC_SUN:
             return isSunDataFresh();
+        case WC_PRESSURE:
+            return isPressureDataFresh();
         default:
             return false;
     }
+}
+
+bool WeatherInfoOptimized::isPressureDataFresh() const {
+    if (!isPressureValid((double)pressureHpa)) return false;
+    if (pressureObservedAt == 0) return false;
+    const uint32_t nowu = (uint32_t)utcNow();
+    if (nowu < (uint32_t)TIMEZERO) return true;
+    return pressureObservedAt + WEATHER_PRESSURE_MAX_AGE_SEC >= nowu;
+}
+
+void WeatherInfoOptimized::initPressureData() {
+    pressureHpa = WEATHER_INVALID_PRESSURE;
+    pressureObservedAt = 0;
+    pressureStationId[0] = '\0';
 }
 
 bool WeatherInfoOptimized::anyWeatherComponentStale() const {
@@ -495,19 +517,25 @@ bool WeatherInfoOptimized::anyWeatherComponentStale() const {
 
 void updateCurrentOutsideConditions() {
     // Always re-evaluate; do not keep a stale haveOutsideTemperatureSensor from ScreenFlags.dat.
+    // Outside conditions are the local outdoor aggregates, not an average of every outdoor flag.
     I.haveOutsideTemperatureSensor = false;
+    I.currentOutsideHumidity = -127;
+    I.currentOutsidePressure = -127;
 
-    if (Sensors.hasOutsideSensors("temperature")) {
-        I.currentOutsideTemp = Sensors.getAverageOutsideParameterValue("temperature", (uint32_t)utcNow() - 900);
-        if (isTempValid(I.currentOutsideTemp)) I.haveOutsideTemperatureSensor = true;
+    ArborysSnsType* temp = Actuators_findLocalAggregate("temperature", 2);
+    if (temp && !temp->expired && isTempValid(temp->snsValue)) {
+        I.currentOutsideTemp = (int8_t)temp->snsValue;
+        I.haveOutsideTemperatureSensor = true;
     }
-    if (Sensors.hasOutsideSensors("humidity")) {
-        I.currentOutsideHumidity = Sensors.getAverageOutsideParameterValue("humidity", (uint32_t)utcNow() - 300);
+    ArborysSnsType* rh = Actuators_findLocalAggregate("humidity", 2);
+    if (rh && !rh->expired && isRHValid(rh->snsValue)) {
+        I.currentOutsideHumidity = (int8_t)(rh->snsValue + 0.5);
     }
-    if (Sensors.hasOutsideSensors("pressure")) {
-        I.currentOutsidePressure = Sensors.getAverageOutsideParameterValue("pressure", (uint32_t)utcNow() - 300);
+    if (!isRHValid(I.currentOutsideHumidity)) {
+        const int8_t forecastRh = WeatherData.getHumidity((uint32_t)utcNow());
+        const int8_t forecastRhTemp = WeatherData.getTemperature((uint32_t)utcNow());
+        if (isTempValid(forecastRhTemp) && isRHValid(forecastRh)) I.currentOutsideHumidity = forecastRh;
     }
-
     const int8_t forecastTemp = WeatherData.getTemperature((uint32_t)utcNow());
     if (!I.haveOutsideTemperatureSensor || !isTempValid(I.currentOutsideTemp)) {
         I.currentOutsideTemp = forecastTemp;
@@ -529,6 +557,18 @@ void updateCurrentOutsideConditions() {
         }
     }
 #endif
+}
+
+double absoluteHumidity(double relativeHumidity, double tempF) {
+    if (isnan(relativeHumidity)) relativeHumidity = I.currentOutsideHumidity;
+    if (isnan(tempF)) tempF = I.currentOutsideTemp;
+    if (!isRHValid(relativeHumidity) || !isTempValid(tempF)) return NAN;
+
+    // August-Roche-Magnus saturation vapor pressure (hPa), then vapor density (g/m^3).
+    const double c = (tempF - 32.0) * (5.0 / 9.0);
+    const double saturationHpa = 6.112 * exp((17.67 * c) / (c + 243.5));
+    const double vaporHpa = saturationHpa * (relativeHumidity / 100.0);
+    return (216.7 * vaporHpa) / (c + 273.15);
 }
 
 #ifdef _USEWEATHER
@@ -1065,6 +1105,177 @@ bool WeatherInfoOptimized::fetchDailyForecast() {
     });
 }
 
+namespace {
+
+// NWS quantitative pressure is pascals (wmoUnit:Pa). Display and isPressureValid use hPa.
+bool quantitativePressureToHpa(JsonVariantConst quantity, int16_t& hpa) {
+    if (quantity.isNull()) return false;
+    JsonVariantConst value = quantity["value"];
+    if (value.isNull()) return false;
+
+    double v = value.as<double>();
+    if (isnan(v) || v <= 0) return false;
+
+    const char* unit = quantity["unitCode"].as<const char*>();
+    if (!unit) unit = "";
+    if (strstr(unit, "inHg")) v *= 33.8638866667;
+    else if (strstr(unit, "hPa") || strstr(unit, "mbar")) {
+        // already hectopascals
+    } else if (v > 2000.0) {
+        v /= 100.0; // pascals
+    }
+
+    if (!isPressureValid(v)) return false;
+    hpa = (int16_t)(v + 0.5);
+    return true;
+}
+
+bool weatherGovGet(const char* url, JsonDocument& filterDoc, JsonDocument& doc, int& httpCode) {
+    String extraHeaders = "User-Agent: (ArborysWeatherProject, contact@yourdomain.com)\nAccept: application/geo+json\n";
+    HTTPMessage M;
+    M.setUrl(url);
+    M.setMethod("GET");
+    M.setContentType("application/json");
+    M.setCacert("bundle");
+    M.timeout = WEATHER_HTTP_TIMEOUT_SHORT_MS;
+    M.usePSRAM = true;
+    M.responseDoc = &doc;
+    M.filter = &filterDoc;
+    M.setExtraHeaders(extraHeaders.c_str());
+    const bool ok = SendHTTPMessage(M);
+    httpCode = M.httpCode;
+    return ok;
+}
+
+} // namespace
+
+bool WeatherInfoOptimized::appendNearestStationIds(char ids[][8], uint8_t cap, uint8_t& count) {
+    if (!hasUsableGrid() || count >= cap) return count > 0;
+
+    char url[96];
+    snprintf(url, sizeof(url), "https://api.weather.gov/gridpoints/%s/%d,%d/stations",
+             Grid_id, (int)Grid_x, (int)Grid_y);
+
+    JsonDocument filterDoc;
+    filterDoc["features"][0]["properties"]["stationIdentifier"] = true;
+    filterDoc["features"][0]["properties"]["@id"] = true;
+    JsonDocument doc;
+    int httpCode = 0;
+    if (!weatherGovGet(url, filterDoc, doc, httpCode)) {
+        SerialPrint("Station list request failed", true);
+        SerialPrint("HTTP Code: " + String(httpCode), true);
+        return false;
+    }
+
+    JsonArray features = doc["features"].as<JsonArray>();
+    for (JsonObject feature : features) {
+        if (count >= cap) break;
+        const char* id = feature["properties"]["stationIdentifier"].as<const char*>();
+        if (!id || !id[0]) {
+            const char* uri = feature["properties"]["@id"].as<const char*>();
+            if (uri) {
+                const char* slash = strrchr(uri, '/');
+                if (slash && slash[1]) id = slash + 1;
+            }
+        }
+        if (!id || !id[0] || strlen(id) >= sizeof(ids[0])) continue;
+
+        bool duplicate = false;
+        for (uint8_t i = 0; i < count; i++) {
+            if (strcmp(ids[i], id) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        strncpy(ids[count], id, sizeof(ids[0]) - 1);
+        ids[count][sizeof(ids[0]) - 1] = '\0';
+        count++;
+    }
+    return count > 0;
+}
+
+bool WeatherInfoOptimized::readStationPressure(const char* stationId) {
+    if (!stationId || !stationId[0]) return false;
+
+    char url[80];
+    snprintf(url, sizeof(url), "https://api.weather.gov/stations/%s/observations/latest", stationId);
+
+    JsonDocument filterDoc;
+    filterDoc["properties"]["timestamp"] = true;
+    filterDoc["properties"]["seaLevelPressure"]["value"] = true;
+    filterDoc["properties"]["seaLevelPressure"]["unitCode"] = true;
+    filterDoc["properties"]["barometricPressure"]["value"] = true;
+    filterDoc["properties"]["barometricPressure"]["unitCode"] = true;
+
+    JsonDocument doc;
+    int httpCode = 0;
+    if (!weatherGovGet(url, filterDoc, doc, httpCode)) {
+        SerialPrint((String("Station pressure request failed for ") + stationId).c_str(), true);
+        SerialPrint("HTTP Code: " + String(httpCode), true);
+        return false;
+    }
+    if (httpCode == 304) return isPressureDataFresh();
+
+    JsonObject props = doc["properties"];
+    if (props.isNull()) return false;
+
+    // Sea-level pressure matches the display bands (~1000 / 1022 hPa).
+    // Station pressure (barometricPressure) is the unreduced sensor value.
+    int16_t hpa = WEATHER_INVALID_PRESSURE;
+    if (!quantitativePressureToHpa(props["seaLevelPressure"], hpa) &&
+        !quantitativePressureToHpa(props["barometricPressure"], hpa)) {
+        return false;
+    }
+
+    uint32_t observed = 0;
+    const char* ts = props["timestamp"].as<const char*>();
+    if (ts && ts[0]) observed = (uint32_t)iso8601ToUnix(String(ts));
+    if (observed == 0) observed = (uint32_t)utcNow();
+
+    const uint32_t nowu = (uint32_t)utcNow();
+    if (nowu >= (uint32_t)TIMEZERO) {
+        if (observed + WEATHER_PRESSURE_MAX_AGE_SEC < nowu) return false;
+        if (observed > nowu + 900UL) return false;
+    }
+
+    pressureHpa = hpa;
+    pressureObservedAt = observed;
+    strncpy(pressureStationId, stationId, sizeof(pressureStationId) - 1);
+    pressureStationId[sizeof(pressureStationId) - 1] = '\0';
+    SerialPrint((String("Station pressure ") + stationId + " " + String(hpa) + " hPa").c_str(), true);
+    return true;
+}
+
+bool WeatherInfoOptimized::fetchStationPressure() {
+    char ids[WEATHER_PRESSURE_STATION_TRIES][8];
+    uint8_t count = 0;
+    memset(ids, 0, sizeof(ids));
+
+    if (pressureStationId[0]) {
+        strncpy(ids[0], pressureStationId, sizeof(ids[0]) - 1);
+        ids[0][sizeof(ids[0]) - 1] = '\0';
+        count = 1;
+    }
+
+    const bool listed = appendNearestStationIds(ids, WEATHER_PRESSURE_STATION_TRIES, count);
+    if (!listed && count == 0) {
+        storeError("Station list request failed", ERROR_HTTP_RESPONSE, true);
+        this->lastUpdateError = (uint32_t)utcNow();
+        return false;
+    }
+
+    for (uint8_t i = 0; i < count; i++) {
+        esp_task_wdt_reset();
+        if (readStationPressure(ids[i])) return true;
+    }
+
+    storeError("No nearby station reported current pressure", ERROR_JSON_PARSE, true);
+    this->lastUpdateError = (uint32_t)utcNow();
+    return false;
+}
+
 bool WeatherInfoOptimized::fetchSunriseSunset() {
     auto requestSunForDate = [&](const char* dateYmd) -> bool {
         // time_format=unix → sunrise/sunset are UTC unix strings (avoids local AM/PM parse + Prefs TZ races).
@@ -1193,6 +1404,11 @@ int8_t WeatherInfoOptimized::getHumidity(uint32_t dt) {
     int16_t i = hourSlot(dt);
     if (i < 0) return WEATHER_INVALID_TEMP;
     return hourly[i].humidity;
+}
+
+int16_t WeatherInfoOptimized::getPressure() const {
+    if (!isPressureDataFresh()) return WEATHER_INVALID_PRESSURE;
+    return pressureHpa;
 }
 
 int16_t WeatherInfoOptimized::getWeatherID(uint32_t dt) {
@@ -1447,6 +1663,7 @@ bool WeatherInfoOptimized::initWeather() {
     initHourlyForecastData();
     initDailyPeriodData();
     initSunTimes();
+    initPressureData();
 
     lastUpdateT = 0;
     lastUpdateError = 0;
@@ -1960,8 +2177,85 @@ bool WeatherInfoOptimized::weatherPackageFileExists() const {
     return FileOrDirectoryExists(WEATHER_PKG_PATH);
 }
 
+// Missing file is not corrupt. A short header, or a store version / object size that
+// does not match this firmware, must be deleted rather than served.
+enum WeatherPkgAbi : uint8_t { WPKG_ABI_MISSING = 0, WPKG_ABI_CORRUPT = 1, WPKG_ABI_OK = 2 };
+
+static bool s_weatherPkgRecoveryPending = false;
+
+static WeatherPkgAbi weatherPackageAbiState() {
+    File f = SD.open(WEATHER_PKG_PATH, FILE_READ);
+    if (!f) return WPKG_ABI_MISSING;
+    if (f.size() < WEATHER_PKG_HEADER_CORE) {
+        f.close();
+        return WPKG_ABI_CORRUPT;
+    }
+    uint8_t hdr[16];
+    const int n = f.read(hdr, sizeof(hdr));
+    f.close();
+    if (n != (int)sizeof(hdr)) return WPKG_ABI_CORRUPT;
+
+    uint16_t storeVer = 0, objSize = 0;
+    memcpy(&storeVer, hdr + 12, 2);
+    memcpy(&objSize, hdr + 14, 2);
+    if (storeVer != WEATHER_STORE_VERSION || objSize != (uint16_t)sizeof(WeatherInfoOptimized)) {
+        return WPKG_ABI_CORRUPT;
+    }
+    return WPKG_ABI_OK;
+}
+
+// A file left on SD from an earlier NOAA fetch, or from firmware with a different
+// WeatherInfoOptimized size, must not be served as-is. GET /WEATHERPKG and the
+// hourly push both call this.
+static bool weatherPackageFileIsCurrent(const WeatherInfoOptimized& weather) {
+    if (weatherPackageAbiState() != WPKG_ABI_OK) return false;
+    File f = SD.open(WEATHER_PKG_PATH, FILE_READ);
+    if (!f) return false;
+    uint8_t hdr[8];
+    const int n = f.read(hdr, sizeof(hdr));
+    f.close();
+    if (n != (int)sizeof(hdr)) return false;
+    uint32_t packagedAt = 0;
+    memcpy(&packagedAt, hdr + 4, 4);
+    // packagedAt is when the file was built. lastUpdateT moves when NOAA data does.
+    if (weather.lastUpdateT != 0 && packagedAt < weather.lastUpdateT) return false;
+    return true;
+}
+
+uint8_t WeatherInfoOptimized::recoverCorruptWeatherPackage(bool setupProgress) {
+    if (weatherPackageAbiState() == WPKG_ABI_CORRUPT) {
+        sdDeleteFile(WEATHER_PKG_PATH);
+        sdDeleteFile(WEATHER_PKG_TMP_PATH);
+        s_weatherPkgRecoveryPending = true;
+        SerialPrint("Weather package size mismatch; deleted", true);
+    } else if (!s_weatherPkgRecoveryPending) {
+        return 0;
+    }
+
+    if (!wifiReadyForNetwork() || !isTimeValid((uint32_t)utcNow())) {
+        SerialPrint("Weather package rebuild waiting for Wi-Fi and time", true);
+        return 2;
+    }
+
+    // synctime 0 marks every NOAA component due. Do not leave the new package
+    // for the hourly push.
+    esp_task_wdt_reset();
+    updateWeatherOptimized(0, setupProgress, true);
+    esp_task_wdt_reset();
+    if (!buildWeatherPackageFile(true)) {
+        SerialPrint("Weather package rebuild failed", true);
+        return 2;
+    }
+    s_weatherPkgRecoveryPending = false;
+    SerialPrint("Weather package rebuilt after size mismatch", true);
+    return 1;
+}
+
 bool WeatherInfoOptimized::ensureWeatherPackageFile() {
-    if (weatherPackageFileExists()) return true;
+    if (weatherPackageAbiState() == WPKG_ABI_CORRUPT || s_weatherPkgRecoveryPending) {
+        return recoverCorruptWeatherPackage(false) == 1;
+    }
+    if (weatherPackageFileIsCurrent(*this)) return true;
     return buildWeatherPackageFile(true);
 }
 

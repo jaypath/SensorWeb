@@ -5,6 +5,7 @@
 #include <SD.h>
 #include <cstdlib>
 #include "SDCard.hpp"
+#include "agg_links.hpp"
 #include "utility.hpp"
 #include "Devices.hpp"
 #include "GsheetUpload.hpp"
@@ -345,8 +346,7 @@ bool storeDevicesSensorsSD() {
     // Write the entire Devices_Sensors object
     f.write((uint8_t*)&Sensors, sizeof(Devices_Sensors));
     f.close();
-    
-    
+    AggLinks_save();
     return true;
 }
 

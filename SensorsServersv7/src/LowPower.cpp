@@ -48,7 +48,8 @@ static void LOWPOWER_doSensorCycle() {
         storeError("Low power wake skipped sensor read: WiFi not ready", ERROR_SENSOR_READ, true);
         return;
     }
-    byte snscount = readAllSensors(true);
+    // Same boot pass as setup: send only sensors that returned a usable sample.
+    byte snscount = readLocalSensorsAtBoot();
     if (snscount > 0) {
         sendAllSensors(true, -1, true);
     } else {

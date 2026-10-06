@@ -567,8 +567,14 @@ static bool supabaseReadingBatchIntervalElapsed(uint32_t nowUnix, uint32_t nowMs
 
 static bool supabaseSensorNeedsCloudUpload(const ArborysSnsType* s) {
   if (!s || !s->IsSet) return false;
-  if (!bitRead(s->Flags, 1)) return false; // monitored only
+  const int16_t idx = Sensors.findSensorByPointer(const_cast<ArborysSnsType*>(s));
+  const uint8_t flags = (idx >= 0) ? Sensors.effectiveSensorFlags(idx, true) : s->Flags;
+  if (!bitRead(flags, 1)) return false;
   if (!s->timeRead) return false;
+#if _HAS_LOCAL_SENSORS
+  // Same gate as the hub uplink: do not upload a placeholder into cloud averages.
+  if (s->deviceIndex == I.MY_DEVICE_INDEX && !localSensorReadyToSend(s)) return false;
+#endif
   return s->timeRead > s->timeCloudUpload;
 }
 

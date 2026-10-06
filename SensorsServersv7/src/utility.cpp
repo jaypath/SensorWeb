@@ -1,5 +1,6 @@
 #include "globals.hpp"
 #include "utility.hpp"
+#include "agg_links.hpp"
 #include "BootSecure.hpp"
 #include "ble_provision.hpp"
 #include "firmwareUpdate.hpp"
@@ -184,11 +185,6 @@ void systemHousekeeping(bool fullHousekeeping) {
 
     CheckWifiStatus(WIFI_CHECK_NORMAL);
 
-    #if _I_AM_PERIPHERAL
-    // Peripheral: APSTA while no live server so AP portal stays available for debug.
-    servicePeripheralServerApMode();
-    #endif
-
 #ifdef _USEWEATHER
     serviceWeatherPackagePush(true);
 #endif
@@ -222,6 +218,8 @@ void systemHousekeeping(bool fullHousekeeping) {
   #ifdef _USEUDP
   receiveUDPMessage(); // receive ArborysMesh/JSON UDP
   #endif
+
+  serviceBootUdpPresence(false);
 
   processDeferredDataRequest();
 
@@ -368,6 +366,8 @@ bool initSystem() {
   #ifdef _USESDCARD
   // Load devices/sensors before any registration or IP sync can overwrite DevicesSensors.dat.
   loadSensorData();
+  #else
+  AggLinks_load();
   #endif
 
   //register this device in devices and sensors. While I may already be registered due to loading from SD card, I may not be if no SD card and I may need to update my IP address!
@@ -407,6 +407,91 @@ bool initSystem() {
           }
         }
         #endif
+#if _IS_SERVER_HUB
+        // 11.1.6: own aggregates that are still derived-only become monitored and critical.
+        // Remote aggregates with no override yet get bits 0, 1, and 7. Runs once per prefs version.
+        {
+          const uint8_t aggregateDefaults[3] = {11, 1, 6};
+          if (Prefs.FIRMWARE.compare(aggregateDefaults) < 0) {
+#if _HAS_LOCAL_SENSORS
+            byte aggTypes[] = _SENSORTYPES;
+            for (byte i = 0; i < _SENSORNUM; i++) {
+              if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) continue;
+              if (aggTypes[i] == SNS_AGGREGATE && (Prefs.SNS_FLAGS[i] & 0xFF) == 0x08) {
+                bitWrite(Prefs.SNS_FLAGS[i], 1, 1);
+                bitWrite(Prefs.SNS_FLAGS[i], 7, 1);
+              }
+            }
+#endif
+            const int16_t me = Sensors.findMyDeviceIndex();
+            if (me >= 0) {
+              bool overridesChanged = false;
+              for (int16_t i = 0; i < NUMSENSORS; i++) {
+                ArborysSnsType* s = Sensors.getSensorBySnsIndex(i);
+                if (!s || s->snsType != SNS_AGGREGATE || s->deviceIndex == me) continue;
+                if (s->OverrideFlags != 0) continue;
+                s->OverrideFlags = 0b10000011;
+                overridesChanged = true;
+              }
+#ifdef _USESDCARD
+              if (overridesChanged) storeDevicesSensorsSD();
+#endif
+            }
+          }
+        }
+#if (_MYTYPE == 100 || _MYTYPE == 101) && _HAS_LOCAL_SENSORS
+        // 11.1.15: aggregates and network metrics stay on this hub. Clear Monitored
+        // and Critical even when prefs were saved with the old flags.
+        {
+          const uint8_t localOnlySensors[3] = {11, 1, 15};
+          if (Prefs.FIRMWARE.compare(localOnlySensors) < 0) {
+            byte localTypes[] = _SENSORTYPES;
+            for (byte i = 0; i < _SENSORNUM; i++) {
+              if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) continue;
+              const uint8_t t = localTypes[i];
+              if (t != SNS_AGGREGATE && !IS_NETWORK_SENSOR_TYPE(t)) continue;
+              bitWrite(Prefs.SNS_FLAGS[i], 1, 0);
+              bitWrite(Prefs.SNS_FLAGS[i], 7, 0);
+            }
+          }
+        }
+#endif
+#endif
+#if _MYTYPE == 4 && _HAS_LOCAL_SENSORS
+        // 11.1.16: OutdoorLighting and Shed. Actuators report on their interval
+        // and on a state change. Empty slots are left for setupSensors().
+        {
+          const uint8_t actuatorReport[3] = {11, 1, 16};
+          if (Prefs.FIRMWARE.compare(actuatorReport) < 0) {
+            byte actuatorTypes[] = _SENSORTYPES;
+            for (byte i = 0; i < _SENSORNUM; i++) {
+              if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) continue;
+              if (!IS_ACTUATOR_SENSOR_TYPE(actuatorTypes[i])) continue;
+              bitWrite(Prefs.SNS_FLAGS[i], 1, 1);
+              bitWrite(Prefs.SNS_FLAGS[i], 7, 1);
+            }
+          }
+        }
+#endif
+#if defined(_USEBRYANT)
+        // 11.1.17: heat, defrost, and cool run clocks stay on this device.
+        // Empty slots are left for setupSensors().
+        {
+          const uint8_t bryantTimeLocal[3] = {11, 1, 17};
+          if (Prefs.FIRMWARE.compare(bryantTimeLocal) < 0) {
+            byte bryantTypes[] = _SENSORTYPES;
+            for (byte i = 0; i < _SENSORNUM; i++) {
+              if (Prefs.SNS_FLAGS[i] == 0 && Prefs.SNS_INTERVAL_POLL[i] == 0 && Prefs.SNS_INTERVAL_SEND[i] == 0) continue;
+              if (!IS_BRYANT_TIME_TYPE(bryantTypes[i])) continue;
+              bitWrite(Prefs.SNS_FLAGS[i], 1, 0);
+              bitWrite(Prefs.SNS_FLAGS[i], 7, 0);
+              Prefs.SNS_LIMIT_MAX[i] = 10080;
+              Prefs.SNS_LIMIT_MIN[i] = -1;
+              Prefs.SNS_INTERVAL_SEND[i] = 65535;
+            }
+          }
+        }
+#endif
         Prefs.FIRMWARE = buildFw;
         int8_t saveStatus = bootSecure.setPrefs(true);
         if (saveStatus > 0) {
@@ -438,11 +523,17 @@ bool initSystem() {
   tftPrint("Attempt Wifi: " + wifiSsid, true);
   SerialPrint("Attempt Wifi: " + wifiSsid, true, 5);
   setupServerRoutes();
+  // Before any mode/begin: RAM storage so a previous AP+STA session is not reloaded from NVS.
+  WiFi.persistent(false);
   WiFi.onEvent(WiFiEvent); //register the WiFi event handler
 
   CheckWifiStatus(WIFI_CHECK_BOOT);
   syncInitialSetupState();
-  // BLE portal (Espressif app) only while unprovisioned and within 30 minutes of boot.
+  // Setup is known now. If NVS or a failed attempt left AP+STA up and STA is usable, drop the soft AP.
+  if (wifiReadyForNetwork()) {
+    maybeExitAPStationMode();
+  }
+  // BLE advertises for the whole soft-AP session, including when STA credentials already exist.
   bleProvisionBeginIfNeeded();
 
   #ifdef _USEUDP
@@ -567,6 +658,7 @@ bool loadSensorData() {
   tftPrint("Loading sensor data from SD... ", false, TFT_WHITE, 2, 1, false, -1, -1);
   #endif
   bool sdread = Sensors.readDevicesSensorsArrayFromSD();
+  AggLinks_load();
   Sensors.updateMyDeviceVersion();
   I.MY_DEVICE_INDEX = Sensors.findMyDeviceIndex();
   displaySetupProgress( sdread);
@@ -1160,21 +1252,15 @@ void checkHVAC() {
   while (snsindex != -1) {
     ArborysSnsType* sensor = Sensors.snsIndexToPointer(snsindex);
     if (!sensor || !sensor->IsSet) continue;
-    if (sensor->snsValue > 0) {
-      switch (sensor->snsType) {
-        case 50: //total time          
-        break;
-        case 51: //heat - gas valve
-        case 52: //heat        
-          if (isBit(sensor->Flags,0)) I.isHeat = 1;
-        break;
-        case 55: // Fan
-          if (isBit(sensor->Flags,0)) I.isFan = 1;
-        break;
-        case 56: //ac
-        case 57: //ac
-          if (isBit(sensor->Flags,0)) I.isAC = 1;
-        break;
+    if (sensor->snsValue > 0 || bitRead(sensor->Flags, 0)) {
+      if (sensor->snsType == SNS_HVAC_TOTAL) {
+        // minutes accumulated; the call rows carry on/off
+      } else if (sensor->snsType == SNS_HVAC_CALL && bitRead(sensor->Flags, 0)) {
+        String name = String(sensor->snsName);
+        name.toLowerCase();
+        if (name.indexOf("fan") >= 0) I.isFan = 1;
+        else if (name.indexOf("heat") >= 0) I.isHeat = 1;
+        else I.isAC = 1;
       }
     }
     snsindex = Sensors.findSnsOfType("HVAC", false, snsindex+1);

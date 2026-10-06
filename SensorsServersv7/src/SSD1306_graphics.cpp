@@ -3,6 +3,9 @@
 
 #include "SSD1306_graphics.hpp"
 #include "globals.hpp"
+#if defined(_USEBRYANT)
+#include "bryant_bus.hpp"
+#endif
 
 SSD1306AsciiWire oled;
 
@@ -26,7 +29,10 @@ void initOled() {
 }
 
 void redrawOled() {
-
+#if defined(_USEBRYANT)
+  bryantOledRefresh();
+  return;
+#endif
 
     oled.clear();
     oled.setCursor(0,0);

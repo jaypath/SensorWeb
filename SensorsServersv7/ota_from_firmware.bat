@@ -26,9 +26,10 @@ set "UTIL=%SCRIPT_DIR%ota_firmware_util.ps1"
 set "FW_ROOT=%SCRIPT_DIR%firmware"
 set "TARGET_LIST=%TEMP%\ota_from_fw_%RANDOM%.txt"
 
-rem Locate espota.py (package layout varies by PlatformIO / Arduino-ESP32 version).
-set "ESPOTA="
-if exist "%USERPROFILE%\.platformio\packages\tool-espotapy\espota.py" (
+rem Project wrapper waits 30s for each block ACK. Fall back to stock espota.py.
+set "ESPOTA=%SCRIPT_DIR%tools\espota.py"
+if not exist "!ESPOTA!" set "ESPOTA="
+if "!ESPOTA!"=="" if exist "%USERPROFILE%\.platformio\packages\tool-espotapy\espota.py" (
   set "ESPOTA=%USERPROFILE%\.platformio\packages\tool-espotapy\espota.py"
 )
 if "!ESPOTA!"=="" if exist "%USERPROFILE%\.platformio\packages\framework-arduinoespressif32\tools\espota.py" (

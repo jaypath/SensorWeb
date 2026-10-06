@@ -12,20 +12,21 @@ struct STRUCT_CORE;
 // Constants
 
 //sensor flags  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3=derived/calculated, RMB4 = Outside, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = critical (alert if expires)
-// OverrideFlags: same bit layout; set bit = hub ignores that Flags bit for remotes (local sensors never use OverrideFlags)
-//device types
-/*
+// OverrideFlags on remotes, and on a hub's own aggregates: a 1 forces that Flags bit to 0.
+// 0b10000011 clears flagged, monitored, and critical. Other local sensors ignore OverrideFlags.
+// After that, monitored (bit 1) sensors that are flagged or expired force ALARM or EXP
+// in the header and can replace the weather icon with those sensor boxes.
+// Critical (bit 7) sensors can set that header mark.
+// They join the icon boxes only when a monitored sensor already opened that view.
+// Bit 1 off skips the send interval. Bit 7 sends a local sensor when its value
+// crosses a limit or its expired state changes, in either direction.
+//device types stay 1-99 peripheral, 100-150 server. Sensor types: src/sensors.hpp.
 
-98 - clock
-100 - weather server with persistent storage (ie SD card)
-101 - sensor storage server with persistent storage (ie SD card)
-102 - support analysis server with persistent storage
-*/
-
-// Critical sensors and every local sensor: 1.25 × SendingInt (SendingInt + SendingInt/4).
-// Noncritical remote sensors: 2 × SendingInt.
-// Remotes use timeLogged (last received/logged update); local sensors use timeRead.
-// Sensor-box graphics wait until 2× even when the expired flag is set at 1.25×.
+// Hub remotes: critical (bit 7 still set after override) expires at 1.05× SendingInt.
+// Other hub remotes expire at 2.05× SendingInt. The hub then rechecks while expired.
+// Local sensors, and every sensor on a non-hub: critical and local at 1.25× SendingInt,
+// other remotes at 2×. Remotes use timeLogged; local sensors use timeRead.
+// Sensor-box graphics wait until 2× even when the expired flag is set earlier.
 inline uint32_t sensorExpiryGraceSec(uint32_t sendingInt) {
     return sendingInt + sendingInt / 4;
 }
@@ -33,6 +34,12 @@ inline uint32_t sensorExpiryGraceFor(bool localOrCritical, uint32_t sendingInt) 
     if (sendingInt == 0) return 0;
     if (localOrCritical) return sensorExpiryGraceSec(sendingInt);
     return sendingInt * 2;
+}
+// Hub remote grace: 1.05× SendingInt when critical, 2.05× otherwise.
+inline uint32_t sensorHubRemoteExpiryGraceSec(bool critical, uint32_t sendingInt) {
+    if (sendingInt == 0) return 0;
+    const uint32_t percent = critical ? 105u : 205u;
+    return (uint32_t)(((uint64_t)sendingInt * percent) / 100u);
 }
 inline uint32_t sensorExpirationTime(uint32_t freshnessTime, uint32_t sendingInt) {
     return freshnessTime + sensorExpiryGraceSec(sendingInt);
@@ -47,8 +54,8 @@ inline uint32_t sensorDisplayExpirationTime(uint32_t freshnessTime, uint32_t sen
 /** Stamp last contact from any server (devType 100–150). Used for peripheral orphan fallback. */
 void noteServerHeard(uint8_t senderDevType);
 
-// Peripherals: servers typically broadcast ~every 10 min. Cap "live server" grace so a
-// default SendingInt of 86400 does not delay APSTA debug access for ~30 hours.
+// Servers typically broadcast ~every 10 min. Cap stale grace so a default SendingInt of
+// 86400 does not keep a silent hub "live" for ~30 hours.
 #ifndef PERIPH_SERVER_STALE_SEC
 #define PERIPH_SERVER_STALE_SEC 1800u // 30 minutes without contact → treat server as expired
 #endif
@@ -110,7 +117,7 @@ struct ArborysSnsType {
     uint32_t lastSDUploadTime; // Last SD sensor-data write (unused on non-SD builds)
     int16_t snsPin = -9999;    // local sensor pin; -9999 = none / remote sensor
     int16_t powerPin = -9999;
-    uint8_t OverrideFlags = 0; // hub ignore-bits for remote Flags (same RMB layout); local sensors unused
+    uint8_t OverrideFlags = 0; // hub: a 1 forces that Flags bit to 0. Remotes, and local aggregates for listing.
     // Alarm band (hubs store remotes'; peripherals also mirror Prefs here for JSON send).
     // NaN = not set / unknown.
     float limitHigh = NAN;
@@ -157,12 +164,20 @@ public:
     uint8_t countServers(); // count the servers
     int16_t nextServerIndex(int16_t startIndex=0, bool weatherServersOnly=false); // get the index of the next server
     // True if at least one non-expired server (devType 100–150) has been heard from recently.
-    // Also refreshes server.expired flags. Used by peripherals to keep APSTA for debug access.
+    // Also refreshes server.expired flags.
     bool hasLiveServer(time_t currentTime = 0);
     // Drop remote entries with corrupt identity (bad LAN decrypt). No-op on hubs.
     void scrubImplausibleRemoteDevices();
-    // True if Flags bit is set and (for remotes) OverrideFlags does not ignore that bit.
+    // True if that Flags bit is set. Remotes use the value after OverrideFlags.
     bool isSensorFlagBitUsed(int16_t index, uint8_t bit, bool useOverrideFlags = true);
+    // Raw Flags for local sensors. Remotes clear each Flags bit whose OverrideFlags bit is 1.
+    uint8_t effectiveSensorFlags(int16_t index, bool useOverrideFlags = true) const;
+    // Sensor page: monitored after overrides. Local aggregates honor OverrideFlags here too.
+    bool listsForGraphics(int16_t snsIndex, bool useOverrideFlags = true, uint8_t* flagsOut = nullptr);
+    // Header EXP: monitored or critical, expired, and neither flagged nor critical.
+    uint16_t countMainScreenNonCriticalExpiredAlerts(bool respectRemoteOverride = true);
+    // Weather icon yields when a monitored sensor is flagged or past the 2× display expiry.
+    uint16_t countMainScreenIconTriggers(bool respectRemoteOverride = true);
     bool isOutsideSensor(int16_t index);
     bool hasOutsideSensors(String parameter="all");
     int16_t findOutsideSensorByType(String parameter="all");
@@ -199,6 +214,7 @@ public:
     int16_t findOldestDevice();
     int16_t findOldestSensor();
     int8_t isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsflags, uint16_t flagsthatmatter, uint8_t flagsettings, uint32_t MoreRecentThan, bool countCriticalExpired, bool countAnyExpired, uint8_t snsType=0, bool useOverrideFlags=true);
+    // Icon boxes, once open: monitored or critical sensors that are flagged or display-expired.
     bool matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride = true, bool expiredUsesDisplayGrace = false);
     uint16_t countMainScreenAlerts(bool respectRemoteOverride = true);
     uint16_t countMainScreenFlaggedAlerts(bool respectRemoteOverride = true);

@@ -1,5 +1,7 @@
 #include "globals.hpp"
 #include "Devices.hpp"
+#include "agg_links.hpp"
+#include "actuators.hpp"
 #include "utility.hpp"
 #include <TimeLib.h>
 
@@ -29,10 +31,27 @@ static bool isLocalDeviceMAC(uint64_t MAC) {
     return MAC == (uint64_t)ESP.getEfuseMac();
 }
 
-// Non-hub nodes: local device + servers (devType 100–150) only. Hub nodes: all devices.
+static void noteRegisteredHubDevice(uint64_t MAC, IPAddress IP, uint32_t sendingInt) {
+#if _IS_SERVER_HUB
+    AggLinks_noteDevice(MAC, IP, sendingInt);
+#else
+    (void)MAC;
+    (void)IP;
+    (void)sendingInt;
+#endif
+}
+
+// Non-hub nodes: local device + servers (devType 100–150) only.
+// Full hubs: every device. Type 102: registered devices only.
 static bool shouldAcceptRemoteDevice(uint64_t MAC, uint8_t devType, const ArborysDevType* existing) {
     if (isLocalDeviceMAC(MAC)) return true;
-#if _IS_SERVER_HUB
+#if _HUB_REGISTERED_ONLY
+    if (AggLinks_hasDevice(MAC)) return true;
+    if (existing && existing->IsSet && AggLinks_hasDevice(existing->MAC)) return true;
+    return false;
+#elif _IS_SERVER_HUB
+    (void)devType;
+    (void)existing;
     return true;
 #else
     if (IS_SERVER_DEVICE_TYPE(devType)) return true;
@@ -41,10 +60,12 @@ static bool shouldAcceptRemoteDevice(uint64_t MAC, uint8_t devType, const Arbory
 #endif
 }
 
-// Non-hub nodes: local sensors only. Hub nodes: all sensors.
+// Non-hub nodes: local sensors only. Full hubs: all sensors. Type 102: registered devices only.
 static bool shouldAcceptRemoteSensor(uint64_t deviceMAC) {
     if (isLocalDeviceMAC(deviceMAC)) return true;
-#if _IS_SERVER_HUB
+#if _HUB_REGISTERED_ONLY
+    return AggLinks_hasDevice(deviceMAC);
+#elif _IS_SERVER_HUB
     return true;
 #else
     return false;
@@ -213,7 +234,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
 
         if (device->IP == IP && strcmp(device->devName, devName) == 0 && device->Flags == flags && device->SendingInt == sendingInt && device->devType == devType) {
             //device already exists with all the same parameters (other than the time received), so return the existing index
-            //do nothing
+            noteRegisteredHubDevice(MAC, IP, sendingInt);
         }        else {
             // Update existing device
             if (IP != IPAddress(0, 0, 0, 0)) {
@@ -243,6 +264,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             #endif
         }
         applyDeviceFirmware(device, MAC, firmware);
+        noteRegisteredHubDevice(MAC, device->IP, device->SendingInt);
         return existingIndex;
     }
     
@@ -275,7 +297,7 @@ int16_t Devices_Sensors::addDevice(uint64_t MAC, IPAddress IP, const char* devNa
             applyDeviceFirmware(&devices[i], MAC, firmware);
             
             numDevices++;
-            
+            noteRegisteredHubDevice(MAC, devices[i].IP, devices[i].SendingInt);
             return i;
         }
     }
@@ -593,6 +615,14 @@ int16_t Devices_Sensors::addSensor(uint64_t deviceMAC, IPAddress deviceIP, uint8
             sensors[i].snsPin = snsPin;
             sensors[i].powerPin = powerPin;
             sensors[i].OverrideFlags = 0;
+#if _IS_SERVER_HUB
+            // First registration of another hub's aggregate. Bits 0, 1, and 7.
+            // Later packets and user edits do not replace this.
+            if (snsType == SNS_AGGREGATE) {
+                const int16_t me = findMyDeviceIndex();
+                if (me >= 0 && deviceIndex != me) sensors[i].OverrideFlags = 0b10000011;
+            }
+#endif
             sensors[i].limitHigh = updateLimitHigh ? limitHigh : NAN;
             sensors[i].limitLow = updateLimitLow ? limitLow : NAN;
             numSensors++;
@@ -694,17 +724,54 @@ int16_t Devices_Sensors::findSensorByPointer(ArborysSnsType* P) {
     return -1;
 }
 
+// A 1 in over forces that Flags bit to 0. 0b10000011 clears bits 0, 1, and 7.
+static uint8_t flagsAfterOverride(uint8_t flags, uint8_t over) {
+    return (uint8_t)(flags & (uint8_t)~over);
+}
+
+uint8_t Devices_Sensors::effectiveSensorFlags(int16_t index, bool useOverrideFlags) const {
+    if (index < 0 || index >= NUMSENSORS || !sensors[index].IsSet) return 0;
+    uint8_t flags = sensors[index].Flags;
+    if (!useOverrideFlags || sensors[index].deviceIndex == I.MY_DEVICE_INDEX) return flags;
+    return flagsAfterOverride(flags, sensors[index].OverrideFlags);
+}
+
+// Remotes and a hub's own aggregates.
+static bool hubHonorsOverride(const ArborysSnsType* s, bool useOverride) {
+    if (!useOverride || !s) return false;
+    const bool remote = s->deviceIndex != I.MY_DEVICE_INDEX;
+    const bool localAggregate = !remote && s->snsType == SNS_AGGREGATE;
+    return remote || localAggregate;
+}
+
+static bool hubAlertFlags(const ArborysSnsType* s, bool useOverride, uint8_t* flagsOut) {
+    if (!s) return false;
+    const uint8_t flags = hubHonorsOverride(s, useOverride)
+        ? flagsAfterOverride(s->Flags, s->OverrideFlags) : s->Flags;
+    if (flagsOut) *flagsOut = flags;
+    return true;
+}
+
+static bool monitoredOrCritical(uint8_t flags) {
+    return bitRead(flags, 1) || bitRead(flags, 7);
+}
+
+bool Devices_Sensors::listsForGraphics(int16_t index, bool useOverrideFlags, uint8_t* flagsOut) {
+    if (isSensorIndexInvalid(index, false) != 0) return false;
+    uint8_t flags = 0;
+    if (!hubAlertFlags(&sensors[index], useOverrideFlags, &flags)) return false;
+    if (!bitRead(flags, 1)) return false;
+    if (flagsOut) *flagsOut = flags;
+    return true;
+}
+
 bool Devices_Sensors::isSensorFlagBitUsed(int16_t index, uint8_t bit, bool useOverrideFlags) {
-    // Flags bit is usable only when set on the sensor AND (for remotes) not ignored via OverrideFlags.
     if (index < 0 || index >= NUMSENSORS || !sensors[index].IsSet || bit > 7) return false;
-    if (!bitRead(sensors[index].Flags, bit)) return false;
-    if (!useOverrideFlags) return true;
-    if (sensors[index].deviceIndex == I.MY_DEVICE_INDEX) return true; // local: OverrideFlags unused
-    return !bitRead(sensors[index].OverrideFlags, bit);
+    return bitRead(effectiveSensorFlags(index, useOverrideFlags), bit);
 }
 
 bool Devices_Sensors::isOutsideSensor(int16_t index) {
-    // Outside = Flags bit4, unless hub OverrideFlags bit4 ignores it for remotes
+    // Outside = Flags bit4, unless the hub's override bit 4 forces it off
     return isSensorFlagBitUsed(index, 4);
 }
 
@@ -745,7 +812,7 @@ uint8_t Devices_Sensors::returnBatteryPercentage(ArborysSnsType* P) {
   
 
 double Devices_Sensors::getAverageOutsideParameterValue(String parameter, uint32_t MoreRecentThan) {
-    // Outside = Flags bit4 usable (not ignored by OverrideFlags); must also be monitored (bit1 usable).
+    // Outside = Flags bit 4 still set after override; must also be monitored (bit 1 still set).
     //return -127 if no monitored outside sensors of that type, or return the average value if there are any. This its in an int8_t range.
     //parameter can be "temperature", "humidity", or "pressure", etc
     //optionally specify the recency of the last update, in unixtime seconds.
@@ -872,11 +939,7 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 
     if (!sensors[snsIndex].IsSet) return -100; //no sensor
 
-    // Effective flags: remotes drop any bit the hub OverrideFlags ignores; local sensors use Flags as-is.
-    uint8_t effectiveFlags = sensors[snsIndex].Flags;
-    if (useOverrideFlags && sensors[snsIndex].deviceIndex != I.MY_DEVICE_INDEX) {
-        effectiveFlags = (uint8_t)(sensors[snsIndex].Flags & ~sensors[snsIndex].OverrideFlags);
-    }
+    uint8_t effectiveFlags = effectiveSensorFlags(snsIndex, useOverrideFlags);
 
     bool isgood=true;
 
@@ -939,26 +1002,20 @@ int8_t Devices_Sensors::isSensorFlagged(int16_t snsIndex, uint16_t optionalsnsfl
 
 }
 
+static bool readingOpensAlert(const ArborysSnsType* s, bool displayExpired, bool expiredUsesDisplayGrace, uint8_t flags) {
+    if (bitRead(flags, 0)) return true;
+    if (!s->expired) return false;
+    if (expiredUsesDisplayGrace && !displayExpired) return false;
+    return true;
+}
+
 bool Devices_Sensors::matchesMainScreenAlert(int16_t snsIndex, bool respectRemoteOverride, bool expiredUsesDisplayGrace) {
     if (isSensorIndexInvalid(snsIndex, false) != 0) return false;
-
-    constexpr uint16_t kAllTypes = 1; // optionalsnsflags bit 0 = all sensor types
-
-    // Monitored + flagged (remote OverrideFlags respected when respectRemoteOverride).
-    if (isSensorFlagged(snsIndex, kAllTypes, 3, 3, 0, false, false, 0, respectRemoteOverride) == 1) {
-        return true;
-    }
-
-    // Graphics boxes wait until 2× SendingInt; header EXP still uses 1.25× via countMainScreenCriticalExpiredAlerts.
-    if (expiredUsesDisplayGrace && !isSensorExpiredForDisplay(snsIndex)) {
-        return false;
-    }
-
-    // Monitored + critical + expired.
-    if (isSensorFlagged(snsIndex, kAllTypes, 0, 0, 0, true, false, 0, respectRemoteOverride) != 2) {
-        return false;
-    }
-    return isSensorFlagged(snsIndex, kAllTypes, 2, 2, 0, false, false, 0, respectRemoteOverride) == 1;
+    uint8_t flags = 0;
+    if (!hubAlertFlags(&sensors[snsIndex], respectRemoteOverride, &flags)) return false;
+    if (!monitoredOrCritical(flags)) return false;
+    const bool displayExpired = isSensorExpiredForDisplay(snsIndex);
+    return readingOpensAlert(&sensors[snsIndex], displayExpired, expiredUsesDisplayGrace, flags);
 }
 
 uint16_t Devices_Sensors::countMainScreenAlerts(bool respectRemoteOverride) {
@@ -972,26 +1029,52 @@ uint16_t Devices_Sensors::countMainScreenAlerts(bool respectRemoteOverride) {
 }
 
 uint16_t Devices_Sensors::countMainScreenFlaggedAlerts(bool respectRemoteOverride) {
-    constexpr uint16_t kAllTypes = 1;
     uint16_t count = 0;
     for (int16_t i = 0; i < NUMSENSORS; ++i) {
         if (isSensorIndexInvalid(i, false) != 0) continue;
-        if (isSensorFlagged(i, kAllTypes, 3, 3, 0, false, false, 0, respectRemoteOverride) == 1) {
-            ++count;
-        }
+        uint8_t flags = 0;
+        if (!hubAlertFlags(&sensors[i], respectRemoteOverride, &flags)) continue;
+        if (!monitoredOrCritical(flags)) continue;
+        if (bitRead(flags, 0) || (bitRead(flags, 7) && sensors[i].expired)) ++count;
     }
     return count;
 }
 
 uint16_t Devices_Sensors::countMainScreenCriticalExpiredAlerts(bool respectRemoteOverride) {
-    constexpr uint16_t kAllTypes = 1;
     uint16_t count = 0;
     for (int16_t i = 0; i < NUMSENSORS; ++i) {
         if (isSensorIndexInvalid(i, false) != 0) continue;
-        if (isSensorFlagged(i, kAllTypes, 0, 0, 0, true, false, 0, respectRemoteOverride) != 2) continue;
-        if (isSensorFlagged(i, kAllTypes, 2, 2, 0, false, false, 0, respectRemoteOverride) == 1) {
-            ++count;
-        }
+        uint8_t flags = 0;
+        if (!hubAlertFlags(&sensors[i], respectRemoteOverride, &flags)) continue;
+        if (!bitRead(flags, 7) || !sensors[i].expired) continue;
+        if (!isSensorExpiredForDisplay(i)) continue;
+        ++count;
+    }
+    return count;
+}
+
+uint16_t Devices_Sensors::countMainScreenIconTriggers(bool respectRemoteOverride) {
+    uint16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; ++i) {
+        if (isSensorIndexInvalid(i, false) != 0) continue;
+        uint8_t flags = 0;
+        if (!hubAlertFlags(&sensors[i], respectRemoteOverride, &flags)) continue;
+        if (!bitRead(flags, 1)) continue;
+        if (!readingOpensAlert(&sensors[i], isSensorExpiredForDisplay(i), true, flags)) continue;
+        ++count;
+    }
+    return count;
+}
+
+uint16_t Devices_Sensors::countMainScreenNonCriticalExpiredAlerts(bool respectRemoteOverride) {
+    uint16_t count = 0;
+    for (int16_t i = 0; i < NUMSENSORS; ++i) {
+        if (isSensorIndexInvalid(i, false) != 0) continue;
+        uint8_t flags = 0;
+        if (!hubAlertFlags(&sensors[i], respectRemoteOverride, &flags)) continue;
+        if (!monitoredOrCritical(flags)) continue;
+        if (bitRead(flags, 0) || bitRead(flags, 7) || !sensors[i].expired) continue;
+        ++count;
     }
     return count;
 }
@@ -1408,10 +1491,10 @@ void Devices_Sensors::resetDailyPingCounters() {
     }
 }
 
-// Expiration: local sensors and critical remotes at freshness + 1.25 × SendingInt.
-// Noncritical remotes at freshness + 2 × SendingInt.
+// Expiration: hub remotes at 1.05× (critical after override) or 2.05× (everyone else).
+// Local sensors and non-hub builds: 1.25× for local and critical, 2× for other remotes.
 // Local sensors use timeRead; remotes use timeLogged. Sticky expired clears when back inside grace.
-// Hubs do not set the flag on a non-low-power peripheral here; the expiry probe does that after snsReqExpired.
+// The hub recheck asks again while a peripheral stays expired; it does not gate this flag.
 int16_t Devices_Sensors::checkExpirationDevice(int16_t index, time_t currentTime, bool onlyCritical, uint8_t multiplier) {
 
     ArborysDevType* device = &devices[index];
@@ -1450,9 +1533,19 @@ bool Devices_Sensors::isSensorPastExpiryThreshold(int16_t index, time_t currentT
     if (currentTime == 0) currentTime = utcNow();
     if (!isMine && freshnessTime == 0) return true;
 
+    uint32_t grace = 0;
+#if _IS_SERVER_HUB
+    if (!isMine) {
+        // Bit 7 after override. Local sensors on the hub keep the 1.25× clock below.
+        grace = sensorHubRemoteExpiryGraceSec(isSensorFlagBitUsed(index, 7), sendint);
+    } else {
+        grace = sensorExpiryGraceSec(sendint);
+    }
+#else
     const bool localOrCritical = isMine || isSensorFlagBitUsed(index, 7);
-    const uint32_t expirationTime = freshnessTime + sensorExpiryGraceFor(localOrCritical, sendint);
-    return (uint32_t)currentTime > expirationTime;
+    grace = sensorExpiryGraceFor(localOrCritical, sendint);
+#endif
+    return (uint32_t)currentTime > freshnessTime + grace;
 }
 
 byte Devices_Sensors::checkExpirationAllSensors(time_t currentTime, bool onlyCritical, uint8_t multiplier, bool expireDevice) {
@@ -1495,27 +1588,42 @@ int16_t Devices_Sensors::checkExpirationSensor(int16_t index, time_t currentTime
     if (currentTime == 0) currentTime = utcNow();
 
     if (!isSensorPastExpiryThreshold(index, currentTime)) {
+        if (sensors[index].snsType == SNS_AGGREGATE && isnan(sensors[index].snsValue)) {
+            const bool wasExpired = sensors[index].expired;
+            sensors[index].expired = true;
+            // A same-class average left NaN because every member was NaN or expired.
+            // That is not an alarm. Limits are the only alarm for that average.
+            if (!Actuators_averageOmitsMemberGaps(&sensors[index])
+                && bitRead(sensors[index].Flags, 7) && bitRead(sensors[index].Flags, 0) == 0) {
+                bitWrite(sensors[index].Flags, 0, 1);
+            }
+            if (!wasExpired && isMySensor(index) && bitRead(sensors[index].Flags, 7)) {
+                bitWrite(sensors[index].Flags, 6, 1);
+            }
+            return 1;
+        }
+        const bool wasExpired = sensors[index].expired;
         sensors[index].expired = false;
+        // expired → fresh. Critical sends this edge once.
+        if (wasExpired && isMySensor(index) && bitRead(sensors[index].Flags, 7)) {
+            bitWrite(sensors[index].Flags, 6, 1);
+        }
         return 0;
     }
-
-    // Hubs ask a non-low-power peripheral for data before setting this flag.
-#if _IS_SERVER_HUB
-    if (!isMySensor(index)) {
-        const int16_t di = sensors[index].deviceIndex;
-        if (di >= 0 && di < NUMDEVICES && devices[di].IsSet
-            && !IS_SERVER_DEVICE_TYPE(devices[di].devType)
-            && bitRead(devices[di].Flags, 2) == 0) {
-            return sensors[index].expired ? 1 : 0;
-        }
-    }
-#endif
 
     if (expireDevice) {
         const int16_t di = sensors[index].deviceIndex;
         if (di >= 0 && di < NUMDEVICES) devices[di].expired = true;
     }
+    const bool wasExpired = sensors[index].expired;
     sensors[index].expired = true;
+    if (!wasExpired && isMySensor(index) && bitRead(sensors[index].Flags, 7)) {
+        bitWrite(sensors[index].Flags, 6, 1);
+    }
+    if (sensors[index].snsType == SNS_AGGREGATE && bitRead(sensors[index].Flags, 7) && bitRead(sensors[index].Flags, 0) == 0
+        && !(isnan(sensors[index].snsValue) && Actuators_averageOmitsMemberGaps(&sensors[index]))) {
+        bitWrite(sensors[index].Flags, 0, 1);
+    }
     return 1;
 }
 
@@ -1537,63 +1645,91 @@ uint8_t Devices_Sensors::getSensorFlag(int16_t index) {
     return sensors[index].Flags;
 }
 
+static String aggregateTypeName(const char* kind) {
+    if (!kind || !kind[0]) return "actuator";
+    if (strcmp(kind, "temperature") == 0) return "actuator temp";
+    if (strcmp(kind, "humidity") == 0) return "actuator rh";
+    return String("actuator ") + kind;
+}
+
 String Devices_Sensors::sensorIsOfType(int16_t index) {
     if (index < 0 || index >= NUMSENSORS ) return "Invalid index";
+    if (sensors[index].IsSet) return sensorIsOfType(&sensors[index]);
     return sensorIsOfType(sensors[index].snsType);
 }
 
 String Devices_Sensors::sensorIsOfType(ArborysSnsType* sensor) {
     if (sensor == NULL) return "Invalid sensor";
+    if (sensor->snsType == SNS_AGGREGATE) return aggregateTypeName(Actuators_aggregateKind(sensor));
     return sensorIsOfType(sensor->snsType);
 }
 
 String Devices_Sensors::sensorIsOfType(uint8_t snsType) {
-    if (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17) return "temperature";
-    if (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18) return "humidity";
+    if (snsType == 1 || snsType == 4 || snsType == 10 || snsType == 14 || snsType == 17 || snsType == SNS_BRYANT_OAT || snsType == SNS_BRYANT_TEMP) return "temperature";
+    if (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18 || snsType == SNS_BRYANT_RH) return "humidity";
     if (snsType == 9 || snsType == 13 || snsType == 19) return "pressure";
     if (snsType == 60 || snsType == 61 || snsType == 62 || snsType == 63) return "battery";
     if (snsType == 60 || snsType == 62) return "battery_li";
     if (snsType == 61 || snsType == 63) return "battery_pb";
     if (snsType >= 50 && snsType < 60) return "HVAC";
+    if (snsType == SNS_HVAC_CALL || snsType == SNS_HVAC_TOTAL) return "HVAC";
+    if (snsType == SNS_BRYANT_MODE || snsType == SNS_BRYANT_SETPOINT || IS_BRYANT_TIME_TYPE(snsType)) return "HVAC";
     if (snsType == 3 || snsType == 33) return "soil";
-    if (snsType == 70) return "leak";
-    if (snsType == 200) return "human detection";
-    if (snsType == 220) return "switch lights";
-    if (snsType == 73) return "timer dio";
-    if (snsType == 75) return "clock dio";
+    if (snsType == SNS_LEAK) return "leak";
+    if (snsType == SNS_PRESENCE) return "human detection";
+    if (snsType == SNS_BUTTON) return "switch lights";
+    if (snsType == SNS_COUNTDOWN || snsType == SNS_COUNTDOWN_INV) return "timer dio";
+    if (snsType == SNS_SWITCH) return "switch";
+    if (snsType == SNS_VALVE) return "valve";
     if (snsType == 8) return "human";
     if (snsType == 7) return "distance";
     if (snsType == 12 ) return "weather";
     if (snsType == 11 || snsType == 16) return "altitude";
-    if (snsType == 98) return "clock";
-    if (snsType == 71) return "binary";
-    if (snsType >= 80 && snsType <= 89) return "network";
+    if (snsType == SNS_CLOCK || snsType == SNS_TIMER_ON_H) return "clock";
+    if (snsType == SNS_BINARY || snsType == SNS_BINARY_INV) return "binary";
+    if (IS_NETWORK_SENSOR_TYPE(snsType)) return "network";
     if (IS_INTERRUPT_SENSOR_TYPE(snsType)) return "interrupt";
+    if (IS_ACTUATOR_SENSOR_TYPE(snsType)) return "actuator";
     if (IS_SERVER_SENSOR_TYPE(snsType)) return "server";
     return "unknown";
 }
 
+static bool aggregateMatchesType(const char* kind, const String& type) {
+    if (!kind || !kind[0]) return false;
+    if (type == kind) return true;
+    if (strcmp(kind, "distance") == 0 && type == "dist") return true;
+    if (strcmp(kind, "humidity") == 0 && (type == "actuator rh" || type == "actuator humidity")) return true;
+    if (strcmp(kind, "temperature") == 0 && (type == "actuator temp" || type == "actuator temperature")) return true;
+    return type == aggregateTypeName(kind);
+}
+
 bool Devices_Sensors::isSensorOfType(int16_t index, String type) {
+    if (index >= 0 && index < NUMSENSORS && sensors[index].IsSet) return isSensorOfType(&sensors[index], type);
+    if (index < 0 || index >= NUMSENSORS) return false;
     return isSensorOfType(sensors[index].snsType, type);
 }
 
 bool Devices_Sensors::isSensorOfType(ArborysSnsType* sensor, String type) {
     if (sensor == NULL) return false;
-    return isSensorOfType(sensor->snsType, type);
+    return isSensorOfType(static_cast<const ArborysSnsType*>(sensor), type);
 }
 
 bool Devices_Sensors::isSensorOfType(const ArborysSnsType* sensor, String type) {
     if (sensor == NULL) return false;
+    if (sensor->snsType == SNS_AGGREGATE) {
+        if (type == "actuator") return true;
+        if (aggregateMatchesType(Actuators_aggregateKind(sensor), type)) return true;
+    }
     return isSensorOfType(sensor->snsType, type);
 }
 
 bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
 
     if (type == "temperature") {//temperature
-        return (snsType == 1 || snsType == 4 || snsType == 6 || snsType == 10 || snsType == 14 || snsType == 17);
+        return (snsType == 1 || snsType == 4 || snsType == 6 || snsType == 10 || snsType == 14 || snsType == 17 || snsType == SNS_BRYANT_OAT || snsType == SNS_BRYANT_TEMP);
     }
     if (type == "humidity") {//humidity
-        return (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18);
+        return (snsType == 2 || snsType == 5 || snsType == 15 || snsType == 18 || snsType == SNS_BRYANT_RH);
     }
     if (type == "pressure") {//pressure
         return (snsType == 9 || snsType == 13 || snsType == 19);
@@ -1607,26 +1743,24 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "battery_pb") {//battery_pb
         return (snsType == 61 || snsType == 63);
     }
-    if (type == "HVAC") {//HVAC
-        return (snsType >= 50 && snsType < 60);
+    if (type == "HVAC") {
+        return (snsType >= 50 && snsType < 60) || IS_HVAC_RUNTIME_TYPE(snsType)
+            || snsType == SNS_BRYANT_MODE || snsType == SNS_BRYANT_SETPOINT
+            || IS_BRYANT_TIME_TYPE(snsType);
     }
     if (type == "soil") {//soil
         return (snsType == 3 || snsType == 33 || snsType == 34 || snsType == 35);
     }
-    if (type == "leak") {//leak
-        return (snsType == 70);
-    }
-    if (type == "human" || type == "human detection") {//human presence
-        return (snsType == 200 || snsType == 8);
-    }
+    if (type == "leak") return (snsType == SNS_LEAK);
+    if (type == "human" || type == "human detection") return (snsType == SNS_PRESENCE || snsType == 8);
     if (type == "switch" || type == "lights" || type == "switch lights") {
-        return (snsType == 220 || snsType == 73 || snsType == 75);
+        return (snsType == SNS_BUTTON || snsType == SNS_SWITCH || snsType == SNS_COUNTDOWN);
     }
     if (type == "timer" || type == "timer dio") {
-        return (snsType == 73 || snsType == 74);
+        return (snsType == SNS_COUNTDOWN || snsType == SNS_COUNTDOWN_INV);
     }
     if (type == "clock" || type == "clock dio") {
-        return (snsType == 75 || snsType == 98);
+        return (snsType == SNS_CLOCK || snsType == SNS_TIMER_ON_H);
     }
     if (type == "dist" || type == "distance") {//distance
         return (snsType == 7);
@@ -1637,18 +1771,12 @@ bool Devices_Sensors::isSensorOfType(uint8_t snsType, String type) {
     if (type == "altitude") {//altitude
         return (snsType == 11 || snsType == 16);
     }
-    if (type == "network") {//network monitor (RSSI + network tests)
-        return (snsType >= 80 && snsType <= 89);
-    }
-    if (type == "server") {//server-side sensor slot
-        return IS_SERVER_SENSOR_TYPE(snsType);
-    }
-    if (type == "binary") {//binary
-        return (snsType == 71);
-    }
-    if (type == "interrupt") {//GPIO interrupt sensors (200-255)
-        return IS_INTERRUPT_SENSOR_TYPE(snsType);
-    }
+    if (type == "network") return IS_NETWORK_SENSOR_TYPE(snsType);
+    if (type == "server") return IS_SERVER_SENSOR_TYPE(snsType);
+    if (type == "binary") return (snsType == SNS_BINARY || snsType == SNS_BINARY_INV);
+    if (type == "valve" || type == "solenoid") return (snsType == SNS_VALVE);
+    if (type == "actuator") return IS_ACTUATOR_SENSOR_TYPE(snsType);
+    if (type == "interrupt") return IS_INTERRUPT_SENSOR_TYPE(snsType);
     
     if (type == "all" || type == "any") {//all
         return true;

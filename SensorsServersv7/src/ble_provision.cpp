@@ -9,41 +9,36 @@
 
 #include <WiFi.h>
 #include <WiFiProv.h>
-#include <esp_bt.h>
-#include <network_provisioning/manager.h>
+#include <string.h>
+#include "network_provisioning/manager.h"
+#include "network_provisioning/scheme_ble.h"
 
-#if !((defined(CONFIG_BLUEDROID_ENABLED) || defined(CONFIG_NIMBLE_ENABLED)) && __has_include("esp_bt.h"))
-#error "_USE_BLE_PROV requires Bluetooth (NimBLE) in the Arduino-ESP32 build"
-#endif
 #if !defined(CONFIG_NIMBLE_ENABLED)
 #error "_USE_BLE_PROV requires the NimBLE host; classic ESP32 envs need custom_sdkconfig = ${nimble_esp32.custom_sdkconfig}"
 #endif
 
 namespace {
 
-constexpr char kPopPrefix[] = "sn";  // Espressif app PoP; full string = sn + 6 hex MAC bytes
-
-static bool s_started = false;
-static bool s_stopping = false;
-static bool s_stopped = false;
+static bool s_mgrReady = false;
+static bool s_advertising = false;
 static bool s_eventHooked = false;
-static volatile bool s_stopRequested = false;
 static volatile bool s_credsPending = false;
+static volatile bool s_restoreAp = false;
 static char s_pendingSsid[33] = {0};
 static char s_pendingPass[65] = {0};
 static char s_serviceName[32] = {0};
-static char s_pop[16] = {0};
+static char s_pop[32] = {0};
 
+static void onProvEvent(arduino_event_t* sys_event);
+
+// ESP.getEfuseMac() is little-endian: byte 0 is the last MAC octet.
+// Display order AA:BB:CC:DD:EE:FF ends in DDEEFF = bytes 2,1,0.
 static void buildPopAndName() {
-  const uint8_t b3 = getPROCIDByte(Prefs.PROCID, 3);
-  const uint8_t b4 = getPROCIDByte(Prefs.PROCID, 4);
-  const uint8_t b5 = getPROCIDByte(Prefs.PROCID, 5);
-  snprintf(s_serviceName, sizeof(s_serviceName), "PROV_%02X%02X%02X", b3, b4, b5);
-  snprintf(s_pop, sizeof(s_pop), "%s%02X%02X%02X", kPopPrefix, b3, b4, b5);
-}
-
-static bool pastDeadline() {
-  return millis() >= BLE_PROV_MAX_MS;
+  const uint8_t last = getPROCIDByte(Prefs.PROCID, 0);
+  const uint8_t mid = getPROCIDByte(Prefs.PROCID, 1);
+  const uint8_t first = getPROCIDByte(Prefs.PROCID, 2);
+  snprintf(s_serviceName, sizeof(s_serviceName), "arborysnet-%02X%02X%02X", first, mid, last);
+  snprintf(s_pop, sizeof(s_pop), "%s", AP_STATION_PASSWORD);
 }
 
 static void applyPendingCredentials() {
@@ -66,36 +61,85 @@ static void applyPendingCredentials() {
   }
 }
 
-static void releaseBtMemory() {
-  // After FREE_BTDM/FREE_BLE scheme handler, permanently reclaim controller BSS for the heap.
-  // Failure is fine if already released or BT never started.
-#if CONFIG_IDF_TARGET_ESP32
-  esp_bt_mem_release(ESP_BT_MODE_BTDM);
-#else
-  esp_bt_mem_release(ESP_BT_MODE_BLE);
-#endif
+static void restoreSoftApIfDown() {
+  if (wifiReadyForNetwork()) return;
+  if (!softApRunning()) {
+    SerialPrint("BLE prov: soft AP down; restoring AP", true);
+    enterAPStationMode();
+  }
 }
 
-static void stopProvisioningInternal(const char* reason) {
-  if (s_stopped || s_stopping) return;
-  if (!s_started) {
-    s_stopped = true;
-    s_stopRequested = false;
+static bool ensureManager() {
+  if (s_mgrReady) return true;
+
+  // Copy the BLE scheme and keep AP+STA. The stock scheme forces STA, which
+  // would drop the recovery soft AP the moment advertising starts.
+  network_prov_mgr_config_t config;
+  memset(&config, 0, sizeof(config));
+  config.scheme = network_prov_scheme_ble;
+  config.scheme.wifi_mode = WIFI_MODE_APSTA;
+
+  WiFi.STA.begin(false);
+  if (network_prov_mgr_init(config) != ESP_OK) {
+    SerialPrint("BLE prov: manager init failed", true);
+    return false;
+  }
+  s_mgrReady = true;
+  return true;
+}
+
+static void startAdvertising() {
+  if (s_advertising) return;
+  if (!softApRunning()) return;
+  if (!ensureManager()) return;
+
+  buildPopAndName();
+
+  if (!s_eventHooked) {
+    WiFi.onEvent(onProvEvent);
+    s_eventHooked = true;
+  }
+
+  // disable_auto_stop must run before start, or a successful session tears BLE down.
+  if (network_prov_mgr_disable_auto_stop(1000) != ESP_OK) {
+    SerialPrint("BLE prov: disable_auto_stop failed", true);
+  }
+
+  // Standard Espressif BLE provisioning UUID (matches the phone app).
+  uint8_t uuid[16] = {
+      0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+      0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02};
+  network_prov_scheme_ble_set_service_uuid(uuid);
+
+  // Do not call network_prov_mgr_reset_wifi_provisioning(): that restores
+  // Wi-Fi defaults and clears the soft-AP password.
+  const esp_err_t err = network_prov_mgr_start_provisioning(
+      NETWORK_PROV_SECURITY_1, s_pop, s_serviceName, nullptr);
+  if (err == ESP_ERR_INVALID_STATE) {
+    s_advertising = true;
     return;
   }
-  s_stopping = true;
-  SerialPrint(String("BLE prov: tearing down (") + reason + ")", true);
+  if (err != ESP_OK) {
+    SerialPrint("BLE prov: start failed (" + String((int)err) + "); will retry", true);
+    return;
+  }
 
-  WiFiProv.endProvision();
-  // Ensure manager is fully gone even if auto-stop already ran.
-  network_prov_mgr_deinit();
-  releaseBtMemory();
+  s_advertising = true;
+  SerialPrint(String("BLE prov: advertising ") + s_serviceName + " (PoP = AP password)", true);
+  tftPrint(String("BLE: ") + s_serviceName, true);
+  WiFiProv.printQR(s_serviceName, s_pop, "ble");
 
-  s_started = false;
-  s_stopping = false;
-  s_stopped = true;
-  s_stopRequested = false;
-  SerialPrint("BLE prov: stopped; BT memory released", true);
+  // start_provisioning can restart Wi-Fi and drop the soft AP. Put it back.
+  restoreSoftApIfDown();
+}
+
+static void stopAdvertising(const char* reason) {
+  if (!s_advertising && !s_mgrReady) return;
+  if (!s_advertising) return;
+
+  SerialPrint(String("BLE prov: stopping (") + reason + ")", true);
+  s_advertising = false;
+  network_prov_mgr_stop_provisioning();
 }
 
 static void onProvEvent(arduino_event_t* sys_event) {
@@ -103,7 +147,7 @@ static void onProvEvent(arduino_event_t* sys_event) {
 
   switch (sys_event->event_id) {
     case ARDUINO_EVENT_PROV_START:
-      SerialPrint("BLE prov: advertising — use Espressif app (BLE)", true);
+      SerialPrint("BLE prov: session started", true);
       break;
 
     case ARDUINO_EVENT_PROV_CRED_RECV: {
@@ -123,20 +167,17 @@ static void onProvEvent(arduino_event_t* sys_event) {
     }
 
     case ARDUINO_EVENT_PROV_CRED_FAIL:
-      SerialPrint("BLE prov: Wi-Fi connect failed (BLE stays up until timeout)", true);
+      SerialPrint("BLE prov: Wi-Fi connect failed; BLE stays up", true);
+      s_restoreAp = true;
       break;
 
     case ARDUINO_EVENT_PROV_CRED_SUCCESS:
-      // Credentials worked — drop BLE ASAP so STA / ESP-NOW are undisturbed.
-      SerialPrint("BLE prov: success — requesting immediate teardown", true);
-      s_stopRequested = true;
+      SerialPrint("BLE prov: credentials accepted", true);
       break;
 
     case ARDUINO_EVENT_PROV_END:
-      s_started = false;
-      s_stopped = true;
-      releaseBtMemory();
-      SerialPrint("BLE prov: provisioning ended", true);
+      s_advertising = false;
+      SerialPrint("BLE prov: advertising ended", true);
       break;
 
     default:
@@ -144,88 +185,38 @@ static void onProvEvent(arduino_event_t* sys_event) {
   }
 }
 
+static void syncToSoftAp() {
+  if (softApRunning()) {
+    if (!s_advertising) startAdvertising();
+  } else if (s_advertising) {
+    stopAdvertising("STA recovered");
+  }
+}
+
 }  // namespace
 
 void bleProvisionBeginIfNeeded() {
-  if (s_started || s_stopped) return;
-  if (pastDeadline()) {
-    s_stopped = true;
-    SerialPrint("BLE prov: skipped (past 30-minute boot window)", true);
-    releaseBtMemory();
-    return;
-  }
-  if (Prefs.HAVECREDENTIALS && Prefs.WIFISSID[0] != '\0') {
-    s_stopped = true;
-    SerialPrint("BLE prov: skipped (Wi-Fi credentials already present)", true);
-    // Never initialize BT this boot — reclaim reserved BT controller memory for heap/Wi-Fi.
-    releaseBtMemory();
-    return;
-  }
-
   buildPopAndName();
-
-  if (!s_eventHooked) {
-    WiFi.onEvent(onProvEvent);
-    s_eventHooked = true;
-  }
-
-  // Standard Espressif BLE provisioning UUID (matches WiFiProv examples / phone apps).
-  uint8_t uuid[16] = {
-      0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
-      0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02};
-
-  // FREE_BTDM (ESP32) / FREE_BLE (S3+) reclaim stack RAM when provisioning stops.
-#if CONFIG_IDF_TARGET_ESP32
-  const scheme_handler_t handler = NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM;
-#else
-  const scheme_handler_t handler = NETWORK_PROV_SCHEME_HANDLER_FREE_BLE;
-#endif
-
-  SerialPrint(String("BLE prov: starting service=") + s_serviceName + " pop=" + s_pop, true);
-  tftPrint(String("BLE: ") + s_serviceName + " PoP " + s_pop, true);
-
-  WiFiProv.beginProvision(
-      NETWORK_PROV_SCHEME_BLE,
-      handler,
-      NETWORK_PROV_SECURITY_1,
-      s_pop,
-      s_serviceName,
-      nullptr,
-      uuid,
-      true  // reset IDF provisioned flag so SoftAP-only devices still show BLE portal
-  );
-
-  // Keep BLE alive until we explicitly tear down (success or 30-minute deadline).
-  WiFiProv.disableAutoStop(1000);
-
-  WiFiProv.printQR(s_serviceName, s_pop, "ble");
-
-  s_started = true;
-  s_stopped = false;
+  syncToSoftAp();
 }
 
 void bleProvisionService() {
   if (s_credsPending) {
     applyPendingCredentials();
   }
-
-  if (s_stopRequested) {
-    stopProvisioningInternal("success/request");
-    return;
+  if (s_restoreAp) {
+    s_restoreAp = false;
+    restoreSoftApIfDown();
   }
-
-  if (s_started && !s_stopped && pastDeadline()) {
-    stopProvisioningInternal("30-minute boot deadline");
-  }
+  syncToSoftAp();
 }
 
 void bleProvisionStop() {
-  s_stopRequested = true;
-  stopProvisioningInternal("explicit stop");
+  stopAdvertising("explicit stop");
 }
 
 bool bleProvisionIsActive() {
-  return s_started && !s_stopped;
+  return s_advertising;
 }
 
 const char* bleProvisionPop() {

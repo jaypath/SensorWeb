@@ -4,6 +4,10 @@
 #include "sensors.hpp"
 #include <SensorEffectors.hpp>
 #include "interrupt_triggers.hpp"
+#include "actuators.hpp"
+#include "bryant_bus.hpp"
+#include <math.h>
+#include <esp_task_wdt.h>
 
 #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
 #include "NetworkMonitor.hpp"
@@ -134,7 +138,7 @@ static bool isRealPowerPin(int16_t powerPin) {
 }
 
 static bool isDioBinaryType(uint8_t snsType) {
-  return snsType == 70 || snsType == 71;
+  return snsType == SNS_LEAK || snsType == SNS_BINARY || snsType == SNS_BINARY_INV || snsType == SNS_VALVE;
 }
 
 static bool isInterruptDioType(uint8_t snsType) {
@@ -142,15 +146,15 @@ static bool isInterruptDioType(uint8_t snsType) {
 }
 
 static bool isTimerOutputType(uint8_t snsType) {
-  return snsType == 73 || snsType == 74;
+  return snsType == SNS_COUNTDOWN || snsType == SNS_COUNTDOWN_INV;
 }
 
-static bool isClockOutputType(uint8_t snsType) {
-  return snsType == 75;
+static bool isSwitchOutputType(uint8_t snsType) {
+  return snsType == SNS_SWITCH;
 }
 
 static bool isDrivenDioOutputType(uint8_t snsType) {
-  return isTimerOutputType(snsType) || isClockOutputType(snsType);
+  return isTimerOutputType(snsType) || isSwitchOutputType(snsType);
 }
 
 static bool humanPresenceLimitIsHigh(double v) {
@@ -171,20 +175,50 @@ bool normalizeHumanPresenceLimits(double& limitHigh, double& limitLow) {
   return false;
 }
 
+bool sensorReadingIsPlausible(uint8_t snsType, double value, const char* category) {
+  if (isnan(value) || isinf(value)) return false;
+  auto inRange = [](double v, double lo, double hi) { return v >= lo && v <= hi; };
+
+  // Household sensors are °F. -200 is a failed read. 0 °F can be real and is left for the spread check.
+  if (category && strcasecmp(category, "temperature") == 0) return inRange(value, -80.0, 170.0);
+  if (category && strcasecmp(category, "humidity") == 0) return inRange(value, 0.0, 100.0);
+  if (category && strcasecmp(category, "pressure") == 0) return inRange(value, 800.0, 1100.0);
+  if (category && strcasecmp(category, "soil") == 0) return inRange(value, 0.0, 100.0);
+  if (category && (strcasecmp(category, "distance") == 0 || strcasecmp(category, "dist") == 0)) return inRange(value, 0.0, 40.0);
+  if (category && strcasecmp(category, "altitude") == 0) return inRange(value, -500.0, 9000.0);
+
+  if (Sensors.isSensorOfType(snsType, "temperature")) return inRange(value, -80.0, 170.0);
+  if (Sensors.isSensorOfType(snsType, "humidity")) return inRange(value, 0.0, 100.0);
+  if (Sensors.isSensorOfType(snsType, "pressure")) return inRange(value, 800.0, 1100.0);
+  if (Sensors.isSensorOfType(snsType, "soil")) return inRange(value, 0.0, 100.0);
+  if (Sensors.isSensorOfType(snsType, "distance")) return inRange(value, 0.0, 40.0);
+  if (Sensors.isSensorOfType(snsType, "altitude")) return inRange(value, -500.0, 9000.0);
+  if (snsType == 60 || snsType == 62) return inRange(value, 2.0, 5.5);   // Li-ion volts
+  if (snsType == 61 || snsType == 63) return inRange(value, 6.0, 18.0);  // lead-acid volts
+  if (snsType == 20) return value > 0.0 && value < 5000000.0;            // BME680 gas ohms
+  if (snsType == SNS_NET_RSSI) return inRange(value, -120.0, 0.0);
+  if (snsType == 12) return inRange(value, -10.0, 10.0);                 // weather code
+  if (snsType == SNS_BINARY || snsType == SNS_BINARY_INV || snsType == SNS_LEAK || snsType == SNS_VALVE || snsType == SNS_SWITCH) {
+    return value == 0.0 || value == 1.0;
+  }
+  return true;
+}
+
 void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag) {
   if (!P) return;
 
-  // Type 73/74/75: Flags bit0 is DIO state (set by update), not an alarm-from-limits bit.
-  // Type 75 limits are schedule hours (on/off), not alarm thresholds.
-  if (isDrivenDioOutputType(P->snsType)) {
+  // Type 170/171/172: Flags bit0 is the pin state, not an alarm-from-limits bit.
+  // Type 162 limits are the clock window, not alarm thresholds.
+  if (isDrivenDioOutputType(P->snsType) || P->snsType == SNS_TIMER_ON_H) {
     if (bitRead(lastflag, 0) != bitRead(P->Flags, 0)) {
-      bitWrite(P->Flags, 6, 1);
+      // Pin or clock-window state. That is a normal send, so only Monitored queues it.
+      if (bitRead(P->Flags, 1)) bitWrite(P->Flags, 6, 1);
       SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
     }
     return;
   }
 
-  if (P->snsType == 200 || P->snsType == 220) {
+  if (P->snsType == SNS_PRESENCE || P->snsType == SNS_BUTTON) {
     normalizeHumanPresenceLimits(limitHigh, limitLow);
     P->limitHigh = (float)limitHigh;
     P->limitLow = (float)limitLow;
@@ -214,7 +248,8 @@ void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8
   }
 
   if (bitRead(lastflag, 0) != bitRead(P->Flags, 0)) {
-    bitWrite(P->Flags, 6, 1);
+    // In range ↔ out of range. Critical (bit 7) sends that edge. Monitored does not.
+    if (bitRead(P->Flags, 7)) bitWrite(P->Flags, 6, 1);
     SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
   }
 }
@@ -300,9 +335,11 @@ for (byte i=0;i<_SENSORNUM;i++) {
   byte snsID = Sensors.countSensors(sensortypes[i],I.MY_DEVICE_INDEX)+1;
 
   #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
-       bool isVirtualSensor = (sensortypes[i] == 80) || NetworkMonitor.isSensorType(sensortypes[i]);
+       bool isVirtualSensor = (sensortypes[i] == SNS_NET_RSSI) || (sensortypes[i] == SNS_AGGREGATE)
+           || (sensortypes[i] == SNS_TEMP_GAP) || NetworkMonitor.isSensorType(sensortypes[i]);
   #else
-       bool isVirtualSensor = (sensortypes[i] == 80);
+       bool isVirtualSensor = (sensortypes[i] == SNS_NET_RSSI) || (sensortypes[i] == SNS_AGGREGATE)
+           || (sensortypes[i] == SNS_TEMP_GAP);
   #endif
 
 
@@ -335,12 +372,29 @@ for (byte i=0;i<_SENSORNUM;i++) {
 
   switch (sensortypes[i]) {
     
-    case 53: //HVAC time - this is the total time. Note that sensor pin is not used
+    case SNS_HVAC_TOTAL:
       {
       bitWrite(Prefs.SNS_FLAGS[i],3,1);
-      
       break;
       }
+
+#if defined(_USEBRYANT)
+    case SNS_BRYANT_MODE:
+    case SNS_BRYANT_OAT:
+    case SNS_BRYANT_SETPOINT:
+    case SNS_BRYANT_TEMP:
+    case SNS_BRYANT_RH:
+    case SNS_BRYANT_RUNTIME:
+    case SNS_BRYANT_DEFROST:
+    case SNS_BRYANT_RUN_COOL:
+    case SNS_BRYANT_DAY_HEAT:
+    case SNS_BRYANT_DAY_DEFROST:
+    case SNS_BRYANT_DAY_COOL:
+    case SNS_HYDRONIC_ZONE:
+    case SNS_TEMP_GAP:
+      bitWrite(Prefs.SNS_FLAGS[i], 3, 1);
+      break;
+#endif
 
     case 61: //battery percent
       {
@@ -348,21 +402,21 @@ for (byte i=0;i<_SENSORNUM;i++) {
       break;
       }
 
-    case 80: // WiFi RSSI (universal; snsID 1=current, 2=low, 3=high)
+    case SNS_NET_RSSI:
       break;
 
-    case 81: // Network Monitor - BSSID changes
-    case 82: // Network Monitor - local IP changes
-    case 83: // Network Monitor - DNS resolution
-    case 84: // Network Monitor - HTTP Tx failures
-    case 85: // Network Monitor - gateway ping avg RTT
-    case 86: // Network Monitor - gateway ping jitter
-    case 87: // Network Monitor - external ping avg RTT
-    case 88: // Network Monitor - external ping jitter
-    case 89: // Network Monitor - download speed (Mbps)
+    case SNS_NET_FIRST:
+    case 154:
+    case 155:
+    case 156:
+    case 157:
+    case 158:
+    case 159:
+    case 160:
+    case SNS_NET_LAST:
       break;
-    case 200: // human presence (RCWL-0516)
-    case 220: // lights switch
+    case SNS_PRESENCE:
+    case SNS_BUTTON:
       if (normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[i], Prefs.SNS_LIMIT_MIN[i])) {
         Prefs.isUpToDate = false;
       }
@@ -455,6 +509,10 @@ digitalWrite(MUXPINS[3],HIGH); //set to last mux channel by default
   #endif
 
 
+#if defined(_USEBRYANT)
+  bryantBusBegin();
+#endif
+
   SensorEffectors_init();
   SerialPrint("Sensors setup complete",true);
 }
@@ -486,6 +544,134 @@ double peak_to_peak(int16_t pin, int ms) {
 
 }
 
+// Active-low DIO, including a 120 Hz ripple through an optocoupler.
+// True if LOW is seen at any sample in the window.
+static bool sampleActiveLow(int8_t gpio, uint16_t windowMs) {
+  if (gpio < 0) return false;
+  pinMode((uint8_t)gpio, INPUT);
+  const uint32_t start = millis();
+  do {
+    if (digitalRead((uint8_t)gpio) == LOW) return true;
+    delay(1);
+  } while ((uint32_t)(millis() - start) < windowMs);
+  return false;
+}
+
+
+static bool bootReadChangesOutput(uint8_t snsType) {
+  return snsType == SNS_SWITCH || snsType == SNS_COUNTDOWN || snsType == SNS_COUNTDOWN_INV
+      || snsType == SNS_HYDRONIC_ZONE;
+}
+
+static bool bootSensorReadIsFeasible(const ArborysSnsType* sensor) {
+  if (!sensor) return false;
+  const uint8_t t = sensor->snsType;
+  if (t == 90) return false; // sleep info is set manually
+  if (bootReadChangesOutput(t)) return false;
+  // Ping, DNS, and download tests block setup and have no sample until they run on their own interval.
+  if (IS_NETWORK_SENSOR_TYPE(t) && t != SNS_NET_RSSI) return false;
+  return true;
+}
+
+static bool bootSampleIsUsable(const ArborysSnsType* sensor) {
+  if (!sensor) return false;
+  const double v = sensor->snsValue;
+  if (isnan(v) || isinf(v)) return false;
+  // Climate / I2C failure sentinel. Hubs store this as NaN.
+  if (v <= -999.0 && v > -10000.0) return false;
+  return true;
+}
+
+static bool bootReadIsDerived(uint8_t snsType) {
+  return snsType == SNS_AGGREGATE || snsType == SNS_TEMP_GAP;
+}
+
+// Drop the history slot just written for a sample we are not keeping.
+static void dropBootHistorySample(ArborysSnsType* S) {
+  const int16_t h = SensorHistory.getSensorHistoryIndex(S);
+  if (h < 0 || h >= _SENSORNUM) return;
+  const uint8_t idx = SensorHistory.HistoryIndex[h];
+  if (SensorHistory.TimeStamps[h][idx] == 0 || SensorHistory.TimeStamps[h][idx] != S->timeRead) return;
+  SensorHistory.TimeStamps[h][idx] = 0;
+  SensorHistory.Values[h][idx] = 0;
+  SensorHistory.Flags[h][idx] = 0;
+  SensorHistory.HistoryIndex[h] = (idx == 0) ? (uint8_t)(_SENSORHISTORYSIZE - 1) : (uint8_t)(idx - 1);
+}
+
+static bool readOneLocalSensorAtBoot(ArborysSnsType* sensor) {
+  const uint32_t prevLogged = sensor->timeLogged;
+  const uint8_t prevFlags = sensor->Flags;
+  const bool prevExpired = sensor->expired;
+
+  int8_t readResult = 0;
+  if (IS_ACTUATOR_SENSOR_TYPE(sensor->snsType)) {
+    readResult = pollActuator(sensor, true);
+  } else {
+    readResult = ReadData(sensor, true);
+  }
+
+  if (readResult > 0 && bootSampleIsUsable(sensor)) {
+    delay(20);
+    return true;
+  }
+
+  dropBootHistorySample(sensor);
+  sensor->snsValue = NAN;
+  sensor->Flags = prevFlags;
+  sensor->expired = prevExpired;
+  sensor->timeLogged = prevLogged;
+  // -10 and a committed read already scheduled the next try. Anything else stays unread.
+  if (readResult != -10 && readResult <= 0) sensor->timeRead = 0;
+  if (readResult != 0) delay(20);
+  return false;
+}
+
+// Called once setup has finished configuring pins. A usable reading replaces the
+// registration value before any minute-boundary send. Unusable results become NaN
+// with no history entry, so hubs and ArborysNet never average a placeholder.
+int8_t readLocalSensorsAtBoot() {
+  SerialPrint("Boot: reading local sensors", true);
+  esp_task_wdt_reset();
+  updateRSSI(true);
+  bryantBusPoll();
+
+  int8_t numGood = 0;
+  // Measurements first, then averages and gaps that depend on them.
+  for (int pass = 0; pass < 2; pass++) {
+    for (int16_t i = 0; i < _SENSORNUM; i++) {
+      ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
+      if (!sensor || !sensor->IsSet || sensor->deviceIndex != I.MY_DEVICE_INDEX) continue;
+      // Leave outputs for the loop, after measurements exist. timeRead 0 keeps the placeholder off the uplink.
+      if (bootReadChangesOutput(sensor->snsType)) {
+        sensor->timeRead = 0;
+        continue;
+      }
+      if (!bootSensorReadIsFeasible(sensor)) continue;
+      const bool derived = bootReadIsDerived(sensor->snsType);
+      if ((pass == 0 && derived) || (pass == 1 && !derived)) continue;
+      if (readOneLocalSensorAtBoot(sensor)) numGood++;
+      esp_task_wdt_reset();
+    }
+  }
+
+  SerialPrint("Boot sensor read: " + String(numGood) + " ok", true);
+  esp_task_wdt_reset();
+  return numGood;
+}
+
+// Gate for hub uplinks and cloud uploads. Remote sensors are already someone else's sample.
+bool localSensorReadyToSend(const ArborysSnsType* S) {
+  if (!S) return false;
+  if (S->deviceIndex != I.MY_DEVICE_INDEX) return true;
+  if (S->timeRead == 0) return false;
+  if (isnan(S->snsValue) || isinf(S->snsValue)) return false;
+#if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
+  if (IS_NETWORK_SENSOR_TYPE(S->snsType) && S->snsType != SNS_NET_RSSI) {
+    if (NetworkMonitor.readSensorTime(S->snsType) == 0) return false;
+  }
+#endif
+  return true;
+}
 
 int8_t readAllSensors(bool forceRead) {
 //returns the number of sensors that were read successfully
@@ -495,7 +681,12 @@ int8_t readAllSensors(bool forceRead) {
     if (sensor && sensor->IsSet) {
       if (sensor->deviceIndex != I.MY_DEVICE_INDEX) continue;
       
-      int8_t readResult = ReadData(sensor, forceRead);
+      int8_t readResult = 0;
+      if (IS_ACTUATOR_SENSOR_TYPE(sensor->snsType)) {
+        readResult = pollActuator(sensor, forceRead);
+      } else {
+        readResult = ReadData(sensor, forceRead);
+      }
       //readresult = 0 means not time to read, not an error
 
       if (readResult == -10) {
@@ -777,7 +968,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
           if (val != AHTXX_ERROR) //AHTXX_ERROR = 255, library returns 255 if error occurs
           {
             P->snsValue = (100*(val*9/5+32))/100;
-            if (isTempValid(P->snsValue,false)==false) {
+            // A high limit above 125°F (an attic) accepts hotter air. Otherwise the usual range applies.
+            const bool allowHot = prefs_index >= 0 && Prefs.SNS_LIMIT_MAX[prefs_index] > 125.0;
+            if (isTempValid(P->snsValue, allowHot)==false) {
               P->snsValue = -999;
               isInvalid=true;
             }
@@ -798,7 +991,8 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
             isInvalid=true;
           } else {
             P->snsValue = (100*(temperature.temperature*9/5+32))/100;
-            if (isTempValid(P->snsValue,false)==false) {
+            const bool allowHot = prefs_index >= 0 && Prefs.SNS_LIMIT_MAX[prefs_index] > 125.0;
+            if (isTempValid(P->snsValue, allowHot)==false) {
               P->snsValue = -999;
               isInvalid=true;
             }
@@ -937,7 +1131,8 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       {
         #ifdef _USEBMP
         P->snsValue = ( bmp.readTemperature()*9/5+32);
-        if (isTempValid(P->snsValue,false)==false) {
+        const bool allowHot = prefs_index >= 0 && Prefs.SNS_LIMIT_MAX[prefs_index] > 125.0;
+        if (isTempValid(P->snsValue, allowHot)==false) {
           P->snsValue = -999;
           isInvalid=true;
         }
@@ -1132,119 +1327,31 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       }
     #endif
 
-    #if defined(_USEHVAC) 
+    #if defined(_USEHVAC)
 
-      case 50: //total HVAC time        
-        {
-          if (Sensors.countFlagged(55,0b00000001,0b00000001,0,false,false,0)>0 || Sensors.countFlagged(51,0b00000001,0b00000001,0,false,false,0)>0) {
-            P->snsValue += Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //number of minutes HVAC  systems were on
-            bitWrite(P->Flags,0,1); //currently flagged
-          }
-        break;
-        }
-
-    #ifdef _USEHEAT
-      case 51: //heat - gas valve
-        {
-
-          
-          //can use the mux, as long as _USERELAY is set correctly.
-          #ifndef _USEMUX
-            pinMode(snspin, INPUT);
-          #endif
-
-
-          //take n measurements, and average
-          val=0;
-          nsamps=1; //number of samples to average
-
-          #ifdef _USEMUX
-            //set the MUX channel to snspin
-            digitalWrite(MUXPINS[0],bitRead(snspin,0));
-            digitalWrite(MUXPINS[1],bitRead(snspin,1));
-            digitalWrite(MUXPINS[2],bitRead(snspin,2));
-            digitalWrite(MUXPINS[3],bitRead(snspin,3));
-
-            wait_ms(50); //provide time for channel switch and charge capacitors
-
-            //read values from the mux and find p2p
-            val = peak_to_peak(MUXPINS[4],50); //50 ms is 3 clock cycles at 60 Hz
-          #else
-            //use the ESP32 pins directly
-            val = peak_to_peak(snspin,50);
-          #endif
-
-          if (val > Prefs.SNS_LIMIT_MAX[prefs_index]) {
-            P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
-            bitWrite(P->Flags,0,1); //currently flagged
-          }
-        break;
-        }
-    
-      case 52: //heat
-        {
-        //take n measurements, and average
-        val=0;
-        nsamps=1; //number of samples to average
-        byte snspin = HEATPINS[P->snsID];
-
-        #ifdef _USEMUX
-          //set the MUX channel to snspin
-          digitalWrite(MUXPINS[0],bitRead(snspin,0));
-          digitalWrite(MUXPINS[1],bitRead(snspin,1));
-          digitalWrite(MUXPINS[2],bitRead(snspin,2));
-          digitalWrite(MUXPINS[3],bitRead(snspin,3));
-
-          wait_ms(50); //provide time for channel switch and charge capacitors
-
-          //read values from the mux and find p2p
-          val = peak_to_peak(MUXPINS[4],50); //50 ms is 3 clock cycles at 60 Hz
-        #else
-          //use the DIO pins directly
-          val = peak_to_peak(snspin,50);
-        #endif
-
-        if (val > Prefs.SNS_LIMIT_MAX[prefs_index]) {
-          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the system was on
-          bitWrite(P->Flags,0,1); //currently flagged
-
-        }
-
-            
-        break;
-        }
-    #endif
-
-    #if defined(_USEAC)
-      case 56: //aircon compressor
+      case SNS_HVAC_CALL:
       {
-        //assumes you are using a fan relay to switch on
-        //if the fan is off, the NC pins of relay will be connected and I can read a digital high
-        //if fan is on, relay will be away (conneccting AC) andpin will be low
-    
-        val=readPinValue(P, 1);
-        if (val == 0)           {
-          bitWrite(P->Flags,0,1); //currently flagged
-          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on          
+        const bool on = sampleActiveLow(correctedPin, 50);
+        if (on) {
+          bitWrite(P->Flags, 0, 1);
+          P->snsValue += (double)Prefs.SNS_INTERVAL_POLL[prefs_index] / 60.0;
+        } else {
+          bitWrite(P->Flags, 0, 0);
         }
-
         break;
       }
-      case 55: //fan
+
+      case SNS_HVAC_TOTAL:
       {
-        //assumes you are using a fan relay to switch on
-        //if the fan is off, the NC pins of relay will be connected and I can read a digital high
-        //if fan is on, relay will be away (conneccting AC) andpin will be low
-        val=readPinValue(P, 1);
-        if (val == 0) {
-          bitWrite(P->Flags,0,1); //currently flagged
-          P->snsValue += (double) Prefs.SNS_INTERVAL_POLL[prefs_index]/60; //snsvalue is the number of minutes the ac was on
+        if (Sensors.countFlagged(SNS_HVAC_CALL, 0b00000001, 0b00000001, 0, false, false, 0) > 0) {
+          bitWrite(P->Flags, 0, 1);
+          P->snsValue += (double)Prefs.SNS_INTERVAL_POLL[prefs_index] / 60.0;
+        } else {
+          bitWrite(P->Flags, 0, 0);
         }
-
-
         break;
       }
-    #endif
+
     #endif
 
     #if defined(_USELIBATTERY) || defined(_USESLABATTERY)
@@ -1278,32 +1385,18 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
       #endif
 
-      case 73: // timer DIO OUTPUT: snsValue = remaining seconds; bit0 = DIO state
-      {
-#if _USEINTERRUPT
-        const uint32_t pollSec = (prefs_index >= 0) ? Prefs.SNS_INTERVAL_POLL[prefs_index] : P->PollingInt;
-        InterruptTriggers_updateTimerOutput(P, correctedPin, pollSec);
-#else
-        if (correctedPin >= 0) {
-          const bool on = P->snsValue > 0.0;
-          pinMode((uint8_t)correctedPin, OUTPUT);
-          digitalWrite((uint8_t)correctedPin, on ? HIGH : LOW);
-          bitWrite(P->Flags, 0, on ? 1 : 0);
-        }
-#endif
-        break;
-      }
-
-      case 75: // clock-window DIO OUTPUT: on between limitMin and limitMax (hours / dawn / dusk)
+      case SNS_TIMER_ON_H:
       {
         const double onSpec = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MIN[prefs_index] : P->limitLow;
         const double offSpec = (prefs_index >= 0) ? Prefs.SNS_LIMIT_MAX[prefs_index] : P->limitHigh;
-        InterruptTriggers_updateClockDio(P, correctedPin, onSpec, offSpec);
+        const bool inside = InterruptTriggers_inClockWindow(onSpec, offSpec);
+        P->snsValue = inside ? 1.0 : 0.0;
+        bitWrite(P->Flags, 0, inside ? 1 : 0);
         break;
       }
 
-      case 200: // RCWL: daily detection count + .1 if recent within poll_interval
-      case 220: // button: daily push count + .1 if recent within poll_interval
+      case SNS_PRESENCE:
+      case SNS_BUTTON:
       {
 #if _USEINTERRUPT
         const uint32_t pollSec = (prefs_index >= 0) ? Prefs.SNS_INTERVAL_POLL[prefs_index] : P->PollingInt;
@@ -1313,12 +1406,14 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 #endif
         break;
       }
-      case 70: // leak DIO (HIGH=1, LOW=0); alarms via Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN
-      case 71: // binary DIO high/low
+      case SNS_LEAK:
+      case SNS_BINARY:
+      case SNS_BINARY_INV:
+      case SNS_VALVE:
       {
         int8_t dioGpio = correctedPin;
         #ifdef _USELEAK
-        if (P->snsType == 70 && dioGpio < 0) {
+        if (P->snsType == SNS_LEAK && dioGpio < 0) {
           dioGpio = (int8_t)_USELEAK;
         }
         #endif
@@ -1326,10 +1421,16 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
           isInvalid = true;
           break;
         }
-        P->snsValue = (digitalRead(dioGpio) == HIGH) ? 1.0 : 0.0;
+        if (P->snsType == SNS_VALVE) {
+          P->snsValue = sampleActiveLow(dioGpio, 50) ? 1.0 : 0.0;
+        } else if (P->snsType == SNS_BINARY_INV) {
+          P->snsValue = (digitalRead(dioGpio) == LOW) ? 1.0 : 0.0;
+        } else {
+          P->snsValue = (digitalRead(dioGpio) == HIGH) ? 1.0 : 0.0;
+        }
         break;
       }
-    case 80: // WiFi RSSI from STRUCT_CORE (snsID 1=current, 2=low, 3=high)
+    case SNS_NET_RSSI:
       {
         switch (P->snsID) {
           case 2:
@@ -1350,15 +1451,15 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
         break;
       }
 #if defined(_USENETWORKMONITOR) && (_USENETWORKMONITOR > 0)
-    case 81: // AP switch count
-    case 82: // local IP change count
-    case 83: // DNS resolution (ms)
-    case 84: // HTTP Tx failure count
-    case 85: // gateway ping avg RTT (ms)
-    case 86: // gateway ping jitter (ms)
-    case 87: // external ping avg RTT (ms)
-    case 88: // external ping jitter (ms)
-    case 89: // download speed (Mbps)
+    case SNS_NET_FIRST:
+    case 154:
+    case 155:
+    case 156:
+    case 157:
+    case 158:
+    case 159:
+    case 160:
+    case SNS_NET_LAST:
       {
         int8_t nmTest = NetworkMonitor.runTestIndexFromSensorType(P->snsType);
         if (nmTest >= 0) {
@@ -1380,9 +1481,24 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       break;
       }
 
-    case 98:
+#if defined(_USEBRYANT)
+    case SNS_BRYANT_MODE:
+    case SNS_BRYANT_OAT:
+    case SNS_BRYANT_SETPOINT:
+    case SNS_BRYANT_TEMP:
+    case SNS_BRYANT_RH:
+    case SNS_BRYANT_RUNTIME:
+    case SNS_BRYANT_DEFROST:
+    case SNS_BRYANT_RUN_COOL:
+    case SNS_BRYANT_DAY_HEAT:
+    case SNS_BRYANT_DAY_DEFROST:
+    case SNS_BRYANT_DAY_COOL:
+      bryantPublish(P);
+      break;
+#endif
+
+    case SNS_CLOCK:
     {
-      //I am a clock sensor, return the current time in unix format
       P->snsValue = I.currentTime;
       break;
     }
@@ -1419,9 +1535,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     bitWrite(P->Flags,2,0); //not low power device
   #endif
 
-  if (P->snsType>=50 && P->snsType<60) { //HVAC is a special case. 50 = total time, 51 = gas, 55 = hydronic valve, 56 - ac 57 = fan
+  if (IS_HVAC_RUNTIME_TYPE(P->snsType)) {
     if (bitRead(P->Flags,0) != bitRead(lastflag,0)) { //flags changed
-      bitWrite(P->Flags,6,1); //change in flag status
+      if (bitRead(P->Flags, 7)) bitWrite(P->Flags,6,1); //critical: bounds edge
       if (bitRead(P->Flags,0) == 1) bitWrite(P->Flags,5,1); //value is high
       SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
     } else {
@@ -1441,12 +1557,12 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       P->snsValue = (P->snsValue >= 0.5) ? 1.0 : 0.0;
     }
 
-    if ((P->snsType == 200 || P->snsType == 220) && prefs_index >= 0 &&
+    if (IS_INTERRUPT_SENSOR_TYPE(P->snsType) && prefs_index >= 0 &&
         normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefs_index], Prefs.SNS_LIMIT_MIN[prefs_index])) {
       limitHigh = Prefs.SNS_LIMIT_MAX[prefs_index];
       limitLow = Prefs.SNS_LIMIT_MIN[prefs_index];
       Prefs.isUpToDate = false;
-      storeError("Type 200/220 limits were inverted; swapped high/low", ERROR_SENSOR_INVALID, true);
+      storeError("Presence/button limits were inverted; swapped high/low", ERROR_SENSOR_INVALID, true);
     }
 
     if (prefs_index >= 0) {
@@ -1466,7 +1582,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
     if (Sensors.isSensorOfType(P, "soil")) LEDs.LED_set_color_soil(P);
   #endif
 
-  // Successful local read refreshes the expiry clock; clear sticky expired.
+  // Successful local read refreshes the expiry clock. Critical sends the
+  // expired → fresh edge; Monitored does not send for that change alone.
+  if (P->expired && bitRead(P->Flags, 7)) bitWrite(P->Flags, 6, 1);
   P->expired = false;
 
   if (turnOffPinAtEnd) {
@@ -1843,6 +1961,15 @@ void initHardwareSensors() {
 
   // Call sensor-specific setup
   setupSensors();
+
+#ifdef _USEI2C
+  // AHTxx::begin() calls Stream::setTimeout(1). That is the readBytes wait, not
+  // the I2C engine. A 1 ms wait drops bytes when Wi-Fi interrupts land mid-read.
+  // OutdoorLighting then posts a hub error on every failed BMP or AHT sample.
+  Wire.setClock(100000L);
+  Wire.setTimeout(50);
+  Wire.setTimeOut(50);
+#endif
 
   // Powered sensors use negative snsPin encoding: turn their rails back OFF for low power.
   // ReadData will pulse them on around each poll.

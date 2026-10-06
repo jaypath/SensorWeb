@@ -9,11 +9,15 @@
 // Every env must set at least one to 1. Typical configs:
 //   Local sensor node:  _HAS_LOCAL_SENSORS=1  _IS_SERVER_HUB=0
 //   Weather/hub server: _HAS_LOCAL_SENSORS=0  _IS_SERVER_HUB=1
-//   Hybrid monitor hub: _HAS_LOCAL_SENSORS=1  _IS_SERVER_HUB=1  _MYTYPE=100
+//   Hybrid:             _HAS_LOCAL_SENSORS=1  _IS_SERVER_HUB=1
+//   Type 100 forces hybrid. Other servers (weatherlite 101, link hub 102) are
+//   hybrid when the env sets _HAS_LOCAL_SENSORS=1.
+//   Type 102 stores and pings only devices the user registered. Types 100 and 101
+//   still accept every device, including when they have aggregate sensors.
 //
-// _MYTYPE (runtime network identity) is separate from these compile-time roles.
-// Device types: 1–99 peripheral, 100–150 server. Sensor types 100–150 are server slots;
-// 200–255 are interrupt-driven sensors.
+// _MYTYPE (runtime network identity) is separate from these compile-time roles,
+// except type 100 forces hybrid and type 102 forces registered-only ingest.
+// Device types: 1–99 peripheral, 100–150 server. Sensor type numbers: src/sensors.hpp.
 
 #ifndef DEV_SERVER_TYPE_MIN
 #define DEV_SERVER_TYPE_MIN 100
@@ -21,20 +25,69 @@
 #ifndef DEV_SERVER_TYPE_MAX
 #define DEV_SERVER_TYPE_MAX 150
 #endif
-#ifndef SNS_SERVER_TYPE_MIN
-#define SNS_SERVER_TYPE_MIN 100
+// Server that ingests only devices registered on the link table (max 10).
+#ifndef DEV_TYPE_LINK_HUB
+#define DEV_TYPE_LINK_HUB 102
 #endif
-#ifndef SNS_SERVER_TYPE_MAX
-#define SNS_SERVER_TYPE_MAX 150
-#endif
-#ifndef SNS_INTERRUPT_TYPE_MIN
-#define SNS_INTERRUPT_TYPE_MIN 200
-#endif
+
+// Sensor types. The table in src/sensors.hpp is the source of truth.
+#define SNS_LEAK 101
+#define SNS_BINARY 102
+#define SNS_BINARY_INV 103
+#define SNS_PRESENCE 110
+#define SNS_BUTTON 111
+#define SNS_HVAC_CALL 120
+#define SNS_VALVE 121
+#define SNS_CLOCK 151
+#define SNS_NET_RSSI 152
+#define SNS_NET_FIRST 153
+#define SNS_NET_LAST 161
+#define SNS_TIMER_ON_H 162
+#define SNS_HVAC_TOTAL 163
+#define SNS_ACTUATOR_MIN 170
+#define SNS_ACTUATOR_MAX 219
+#define SNS_SWITCH 170
+#define SNS_COUNTDOWN 171
+#define SNS_COUNTDOWN_INV 172
+// Aggregate of linked sensors. No GPIO. Ruleset: avg, min, max, or any.
+// Optional :category and :indoor or :outdoor. Broadcast only when monitored.
+// A hub's own aggregate defaults to monitored and critical. A receiving hub
+// sets override 0b10000011 the first time it registers that sensor, which
+// forces flagged, monitored, and critical off.
+// Typing stays "actuator" unless every combined sensor is one kind, in which
+// case it is also that kind (temperature, humidity, pressure, distance, leak).
+#define SNS_AGGREGATE 173
+// Bryant Evolution, listen-only. 47 is outside the actuator range so poll
+// does not own it. 174 is the hydronic recommendation and does send.
+#define SNS_BRYANT_DEFROST 47
+#define SNS_BRYANT_RUN_COOL 48
+#define SNS_BRYANT_DAY_HEAT 49
+#define SNS_BRYANT_DAY_DEFROST 66
+#define SNS_BRYANT_DAY_COOL 67
+#define SNS_BRYANT_MODE 164
+#define SNS_BRYANT_OAT 165
+#define SNS_BRYANT_SETPOINT 166
+#define SNS_BRYANT_TEMP 167
+#define SNS_BRYANT_RH 168
+#define SNS_BRYANT_RUNTIME 169
+#define SNS_HYDRONIC_ZONE 174
+// min(actual - heat setpoint, 0). Stays an actuator, not a temperature.
+#define SNS_TEMP_GAP 175
+#define SNS_SERVER_TYPE_MIN 220
+#define SNS_SERVER_TYPE_MAX 254
+#define SNS_TYPE_EXTENDED 255
 
 #define IS_SERVER_DEVICE_TYPE(t) ((unsigned)(t) >= (unsigned)DEV_SERVER_TYPE_MIN && (unsigned)(t) <= (unsigned)DEV_SERVER_TYPE_MAX)
 #define IS_PERIPHERAL_DEVICE_TYPE(t) ((unsigned)(t) < (unsigned)DEV_SERVER_TYPE_MIN)
 #define IS_SERVER_SENSOR_TYPE(t) ((unsigned)(t) >= (unsigned)SNS_SERVER_TYPE_MIN && (unsigned)(t) <= (unsigned)SNS_SERVER_TYPE_MAX)
-#define IS_INTERRUPT_SENSOR_TYPE(t) ((unsigned)(t) >= (unsigned)SNS_INTERRUPT_TYPE_MIN)
+#define IS_ACTUATOR_SENSOR_TYPE(t) ((unsigned)(t) >= (unsigned)SNS_ACTUATOR_MIN && (unsigned)(t) <= (unsigned)SNS_ACTUATOR_MAX)
+#define IS_INTERRUPT_SENSOR_TYPE(t) ((unsigned)(t) == (unsigned)SNS_PRESENCE || (unsigned)(t) == (unsigned)SNS_BUTTON)
+#define IS_NETWORK_SENSOR_TYPE(t) ((unsigned)(t) >= (unsigned)SNS_NET_RSSI && (unsigned)(t) <= (unsigned)SNS_NET_LAST)
+#define IS_HVAC_RUNTIME_TYPE(t) ((unsigned)(t) == (unsigned)SNS_HVAC_CALL || (unsigned)(t) == (unsigned)SNS_HVAC_TOTAL)
+// Bryant minutes: current heat (169), defrost (47), cool (48), and the three daily totals.
+// Monitored and Critical stay off. The values stay on this device and on its SD history.
+#define IS_BRYANT_TIME_TYPE(t) ((unsigned)(t) == (unsigned)SNS_BRYANT_RUNTIME || (unsigned)(t) == (unsigned)SNS_BRYANT_DEFROST || (unsigned)(t) == (unsigned)SNS_BRYANT_RUN_COOL || (unsigned)(t) == (unsigned)SNS_BRYANT_DAY_HEAT || (unsigned)(t) == (unsigned)SNS_BRYANT_DAY_DEFROST || (unsigned)(t) == (unsigned)SNS_BRYANT_DAY_COOL)
+#define IS_EXTENDED_SENSOR_TYPE(t) ((unsigned)(t) == (unsigned)SNS_TYPE_EXTENDED)
 
 #ifdef _MYTYPE
 // Integer-only: these are used in #if. C casts are not legal in the preprocessor.
@@ -51,6 +104,22 @@
 
 #ifndef _IS_SERVER_HUB
 #define _IS_SERVER_HUB 0
+#endif
+
+// Type 100 is always a hybrid hub. A later -D of either flag does not turn that off.
+#if defined(_MYTYPE) && ((_MYTYPE) == 100)
+#undef _HAS_LOCAL_SENSORS
+#undef _IS_SERVER_HUB
+#define _HAS_LOCAL_SENSORS 1
+#define _IS_SERVER_HUB 1
+#endif
+
+#ifndef _HUB_REGISTERED_ONLY
+#if defined(_MYTYPE) && ((_MYTYPE) == DEV_TYPE_LINK_HUB)
+#define _HUB_REGISTERED_ONLY 1
+#else
+#define _HUB_REGISTERED_ONLY 0
+#endif
 #endif
 
 #if !_HAS_LOCAL_SENSORS && !_IS_SERVER_HUB
@@ -88,7 +157,7 @@
 #error "_USEWEATHERLITE requires _USESDCARD (receive/unpack weather package on SD)"
 #endif
 
-// Interrupt sensors (snsType 200–255): peripherals only.
+// Interrupt inputs (presence 110, button 111): peripherals only.
 // Implementation is in src/interrupt_triggers.hpp/.cpp when _USEINTERRUPT=1.
 #ifndef _USEINTERRUPT
 #define _USEINTERRUPT 0

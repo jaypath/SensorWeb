@@ -3,37 +3,33 @@
 
 #include <Arduino.h>
 
-// Espressif BLE Wi-Fi provisioning (WiFiProv / network_prov_scheme_ble).
-// Coexists with the SoftAP HTTP wizard: BLE only injects the same Prefs credentials.
-// Lifetime: starts at boot when credentials are missing; torn down on success or at
-// BLE_PROV_MAX_MS after boot (whichever first). BT stack memory is released on stop.
+// Espressif BLE Wi-Fi provisioning (network_prov_scheme_ble).
+// Runs only while the soft AP is up (STA lost). Stops when STA is usable again.
+// The controller is not released, so a later outage can advertise again.
+// Phone app: Espressif BLE Provisioning. Device name arborysnet-XXXXXX
+// (last six hex digits of the MAC). Proof of possession is the soft-AP password.
 
 #ifndef _USE_BLE_PROV
 #define _USE_BLE_PROV 0
 #endif
 
-#ifndef BLE_PROV_MAX_MS
-#define BLE_PROV_MAX_MS (30UL * 60UL * 1000UL)  // 30 minutes from boot
-#endif
-
-// Gate on ESP32 (framework define), not _USE32 — this header may be included before globals.hpp.
 #if defined(ESP32) && _USE_BLE_PROV
 
-/** Start BLE portal if unprovisioned and still inside the boot window. One-shot per boot. */
+/** Start BLE if the soft AP is up and advertising is not already running. */
 void bleProvisionBeginIfNeeded();
 
-/** Periodic: apply pending Prefs, enforce 30-minute teardown. */
+/** Apply credentials received over BLE, and match advertising to soft-AP state. */
 void bleProvisionService();
 
-/** Tear down BLE immediately (safe to call when not running). Releases BTDM/BLE RAM. */
+/** Stop advertising. Safe when not running. Does not release the controller. */
 void bleProvisionStop();
 
 bool bleProvisionIsActive();
 
-/** Proof-of-possession string for the Espressif phone app (stable per device). */
+/** Proof-of-possession string (same as the soft-AP password). */
 const char* bleProvisionPop();
 
-/** BLE service name (PROV_XXXXXX). Empty if not started. */
+/** BLE device name (arborysnet-XXXXXX). */
 const char* bleProvisionServiceName();
 
 #else

@@ -13,13 +13,5 @@ void SensorEffectors_onAlarmChange(uint8_t snsType, uint8_t snsID, double snsVal
   (void)snsID;
   (void)snsValue;
 
-  switch (snsType) {
-    case 73: // timer countdown DIO
-    case 75: // clock-window DIO
-    case 200: // RCWL daily count / recent activity
-    case 220: // button daily count / recent activity
-      break;
-    default:
-      break;
-  }
+  (void)snsType;
 }

@@ -27,7 +27,7 @@ static constexpr uint8_t WPKG_SEC_EVENT = 2;
 
 static constexpr uint8_t WPKG_FLAG_DATA_STALE = 0x01; // producer marks NOAA/data stale at pack time
 // All WeatherInfoOptimized time fields in the blob (hourBase, sunrise/sunset, lastUpdateT,
-// period start/end, alert times, component lastAttemptT, …) are UTC unix seconds.
+// pressureObservedAt, period start/end, alert times, component lastAttemptT, …) are UTC unix seconds.
 static constexpr uint8_t WPKG_FLAG_TIMES_UTC = 0x02;
 
 static constexpr uint16_t WEATHER_PKG_MAX_SECTIONS = 64;

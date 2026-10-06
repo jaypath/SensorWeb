@@ -14,77 +14,89 @@ struct ArborysDevType;
 struct ArborysSnsType;
 class Devices_Sensors;
 
-//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored, RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = flag changed since last read, RMB7 = this sensor is critical and monitored - alert if it expires after time limit specified)
+//  uint8_t Flags; //RMB0 = Flagged, RMB1 = Monitored (send on interval), RMB2=LowPower, RMB3-derived/calculated  value, RMB4 =  Outside sensor, RMB5 = 1 - too high /  0 = too low (only matters when bit0 is 1), RMB6 = send now, RMB7 = Critical: send on bounds or expiry change, either direction
 // Prefs.SNS_FLAGS is uint16_t: bits 0-7 mirror runtime Flags; bit 8 = auto-zero for scaled sensors (SNS_FLAG_BIT_AUTOZERO)
 #define SNS_FLAG_BIT_AUTOZERO 8
 
-  /*sens types
-//0 - not defined
-//1 - temp, DHT
-//2 - RH, DHT
-//3 - soil moisture, capacitative or Resistive
-//4 -  temp, AHT21
-//5 - RH, AHT21
-//6 - - ADS1115 reading NTC thermistor , requires _THERMISTOR_B0, _THERMISTOR_R0 (nominal resistance at 25C), _THERMISTOR_RKNOWN (resistance of resisor in series with NTC), _THERMISTOR_TKNOWN (temperature at known resistance), _THERMISTOR_VDD (supply voltage)   
-//7 - distance, HC-SR04 or tfluna 
-//8 - 
-//9 - BMP pressure
-//10 - BMP temp
-//11 - BMP altitude
-//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
-//13 - BMe pressure
-//14 - BMe temp
-//15 - BMe humidity
-//16 - BMe altitude
-//17 - BME680 temp
-18 - BME680 rh
-19 - BME680 air press
-20  - BME680 gas sensor
-21 - 
-30 -
+  /* Sensor types (uint8_t). This is the only type table. Device types are separate:
+     1-99 peripheral, 100-150 server (_MYTYPE / devType). Do not widen snsType.
+     makeSensorID packs type in 8 bits: (deviceIndex << 16) + (snsType << 8) + snsID.
 
-50 - HVAC, total heating time (use for a multizone system) (ie heat on)
-51 - HVAC, Heat zone 
-52 - HVAC, Heat fan  
-53 - HVAC, Heat pump on
-55 = HVAC, total cooling time
-56 = HVAC, AC/heatpump Compressor on
-57 = HVAC, AC/heatpump fan on
-58 = HVAC, dehumidifer on
-59 = HVAC, humidifier on
+     0      undefined / off
+     1-20   hardware sensors. Do not renumber.
+            1 DHT temp, 2 DHT RH, 3 soil, 4 AHT temp, 5 AHT RH,
+            6 ADS1115 NTC, 7 distance, 9 BMP pressure, 10 BMP temp, 11 BMP altitude,
+            12 pressure prediction, 13-16 BME, 17-20 BME680 (20 gas, kept even if unused)
+     21-59  more hardware-specific sensors (33-35 soil variants live here).
+            47 Bryant current defrost minutes. 48 current cool minutes.
+                49 daily heat minutes. These stay on this device.
+     60-98  generic voltage surrogates, not tied to one chip. 60-63 battery stay.
+            66 Bryant daily defrost minutes. 67 daily cool minutes. Not batteries.
+     99     voltage surrogate, unspecified
+     100-149 DIO stand-ins for a physical thing. 100 is the unspecified DIO.
+            101 leak (was 70). 102 binary, high=on (was 71). 103 binary, low=on (was 72).
+            110 human presence, IRQ (was 200). 111 momentary button, IRQ (was 220).
+            120 HVAC call. Name is AC, heat, or fan. Active-low (or a short sample of a
+                rippling optocoupler). snsValue is minutes on. Flag bit0 is on now.
+            121 solenoid / valve. Not an HVAC call, so HVAC total ignores it.
+                A voltage that means open/closed still uses this type.
+     150-169 calculated or remote. The name is the meaning. Permanent assignments:
+            151 clock, unix time (was 98)
+            152 WiFi RSSI (was 80). 153-161 network tests (were 81-89)
+            162 Timer_On_H. 1 while local time is inside [limitMin, limitMax), else 0.
+                0-23 = hour, -1 = dawn, -2 = dusk. Wraps midnight when on is after off.
+            163 HVAC total. Adds minutes while any type-120 call row is flagged.
+            164 Bryant outdoor operating mode. 165 outside °F. A fresh Bryant
+                outdoor frame, else the newest fresh temperature on a non-server
+                device (OAT checkboxes, or an outside-flagged temperature on a
+                registered peripheral), else the newest fresh outside temperature
+                on a registered weather server, preferring that server's outdoor
+                temperature aggregate. 166 heat setpoint °F. 167 Connex master °F.
+                168 Connex master RH. 169 current heat-pump run minutes, kept
+                through defrost. 47, 48, 49, 66, 67, and 169 are local only
+                (Monitored and Critical off). Daily totals reset at local midnight.
+                A reboot restores today's totals from the SD history.
+     170-219 actuators. 170 power switch (rule true → pin high). 171 countdown (was 73).
+            172 inverted countdown (was 74).
+            173 aggregate, no GPIO. Ruleset avg, min, max, or any. Optional
+            :category and :indoor or :outdoor (flag bit 4). Checked sensors are
+            the user's choice, including a type outside the group. With nothing
+            saved yet, a full hub averages that group. :outdoor keeps only
+            sensors flagged outside. Without it, those are left out. A saved
+            empty list stays NAN. An average drops a reading outside a physical
+            range, and for temperature, humidity, and pressure a reading more
+            than 2 standard deviations from the mean of the other plausible
+            values. Min, max, and any do not. A mixed average flags a discarded
+            reading. An average of one class leaves a bad member out, including
+            one outside range or far from the others, and alarms only from its
+            limits. Poll uses stored readings (send interval +
+            25%). All stale → NAN. Interval broadcast only when monitored (flag bit 1).
+            A request that names the sensor still returns it. Critical (bit 7)
+            sends when the value crosses a limit or the expired state changes,
+            in either direction, even if the sensor is not monitored.
+            Weather hubs use the
+            outdoor temperature, humidity, and pressure aggregates for the
+            outside conditions on the display.
+            174 hydronic recommendation, no GPIO. snsValue 1 recommends on.
+                It is sent upstream. It does not drive a zone valve.
+            175 temperature gap, no GPIO. min(actual - heat setpoint, 0).
+                At or above the setpoint the value is 0. Below it, the value is
+                negative degrees. A missing input is NAN. Ruleset gap:master,
+                gap:up, or gap:oat names the actual temperature. Not a temperature,
+                so an average does not fold the gap back in.
+     220-254 server sensor slots. Device type 100 (weather hub) is not a sensor type.
+     255    extension sentinel. snsType2 is not in the struct yet. Do not send 255.
+            When a wide type is added, the mesh packet and findSensor must carry it.
+            uint16_t is enough for that field.
 
-60 -  battery power
-61 - battery %
-62 - battery voltage, ads1115
-70 - leak yes/no (DIO; same pin/pull encoding as 71). Value HIGH=1 LOW=0. Alarms use Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN: value>MAX or value<MIN. MAX=0 MIN=0 → HIGH alarms; MAX=1 MIN=1 → LOW alarms; MAX=1 MIN=0 → never.
-71 - any binary DIO, 1=high/on, 0=low/off. snsPin is the GPIO (0-99 analog encoding or 200-299 digital). powerPin is pull config, not a rail: -9999/-1 ignore (INPUT, idle LOW); -100 INPUT_PULLDOWN idle LOW; -99 INPUT_PULLUP idle HIGH. Same Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN alarm rules as type 70.
-SendingInt 0 (any sensor) = transmit only on alarm-status change (Flags bit 6) or hub/user request; one send after first read so hubs can register the sensor.
-72 - any binary DIO, 0=high/on, 1=low/off. snsPin is the GPIO (0-99 analog encoding or 200-299 digital). powerPin is pull config, not a rail: -9999/-1 ignore (INPUT, idle LOW); -100 INPUT_PULLDOWN idle LOW; -99 INPUT_PULLUP idle HIGH. Same Prefs.SNS_LIMIT_MAX / SNS_LIMIT_MIN alarm rules as type 70.
-73 - timer countdown DIO OUTPUT. snsValue is remaining seconds (>0 → DIO HIGH, else LOW). Each poll subtracts poll_interval seconds (min 0). Flags bit0 mirrors DIO state. Poll 0 = never update. Default poll 1s.
-74 - inverted timer countdown DIO OUTPUT (same as 73 but opposite DIO polarity when implemented).
-75 - clock-window DIO OUTPUT. limitMin = on time, limitMax = off time (local hour 0–23; -1=dawn, -2=dusk via type-100 sunAck).
-     DIO HIGH while now is in [on, off) (wraps midnight if on>off). snsValue 0=LOW / 1=HIGH; Flags bit0 mirrors DIO. No IRQ.
-80-89 network monitor sensors (sns/power pins ignored)
-80 WiFi RSSI (dBm) from STRUCT_CORE I; snsID 1=current, 2=low, 3=high — universal, no _USENETWORKMONITOR
-81-89 network monitor tests (_USENETWORKMONITOR): 81 AP switch count, 82 local IP change count,
-83 DNS resolution (ms), 84 HTTP Tx failures, 85 gateway ping avg RTT (ms), 86 gateway ping jitter (ms),
-87 external ping avg RTT (ms), 88 external ping jitter (ms), 89 download speed (Mbps)
-98 - clock
-99 = any numerical value
-100-150 - server type sensors, to which other sensors will send their data
-100 - weather display server with local persistent storage (ie SD card)
-200-255 - interrupt-driven DIO sensors (_USEINTERRUPT=1). Implementation: src/interrupt_triggers.hpp/.cpp.
-     Poll interval: activity decimal refresh / daily reset; 0 = never run sensor update.
-     snsValue = daily integer count + .1 if triggered within last poll_interval, else .0.
-     Limits: fractional recent activity is HIGH. MAX≠0 MIN=0 → alarm while recent (default);
-     MAX≠0 MIN≠0 → alarm when idle; MAX=0 MIN=0 → never; MAX=0 MIN≠0 is swapped.
-200 - human presence (RCWL-0516). Rising edge IRQ. _PIN_ENABLE_RCWL (GPIO, driven HIGH at setup),
-     _RCWL_ASSOCIATED_SNS (prefs index of type 73 timer). Edges within poll_interval are ignored (no count/timer).
-     When Lights are on and remaining snsValue < 120, adds poll_interval+5 to Lights.
-220 - momentary button. Rising edge IRQ with debounce; falling edge ignored. _BUTTON_ASSOCIATED_SNS (prefs index).
-     If associated Flags bit0 is on → set associated snsValue=0 (not counted). If associated snsValue<=0 → arm to this
-     button's poll_interval (counted).
-*/
+     Presence 110: daily count + 0.1 if active within the poll interval. RCWL enable pin
+     _PIN_ENABLE_RCWL. Button 111: rising edge, debounce _INTERRUPT_DEBOUNCE_MS.
+     Shed lights are actuator 171. Link 0 is the presence prefs index, link 1 is the
+     button prefs index, and the actuator threshold is the motion-extend cap (120s).
+     Button rising: if the countdown is on, clear it (not counted). If it is off, arm it
+     to the button poll interval (counted). Motion while on and remaining under the cap
+     adds poll_interval+5 seconds.
+  */
 
 // Type 71 powerPin values (not a GPIO rail)
 #define SNS_DIO_PULLDOWN (-100)
@@ -256,6 +268,9 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false, bool uncalibrate
 // Type 200: nonzero limit = HIGH, zero = LOW. Swaps invalid MAX=0/MIN≠0. Returns true if swapped.
 bool normalizeHumanPresenceLimits(double& limitHigh, double& limitLow);
 void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag);
+// Physical range for a reading. category (temperature, humidity, pressure, ...) wins when set.
+// Types with no feasible range return true. NaN and infinity are never plausible.
+bool sensorReadingIsPlausible(uint8_t snsType, double value, const char* category = nullptr);
 bool sensorUsesScaling(uint8_t snsType);
 float readResistanceDivider(float R1, float Vsupply, float Vread);
 float readVoltageDivider(float R1, float R2, ArborysSnsType* P, byte avgN=1);
@@ -265,6 +280,13 @@ void serviceInterruptSensors();
 #endif
 double peak_to_peak(int16_t pin, int ms = 50);
 void initHardwareSensors();
+// Force one local-sensor pass at the end of setup. Registration stamps timeRead,
+// so the first loop would otherwise skip the poll and uplink the placeholder 0.
+// Returns how many sensors produced a usable sample.
+int8_t readLocalSensorsAtBoot();
+// False when this device has not yet produced a sample worth averaging:
+// never read, NaN, infinity, or a network test that has not run.
+bool localSensorReadyToSend(const ArborysSnsType* S);
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
 int8_t readAllSensors(bool forceRead=false);
 float readAnalogVoltage(ArborysSnsType* P, byte nsamps);

@@ -435,56 +435,7 @@ struct DeviceVal {
 */
 
 
-/*sens types
-//0 - not defined
-//1 - temp, DHT
-//2 - RH, DHT
-//3 - soil moisture, capacitative or Resistive
-//4 -  temp, AHT21
-//5 - RH, AHT21
-//6 - 
-//7 - distance, HC-SR04
-//8 - 
-//9 - BMP pressure
-//10 - BMP temp
-//11 - BMP altitude
-//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
-//13 - BMe pressure
-//14 - BMe temp
-//15 - BMe humidity
-//16 - BMe altitude
-//17 - BME680 temp
-18 - BME680 rh
-19 - BME680 air press
-20  - BME680 gas sensor
-21 - 
-30 -
-50 - any binary, 1=yes/true/on
-51 = any on/off switch
-52 = any yes/no switch
-53 = any 3 way switch
-54 = 
-55 - heat on/off {requires N DIO Pins}
-56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
-57 - a/c fan on/off
-58 - 
-60 -  battery power
-61 - battery %
-70 - leak sensor 
-98 - clock
-99 = any numerical value
-100-150 - server type sensors, to which other sensors will send their data
-100 = any server (receives data), disregarding subtype
-101 - weather display server with local persistent storage (ie SD card)
-102 = any weather server that has no persistent storage
-103 = any server with local persistent storage (ie SD card) that uploads data cloud storage
-104 = any server without local persistent storage that uploads data cloud storage
-200-255 - interrupt-driven sensors
-200 - human presence (mm-wave RCWL-0516); snsValue = +light sec remaining, or -motion-ignore sec remaining
-220 - momentary lights switch; snsValue same shared timer (+on / -ignore / 0 idle)
- 
-
-*/
+// Sensor types: src/sensors.hpp.
 
 //------------------
 // Now include headers that depend on the above type definitions

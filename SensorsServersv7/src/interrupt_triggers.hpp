@@ -8,21 +8,21 @@ struct ArborysSnsType;
 
 // Sensor families used by /SWITCHSTATE
 inline bool isSwitchStateOutputType(uint8_t snsType) {
-  return snsType >= 71 && snsType <= 79;
+  return snsType == SNS_SWITCH || snsType == SNS_COUNTDOWN || snsType == SNS_COUNTDOWN_INV;
 }
 inline bool isSwitchStateInterruptType(uint8_t snsType) {
-  return snsType >= 200;
+  return IS_INTERRUPT_SENSOR_TYPE(snsType);
 }
 
-// --- Type 75: clock-window DIO OUTPUT (no IRQ; used by Out32 etc.) ---
-// limitLow = on time, limitHigh = off time.
-// Spec: 0–23 = local hour, -1 = dawn, -2 = dusk. snsValue = 0 (LOW) or 1 (HIGH).
+// Clock window used by type 162 Timer_On_H. True while local time is inside
+// [on, off). Spec: 0-23 = hour, -1 = dawn, -2 = dusk. False if time is unknown.
+bool InterruptTriggers_inClockWindow(double limitLowOn, double limitHighOff);
+
+// Legacy clock-window pin driver. Timer_On_H does not use a pin.
 void InterruptTriggers_updateClockDio(ArborysSnsType* sensor, int8_t dioGpio,
                                      double limitLowOn, double limitHighOff);
 
-// Web SwitchState: set output for types 71–79.
-// Type 73/74: on → snsValue=seconds (countdown); off → snsValue=0. Auto logic still runs.
-// Type 75 (and other non-countdown outputs): timed force for `seconds` (1–255), then auto resumes.
+// Web SwitchState for type 170 (timed force) and 171/172 (write the countdown).
 // Returns false if rejected (bad args / unsupported).
 bool InterruptTriggers_webSetOutput(ArborysSnsType* sensor, bool on, uint8_t seconds);
 
@@ -48,20 +48,20 @@ void InterruptTriggers_serviceWebForces();
 #define _BUTTON_ASSOCIATED_SNS -1
 #endif
 
-// Attach CHANGE IRQ for type 200 (RCWL) / 220 (button). Type 73 is polled output only.
+// Attach CHANGE IRQ for presence (110) and button (111).
 void InterruptTriggers_setup(ArborysSnsType* sensor, int8_t irqGpio);
 
 // Process pending rising edges (debounce + associated-sensor updates). Call from loop.
 void serviceInterruptSensors();
 
-// Poll-path helpers for types 200/220 (daily reset + .0/.1 activity decimal).
+// Poll-path helpers for presence and button (daily reset + .0/.1 activity decimal).
 // pollIntervalSec == 0 means caller should skip (never update).
 void InterruptTriggers_updateCountSensor(ArborysSnsType* sensor, uint32_t pollIntervalSec);
 
-// Type 73: countdown by pollIntervalSec, drive DIO, set Flags bit0 to match DIO.
+// Type 171/172: countdown by pollIntervalSec, drive DIO, set Flags bit0 to match DIO.
 void InterruptTriggers_updateTimerOutput(ArborysSnsType* sensor, int8_t dioGpio, uint32_t pollIntervalSec);
 
-// Simulate a rising-edge interrupt action (e.g. web "push button") for types 200–255.
+// Simulate a rising edge (web "push button") for presence and button.
 bool InterruptTriggers_simulateRisingEdge(ArborysSnsType* sensor);
 
 void InterruptTriggers_isr(void* arg);

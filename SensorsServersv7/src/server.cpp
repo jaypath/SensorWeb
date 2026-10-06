@@ -2,8 +2,10 @@
 #include "server.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
+#include "agg_links.hpp"
 #if _HAS_LOCAL_SENSORS
 #include "interrupt_triggers.hpp"
+#include "actuators.hpp"
 #endif
 #ifdef _USENETWORKMONITOR
 #if _USENETWORKMONITOR > 0
@@ -27,6 +29,7 @@
 
 #include "BootSecure.hpp"
 #include "ble_provision.hpp"
+#include <Preferences.h>
 #include "AddESPNOW.hpp"
 #include "firmwareUpdate.hpp"
 #if _SUPABASE_RUNTIME
@@ -706,9 +709,10 @@ bool SendHTTPMessage(HTTPMessage& M) {
     if (M.httpCode == HTTPC_ERROR_READ_TIMEOUT || M.httpCode == HTTPC_ERROR_CONNECTION_LOST) {
       errType = ERROR_HTTP_TIMEOUT;
     }
-    storeError("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), errType, true);
     M.success = false;
     http.end();
+    // Close the client first. storeError on a peripheral opens another HTTP client.
+    storeError("SendHTTPMessage: Failed with code: " + String(M.httpCode) + " for " + String(M.url.get()), errType, true);
 
     return false;
   }
@@ -725,10 +729,10 @@ bool SendHTTPMessage(HTTPMessage& M) {
   if (serverSize == 0) {
     SerialPrint("SendHTTPMessage: FYI: No payload from " + String(M.url.get()), true);
     M.success = (M.responseDoc == nullptr);
+    http.end();
     if (!M.success) {
       storeError("SendHTTPMessage: Empty body for " + String(M.url.get()), ERROR_JSON_PARSE, true);
     }
-    http.end();
     return M.success;
   }
     
@@ -766,18 +770,18 @@ bool SendHTTPMessage(HTTPMessage& M) {
     if (!M.payload) {
       if (!M.initPayload(serverSize + 1)) {
         SerialPrint("SendHTTPMessage: Failed to initialize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), true);
-        storeError("SendHTTPMessage: Failed to initialize payload for " + String(M.url.get()), ERROR_HTTP_RESPONSE,true);
         M.success = false;
         http.end();
+        storeError("SendHTTPMessage: Failed to initialize payload for " + String(M.url.get()), ERROR_HTTP_RESPONSE,true);
         return false;
       }
     } else {
       if (M.payloadSize < serverSize) {
         if (!M.resizePayload(serverSize + 1)) {
           SerialPrint("SendHTTPMessage: Failed to resize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), true);
-          storeError("SendHTTPMessage: Failed to resize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), ERROR_HTTP_RESPONSE,true);
           M.success = false;
           http.end();
+          storeError("SendHTTPMessage: Failed to resize payload for " + String(M.url.get()) + " with size " + String(serverSize + 1), ERROR_HTTP_RESPONSE,true);
           return false;
         }
       }
@@ -808,6 +812,7 @@ bool SendHTTPMessage(HTTPMessage& M) {
     if (error) {
       M.success = false;
       SerialPrint("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), true);
+      http.end();
       storeError("SendHTTPMessage: Failed to deserialize JSON for " + String(M.url.get()) + " with error: " + String(error.c_str()), ERROR_JSON_PARSE, true);
 #ifdef _USESDCARD
       dumpHttpPayloadForDebug(M.payload.get(), payloadLen, M.url.get());
@@ -941,16 +946,192 @@ static String bssidToString(const uint8_t* bssid) {
   return String(buf);
 }
 
+// Last radio that actually carried traffic. RTC survives ESP.restart(), so the
+// WIFI FAILED reboot can rejoin this BSSID before it scans.
+static constexpr uint32_t WIFI_ANCHOR_MAGIC = 0x57494631u;
+struct WifiAnchorRtc {
+  uint32_t magic;
+  uint8_t bssid[6];
+  uint8_t channel;
+  uint8_t valid;
+};
+RTC_NOINIT_ATTR static WifiAnchorRtc s_wifiAnchorRtc;
+
+struct StaAnchor {
+  bool valid = false;
+  uint8_t channel = 0;
+  int32_t rssi = -127;
+  uint8_t bssid[6] = {0};
+};
+
+static bool loadRtcAnchor(StaAnchor& out) {
+  out = StaAnchor{};
+  if (s_wifiAnchorRtc.magic != WIFI_ANCHOR_MAGIC || !s_wifiAnchorRtc.valid) return false;
+  if (s_wifiAnchorRtc.channel < AP_WIFI_CHANNEL_MIN || s_wifiAnchorRtc.channel > AP_WIFI_CHANNEL_MAX) return false;
+  out.valid = true;
+  out.channel = s_wifiAnchorRtc.channel;
+  memcpy(out.bssid, s_wifiAnchorRtc.bssid, 6);
+  return true;
+}
+
+static void saveRtcAnchor(const StaAnchor& a) {
+  if (!a.valid) return;
+  s_wifiAnchorRtc.magic = WIFI_ANCHOR_MAGIC;
+  s_wifiAnchorRtc.channel = a.channel;
+  s_wifiAnchorRtc.valid = 1;
+  memcpy(s_wifiAnchorRtc.bssid, a.bssid, 6);
+}
+
+static StaAnchor captureLiveAnchor() {
+  StaAnchor a;
+  if (!wifiReadyForNetwork()) return a;
+  const uint8_t* bssid = WiFi.BSSID();
+  const int ch = WiFi.channel();
+  if (!bssid || ch < AP_WIFI_CHANNEL_MIN || ch > AP_WIFI_CHANNEL_MAX) return a;
+  a.valid = true;
+  a.channel = (uint8_t)ch;
+  a.rssi = WiFi.RSSI();
+  memcpy(a.bssid, bssid, 6);
+  saveRtcAnchor(a);
+  return a;
+}
+
+static bool joinAnchor(const StaAnchor& a) {
+  if (!haveWifiCredentials()) return false;
+  if (softApRunning()) {
+    // The portal owns the radio on channel 1. Do not retune it to chase STA.
+    return false;
+  }
+  #ifdef _USE32
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
+  if (WiFi.getMode() != WIFI_MODE_STA && WiFi.getMode() != WIFI_MODE_APSTA) {
+    WiFi.mode(WIFI_MODE_STA);
+  }
+  #endif
+  // Already on this BSSID and channel: begin() again would bounce the link.
+  if (a.valid && WiFi.status() == WL_CONNECTED) {
+    const uint8_t* live = WiFi.BSSID();
+    if (live && WiFi.channel() == (int)a.channel && memcmp(live, a.bssid, 6) == 0
+        && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+      WiFi.setSleep(WIFI_PS_NONE);
+      return true;
+    }
+  }
+  // begin() while still associated ignores the new channel and leaves the scan channel.
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect(false);
+    delay(20);
+    esp_task_wdt_reset();
+  }
+  if (a.valid) {
+    SerialPrint("WiFi: rejoining saved AP " + bssidToString(a.bssid) + " ch=" + String(a.channel), true);
+    WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD, a.channel, a.bssid, true);
+  } else {
+    SerialPrint("WiFi: no saved AP; joining SSID on channel 1", true);
+    WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD, AP_WIFI_CHANNEL_MIN);
+  }
+  WiFi.setSleep(WIFI_PS_NONE);
+  return true;
+}
+
+static bool waitStaReady(uint32_t timeoutMs) {
+  const uint32_t start = millis();
+  while ((millis() - start) < timeoutMs) {
+    esp_task_wdt_reset();
+    if (wifiReadyForNetwork()) return true;
+    delay(100);
+  }
+  return wifiReadyForNetwork();
+}
+
+// Active scan. The caller must copy the results before any WiFi.begin, which clears them.
+// priorOut receives the radio that was working before the scan, if any.
+static int16_t scanNetworksKeepSta(StaAnchor* priorOut) {
+  const StaAnchor prior = captureLiveAnchor();
+  if (priorOut) *priorOut = prior;
+  esp_task_wdt_reset();
+  const int16_t found = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
+  esp_task_wdt_reset();
+  return found;
+}
+
+// A scan or channel hop can leave WL_CONNECTED and the old IP while the radio sits
+// on the last channel it visited. That still counts as having left the saved AP.
+static bool staStillHome(const StaAnchor& prior) {
+  if (!prior.valid || !wifiReadyForNetwork()) return false;
+  if (WiFi.channel() != (int)prior.channel) return false;
+  const uint8_t* bssid = WiFi.BSSID();
+  return bssid && memcmp(bssid, prior.bssid, 6) == 0;
+}
+
+static void restoreAnchorIfDropped(const StaAnchor& prior) {
+  if (!prior.valid || staStillHome(prior)) return;
+  SerialPrint("WiFi left " + bssidToString(prior.bssid) + " ch=" + String(prior.channel)
+      + "; rejoining", true);
+  if (!joinAnchor(prior)) return;
+  // Do not return while the radio is still on the scan channel. The next
+  // capture would store that channel as the AP to use after a reboot.
+  if (!waitStaReady(15000) || !staStillHome(prior)) {
+    SerialPrint("WiFi: previous AP did not come back on ch=" + String(prior.channel), true);
+    if (WiFi.status() == WL_CONNECTED) WiFi.disconnect(false);
+    return;
+  }
+  captureLiveAnchor();
+}
+
+static void noteWifiFailPending() {
+  Preferences prefs;
+  if (!prefs.begin("wififail", false)) return;
+  prefs.putUChar("pending", 1);
+  prefs.putUChar("cause", (uint8_t)RESET_WIFI);
+  prefs.putString("msg", "WiFi failed");
+  prefs.end();
+}
+
+static void reportWifiFailToHubs() {
+  static bool s_settled = false;
+  if (s_settled || !wifiReadyForNetwork()) return;
+
+  Preferences prefs;
+  if (!prefs.begin("wififail", true)) return;
+  const uint8_t pending = prefs.getUChar("pending", 0);
+  prefs.end();
+  if (pending != 1) {
+    s_settled = true;
+    return;
+  }
+
+  // Hub IPs arrive after the device list is filled. Keep the NVS flag until one exists.
+  bool hubKnown = false;
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet || !IS_SERVER_DEVICE_TYPE(d->devType)) continue;
+    if (d->IP == IPAddress(0, 0, 0, 0) || d->IP == WiFi.localIP()) continue;
+    hubKnown = true;
+    break;
+  }
+  if (!hubKnown) return;
+
+  if (!prefs.begin("wififail", false)) return;
+  prefs.putUChar("pending", 0);
+  prefs.end();
+  s_settled = true;
+  // storeError on a peripheral forwards to hubs only while STA is up.
+  storeError("WiFi failed", ERROR_REBOOT_TRIGGERED, true);
+  SerialPrint("Reported WiFi failed to hubs", true);
+}
+
 // Scan for Prefs.WIFISSID and return the strongest AP. Does not persist the BSSID.
 static bool findBestApForConfiguredSsid(WifiApCandidate& out) {
   out = WifiApCandidate{};
   if (Prefs.WIFISSID[0] == '\0') return false;
 
-  esp_task_wdt_reset();
-  const int numNetworks = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
-  esp_task_wdt_reset();
+  StaAnchor prior;
+  const int numNetworks = scanNetworksKeepSta(&prior);
   if (numNetworks <= 0) {
     WiFi.scanDelete();
+    restoreAnchorIfDropped(prior);
     return false;
   }
 
@@ -967,24 +1148,100 @@ static bool findBestApForConfiguredSsid(WifiApCandidate& out) {
     }
   }
   WiFi.scanDelete();
+  // Leave a dropped link down if the caller is about to join a stronger AP.
+  // If this scan is the end of the decision, the caller rejoins prior.
+  if (!out.found) restoreAnchorIfDropped(prior);
   return out.found;
 }
 
-// Begin STA using the strongest BSSID for the configured SSID when a scan finds one.
-// Falls back to SSID-only begin() if the scan finds nothing. BSSID is not stored in Prefs.
+// Re-apply the soft-AP PSK if a STA begin/mode change left the beacon up but open
+// or with a different password. Phones report that as a wrong password.
+static void ensureSoftApCredentials() {
+  if (!softApRunning()) return;
+  // STA and the soft AP share one radio. Once the router link is up, leave that
+  // channel alone; maybeExitAPStationMode() removes the AP. Forcing channel 1 here
+  // would drop the link the wizard just brought up.
+  if (wifiReadyForNetwork()) return;
+
+  wifi_config_t conf;
+  memset(&conf, 0, sizeof(conf));
+  if (esp_wifi_get_config(WIFI_IF_AP, &conf) != ESP_OK) return;
+
+  const bool passwordOk = conf.ap.authmode == WIFI_AUTH_WPA2_PSK
+      && strncmp((const char*)conf.ap.password, AP_STATION_PASSWORD, sizeof(conf.ap.password)) == 0;
+  const bool channelOk = conf.ap.channel == AP_WIFI_CHANNEL_MIN;
+  char expectedSsid[33];
+  snprintf(expectedSsid, sizeof(expectedSsid), "SensorNet-%02X%02X%02X%02X%02X%02X",
+      getPROCIDByte(Prefs.PROCID, 0), getPROCIDByte(Prefs.PROCID, 1), getPROCIDByte(Prefs.PROCID, 2),
+      getPROCIDByte(Prefs.PROCID, 3), getPROCIDByte(Prefs.PROCID, 4), getPROCIDByte(Prefs.PROCID, 5));
+  const bool ssidOk = strncmp((const char*)conf.ap.ssid, expectedSsid, sizeof(conf.ap.ssid)) == 0;
+  if (passwordOk && ssidOk && channelOk) return;
+
+  static uint32_t s_lastReapplyMs = 0;
+  const uint32_t nowMs = millis();
+  if (s_lastReapplyMs != 0 && (nowMs - s_lastReapplyMs) < 15000UL) return;
+  s_lastReapplyMs = nowMs ? nowMs : 1;
+
+  SerialPrint("Soft AP password or SSID was cleared; reapplying", true);
+  String wifiID;
+  String wifiPWD;
+  IPAddress apIP;
+  connectSoftAP(&wifiID, &wifiPWD, &apIP);
+}
+
+// First join uses the saved BSSID and channel and does not scan.
+// The following join scans. If that scan finds nothing, or the new radio does not
+// come up, the saved radio is put back. Soft AP owns channel 1 and is not retuned.
+static bool s_bootAnchorTried = false;
+static uint32_t s_staDownSinceMs = 0;
+static uint32_t s_staDownRetryMs = 0;
+
 static void beginWifiPreferBestBssid() {
+  // Boot and the setup wizard call this. Runtime recovery does not: it rejoins the
+  // saved radio through joinAnchor(), which leaves a channel-1 portal untouched.
+  if (!s_bootAnchorTried) {
+    s_bootAnchorTried = true;
+    StaAnchor saved;
+    if (loadRtcAnchor(saved)) {
+      joinAnchor(saved);
+      return;
+    }
+  }
+
+  const StaAnchor prior = captureLiveAnchor();
   WifiApCandidate best;
   if (findBestApForConfiguredSsid(best) && best.channel > 0) {
+    const bool same = prior.valid && memcmp(best.bssid, prior.bssid, 6) == 0;
+    const int32_t improvement = prior.valid ? (best.rssi - prior.rssi) : WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB;
+    if (prior.valid && (same || improvement < WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB)) {
+      restoreAnchorIfDropped(prior);
+      return;
+    }
     SerialPrint("WiFi: joining strongest BSSID " + bssidToString(best.bssid) +
         " ch=" + String(best.channel) + " rssi=" + String(best.rssi) +
         " for SSID " + String(Prefs.WIFISSID), true);
+    // begin() while still associated ignores the new channel and leaves the scan channel.
+    WiFi.disconnect(false);
+    delay(20);
+    esp_task_wdt_reset();
     WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD, best.channel, best.bssid, true);
+    WiFi.setSleep(WIFI_PS_NONE);
+    if (!waitStaReady(15000) || WiFi.channel() != best.channel) {
+      SerialPrint("WiFi: new AP did not come up on ch=" + String(best.channel) + "; reverting", true);
+      if (prior.valid) joinAnchor(prior);
+      else {
+        StaAnchor saved;
+        if (loadRtcAnchor(saved)) joinAnchor(saved);
+      }
+    } else {
+      captureLiveAnchor();
+    }
     return;
   }
 
-  SerialPrint("WiFi: no BSSID scan match for " + String(Prefs.WIFISSID) +
-      "; joining by SSID only", true);
-  WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD);
+  SerialPrint("WiFi: no BSSID scan match for " + String(Prefs.WIFISSID), true);
+  if (prior.valid) joinAnchor(prior);
+  else joinAnchor(StaAnchor{});
 }
 
 static bool initialSetupRequirementsMet() {
@@ -1026,6 +1283,11 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
   syncDeviceIPFromWifi();
 
   if (connected) {
+    s_staDownSinceMs = 0;
+    s_staDownRetryMs = 0;
+    s_bootAnchorTried = false;
+    captureLiveAnchor();
+    reportWifiFailToHubs();
     maybeExitAPStationMode();
     return linkStatus;
   }
@@ -1064,9 +1326,7 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
     return linkStatus;
   }
 
-  // Runtime: ESP-IDF auto-reconnect handles brief STA drops. Associated-without-IP is
-  // handled by maybeRecoverWifiWithoutIp() (every loop). After WIFI_DOWN_AP_THRESHOLD_SEC
-  // of continuous failure, open soft-AP so credentials can be updated; keep AP up until STA recovers.
+  // No saved password: the soft AP is the only way in.
   if (!haveWifiCredentials()) {
     if (!softApRunning()) {
       enterAPStationMode();
@@ -1074,14 +1334,30 @@ int8_t CheckWifiStatus(WifiCheckMode mode) {
     return linkStatus;
   }
 
-  maybeRecoverWifiWithoutIp();
+  // Boot already opened the portal because the saved credentials did not connect.
+  // Leave it on channel 1. Do not scan, rejoin, or reboot over the top of it.
+  if (softApRunning()) return linkStatus;
 
-  if (I.wifiDownSince && isTimeValid((uint32_t)utcNow())
-      && (utcNow() - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC)) {
-    if (!softApRunning()) {
-      SerialPrint("WiFi down > " + String(WIFI_DOWN_AP_THRESHOLD_SEC) + "s; entering AP mode", true);
-      enterAPStationMode();
-    }
+  // Saved password: rejoin the last radio. Do not open the soft AP and do not scan.
+  maybeRecoverWifiWithoutIp();
+  if (wifiReadyForNetwork()) return measureWifiLinkStatus();
+
+  const uint32_t nowMs = millis();
+  if (s_staDownSinceMs == 0) s_staDownSinceMs = nowMs ? nowMs : 1;
+  const bool downLongByClock = I.wifiDownSince && isTimeValid((uint32_t)utcNow())
+      && (utcNow() - I.wifiDownSince >= WIFI_DOWN_AP_THRESHOLD_SEC);
+  const bool downLongByMillis = (nowMs - s_staDownSinceMs) >= (WIFI_DOWN_AP_THRESHOLD_SEC * 1000UL);
+  if (downLongByClock || downLongByMillis) {
+    noteWifiFailPending();
+    controlledReboot("WiFi failed", RESET_WIFI, true);
+    return linkStatus;
+  }
+
+  if (s_staDownRetryMs == 0 || (nowMs - s_staDownRetryMs) >= (WIFI_AP_STA_RECONNECT_SEC * 1000UL)) {
+    s_staDownRetryMs = nowMs ? nowMs : 1;
+    StaAnchor saved;
+    if (!loadRtcAnchor(saved)) saved = StaAnchor{};
+    joinAnchor(saved);
   }
 
   return linkStatus;
@@ -1115,13 +1391,8 @@ int16_t tryWifi(uint16_t delayms, bool checkCredentials) {
   // Configure WiFi for WPA2/WPA3 compatibility
   // This helps with mixed WPA2/WPA3 networks (transition mode)
   WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
-  
-  // Set WiFi security preferences for WPA2/WPA3 compatibility
-  // WIFI_AUTH_WPA2_PSK = WPA2 only
-  // WIFI_AUTH_WPA3_PSK = WPA3 only  
-  // WIFI_AUTH_WPA2_WPA3_PSK = WPA2/WPA3 mixed (transition mode) - preferred for compatibility
-  // Note: The WiFi.begin() call will automatically negotiate, but we can set preferences
+  // Credentials live in Prefs. Do not store STA/AP config in WiFi NVS (persistent defaults true on this core).
+  WiFi.persistent(false);
   #endif
 
   // Scan for strongest BSSID of this SSID, then join it (not persisted).
@@ -1176,6 +1447,7 @@ int16_t connectWiFi(uint8_t retryLimit, uint16_t tryTimeoutMs) {
 
 void startWifiConnectAsync() {
   if (!haveWifiCredentials()) return;
+  if (softApRunning()) return;
   // Already associated / usable — do not re-issue WiFi.begin (can bounce soft-AP in APSTA).
   if (wifiReadyForNetwork()) return;
   // Time-debounce begin(); do NOT gate on WL_IDLE_STATUS — on Arduino-ESP32 3.x that
@@ -1189,8 +1461,9 @@ void startWifiConnectAsync() {
   }
 
   #ifdef _USE32
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
+  // Auto-reconnect scans while the STA is down and breaks soft-AP authentication.
+  WiFi.setAutoReconnect(!softApRunning());
+  WiFi.persistent(false);
   #endif
   // Preserve AP+STA if soft-AP is already up; never force a mode flip here.
   if (softApRunning()) {
@@ -1200,16 +1473,17 @@ void startWifiConnectAsync() {
   } else if (WiFi.getMode() != WIFI_MODE_STA && WiFi.getMode() != WIFI_MODE_APSTA) {
     WiFi.mode(WIFI_MODE_STA);
   }
-  beginWifiPreferBestBssid();
-  WiFi.setSleep(WIFI_PS_NONE);
+  StaAnchor saved;
+  if (!loadRtcAnchor(saved)) saved = StaAnchor{};
+  joinAnchor(saved);
   s_lastBeginMs = nowMs;
-  SerialPrint("startWifiConnectAsync: non-blocking STA reconnect started", true);
+  SerialPrint("startWifiConnectAsync: rejoin saved AP started", true);
 }
 
 void maybeRecoverWifiWithoutIp() {
   if (!haveWifiCredentials()) return;
-  // Avoid bouncing STA while someone is using the soft-AP portal.
-  if (softApRunning() && apStationUserActive()) return;
+  // Soft AP is channel 1 with the portal password. Do not disconnect or scan over it.
+  if (softApRunning()) return;
 
   static uint32_t s_zeroIpSinceMs = 0;
   static uint32_t s_lastRecoverMs = 0;
@@ -1223,7 +1497,7 @@ void maybeRecoverWifiWithoutIp() {
     s_beginAfterDisconnectMs = 0;
     #ifdef _USE32
     WiFi.setAutoReconnect(true);
-    WiFi.persistent(true);
+    WiFi.persistent(false);
     #endif
     if (softApRunning()) {
       if (WiFi.getMode() != WIFI_MODE_APSTA) {
@@ -1232,9 +1506,10 @@ void maybeRecoverWifiWithoutIp() {
     } else if (WiFi.getMode() != WIFI_MODE_STA && WiFi.getMode() != WIFI_MODE_APSTA) {
       WiFi.mode(WIFI_MODE_STA);
     }
-    beginWifiPreferBestBssid();
-    WiFi.setSleep(WIFI_PS_NONE);
-    SerialPrint("maybeRecoverWifiWithoutIp: WiFi.begin after disconnect", true);
+    StaAnchor saved;
+    if (!loadRtcAnchor(saved)) saved = StaAnchor{};
+    joinAnchor(saved);
+    SerialPrint("maybeRecoverWifiWithoutIp: rejoin after disconnect", true);
     return;
   }
 
@@ -1266,7 +1541,8 @@ void maybeRecoverWifiWithoutIp() {
   if (I.wifiFailCount < 255) I.wifiFailCount++;
 
   if (I.wifiFailCount >= WIFI_ZERO_IP_REBOOT_AFTER) {
-    controlledReboot("WiFi associated without IP; recovery exhausted", RESET_WIFI, true);
+    noteWifiFailPending();
+    controlledReboot("WiFi failed", RESET_WIFI, true);
     return;
   }
 
@@ -1284,11 +1560,13 @@ void maybeOptimizeWifiBssid() {
 
   if (!haveWifiCredentials()) return;
   if (!wifiReadyForNetwork()) return;
+  if (softApRunning()) return;
   if (!isTimeValid((uint32_t)utcNow())) return;
 
-  // Start the 30-minute clock on first eligible call; do not rescan immediately after boot connect.
+  // Start the 180-minute clock on first eligible call; do not rescan immediately after boot connect.
   if (s_lastOptimizeTime == 0) {
     s_lastOptimizeTime = utcNow();
+    captureLiveAnchor();
     return;
   }
   if (utcNow() >= s_lastOptimizeTime
@@ -1297,43 +1575,46 @@ void maybeOptimizeWifiBssid() {
   }
   s_lastOptimizeTime = utcNow();
 
-  const uint8_t* currentBssid = WiFi.BSSID();
-  if (!currentBssid) {
-    SerialPrint("WiFi BSSID optimize: no current BSSID; skipping", true);
+  const StaAnchor prior = captureLiveAnchor();
+  if (!prior.valid) {
+    SerialPrint("WiFi BSSID optimize: no current AP; skipping", true);
     return;
   }
-
-  uint8_t currentCopy[6];
-  memcpy(currentCopy, currentBssid, 6);
-  const int32_t currentRssi = WiFi.RSSI();
+  if (isRssiValid(prior.rssi) && prior.rssi > WIFI_BSSID_OPTIMIZE_SKIP_ABOVE_DB) {
+    SerialPrint("WiFi BSSID optimize: rssi=" + String(prior.rssi) + " is fine; not searching", true);
+    return;
+  }
 
   WifiApCandidate best;
   if (!findBestApForConfiguredSsid(best)) {
     SerialPrint("WiFi BSSID optimize: scan found no APs for " + String(Prefs.WIFISSID), true);
+    restoreAnchorIfDropped(prior);
     return;
   }
 
-  const bool sameAp = (memcmp(best.bssid, currentCopy, 6) == 0);
-  if (sameAp) {
-    SerialPrint("WiFi BSSID optimize: already on strongest AP " +
-        bssidToString(best.bssid) + " rssi=" + String(best.rssi), true);
+  const bool sameAp = (memcmp(best.bssid, prior.bssid, 6) == 0);
+  const int32_t improvement = best.rssi - prior.rssi;
+  if (sameAp || improvement < WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB) {
+    SerialPrint("WiFi BSSID optimize: keeping " + bssidToString(prior.bssid) +
+        " ch=" + String(prior.channel), true);
+    restoreAnchorIfDropped(prior);
     return;
   }
 
-  const int32_t improvement = best.rssi - currentRssi;
-  if (improvement < WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB) {
-    SerialPrint("WiFi BSSID optimize: stronger AP " + bssidToString(best.bssid) +
-        " rssi=" + String(best.rssi) + " only +" + String(improvement) +
-        " dB vs current " + bssidToString(currentCopy) +
-        " rssi=" + String(currentRssi) + "; keeping current", true);
-    return;
-  }
-
-  SerialPrint("WiFi BSSID optimize: roaming " + bssidToString(currentCopy) +
-      " rssi=" + String(currentRssi) + " -> " + bssidToString(best.bssid) +
+  SerialPrint("WiFi BSSID optimize: roaming " + bssidToString(prior.bssid) +
+      " rssi=" + String(prior.rssi) + " -> " + bssidToString(best.bssid) +
       " rssi=" + String(best.rssi) + " ch=" + String(best.channel), true);
+  WiFi.disconnect(false);
+  delay(20);
+  esp_task_wdt_reset();
   WiFi.begin((char*)Prefs.WIFISSID, (char*)Prefs.WIFIPWD, best.channel, best.bssid, true);
   WiFi.setSleep(WIFI_PS_NONE);
+  if (!waitStaReady(15000) || WiFi.channel() != best.channel) {
+    SerialPrint("WiFi BSSID optimize: new AP did not come up on ch=" + String(best.channel) + "; reverting", true);
+    joinAnchor(prior);
+  } else {
+    captureLiveAnchor();
+  }
 }
 
 bool connectUDP() {
@@ -1439,6 +1720,11 @@ namespace {
     }
 
     SerialPrint(String("AP mode: channel scan ") + (found ? "found server" : "no server"), true);
+    // The hop leaves the radio off channel 1. Put the portal back, password included.
+    String wifiID;
+    String wifiPWD;
+    IPAddress apIP;
+    connectSoftAP(&wifiID, &wifiPWD, &apIP);
     return found;
   }
 
@@ -1512,6 +1798,7 @@ void enterAPStationMode() {
   }
 
   server.begin();
+  WiFi.setAutoReconnect(false);
 
   I.apLastClientActivity = 0;
   I.apLastChannelScanTime = 0;
@@ -1542,19 +1829,16 @@ void enterAPStationMode() {
 }
 
 void maybeExitAPStationMode() {
-  if (!softApRunning()) return;
+  // Mode bits only. softAPdisconnect() enables the AP while clearing it, so never call it
+  // unless the driver already reports AP or AP+STA. A zero soft-AP IP still counts.
+  const wifi_mode_t mode = WiFi.getMode();
+  if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) return;
   // Soft-AP is the recovery surface while router STA is down — only tear it down
   // once STA is actually usable. (Previously this exited whenever setup was finalized,
   // which caused AP start/stop thrashing every loop while WiFi was failed.)
   if (!wifiReadyForNetwork()) return;
   if (!I.initialSetupFinalized) return;
   if (!initialSetupRequirementsMet()) return;
-
-  #if _I_AM_PERIPHERAL
-  // Peripherals keep APSTA while no live server so users can reach the debug portal
-  // even when STA WiFi is fine but hubs are unreachable / all expired.
-  if (!Sensors.hasLiveServer(utcNow())) return;
-  #endif
 
   if (I.initialSetupExitPending) {
     if (WiFi.softAPgetStationNum() > 0) return;
@@ -1565,23 +1849,9 @@ void maybeExitAPStationMode() {
   exitAPStationMode();
 }
 
-#if _I_AM_PERIPHERAL
-void servicePeripheralServerApMode() {
-  const bool liveServer = Sensors.hasLiveServer(utcNow());
-  if (!liveServer) {
-    if (!softApRunning()) {
-      SerialPrint("No live server (none registered or all expired); entering APSTA for debug access", true);
-      enterAPStationMode();
-    }
-    return;
-  }
-  // Server contact restored — drop soft-AP if STA/setup otherwise allow it.
-  maybeExitAPStationMode();
-}
-#endif
-
 void exitAPStationMode() {
-  if (softApRunning()) {
+  const wifi_mode_t mode = WiFi.getMode();
+  if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
     WiFi.softAPdisconnect(true);
     SerialPrint("exitAPStationMode: soft AP stopped, STA active", true);
   }
@@ -1597,6 +1867,7 @@ void exitAPStationMode() {
   s_apChannelScanGotResponse = false;
 
   updateWifiChannel();
+  WiFi.setAutoReconnect(true);
 
   #ifdef _USEUDP
   if (wifiReadyForNetwork()) {
@@ -1608,6 +1879,7 @@ void exitAPStationMode() {
 void serviceAPStationMode() {
   if (!softApRunning()) return;
 
+  ensureSoftApCredentials();
   maybeExitAPStationMode();
   if (!softApRunning()) return;
 
@@ -1621,30 +1893,6 @@ void serviceAPStationMode() {
 
   if (shouldRunApChannelScan()) {
     runApModeChannelScan();
-  }
-
-  if (!haveWifiCredentials()) return;
-
-  const bool firstCheck = (I.apLastReconnectCheckTime == 0 && s_apLastReconnectMillis == 0);
-  const bool dueByTime = isTimeValid((uint32_t)utcNow()) && I.apLastReconnectCheckTime != 0
-      && (utcNow() - I.apLastReconnectCheckTime >= WIFI_AP_STA_RECONNECT_SEC);
-  const bool dueByMillis = (millis() - s_apLastReconnectMillis) >= (WIFI_AP_STA_RECONNECT_SEC * 1000UL);
-  const bool due = firstCheck || dueByTime || (!isTimeValid((uint32_t)utcNow()) && dueByMillis)
-      || (isTimeValid((uint32_t)utcNow()) && I.apLastReconnectCheckTime == 0 && dueByMillis);
-  if (!due) return;
-
-  const bool clientActiveSinceLastCheck = !firstCheck
-      && isTimeValid(I.apLastClientActivity)
-      && I.apLastClientActivity >= I.apLastReconnectCheckTime;
-
-  s_apLastReconnectMillis = millis();
-  if (isTimeValid((uint32_t)utcNow())) {
-    I.apLastReconnectCheckTime = utcNow();
-  }
-
-  // Retry known credentials periodically; keep soft-AP up until STA recovers.
-  if (!clientActiveSinceLastCheck) {
-    startWifiConnectAsync();
   }
 }
 
@@ -1751,6 +1999,10 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   snprintf((char*)Prefs.KEYS.ESPNOW_KEY, sizeof(Prefs.KEYS.ESPNOW_KEY), "%s", lmk_key.c_str());
   Prefs.HAVECREDENTIALS = true;
   Prefs.isUpToDate = false;
+  // The saved BSSID belongs to the previous network. Scan for this SSID.
+  s_wifiAnchorRtc.magic = 0;
+  s_wifiAnchorRtc.valid = 0;
+  s_bootAnchorTried = true;
 
   // SoftAP/HTTP path won — free BLE immediately so STA + ESP-NOW are not sharing the radio with BT.
   bleProvisionStop();
@@ -1770,6 +2022,14 @@ bool connectToWiFi(const String& ssid, const String& password, const String& lmk
   }
   
   SerialPrint("WiFi connection failed", true);
+  if (!softApRunning()) {
+    enterAPStationMode();
+  } else {
+    String wifiID;
+    String wifiPWD;
+    IPAddress apIP;
+    connectSoftAP(&wifiID, &wifiPWD, &apIP);
+  }
   return false;
 }
 
@@ -2638,49 +2898,14 @@ void apiScanWiFi() {
     tft.println("Scanning networks...");
     tft.setTextColor(TFT_WHITE);
     #endif
-  
-  // ESP32 cannot scan while connected to a network in STA mode
-  // We need to temporarily disconnect or switch to AP+STA mode
-  // IMPORTANT: Don't disconnect if client might be connected via WiFi - send response first!
-  #ifdef _USE32
-    bool wasConnected = (WiFi.status() == WL_CONNECTED);
-    String savedSSID = "";
-    String savedPassword = "";
-    wifi_mode_t originalMode = WiFi.getMode();
-    bool needToDisconnect = false;
-    
-    if (wasConnected) {
-      // Save current connection info
-      savedSSID = WiFi.SSID();
-      savedPassword = WiFi.psk();
-      
-      // Switch to AP+STA mode to allow scanning while maintaining AP
-      if (originalMode != WIFI_MODE_APSTA) {
-        WiFi.mode(WIFI_MODE_APSTA);
-        delay(100);
-        // In AP+STA mode, we can scan without disconnecting
-        // The scan will work even if STA is connected
-        needToDisconnect = false;
-      } else {
-        // Already in AP+STA mode - can scan without disconnecting
-        needToDisconnect = false;
-      }
-    } else {
-      // Not connected, but ensure we're in a mode that allows scanning
-      if (originalMode == WIFI_MODE_AP) {
-        WiFi.mode(WIFI_MODE_APSTA);
-        delay(100);
-      }
-      needToDisconnect = false;
-    }
-    
-    // Note: We don't disconnect here to avoid breaking HTTP connections
-    // Scanning works in AP+STA mode even when STA is connected
-  #endif
-  
-  // Perform WiFi scan
-  int numNetworks = WiFi.scanNetworks(false, true); // async=false, show_hidden=true
-  
+
+  // Stay in the current mode. If the scan drops a working STA, rejoin that same AP.
+  // Restore the portal only after the results are copied out; restarting the AP
+  // clears the scan list.
+  const bool apWasUp = softApRunning();
+  StaAnchor scanPrior;
+  int numNetworks = scanNetworksKeepSta(&scanPrior);
+
   // Wait for scan to complete (if async was false, this should be immediate)
   if (numNetworks < 0) {
     // Scan might be in progress, wait a bit
@@ -2706,10 +2931,17 @@ void apiScanWiFi() {
   }
   json += "]}";
   
-  // Clean up scan results
+  // Clean up scan results, then put the portal back on channel 1 with its password.
   WiFi.scanDelete();
-  
-  // Send response BEFORE reconnecting/disconnecting to avoid breaking HTTP connection
+  if (apWasUp) {
+    String wifiID;
+    String wifiPWD;
+    IPAddress apIP;
+    connectSoftAP(&wifiID, &wifiPWD, &apIP);
+  } else {
+    restoreAnchorIfDropped(scanPrior);
+  }
+
   if (numNetworks == 0 || count == 0) {
     #ifdef _USETFT
     tft.setTextColor(TFT_RED);
@@ -2726,23 +2958,6 @@ void apiScanWiFi() {
     #endif
     server.send(200, "application/json", json);
   }
-  
-  // Now reconnect/disconnect AFTER sending the response
-  #ifdef IGNOREME //don't reconnect to original network
-    // Reconnect to original network if we were connected
-    if (wasConnected && savedSSID.length() > 0) {
-      SerialPrint("Reconnecting to " + savedSSID, true);
-      WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
-      // Restore original mode if it wasn't APSTA
-      if (originalMode != WIFI_MODE_APSTA) {
-        delay(1000); // Give time for connection attempt
-        WiFi.mode(originalMode);
-      }
-    } else if (!wasConnected && originalMode != WIFI_MODE_APSTA) {
-      // Restore original mode if we changed it
-      WiFi.mode(originalMode);
-    }
-  #endif
 }
 
 /**
@@ -3909,6 +4124,11 @@ void serviceWeatherPackagePush(bool minuteTick) {
   if (!wifiReadyForNetwork()) return;
   if (!isTimeValid((uint32_t)utcNow())) return;
 
+  // A size-mismatched package is deleted at boot. If Wi-Fi or the clock was not
+  // ready then, finish the NOAA fetch and rewrite on this minute instead of the
+  // hourly push.
+  if (WeatherData.recoverCorruptWeatherPackage(false) == 2) return;
+
   static uint32_t nextPushDue = 0;
   static int16_t pushDevIndex = -1; // -1 idle, else scanning devices
 
@@ -4012,6 +4232,50 @@ void handleTIMEUPDATE() {
 }
 
 
+#if _IS_SERVER_HUB
+static String csvDeviceField(const char* text) {
+  String s = text ? String(text) : String();
+  if (s.indexOf(',') < 0 && s.indexOf('"') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0) return s;
+  s.replace("\"", "\"\"");
+  return "\"" + s + "\"";
+}
+
+// Inventory for get_IP_from_hub. Live means this hub heard the device within 30 minutes.
+// Sensor expired flags are a separate clock and are not used here.
+static bool deviceHeardRecently(const ArborysDevType* d, int16_t index) {
+  if (!d) return false;
+  if (index == I.MY_DEVICE_INDEX) return true;
+  if (d->dataReceived == 0) return false;
+  const uint32_t now = (uint32_t)utcNow();
+  if (!isTimeValid(now) || now < d->dataReceived) return true;
+  return (now - d->dataReceived) <= PERIPH_SERVER_STALE_SEC;
+}
+
+void handleDEVICES() {
+  const bool named = server.hasArg("name");
+  const String want = named ? server.arg("name") : String();
+  String csv;
+  bool found = false;
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet || d->devName[0] == '\0') continue;
+    if (named && want != String(d->devName)) continue;
+    found = true;
+    csv += csvDeviceField(d->devName);
+    csv += ",";
+    csv += d->IP.toString();
+    csv += deviceHeardRecently(d, i) ? ",ok," : ",exp,";
+    csv += String(d->dataReceived);
+    csv += "\n";
+  }
+  if (named && !found) {
+    server.send(404, "text/plain", "not found");
+    return;
+  }
+  server.send(200, "text/csv", csv);
+}
+#endif
+
 void handleSTATUS() {
   //registerHTTPMessage("STATUS");
   WEBHTML.clear();
@@ -4057,7 +4321,11 @@ void handleSTATUS() {
     WEBHTML += "<br>";
   }
   if (t == WIFI_MODE_APSTA || t == WIFI_MODE_AP) {
-    WEBHTML += "AP: " + WiFi.softAPIP().toString() + " clients: " + String(WiFi.softAPgetStationNum()) + "<br>";
+    WEBHTML += "AP: " + WiFi.softAPSSID() + " @ " + WiFi.softAPIP().toString()
+        + " clients: " + String(WiFi.softAPgetStationNum()) + "<br>";
+  }
+  if (bleProvisionIsActive()) {
+    WEBHTML += "BLE: " + String(bleProvisionServiceName()) + " (PoP = AP password)<br>";
   }
   WEBHTML += "RSSI: " + formatRssiHtml(I.RSSIcurrent) + "</p>";
   serverTextFlush(true);
@@ -4158,7 +4426,7 @@ static String formatArborysDeviceFirmware(const ArborysDevType* device) {
 }
 
 // Marks: * if any sensor is flagged (Flags bit0 usable); (exp) if expired and critical bit usable.
-// Remote OverrideFlags ignore the matching Flags bit; local sensors never use OverrideFlags.
+// Remote OverrideFlags force those flag bits to 0. Local sensors never use OverrideFlags.
 static void collectDeviceViewerNameMarks(bool deviceFlagged[NUMDEVICES], bool deviceExpired[NUMDEVICES]) {
   for (int16_t di = 0; di < NUMDEVICES; di++) {
     deviceFlagged[di] = false;
@@ -4216,7 +4484,7 @@ static void appendAllDevicesFirmwareTable() {
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"/?devIndex=" + String(di) + "\">" + formatDeviceViewerName(d, deviceFlagged[di], deviceExpired[di], false) + "</a></td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\"><a href=\"http://" + d->IP.toString() + "\" target=\"_blank\">" + d->IP.toString() + "</a></td>";
     WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + String(d->devType) + "</td>";
-    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(d) + "</td>";
+    WEBHTML = WEBHTML + "<td style=\"padding: 8px; border: 1px solid #ddd;\">" + formatArborysDeviceFirmware(d) + firmwareTransferStatusForDevice(d->devName) + "</td>";
     WEBHTML = WEBHTML + "</tr>";
     serverTextFlush(true);
   }
@@ -4404,8 +4672,10 @@ static void appendSensorTableOverrideConfigCell(int16_t j, ArborysSnsType* senso
   WEBHTML = WEBHTML + "<label style=\"font-weight: bold; display: block; margin-bottom: 4px;\">OverrideFlags:</label>";
   WEBHTML = WEBHTML + "<div style=\"display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-left: 10px;\">";
   uint8_t currentOverrideFlags = sensor->OverrideFlags;
-  // Same RMB layout as Flags; checked bit = ignore that Flags bit for remotes
-  const char* overrideFlagNames[] = {"Flagged", "Monitored", "LowPower", "Derived/Calc", "Outside", "High/Low", "Changed", "Critical"};
+  // A checked bit forces that flag to 0, whatever the sensor sent.
+  // Monitored after that opens the header and can open the icon boxes.
+  // Critical after that opens the header and the 1.05× expiry recheck, and joins icon boxes already open.
+  const char* overrideFlagNames[] = {"Clear flagged", "Clear monitored", "Clear low power", "Clear derived", "Clear outside", "Clear high/low", "Clear changed", "Clear critical"};
   for (int i = 0; i < 8; i++) {
     WEBHTML = WEBHTML + "<label style=\"display: flex; align-items: center; gap: 4px;\">";
     WEBHTML = WEBHTML + "<input type=\"checkbox\" name=\"override_flag_bit" + String(i) + "\" value=\"1\"";
@@ -5588,11 +5858,15 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP) {
   } 
   SerialPrint("Config for soft AP set", true);
   
-  if (!WiFi.softAP(wifiID->c_str(), wifiPWD->c_str())) {
+  // Channel 1 is the ESP-NOW home channel. A shared-radio STA scan was moving this
+  // beacon mid-handshake, and phones reported that as a wrong password.
+  const int apChannel = AP_WIFI_CHANNEL_MIN;
+  if (!WiFi.softAP(wifiID->c_str(), wifiPWD->c_str(), apChannel, 0, 4, false,
+      WIFI_AUTH_WPA2_PSK, WIFI_CIPHER_TYPE_CCMP)) {
     SerialPrint("Failed to start AP", true);
     return;
   }
-  SerialPrint("AP starting (please wait)", true);
+  SerialPrint("AP starting on channel " + String(apChannel) + " with AP password", true);
   updateWifiChannel();
 }
 
@@ -5913,7 +6187,7 @@ void handleSENSOR_LIMITS_UPDATE() {
 #if _HAS_LOCAL_SENSORS
 static String switchStateLabel(const ArborysSnsType* s) {
   if (!s) return "—";
-  if (s->snsType == 73 || s->snsType == 74) {
+  if (s->snsType == SNS_COUNTDOWN || s->snsType == SNS_COUNTDOWN_INV) {
     if (s->snsValue > 0.0) return "ON (" + String((int)floor(s->snsValue)) + "s)";
     return "OFF";
   }
@@ -5977,7 +6251,7 @@ void handleSWITCHSTATE() {
   WEBHTML += "</table>";
   serverTextFlush(true);
 
-  WEBHTML += "<h2>Interrupt triggers (types 200–255)</h2>";
+  WEBHTML += "<h2>Interrupt triggers (presence and button)</h2>";
   WEBHTML += "<p>Trigger a rising-edge action (same as a physical button / motion pulse). Does not hold state.</p>";
   WEBHTML += "<table style=\"width:100%; border-collapse:collapse;\">";
   WEBHTML += "<tr style=\"background:#f0f0f0;\">"
@@ -6012,7 +6286,7 @@ void handleSWITCHSTATE() {
     serverTextFlush(false);
   }
   if (irqCount == 0) {
-    WEBHTML += "<tr><td colspan=\"4\" style=\"border:1px solid #ddd; padding:8px;\">No local interrupt sensors (types 200–255).</td></tr>";
+    WEBHTML += "<tr><td colspan=\"4\" style=\"border:1px solid #ddd; padding:8px;\">No local interrupt sensors.</td></tr>";
   }
   WEBHTML += "</table>";
   serverTextClose(200, true);
@@ -6046,7 +6320,7 @@ void handleSWITCHSTATE_POST() {
     if (sec < 0) sec = 0;
     if (sec > 255) sec = 255;
     // Type 75 OFF with 0 seconds: treat as brief force-off then auto (use 1s minimum pulse).
-    if (!on && (snsType == 75) && sec == 0) sec = 1;
+    if (!on && snsType == SNS_SWITCH && sec == 0) sec = 1;
     ok = InterruptTriggers_webSetOutput(sensor, on, (uint8_t)sec);
     if (!ok) {
       server.send(400, "text/plain", "Set rejected (check seconds 1–255 for ON / clock outputs)");
@@ -6143,7 +6417,7 @@ void handleSENSOR_UPDATE_POST() {
   // Also update the sensor's flags/limits in the Sensors array
   if (sensor) {
     const uint8_t lastflag = sensor->Flags;
-    if (sensor->snsType == 200) {
+    if (IS_INTERRUPT_SENSOR_TYPE(sensor->snsType)) {
       if (normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefsIndex], Prefs.SNS_LIMIT_MIN[prefsIndex])) {
         Prefs.isUpToDate = false;
       }
@@ -6215,6 +6489,201 @@ void handleSENSOR_READ_SEND_NOW() {
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", resultMsg);
 }
+
+#if _IS_SERVER_HUB
+static void redirectAggregateSetup(uint8_t snsType, uint8_t snsID, const char* err) {
+  String loc = "/SENSOR_SETUP?snsType=" + String(snsType) + "&snsID=" + String(snsID);
+  if (err && err[0]) loc += "&linkErr=" + String(err);
+  server.sendHeader("Location", loc);
+  server.send(302, "text/plain", "Redirecting");
+}
+
+static void requestRegisteredSensors() {
+  for (int16_t i = 0; i < NUMDEVICES; i++) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet || d->MAC == 0 || d->MAC == (uint64_t)ESP.getEfuseMac()) continue;
+    sendMSG_DataRequest(d, -1, true);
+  }
+}
+
+static bool aggregateProfileMatch(uint8_t snsType, int16_t candidateIndex, uint8_t candidateType, const char* category) {
+  if (candidateType == SNS_AGGREGATE) {
+    if (!category || !category[0]) return false;
+    const int16_t pi = SensorHistory.getSensorHistoryIndex(candidateIndex);
+    if (pi < 0) return false;
+    char cat[24];
+    Actuators_aggregateRule(pi, nullptr, 0, cat, sizeof(cat), nullptr);
+    return cat[0] && strcasecmp(cat, category) == 0;
+  }
+  if (snsType == SNS_BRYANT_OAT) return Sensors.isSensorOfType(candidateType, "temperature");
+  if (category && category[0]) return Sensors.isSensorOfType(candidateType, category);
+  return true;
+}
+
+static void appendAggregateCheckbox(uint64_t mac, uint8_t st, uint8_t sid, const String& name, bool checked) {
+  const String macStr = MACToString(mac, '\0', true);
+  WEBHTML += "<label style=\"display:block; margin: 4px 0;\"><input type=\"checkbox\" name=\"link\" value=\"";
+  WEBHTML += macStr + "," + String(st) + "," + String(sid) + "\"";
+  if (checked) WEBHTML += " checked";
+  WEBHTML += "> " + name + " (" + AggLinks_groupName(st) + " ";
+  WEBHTML += String(st) + "." + String(sid) + ")</label>";
+}
+
+static String aggregateRegisterNote() {
+  String html = "<p>Sensor list requested. On the sensor's Setup page, check the sensors to include. Refresh that page if the list is still empty.</p><ul>";
+  bool any = false;
+  const int16_t me = Sensors.findMyDeviceIndex();
+  for (int16_t i = 0; i < NUMSENSORS; i++) {
+    ArborysSnsType* s = Sensors.getSensorBySnsIndex(i);
+    if (!s || !s->IsSet || s->deviceIndex != me) continue;
+    if (s->snsType != SNS_AGGREGATE && s->snsType != SNS_BRYANT_OAT) continue;
+    any = true;
+    html += "<li><a href=\"/SENSOR_SETUP?snsType=" + String(s->snsType) + "&snsID=" + String(s->snsID) + "\">";
+    html += String(s->snsName);
+    html += "</a></li>";
+  }
+  html += "</ul>";
+  if (!any) return "<p>Device registered.</p>";
+  return html;
+}
+
+static void appendAggregateLinkForm(int16_t prefsIndex, uint8_t snsType, uint8_t snsID) {
+  char op[8];
+  char category[24];
+  uint8_t place = 0;
+  Actuators_aggregateRule(prefsIndex, op, sizeof(op), category, sizeof(category), &place);
+  if (snsType == SNS_BRYANT_OAT) {
+    WEBHTML += "<h3>Outside temperature fallback</h3>";
+    WEBHTML += "<p>While a Bryant outdoor frame is fresh, this sensor uses that outside temperature. Otherwise it uses the newest fresh temperature on a non-server device: a sensor checked here, or a temperature flagged outside on a registered peripheral. If neither is fresh, it uses the newest outside temperature on a registered weather server, preferring that server's outdoor temperature aggregate. A sample older than that sensor's send interval plus 25% is left out.</p>";
+  } else {
+    WEBHTML += "<h3>Linked sensors</h3>";
+    WEBHTML += "<p>Rule: ";
+    WEBHTML += op;
+    if (category[0]) {
+      WEBHTML += " of ";
+      WEBHTML += category;
+    }
+    if (place == 1) WEBHTML += ", indoor";
+    else if (place == 2) WEBHTML += ", outdoor";
+    WEBHTML += ". Check the sensors to include. A checked sensor is used whether or not it is flagged outside. ";
+    WEBHTML += "A sample older than that sensor's send interval plus 25% is left out. ";
+#if !_HUB_REGISTERED_ONLY
+    if (category[0] && place != 1) {
+      WEBHTML += "Until you save a selection, this uses ";
+      WEBHTML += category;
+      WEBHTML += (place == 2) ? " readings that are flagged outside. " : " readings that are not flagged outside. ";
+      WEBHTML += "After you save, only checked sensors count. Save with none checked and the value stays NAN. ";
+    }
+#endif
+    WEBHTML += "It is not sent on its interval unless monitored. A direct request still returns it. ";
+    WEBHTML += "If it is critical, a limit cross or an expiry change, in either direction, is sent even when it is not monitored. ";
+    WEBHTML += "An average of one kind of sensor leaves out a NaN, expired, or out-of-range member and does not alarm for that. It alarms only when the average is outside its limits.</p>";
+  }
+  if (server.hasArg("linkErr")) {
+    const String e = server.arg("linkErr");
+    WEBHTML += "<p style=\"color:#a33;\">";
+    if (e == "mismatch") WEBHTML += "Those sensors are not the same kind. Temperature can be combined with temperature. Pressure cannot be combined with temperature.";
+    else if (e == "rule") WEBHTML += "A checked sensor does not match this rule's sensor group.";
+    else if (e == "place") WEBHTML += "A checked sensor does not match this rule's indoor or outdoor filter.";
+    else if (e == "full") WEBHTML += "The link table is full (10 devices, 40 sensors).";
+    else WEBHTML += "That sensor could not be saved.";
+    WEBHTML += "</p>";
+  }
+  WEBHTML += "<form method=\"POST\" action=\"/AGG_PULL\" style=\"margin: 12px 0;\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(snsType) + "\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(snsID) + "\">";
+  WEBHTML += "<button type=\"submit\" style=\"padding: 8px 16px; background-color: #009688; color: white; border: none; border-radius: 4px; cursor: pointer;\">Request readings</button>";
+  WEBHTML += "</form>";
+
+  uint64_t forceMac = 0;
+  uint8_t forceType = 0;
+  uint8_t forceId = 0;
+  bool haveForce = false;
+  if (server.hasArg("forceMac")) {
+    String hex;
+    const String raw = server.arg("forceMac");
+    for (unsigned i = 0; i < raw.length(); i++) {
+      const char c = raw.charAt(i);
+      if (isxdigit((unsigned char)c)) hex += c;
+    }
+    uint64_t mac = 0;
+    if (hex.length() > 0 && stringToUInt64(hex, &mac, true) && mac != 0) {
+      forceType = (uint8_t)server.arg("forceType").toInt();
+      forceId = (uint8_t)server.arg("forceId").toInt();
+      const bool self = mac == (uint64_t)ESP.getEfuseMac() && forceType == snsType && forceId == snsID;
+      if (!self && forceType != 0) {
+        forceMac = mac;
+        haveForce = true;
+      }
+    }
+  }
+
+  WEBHTML += "<form method=\"POST\" action=\"/AGG_LINKS\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(snsType) + "\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(snsID) + "\">";
+  bool any = false;
+  bool forceShown = false;
+  const int16_t me = Sensors.findMyDeviceIndex();
+  for (int16_t di = 0; di < NUMDEVICES; di++) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d || !d->IsSet || d->MAC == 0) continue;
+    bool header = false;
+    for (int16_t si = 0; si < NUMSENSORS; si++) {
+      ArborysSnsType* s = Sensors.getSensorBySnsIndex(si);
+      if (!s || !s->IsSet || s->deviceIndex != di) continue;
+      if (di == me && s->snsType == snsType && s->snsID == snsID) continue;
+      const bool picked = AggLinks_isPicked((uint8_t)prefsIndex, d->MAC, s->snsType, s->snsID);
+      const bool profile = aggregateProfileMatch(snsType, si, s->snsType, category);
+      const bool forced = haveForce && d->MAC == forceMac && s->snsType == forceType && s->snsID == forceId;
+      if (!profile && !picked && !forced) continue;
+      if (!header) {
+        WEBHTML += "<h4 style=\"margin: 14px 0 6px;\">" + String(d->devName) + " (" + d->IP.toString() + ")</h4>";
+        header = true;
+      }
+      any = true;
+      if (forced) forceShown = true;
+      appendAggregateCheckbox(d->MAC, s->snsType, s->snsID, String(s->snsName), picked || forced);
+    }
+  }
+
+  AggPick saved[AGG_MAX_LINKS];
+  const uint8_t savedN = AggLinks_linksForPrefs((uint8_t)prefsIndex, saved, AGG_MAX_LINKS);
+  bool extraHeader = false;
+  for (uint8_t i = 0; i < savedN; i++) {
+    if (saved[i].mac == 0) continue;
+    if (Sensors.findSensor(saved[i].mac, saved[i].snsType, saved[i].snsID) >= 0) continue;
+    if (!extraHeader) {
+      WEBHTML += "<h4 style=\"margin: 14px 0 6px;\">Saved, not reported yet</h4>";
+      extraHeader = true;
+    }
+    any = true;
+    if (haveForce && saved[i].mac == forceMac && saved[i].snsType == forceType && saved[i].snsID == forceId) forceShown = true;
+    appendAggregateCheckbox(saved[i].mac, saved[i].snsType, saved[i].snsID, String("Not reported yet"), true);
+  }
+  if (haveForce && !forceShown) {
+    WEBHTML += "<h4 style=\"margin: 14px 0 6px;\">Added by hand</h4>";
+    any = true;
+    appendAggregateCheckbox(forceMac, forceType, forceId, String("Not reported yet"), true);
+  }
+  if (!any) {
+    WEBHTML += "<p>No known ";
+    WEBHTML += (category[0] ? category : "matching");
+    WEBHTML += " sensors yet. Request readings, or add one below.</p>";
+  }
+  WEBHTML += "<button type=\"submit\" style=\"margin-top: 10px; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;\">Save links</button>";
+  WEBHTML += "</form>";
+  WEBHTML += "<h3>Add a sensor</h3>";
+  WEBHTML += "<p>Use this for a sensor that is not in the list, including a type this average would not list on its own. MAC is the device address with no separators.</p>";
+  WEBHTML += "<form method=\"GET\" action=\"/SENSOR_SETUP\" style=\"margin: 12px 0;\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsType\" value=\"" + String(snsType) + "\">";
+  WEBHTML += "<input type=\"hidden\" name=\"snsID\" value=\"" + String(snsID) + "\">";
+  WEBHTML += "<label style=\"display:block; margin: 6px 0;\">MAC <input name=\"forceMac\" required style=\"width: 160px; padding: 4px;\"></label>";
+  WEBHTML += "<label style=\"display:block; margin: 6px 0;\">Type <input type=\"number\" min=\"1\" max=\"255\" name=\"forceType\" required style=\"width: 80px; padding: 4px;\"></label>";
+  WEBHTML += "<label style=\"display:block; margin: 6px 0;\">ID <input type=\"number\" min=\"0\" max=\"255\" name=\"forceId\" required style=\"width: 80px; padding: 4px;\"></label>";
+  WEBHTML += "<button type=\"submit\" style=\"padding: 8px 16px; background-color: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer;\">Add to list</button>";
+  WEBHTML += "</form>";
+}
+#endif
 
 void handleSensorSetup() {
   if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
@@ -6307,9 +6776,72 @@ void handleSensorSetup() {
     WEBHTML = WEBHTML + "</form>";
   }
 
-  WEBHTML = WEBHTML + "</body></html>";
-  server.send(200, "text/html", WEBHTML.c_str());
+#if _IS_SERVER_HUB
+  if ((snsType == SNS_AGGREGATE || snsType == SNS_BRYANT_OAT) && prefsIndex >= 0 && prefsIndex <= 255) {
+    appendAggregateLinkForm(prefsIndex, snsType, snsID);
+  }
+#endif
+
+  serverTextClose(200, true);
 }
+
+#if _IS_SERVER_HUB
+void handleAGG_LINKS() {
+  registerHTTPMessage("AggLinks");
+  if (!server.hasArg("snsType") || !server.hasArg("snsID")) {
+    server.send(400, "text/plain", "Missing snsType or snsID");
+    return;
+  }
+  const uint8_t snsType = (uint8_t)server.arg("snsType").toInt();
+  const uint8_t snsID = (uint8_t)server.arg("snsID").toInt();
+  if (snsType != SNS_AGGREGATE && snsType != SNS_BRYANT_OAT) {
+    server.send(400, "text/plain", "Not an aggregate sensor");
+    return;
+  }
+  const int16_t snsIndex = Sensors.findSensor(ESP.getEfuseMac(), snsType, snsID);
+  const int16_t prefsIndex = SensorHistory.getSensorHistoryIndex(snsIndex);
+  if (prefsIndex < 0 || prefsIndex > 255) {
+    server.send(400, "text/plain", "Sensor has no prefs slot");
+    return;
+  }
+  AggPick picks[AGG_MAX_LINKS];
+  uint8_t n = 0;
+  for (int i = 0; i < server.args(); i++) {
+    if (server.argName(i) != "link") continue;
+    if (n >= AGG_MAX_LINKS) {
+      redirectAggregateSetup(snsType, snsID, "full");
+      return;
+    }
+    const String v = server.arg(i);
+    const int c1 = v.indexOf(',');
+    const int c2 = (c1 >= 0) ? v.indexOf(',', c1 + 1) : -1;
+    if (c1 < 1 || c2 < 0) continue;
+    uint64_t mac = 0;
+    if (!stringToUInt64(v.substring(0, c1), &mac, true) || mac == 0) continue;
+    const uint8_t st = (uint8_t)v.substring(c1 + 1, c2).toInt();
+    const uint8_t sid = (uint8_t)v.substring(c2 + 1).toInt();
+    if (st == 0) continue;
+    picks[n].mac = mac;
+    picks[n].snsType = st;
+    picks[n].snsID = sid;
+    n++;
+  }
+  String err;
+  if (!AggLinks_setPicks((uint8_t)prefsIndex, picks, n, err)) {
+    redirectAggregateSetup(snsType, snsID, err.c_str());
+    return;
+  }
+  redirectAggregateSetup(snsType, snsID, "");
+}
+
+void handleAGG_PULL() {
+  registerHTTPMessage("AggPull");
+  const uint8_t snsType = server.hasArg("snsType") ? (uint8_t)server.arg("snsType").toInt() : SNS_AGGREGATE;
+  const uint8_t snsID = server.hasArg("snsID") ? (uint8_t)server.arg("snsID").toInt() : 0;
+  requestRegisteredSensors();
+  redirectAggregateSetup(snsType, snsID, "");
+}
+#endif
 
 void handleSNS_CALIBRATION() {
   if (!server.hasArg("snsType") || !server.hasArg("snsID") || !server.hasArg("minval") || !server.hasArg("maxval")) {
@@ -6406,7 +6938,7 @@ void handleWeather() {
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.lastUpdateError) ? dateifyLocal(WeatherData.lastUpdateError) : "???") + "</td></tr>";
 
   {
-    static const char* kCompNames[] = {"Grid", "Hourly", "GridFcst", "Daily", "Alerts", "Sun"};
+    static const char* kCompNames[] = {"Grid", "Hourly", "GridFcst", "Daily", "Alerts", "Sun", "Pressure"};
     for (uint8_t ci = 0; ci < WC_COUNT; ci++) {
       const WeatherComponentStatus& st = WeatherData.componentStatus[ci];
       const bool fresh = WeatherData.isComponentDataFresh((WeatherComponent)ci);
@@ -6431,6 +6963,18 @@ void handleWeather() {
   
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Sunset</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + String((WeatherData.sunset) ? dateifyLocal(WeatherData.sunset) : "???") + "</td></tr>";
+
+  {
+    const int16_t pressureHpa = WeatherData.getPressure();
+    String pressureVal = "???";
+    if (pressureHpa != WEATHER_INVALID_PRESSURE) {
+      pressureVal = String(pressureHpa) + " hPa";
+      const uint32_t observedAt = WeatherData.getPressureObservedAt();
+      if (observedAt) pressureVal += " (" + String(dateifyLocal(observedAt)) + ")";
+    }
+    WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Pressure</strong></td>";
+    WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + pressureVal + "</td></tr>";
+  }
   
   WEBHTML = WEBHTML + "<tr><td style=\"border: 1px solid #ddd; padding: 8px;\"><strong>Rain Flag</strong></td>";
   WEBHTML = WEBHTML + "<td style=\"border: 1px solid #ddd; padding: 8px;\">" + (WeatherData.flag_rain ? "Yes" : "No") + "</td></tr>";
@@ -6795,6 +7339,46 @@ static bool sdIsFirmwareRoot(const String& path) {
   return p == "/firmware";
 }
 
+// Deletes every file and subdirectory inside /Firmware. The folder itself stays.
+static void deleteFirmwareFolderContents(int& deleted, int& failed) {
+  deleted = 0;
+  failed = 0;
+  const String root = "/Firmware";
+  while (true) {
+    File dir = SD.open(root.c_str());
+    if (!dir || !dir.isDirectory()) {
+      if (dir) dir.close();
+      failed++;
+      return;
+    }
+    String base;
+    bool isDir = false;
+    bool found = false;
+    while (true) {
+      File entry = dir.openNextFile();
+      if (!entry) break;
+      base = sdEntryBaseName(entry.name());
+      isDir = entry.isDirectory();
+      entry.close();
+      if (base.length() == 0 || base == "." || base == "..") continue;
+      found = true;
+      break;
+    }
+    dir.close();
+    if (!found) return;
+
+    const String target = joinSdPath(root, base);
+    esp_task_wdt_reset();
+    const bool ok = isDir ? sdRemoveDirectoryRecursive(target.c_str()) : sdDeleteFile(target.c_str());
+    if (!ok) {
+      failed++;
+      storeError("Firmware delete failed (" + target + ")", ERROR_SD_FILEDEL, true);
+      return;
+    }
+    deleted++;
+  }
+}
+
 static void appendSdCardDirectoryManageForms(const String& currentPath) {
   String ep = "/SDCARD?path=" + urlEncode(currentPath);
   const bool firmwareDir = sdIsFirmwareRoot(currentPath);
@@ -6804,7 +7388,10 @@ static void appendSdCardDirectoryManageForms(const String& currentPath) {
     WEBHTML = WEBHTML + "<p><strong>/Firmware</strong> accepts firmware uploads and file deletes. "
       "Use <code>&lt;devicename&gt;-&lt;x.x.x&gt;.bin</code> (version after the last hyphen). "
       "Uploading a newer version automatically deletes older binaries for that device. "
-      "Delete legacy subfolders below if migrating from the old per-device layout.</p>";
+      "Delete All removes every file and subfolder here and leaves /Firmware in place.</p>";
+    WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\" style=\"margin: 8px 0;\" onsubmit=\"return confirm('Delete ALL files and subfolders in /Firmware? This cannot be undone.');\">";
+    WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"deleteall\">";
+    WEBHTML = WEBHTML + "<input type=\"submit\" value=\"Delete All\" style=\"padding: 8px 16px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;\"></form>";
     WEBHTML = WEBHTML + "<form method=\"POST\" action=\"" + ep + "\" onsubmit=\"return confirm('Delete this directory and ALL contents?');\">";
     WEBHTML = WEBHTML + "<input type=\"hidden\" name=\"action\" value=\"rmdir\">";
     WEBHTML = WEBHTML + "Delete subdirectory: <input name=\"dirname\" maxlength=\"64\" required> <input type=\"submit\" value=\"Delete Directory\"></form>";
@@ -7329,6 +7916,22 @@ void handleSDCARD_DIR() {
       storeError("SD file delete failed (" + targetPath + ")", ERROR_SD_FILEDEL, true);
     }
     redirectSdDirResult(parentPath, ok, ok ? ("Deleted " + fileName) : "Delete failed");
+    return;
+  }
+
+  if (action == "deleteall") {
+    if (!sdIsFirmwareRoot(parentPath)) {
+      redirectSdDirResult(parentPath, false, "Delete All is only for /Firmware");
+      return;
+    }
+    int deleted = 0;
+    int failed = 0;
+    deleteFirmwareFolderContents(deleted, failed);
+    String msg;
+    if (failed > 0) msg = "Deleted " + String(deleted) + ", " + String(failed) + " failed";
+    else if (deleted == 0) msg = "Nothing to delete";
+    else msg = "Deleted " + String(deleted) + " item" + (deleted == 1 ? "" : "s");
+    redirectSdDirResult(parentPath, failed == 0, msg);
     return;
   }
 
@@ -8420,14 +9023,23 @@ void serviceDeviceConnectivityPings(bool startCycle) {
 static bool sendJsonViaPreferredHttp(IPAddress ip, const char* rawJson, const char* msgType, uint16_t timeoutMs);
 
 #if _IS_SERVER_HUB
-// Hub probe before the expired label. One network attempt per call.
-static constexpr uint32_t EXPIRY_ACK_WAIT_SEC = 20;
+// While a peripheral stays expired, ask again. One network attempt per call.
+// Critical (bit 7 after override): HTTP/HTTPS every min(3 min, SendingInt).
+// Others: UDP every min(5 min, 2×SendingInt), or plain HTTP if today's UDP
+// ping fail rate is above 50%. The expired flag itself is the delivery clock.
+static uint32_t s_expiryProbeUnix[NUMSENSORS];
 
-struct ExpiryProbeState {
-  uint32_t lastProbeUnix;
-  uint8_t lastAck; // 0 none, 1 acked, 2 no ack
-};
-static ExpiryProbeState s_expiryProbe[NUMDEVICES];
+static uint32_t criticalRecheckSec(uint32_t sendingInt) {
+  if (sendingInt == 0 || sendingInt > 180u) return 180u;
+  return sendingInt;
+}
+
+static uint32_t noncriticalRecheckSec(uint32_t sendingInt) {
+  if (sendingInt == 0) return 300u;
+  const uint64_t twice = (uint64_t)sendingInt * 2ull;
+  if (twice > 300ull) return 300u;
+  return (uint32_t)twice;
+}
 
 static bool deviceHasSensorPastExpiry(int16_t devIndex) {
   for (int16_t si = 0; si < NUMSENSORS; ++si) {
@@ -8447,6 +9059,7 @@ static void labelPastThresholdSensorsExpired(int16_t devIndex) {
     if (!S || !S->IsSet || S->deviceIndex != devIndex) continue;
     if (!Sensors.isSensorPastExpiryThreshold(si)) {
       S->expired = false;
+      s_expiryProbeUnix[si] = 0;
       continue;
     }
     if (!S->expired && Sensors.isSensorFlagBitUsed(si, 7) && I.isExpired < 255) I.isExpired++;
@@ -8456,32 +9069,67 @@ static void labelPastThresholdSensorsExpired(int16_t devIndex) {
   if (any) device->expired = true;
 }
 
-static bool sendExpiredProbe(ArborysDevType* device) {
-  const bool haveWifi = wifiReadyForNetwork() && device->IP != IPAddress(0, 0, 0, 0);
-  SerialPrint("snsReqExpired to " + String(device->devName) + " via " + String(haveWifi ? "HTTP" : "ArborysMesh"), true);
-  device->dataSent = utcNow();
-  if (haveWifi) {
-    char jsonBuffer[512];
-    jsonBuffer[0] = '\0';
-    JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), false, -1, true);
-    if (jsonBuffer[0] == '\0') return false;
-    esp_task_wdt_reset();
-    return sendJsonViaPreferredHttp(device->IP, jsonBuffer, "snsReqExpired", 2500);
+// A probe from the previous delivery does not count toward this miss.
+static bool sensorRecheckDue(int16_t si, uint32_t now, bool critical) {
+  ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+  if (!S || !Sensors.isSensorPastExpiryThreshold(si, (time_t)now)) return false;
+  const uint32_t last = s_expiryProbeUnix[si];
+  const uint32_t fresh = S->timeLogged;
+  if (last == 0 || (fresh != 0 && last <= fresh)) return true;
+  const uint32_t gap = critical ? criticalRecheckSec(S->SendingInt) : noncriticalRecheckSec(S->SendingInt);
+  return now >= last + gap;
+}
+
+static void stampRecheckedSensors(int16_t devIndex, uint32_t now, bool includeCritical, bool includeOther) {
+  for (int16_t si = 0; si < NUMSENSORS; ++si) {
+    ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+    if (!S || !S->IsSet || S->deviceIndex != devIndex) continue;
+    if (!Sensors.isSensorPastExpiryThreshold(si, (time_t)now)) {
+      s_expiryProbeUnix[si] = 0;
+      continue;
+    }
+    const bool critical = Sensors.isSensorFlagBitUsed(si, 7);
+    if ((critical && includeCritical) || (!critical && includeOther)) s_expiryProbeUnix[si] = now;
   }
+}
+
+// how: 0 HTTP/HTTPS, 1 UDP, 2 plain HTTP. Stamped by the caller either way.
+static void sendExpiredProbe(ArborysDevType* device, uint8_t how) {
+  const bool haveNet = wifiReadyForNetwork() && device->IP != IPAddress(0, 0, 0, 0);
+  const char* via = "HTTP";
+  if (how == 1) via = "UDP";
+  else if (how == 0) via = isValidLMKKey() ? "HTTPS" : "HTTP";
+  SerialPrint("snsReqExpired to " + String(device->devName) + " via " + String(via), true);
+  if (!haveNet) return;
+
+  char jsonBuffer[512];
+  jsonBuffer[0] = '\0';
+  JSONbuilder_DataRequestMSG(jsonBuffer, sizeof(jsonBuffer), false, -1, true);
+  if (jsonBuffer[0] == '\0') return;
+  device->dataSent = utcNow();
   esp_task_wdt_reset();
-  return meshSendSnsReqExpired(device, 2000);
+  if (how == 1) {
+    sendUDPMessage((uint8_t*)jsonBuffer, device->IP, (uint16_t)strlen(jsonBuffer), "snsReqExpired");
+    return;
+  }
+  if (how == 2) {
+    String httpBody = String(jsonBuffer);
+    JSONbuilder_encodeHTTP(httpBody);
+    IPAddress ip = device->IP;
+    sendHTTPJSON(ip, httpBody.c_str(), "snsReqExpired", 2500);
+    return;
+  }
+  sendJsonViaPreferredHttp(device->IP, jsonBuffer, "snsReqExpired", 2500);
 }
 
 void serviceExpiredDeviceDataRequests(bool startCycle) {
-  static int16_t s_scanIndex = -1; // -1 = idle
+  (void)startCycle;
+  static int16_t s_scanIndex = 0;
   #ifdef _USE_HEADER_INFO_ALERT
   static bool s_headerActive = false;
   #endif
 
-  if (startCycle && s_scanIndex < 0) {
-    s_scanIndex = 0;
-  }
-  if (s_scanIndex < 0) return;
+  if (s_scanIndex < 0 || s_scanIndex >= NUMDEVICES) s_scanIndex = 0;
 
   const int16_t myIndex = Sensors.findMyDeviceIndex();
   const uint32_t now = (uint32_t)utcNow();
@@ -8492,7 +9140,7 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
     ArborysDevType* device = Sensors.getDeviceByDevIndex(di);
     if (!device || !device->IsSet) continue;
     if (IS_SERVER_DEVICE_TYPE(device->devType)) continue;
-    if (bitRead(device->Flags, 2)) continue; // low power: labeled on the clock, not probed
+    if (bitRead(device->Flags, 2)) continue; // low power: labeled on the clock, not asked
     if (Sensors.countSensors(-1, di) == 0) continue;
 
     if (!deviceHasSensorPastExpiry(di)) {
@@ -8500,23 +9148,27 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
         ArborysSnsType* S = Sensors.snsIndexToPointer(si);
         if (!S || !S->IsSet || S->deviceIndex != di) continue;
         S->expired = false;
+        s_expiryProbeUnix[si] = 0;
       }
       device->expired = false;
-      s_expiryProbe[di].lastProbeUnix = 0;
-      s_expiryProbe[di].lastAck = 0;
       continue;
     }
 
-    const uint32_t gap = (device->SendingInt ? device->SendingInt : 300u) * 2u;
-    const bool probed = s_expiryProbe[di].lastProbeUnix != 0;
-    const bool ackWaitElapsed = probed && now >= s_expiryProbe[di].lastProbeUnix + EXPIRY_ACK_WAIT_SEC;
-    if (s_expiryProbe[di].lastAck == 1 && ackWaitElapsed) {
-      // Ack arrived and the readings still did not.
-      labelPastThresholdSensorsExpired(di);
-    }
+    labelPastThresholdSensorsExpired(di);
 
-    const bool gapElapsed = !probed || now > s_expiryProbe[di].lastProbeUnix + gap;
-    if (!gapElapsed) continue;
+    bool criticalDue = false;
+    bool otherDue = false;
+    for (int16_t si = 0; si < NUMSENSORS; ++si) {
+      ArborysSnsType* S = Sensors.snsIndexToPointer(si);
+      if (!S || !S->IsSet || S->deviceIndex != di) continue;
+      if (!Sensors.isSensorPastExpiryThreshold(si, (time_t)now)) continue;
+      if (Sensors.isSensorFlagBitUsed(si, 7)) {
+        if (sensorRecheckDue(si, now, true)) criticalDue = true;
+      } else if (sensorRecheckDue(si, now, false)) {
+        otherDue = true;
+      }
+    }
+    if (!criticalDue && !otherDue) continue;
 
     #ifdef _USE_HEADER_INFO_ALERT
     {
@@ -8530,10 +9182,15 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
     }
     #endif
 
-    const bool acked = sendExpiredProbe(device);
-    s_expiryProbe[di].lastProbeUnix = now;
-    s_expiryProbe[di].lastAck = acked ? 1 : 2;
-    if (!acked) labelPastThresholdSensorsExpired(di);
+    if (criticalDue) {
+      // One request asks for every sensor, so both classes wait their next gap.
+      sendExpiredProbe(device, 0);
+      stampRecheckedSensors(di, now, true, true);
+    } else {
+      const bool udpWeak = udpPingSuccessRatePercent(device) < 50;
+      sendExpiredProbe(device, udpWeak ? 2 : 1);
+      stampRecheckedSensors(di, now, false, true);
+    }
     return; // one device per call
   }
 
@@ -8543,7 +9200,7 @@ void serviceExpiredDeviceDataRequests(bool startCycle) {
     s_headerActive = false;
   }
   #endif
-  s_scanIndex = -1;
+  s_scanIndex = 0;
 }
 #endif
 
@@ -9124,6 +9781,14 @@ static String registerDeviceFromAckJson(const String& ackJson, IPAddress targetI
   }
   if (outIp == IPAddress(0, 0, 0, 0)) outIp = targetIP;
 
+#if _IS_SERVER_HUB
+  if (!AggLinks_addDevice(mac, outIp, outName.c_str(), outDevType)) {
+#if _HUB_REGISTERED_ONLY
+    return "registry full";
+#endif
+  }
+#endif
+
   FirmwareVersion fw;
   if (sender["firmware"].is<JsonVariantConst>()) {
     parseFirmwareFromJson(sender["firmware"], fw);
@@ -9164,7 +9829,8 @@ static String registerDeviceFromAckJson(const String& ackJson, IPAddress targetI
 
 static void renderRegisterDevicePage(const String& ipFieldValue,
     bool showResult, bool pingOk, uint32_t rttMs, const String& pingDetail,
-    const String& regStatus, const String& respName, uint8_t respType, IPAddress respIp) {
+    const String& regStatus, const String& respName, uint8_t respType, IPAddress respIp,
+    const String& extraHtml = "") {
   WEBHTML.clear();
   WEBHTML = "";
   serverTextHeader("Register Device");
@@ -9203,6 +9869,8 @@ static void renderRegisterDevicePage(const String& ipFieldValue,
         regStatus + "</td></tr>";
     WEBHTML = WEBHTML + "</table></div>";
   }
+
+  if (extraHtml.length()) WEBHTML += extraHtml;
 
   serverTextClose(200, true);
 }
@@ -9250,7 +9918,16 @@ void handleREGISTER_DEVICE_POST() {
   }
 
   regStatus = registerDeviceFromAckJson(ackJson, targetIP, respName, respType, respIp);
-  renderRegisterDevicePage(targetIP.toString(), true, true, rttMs, "", regStatus, respName, respType, respIp);
+  String extra;
+#if _HAS_LOCAL_SENSORS && _IS_SERVER_HUB
+  if (regStatus == "registered" || regStatus == "already known") {
+    const int16_t idx = Sensors.findDevice(respIp);
+    ArborysDevType* registered = Sensors.getDeviceByDevIndex(idx);
+    if (registered) sendMSG_DataRequest(registered, -1, true);
+    extra = aggregateRegisterNote();
+  }
+#endif
+  renderRegisterDevicePage(targetIP.toString(), true, true, rttMs, "", regStatus, respName, respType, respIp, extra);
 }
 
 void setupServerRoutes() {
@@ -9261,10 +9938,16 @@ void setupServerRoutes() {
     server.on("/POST_ENC", HTTP_POST, handlePostEnc, handlePostEncRaw);
     server.on("/FIRMWARE_ENC", HTTP_POST, handleFirmwareEnc, handleFirmwareEncRaw);
     server.on("/FIRMWARE_BLOCK", HTTP_POST, handleFirmwareBlock);
+#if defined(_USESDCARD) && _IS_SERVER_HUB
+    server.on("/FIRMWARE_PUT", HTTP_POST, handleFirmwarePut, handleFirmwarePutRaw);
+#endif
 #else
     server.on("/POST_ENC", HTTP_POST, handlePostEnc);
     server.on("/FIRMWARE_ENC", HTTP_POST, handleFirmwareEnc);
     server.on("/FIRMWARE_BLOCK", HTTP_POST, handleFirmwareBlock);
+#if defined(_USESDCARD) && _IS_SERVER_HUB
+    server.on("/FIRMWARE_PUT", HTTP_POST, handleFirmwarePut);
+#endif
 #endif
     server.on("/REQUESTUPDATE", handleREQUESTUPDATE);
     server.on("/CLEARSENSOR", handleCLEARSENSOR);
@@ -9279,6 +9962,9 @@ void setupServerRoutes() {
     server.on("/REBOOT", handleReboot);
     
     server.on("/STATUS", handleSTATUS);
+#if _IS_SERVER_HUB
+    server.on("/DEVICES", HTTP_GET, handleDEVICES);
+#endif
     server.on("/MESH_SETTINGS", HTTP_GET, handleMESH_SETTINGS);
     server.on("/MESH_SETTINGS", HTTP_POST, handleMESH_SETTINGS);
 #if _IS_SERVER_HUB
@@ -9302,6 +9988,10 @@ void setupServerRoutes() {
     server.on("/SENSOR_READ_SEND_NOW", HTTP_POST, handleSENSOR_READ_SEND_NOW);
     server.on("/SENSOR_SETUP", HTTP_GET, handleSensorSetup);
     server.on("/SNS_CALIBRATION", HTTP_POST, handleSNS_CALIBRATION);
+#if _IS_SERVER_HUB
+    server.on("/AGG_LINKS", HTTP_POST, handleAGG_LINKS);
+    server.on("/AGG_PULL", HTTP_POST, handleAGG_PULL);
+#endif
     server.on("/SWITCHSTATE", HTTP_GET, handleSWITCHSTATE);
     server.on("/SWITCHSTATE", HTTP_POST, handleSWITCHSTATE_POST);
     #endif
@@ -9868,6 +10558,9 @@ void processJSONMessage(String& postData, String& responseMsg) {
   else if (msgType == "FirmwareUnavailable") {
     processJSONMessage_FirmwareUnavailable(root, responseMsg);
   }
+  else if (msgType == "FirmwareUpload") {
+    processJSONMessage_FirmwareUpload(root, responseMsg);
+  }
   else if (msgType == "networkStateReq") {
     processJSONMessage_networkStateReq(root, responseMsg);
   }
@@ -9950,6 +10643,25 @@ int16_t processJSONMessage_addDevice(JsonObject root, String& responseMsg) {
 }
 
 
+// Servers learned from the startup UDP presence exchange. A failed mesh ACK to any of
+// them sticks sensor sends to UDP until the next boot. Midnight does not clear it.
+static constexpr uint32_t BOOT_UDP_PRESENCE_WAIT_MS = 3000;
+static uint8_t s_bootUdpPhase = 0; // 0 not sent, 1 collecting replies, 2 decided
+static uint32_t s_bootUdpDeadlineMs = 0;
+static bool s_udpSensorsUntilBoot = false;
+static bool s_bootUdpServer[NUMDEVICES] = {};
+
+static void noteUdpBootRegisteredServer(int16_t senderIndex) {
+  if (s_bootUdpPhase != 1) return;
+  if (s_jsonPingReplyVia != JSON_PING_REPLY_UDP) return;
+  if (senderIndex < 0 || senderIndex >= NUMDEVICES) return;
+  ArborysDevType* d = Sensors.getDeviceByDevIndex(senderIndex);
+  if (!d || !d->IsSet || !IS_SERVER_DEVICE_TYPE(d->devType)) return;
+  if (s_bootUdpServer[senderIndex]) return;
+  s_bootUdpServer[senderIndex] = true;
+  SerialPrint("Boot UDP: registered server " + String(d->devName), true);
+}
+
 void processJSONMessage_ping(JsonObject root, String& responseMsg) {
   responseMsg = "OK";
 
@@ -9959,6 +10671,7 @@ void processJSONMessage_ping(JsonObject root, String& responseMsg) {
   if (senderIndex == -1) {
     return;
   }
+  noteUdpBootRegisteredServer(senderIndex);
 
   if (msgType == "ackPing") {
     ArborysDevType* d = Sensors.getDeviceByDevIndex(senderIndex);
@@ -10250,7 +10963,7 @@ void processJSONMessage_setLimits(JsonObject root, String& responseMsg) {
 
   Prefs.SNS_LIMIT_MAX[prefsIndex] = limitHigh;
   Prefs.SNS_LIMIT_MIN[prefsIndex] = limitLow;
-  if (S->snsType == 200 &&
+  if (IS_INTERRUPT_SENSOR_TYPE(S->snsType) &&
       normalizeHumanPresenceLimits(Prefs.SNS_LIMIT_MAX[prefsIndex], Prefs.SNS_LIMIT_MIN[prefsIndex])) {
     limitHigh = Prefs.SNS_LIMIT_MAX[prefsIndex];
     limitLow = Prefs.SNS_LIMIT_MIN[prefsIndex];
@@ -10896,20 +11609,36 @@ void handlePostEnc() {
 bool checkThisSensorTime(ArborysSnsType* Si) {
   // return true if it is time to send this sensor
   if (!Si || Si->deviceIndex != I.MY_DEVICE_INDEX) return false;
+#if _HAS_LOCAL_SENSORS
+  // Do not send the registration 0 or a boot read that produced no sample.
+  if (!localSensorReadyToSend(Si)) return false;
+#endif
+  const bool monitored = bitRead(Si->Flags, 1);
+  const bool critical = bitRead(Si->Flags, 7);
+  const bool changed = bitRead(Si->Flags, 6) == 1;
 #if _USEINTERRUPT
   if (IS_INTERRUPT_SENSOR_TYPE(Si->snsType)) {
+    // Unmonitored: bit 6 is only a bounds or expiry edge (activity does not latch it).
+    if (!monitored && critical && changed) return true;
     const time_t now = utcNow();
     if (Si->SendingInt > 0 && Si->timeLogged != 0 && now >= (time_t)Si->timeLogged
         && (uint32_t)(now - (time_t)Si->timeLogged) < Si->SendingInt) {
       return false; // max send rate even if interrupts keep firing
     }
-    if (bitRead(Si->Flags, 6) == 1) return true;
+    if (!monitored) return false;
+    if (changed) return true;
     if (Si->timeLogged == 0 && Si->timeRead != 0) return true;
     if (Si->SendingInt == 0) return false;
     return true;
   }
 #endif
-  if (bitRead(Si->Flags, 6) == 1) return true; // alarm status changed
+  // Bit 7 latches bit 6 only for a bounds cross or an expiry-status change,
+  // in either direction. That send does not wait for the interval.
+  if (critical && changed) return true;
+  // Bit 1: interval, and any other normal send (interrupt, actuator, first read).
+  // A bounds or expiry edge with bit 7 clear does not latch bit 6.
+  if (!monitored) return false;
+  if (changed) return true;
   if (Si->SendingInt == 0) {
     // Event-only: also send once after the first successful read so hubs can register the sensor.
     if (Si->timeLogged == 0 && Si->timeRead != 0) return true;
@@ -10959,13 +11688,13 @@ void wrapupSendData(ArborysSnsType* S) {
       if (S->deviceIndex != I.MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
       S->timeLogged = utcNow();
-      S->expired = false;
+      // Leave expired as-is. Clearing it here looks like an expired → fresh
+      // edge and would send a critical sensor again on the next pass.
     }
     return;
   }
   bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
   S->timeLogged = utcNow();
-  S->expired = false;
 }
 
 void wrapupSendDataList(const int16_t* snsIndices, uint8_t count) {
@@ -11461,6 +12190,8 @@ static uint8_t expiredSendLadder() {
 }
 
 static const char* preferredCommunicationsLabel() {
+  // A failed boot mesh ACK keeps UDP for the rest of this boot, including past midnight.
+  if (s_udpSensorsUntilBoot) return "UDP";
   // Hubs ask again when readings are missing. Repeated asks move this node off mesh.
   if (expiredSendLadder() >= 2) return isValidLMKKey() ? "HTTPS" : "HTTP";
   if (expiredSendLadder() >= 1) return "UDP";
@@ -11468,6 +12199,7 @@ static const char* preferredCommunicationsLabel() {
 }
 
 void resetExpiredRequestLadder() {
+  // Day change only. s_udpSensorsUntilBoot stays set until reboot.
   s_expiredReqCount = 0;
   s_expiredReqLastCounted = 0;
   s_expiredSendPending = false;
@@ -11708,6 +12440,95 @@ static bool sendListedSensorsHttpToHubs(const int16_t* sendList, uint8_t sendCou
   return sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, jsonBufferSize, nullptr);
 }
 
+// ip 0.0.0.0 is the presence multicast. Chunks that fit the JSON buffer go out back to back.
+static bool sendSensorJsonViaUdp(const int16_t* sendList, uint8_t sendCount,
+    char* jsonBuffer, uint16_t jsonBufferSize, IPAddress ip) {
+  if (!sendList || sendCount == 0 || !jsonBuffer || jsonBufferSize == 0) return false;
+  uint8_t offset = 0;
+  bool any = false;
+  while (offset < sendCount) {
+    const uint8_t n = countSensorsThatFitJson(sendList + offset, (uint8_t)(sendCount - offset), jsonBufferSize);
+    if (n == 0) {
+      offset++;
+      continue;
+    }
+    if (!JSONbuilder_sensorMSG_list(sendList + offset, n, jsonBuffer, jsonBufferSize, false)) {
+      offset++;
+      continue;
+    }
+    if (sendUDPMessage((uint8_t*)jsonBuffer, ip, (uint16_t)strlen(jsonBuffer), "snsData")) {
+      wrapupSendDataList(sendList + offset, n);
+      any = true;
+    }
+    offset += n;
+  }
+  return any;
+}
+
+static bool broadcastUdpPresence() {
+  char jsonBuffer[512];
+  jsonBuffer[0] = '\0';
+  JSONbuilder_pingMSG(jsonBuffer, sizeof(jsonBuffer), false, false);
+  if (jsonBuffer[0] == '\0') return false;
+  return sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0, 0, 0, 0), (uint16_t)strlen(jsonBuffer), "helloPing");
+}
+
+static void decideBootUdpTransport() {
+  s_bootUdpPhase = 2;
+  bool any = false;
+  for (int16_t i = 0; i < NUMDEVICES; ++i) {
+    if (!s_bootUdpServer[i]) continue;
+    any = true;
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(i);
+    if (!d || !d->IsSet) {
+      s_udpSensorsUntilBoot = true;
+      SerialPrint("Boot UDP: registered server missing; UDP until reboot", true);
+      return;
+    }
+    SerialPrint("Boot UDP: ArborysMesh ACK to " + String(d->devName), true);
+    uint16_t waitMs = meshParams().ackTimeoutMs;
+    if (waitMs < 2000) waitMs = 2000;
+    if (!meshBlockingAckCheck(d, waitMs, nullptr)) {
+      s_udpSensorsUntilBoot = true;
+      SerialPrint("Boot UDP: ACK failed for " + String(d->devName) + "; UDP until reboot", true);
+      return;
+    }
+  }
+  if (!any) {
+    SerialPrint("Boot UDP: no server registered; ArborysMesh stays primary", true);
+  } else {
+    SerialPrint("Boot UDP: ArborysMesh ACK ok; existing send protocol", true);
+  }
+}
+
+void serviceBootUdpPresence(bool blockUntilDecided) {
+  if (s_bootUdpPhase == 2) return;
+  if (!wifiReadyForNetwork()) return;
+#ifdef _USEUDP
+  if (s_bootUdpPhase == 0) {
+    if (!connectUDP()) return;
+    if (!broadcastUdpPresence()) return;
+    s_bootUdpPhase = 1;
+    s_bootUdpDeadlineMs = millis() + BOOT_UDP_PRESENCE_WAIT_MS;
+    SerialPrint("Boot UDP: presence broadcast", true);
+  }
+  if (s_bootUdpPhase != 1) return;
+  if (blockUntilDecided) {
+    while ((int32_t)(millis() - s_bootUdpDeadlineMs) < 0) {
+      receiveUDPMessage();
+      delay(20);
+      esp_task_wdt_reset();
+    }
+  } else if ((int32_t)(millis() - s_bootUdpDeadlineMs) < 0) {
+    return;
+  }
+  decideBootUdpTransport();
+#else
+  (void)blockUntilDecided;
+  s_bootUdpPhase = 2;
+#endif
+}
+
 static bool destinationNeedsLAN(const ArborysDevType* d, bool haveWifi) {
   if (!d) return true;
   return !haveWifi || d->IP == IPAddress(0, 0, 0, 0);
@@ -11744,20 +12565,29 @@ static uint8_t packSensorsForSend(int16_t* outIndices, uint8_t maxOut, bool forc
 
   for (int16_t i = 0; i < NUMSENSORS; ++i) {
     ArborysSnsType* S = Sensors.snsIndexToPointer(i);
-    if (!S || !S->IsSet || S->deviceIndex != myIdx) {
-      continue;
-    }
+    if (!S || !S->IsSet || S->deviceIndex != myIdx) continue;
+#if _HAS_LOCAL_SENSORS
+    // forceSend still omits a sensor that has no real sample yet.
+    if (!localSensorReadyToSend(S)) continue;
+#endif
+    const bool named = forceSend && triggerSnsIndex == i;
+    const bool monitored = bitRead(S->Flags, 1);
+    const bool criticalEdge = bitRead(S->Flags, 7) && bitRead(S->Flags, 6);
+    // Interval and ordinary sends need Monitored. A send-all does not pull an
+    // unmonitored sensor. Critical still goes out on a bounds or expiry edge.
+    if (!named && !monitored && !criticalEdge) continue;
 
     bool isDue = false;
     if (forceSend) {
-      isDue = (triggerSnsIndex < 0) || (i == triggerSnsIndex);
+      if (named || criticalEdge) isDue = true;
+      else if (triggerSnsIndex < 0 && monitored) isDue = true;
     } else {
       isDue = checkThisSensorTime(S);
     }
 
     if (isDue) {
       dueIndices[dueCount++] = i;
-    } else if (S->SendingInt != 0 && isSensorMonitored(S) && sensorHasFreshUnreadData(S)) {
+    } else if (monitored && S->SendingInt != 0 && sensorHasFreshUnreadData(S)) {
       freshIndices[freshCount++] = i;
     }
   }
@@ -11825,6 +12655,8 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
   }
 
   const bool haveWifi = wifiReadyForNetwork();
+  // Finish the startup UDP exchange before the first sensor send chooses a transport.
+  serviceBootUdpPresence(true);
   static char jsonBuffer[SNSDATA_JSON_BUFFER_SIZE];
   int16_t sendList[NUMSENSORS];
   // Pack without JSON limit first for mesh; apply JSON limit only for HTTP fallback.
@@ -11835,6 +12667,32 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
   }
 
   bool isGood = false;
+
+  // Mesh ACK failed at boot: JSON over UDP until reboot. No mesh, and midnight does not undo this.
+  if (s_udpSensorsUntilBoot && haveWifi) {
+    IPAddress dest(0, 0, 0, 0);
+    if (sendToDeviceIndex >= 0) {
+      ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+      if (!d) return false;
+      if (!isDeviceSendTime(d, forceSend)) return false;
+      if (d->IP != IPAddress(0, 0, 0, 0)) dest = d->IP;
+    }
+    SerialPrint("SendData: UDP (ArborysMesh skipped until reboot)", true);
+    isGood = sendSensorJsonViaUdp(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, dest);
+    if (isGood) {
+      if (sendToDeviceIndex >= 0) {
+        ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
+        if (d) d->dataSent = utcNow();
+      } else {
+#ifndef _USELOWPOWER
+        markAllServersDataSent();
+#endif
+      }
+    } else {
+      I.makeBroadcast = true;
+    }
+    return isGood;
+  }
 
   // Directed HTTP response to one device (data-request)
   if (sendToDeviceIndex >= 0) {

@@ -165,26 +165,26 @@ extern uint16_t TESTRUN;
 extern uint32_t WTHRFAIL;
 #endif
 
-// Boot: block at most WIFI_BOOT_MAX_MS trying STA, then non-blocking APSTA (STA retries continue there).
-// Runtime: wait WIFI_DOWN_AP_THRESHOLD_SEC before opening soft-AP for credential recovery;
-// while AP is up, retry known STA credentials every WIFI_AP_STA_RECONNECT_SEC (time-debounced
-// WiFi.begin; do not gate on WL_IDLE_STATUS). Soft-AP stays up until STA is usable.
-// Associated-without-IP (WL_CONNECTED / WL_IDLE + 0.0.0.0): wait WIFI_ZERO_IP_GRACE_MS for DHCP,
-// then disconnect+begin; reboot with RESET_WIFI after WIFI_ZERO_IP_REBOOT_AFTER attempts.
-// Peripherals (_I_AM_PERIPHERAL, _MYTYPE 1–99): also enter/stay in APSTA when no live server is known
-// (none registered, or all servers expired / stale) so users can debug via 192.168.4.1.
-// AP-mode ESP-NOW channel scans run only when credentials are missing (avoid RF hops during STA retry).
+// Boot: try the last working BSSID and channel, then one scan. If that budget fails, open the soft AP.
+// Runtime with saved credentials: rejoin that same BSSID and channel. No scan, no soft AP.
+// After WIFI_DOWN_AP_THRESHOLD_SEC still down, reboot RESET_WIFI and leave an NVS note.
+// The next boot that reaches the router tells the hubs "WiFi failed".
+// Soft AP is only for missing credentials or a boot that cannot join. It is channel 1, WPA2, AP password.
+// While that soft AP is up, BLE provisioning stays advertised (arborysnet-XXXXXX, PoP = AP password).
+// Associated-without-IP uses the same WIFI FAILED reboot after WIFI_ZERO_IP_REBOOT_AFTER forced rejoins.
+// WiFi.persistent(false) is set before the radio starts so AP config is not stored in or reloaded from NVS.
 static constexpr uint32_t WIFI_BOOT_MAX_MS = 60000;         // total boot STA budget before APSTA
 static constexpr uint16_t WIFI_BOOT_TRY_MS = 30000;         // per-attempt wait within the boot budget
 static constexpr uint8_t WIFI_BOOT_RETRY_LIMIT = 2;         // used by connectWiFi() helpers (≤ boot budget)
-static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 300; // 5 minutes of continuous STA failure → enter AP+STA
+static constexpr uint16_t WIFI_DOWN_AP_THRESHOLD_SEC = 300; // 5 minutes of continuous STA failure → reboot WIFI FAILED
 static constexpr uint16_t WIFI_AP_STA_RECONNECT_SEC = 60;   // while in AP+STA, retry known SSID this often
 static constexpr uint32_t WIFI_ZERO_IP_GRACE_MS = 25000;    // allow DHCP after associate / LOST_IP
 static constexpr uint32_t WIFI_ZERO_IP_RECOVER_INTERVAL_MS = 45000; // between forced reconnect attempts
 static constexpr uint8_t WIFI_ZERO_IP_REBOOT_AFTER = 5;     // forced reconnects before reboot
 // Prefer strongest BSSID for the configured SSID at connect time; re-evaluate periodically.
 // Chosen BSSID is never persisted — only the best AP at the moment of selection.
-static constexpr uint16_t WIFI_BSSID_OPTIMIZE_INTERVAL_SEC = 1800; // 30 minutes
+static constexpr uint16_t WIFI_BSSID_OPTIMIZE_INTERVAL_SEC = 10800; // 180 minutes
+static constexpr int8_t WIFI_BSSID_OPTIMIZE_SKIP_ABOVE_DB = -80;   // current AP stronger than this: do not scan
 static constexpr int8_t WIFI_BSSID_ROAM_MIN_IMPROVEMENT_DB = 6;    // hysteresis to avoid AP flapping
 static constexpr uint16_t AP_ESP_NOW_STALE_PING_SEC = 60;
 static constexpr uint16_t AP_CHANNEL_SCAN_IDLE_SEC = 120;
@@ -216,10 +216,6 @@ void maybeExitAPStationMode();
 uint32_t getApStationEnterMillis();
 /** Soft-AP client associated and/or recent AP HTTP activity. */
 bool apStationUserActive();
-#if _I_AM_PERIPHERAL
-// Peripheral: enter/stay in APSTA when no live server (for AP debug portal).
-void servicePeripheralServerApMode();
-#endif
 void syncInitialSetupState();
 void resetEphemeralCoreWifiState();
 void reconcileWifiStateAfterCoreLoad();
@@ -256,6 +252,9 @@ void handleRETRIEVEDATA_MOVINGAVERAGE();
 void handleFLUSHSD();
 void handleSETWIFI();
 void handleSTATUS();
+#if _IS_SERVER_HUB
+void handleDEVICES();
+#endif
 void handleMESH_SETTINGS();
 #if _HAS_LOCAL_SENSORS
 void handleSWITCHSTATE();
@@ -375,14 +374,19 @@ int16_t sendMSG_DataRequest(ArborysDevType* d, int16_t snsIndex, bool viaHTTP);
 void serviceDeviceConnectivityPings(bool startCycle = false);
 
 #if _IS_SERVER_HUB
-// Hub: before labeling a non-low-power peripheral expired, probe with snsReqExpired
-// (HTTP when WiFi is up, ArborysMesh ACK when it is not). One device per call.
+// Hub: while a non-low-power peripheral is expired, ask again. Critical sensors use
+// HTTP/HTTPS every min(3 min, SendingInt). Others use UDP every min(5 min, 2×SendingInt),
+// or plain HTTP when today's UDP ping fail rate is above 50%. One device per call.
 void serviceExpiredDeviceDataRequests(bool startCycle = false);
 #endif
 
 // Peripheral: a hub reported missing readings. Counted at most once per 2× SendingInt.
 void noteExpiredDataRequest(uint64_t hubMac);
 void resetExpiredRequestLadder();
+
+// Boot: UDP presence, then mesh ACK to servers learned that way.
+// blockUntilDecided waits out the reply window before a sensor send.
+void serviceBootUdpPresence(bool blockUntilDecided = false);
 
 // HTTP errorLog to each known hub. The hub storeError()s it onto its SD card.
 // sensor may be null. detail is optional short text after the type and source.

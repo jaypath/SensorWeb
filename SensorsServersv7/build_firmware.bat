@@ -4,9 +4,12 @@ setlocal EnableExtensions EnableDelayedExpansion
 rem Build (and optionally upload) PlatformIO environments from platformio.ini.
 rem
 rem Usage:
-rem   build_firmware.bat                  Build every OTA (espota) env not marked ;not for automation, skipping
-rem                                       envs whose ota_record.txt entry is already at CONFIG_APP_PROJECT_VER
-rem   build_firmware.bat -u               Same, and OTA-upload each built env to its upload_port
+rem   build_firmware.bat                  Refresh IPs from the hub, then build every OTA (espota) env not marked
+rem                                       ;not for automation, skipping envs whose ota_record.txt entry is already
+rem                                       at CONFIG_APP_PROJECT_VER
+rem   build_firmware.bat -u               Same, and OTA-upload each built env to its upload_port.
+rem                                       If an OTA upload fails, the image is sent to wthrlite_OTA and
+rem                                       wthrbase_OTA (unless marked ;not for automation) for hub dispersal.
 rem   build_firmware.bat -u -n            OTA-upload the existing firmware\ images without compiling
 rem   build_firmware.bat Den_OTA -u       Build + OTA-upload Den_OTA to its upload_port (no version check)
 rem   build_firmware.bat Den_USB -u -a    Build + USB-upload Den_USB to the auto-detected COM port
@@ -124,6 +127,7 @@ set "UPLOAD_COUNT=0"
 set "FAIL_COUNT=0"
 set "SKIP_COUNT=0"
 set "EXCLUDE_COUNT=0"
+set "QUEUED_COUNT=0"
 set "FAILED_LIST="
 
 echo.
@@ -140,6 +144,14 @@ if "!NO_COMPILE!"=="1" (echo Compile:          no, using prebuilt firmware) else
 if defined ENV_ARG (
   call :process "!ENV_ARG!" "specified"
   goto :summary
+)
+
+echo.
+echo Refreshing device IPs from the hub...
+call "%SCRIPT_DIR%get_IP_from_hub.bat"
+if errorlevel 1 (
+  echo ERROR: Hub device check failed. No environments were built.
+  exit /b 1
 )
 
 %PS% "%UTIL%" -Mode list -RecordPath "%RECORD%" > "%TARGET_LIST%"
@@ -289,6 +301,10 @@ if /i "!PROTO!"=="espota" (
 )
 if errorlevel 1 (
   echo ERROR: Upload failed for !ENV!
+  if /i "!PROTO!"=="espota" (
+    call :queue_on_hubs
+    if not errorlevel 1 goto :process_queued
+  )
   goto :process_fail
 )
 %PS% "%UTIL%" -Mode record -EnvName "!ENV!" -Port "!UP_TARGET!" -Version "!UP_VER!" -RecordPath "%RECORD%"
@@ -338,6 +354,47 @@ set /a OK_COUNT+=1
 echo OK: !ENV!
 exit /b 0
 
+rem Direct OTA failed. Hand the image to the main hubs so peripherals can pull it later.
+rem Does not write ota_record.txt: the device itself has not taken the update yet.
+:queue_on_hubs
+set "HUB_IMG=!DEST_FILE!"
+if "!NO_COMPILE!"=="1" set "HUB_IMG=!PB_PATH!"
+set "HUB_NAME=!DEVICE!-!UP_VER!.bin"
+if not exist "!HUB_IMG!" (
+  echo ERROR: No firmware image to send to the hubs
+  exit /b 1
+)
+set "HUB_OK=0"
+echo OTA failed. Sending !HUB_NAME! to the main hubs...
+for /f "usebackq tokens=1-3 delims=|" %%A in (`%PS% "%UTIL%" -Mode hubs`) do (
+  if /i "%%A"=="SKIP" (
+    echo Hub %%B skipped: %%C
+  ) else if /i "%%A"=="OK" (
+    echo Sending !HUB_NAME! to %%C ^(%%B^)...
+    set "HUB_RC="
+    for /f "usebackq delims=" %%R in (`%PS% "%UTIL%" -Mode hubput -HubIp "%%B" -ImagePath "!HUB_IMG!" -FirmwareName "!HUB_NAME!"`) do set "HUB_RC=%%R"
+    if /i "!HUB_RC!"=="OK" (
+      echo OK: %%C accepted !HUB_NAME!
+      set "HUB_OK=1"
+    ) else if /i "!HUB_RC!"=="INUSE" (
+      echo WARN: %%C has !HUB_NAME! in use
+    ) else (
+      echo ERROR: %%C !HUB_RC!
+    )
+  ) else (
+    echo ERROR: %%A %%B %%C
+  )
+)
+if "!HUB_OK!"=="1" exit /b 0
+echo ERROR: Neither main hub accepted !HUB_NAME!
+exit /b 1
+
+:process_queued
+if defined STAGED if exist "!STAGED!" del /q "!STAGED!" >nul 2>&1
+set /a QUEUED_COUNT+=1
+echo QUEUED: !ENV! ^(direct OTA failed; firmware is on a hub^)
+exit /b 0
+
 :process_fail
 if defined STAGED if exist "!STAGED!" del /q "!STAGED!" >nul 2>&1
 set /a FAIL_COUNT+=1
@@ -353,15 +410,22 @@ echo Usage:
 echo   build_firmware.bat [env] [-u] [-a] [-n] [-help]
 echo.
 echo   env    A PlatformIO environment name exactly as in platformio.ini, e.g. Den_OTA or Den_USB.
-echo          With an env: only that env is processed; ota_record.txt is NOT checked.
-echo          Without an env: every OTA (espota) env is processed, except envs marked
-echo          ";not for automation" and envs whose ota_record.txt entry is already at the
-echo          platformio.ini version (these are listed as SKIP).
+echo          With an env: only that env is processed; ota_record.txt is NOT checked,
+echo          and get_IP_from_hub.bat is NOT run. The IP and flags already in
+echo          platformio.ini are used.
+echo          Without an env: get_IP_from_hub.bat runs first (updates upload_port and
+echo          ";not for automation"), then every OTA (espota) env is processed, except
+echo          envs marked ";not for automation" and envs whose ota_record.txt entry is
+echo          already at the platformio.ini version (these are listed as SKIP).
 echo.
 echo Flags (any order):
 echo   -u, -upload, --upload        Upload after building, to the env's upload_port:
 echo                                  espota env  -^> OTA to the IP in upload_port
 echo                                  serial env  -^> the COM port in upload_port
+echo                                If an espota upload fails, the image is sent over HTTPS to
+echo                                wthrlite_OTA and wthrbase_OTA so those hubs can disperse it.
+echo                                A hub marked ;not for automation is skipped. The device is
+echo                                not recorded as updated until a direct OTA succeeds.
 echo                                Error if the env has no upload_port (use -a for serial).
 echo   -a, -auto, --auto            Upload to the auto-detected serial port (implies -u).
 echo                                Single serial env only, e.g. build_firmware.bat Den_USB -u -a
@@ -394,6 +458,7 @@ echo   build_firmware.bat Den_USB           Build only
 echo.
 echo Notes:
 echo   - Classic ESP32 (NimBLE) envs build in %%USERPROFILE%%\.platformio-nimble automatically.
+echo   - Hub dispersal uses the LMK in %%ARBORYS_LMK%% or in lmk.key next to this script.
 echo   - Do not run an IDE build at the same time.
 echo.
 endlocal & exit /b 0
@@ -405,6 +470,7 @@ echo === Done ===
 echo Firmware version: !FW_VER!
 echo Successful:       !OK_COUNT!
 echo Uploaded:         !UPLOAD_COUNT!
+echo Queued on hubs:   !QUEUED_COUNT!
 echo Skipped:          !SKIP_COUNT!
 echo Excluded:         !EXCLUDE_COUNT!
 echo Failed:           !FAIL_COUNT!

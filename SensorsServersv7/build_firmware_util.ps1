@@ -8,10 +8,13 @@
 #   record   - upsert env|port|version|timestamp into ota_record.txt
 #   flashmap - for a direct esptool app-only write of -ImagePath with -EnvName's partition table:
 #              OK|otadata_offset|blank_otadata_file|ota_0_offset|upload_speed  or  ERR|message
+#   hubs     - wthrlite_OTA and wthrbase_OTA as OK|ip|env, SKIP|env|not for automation, or ERR|env|why
+#   hubput   - HTTPS (LMK) upload of -ImagePath to -HubIp as firmware -FirmwareName
+#              prints OK, INUSE, or ERR|message. Key: ARBORYS_LMK, else lmk.key beside this script.
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('version', 'list', 'info', 'prebuilt', 'record', 'flashmap')]
+    [ValidateSet('version', 'list', 'info', 'prebuilt', 'record', 'flashmap', 'hubs', 'hubput')]
     [string]$Mode,
 
     [string]$EnvName = '',
@@ -20,7 +23,9 @@ param(
     [string]$RecordPath = '',
     [string]$FirmwareDir = '',
     [string]$ImagePath = '',
-    [string]$IniPath = ''
+    [string]$IniPath = '',
+    [string]$HubIp = '',
+    [string]$FirmwareName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -171,6 +176,99 @@ function Resolve-EnvKey {
     return ''
 }
 
+function Get-LmkKeyBytes {
+    $text = $env:ARBORYS_LMK
+    if (-not $text) {
+        $keyFile = Join-Path $root 'lmk.key'
+        if (Test-Path -LiteralPath $keyFile) {
+            $text = (Get-Content -LiteralPath $keyFile -TotalCount 1).Trim()
+        }
+    }
+    if (-not $text) {
+        throw 'LMK key not found. Set ARBORYS_LMK or put the 16-character key in lmk.key next to build_firmware.bat.'
+    }
+    $raw = [Text.Encoding]::ASCII.GetBytes($text)
+    $key = New-Object byte[] 16
+    $n = [Math]::Min(16, $raw.Length)
+    if ($n -gt 0) { [Array]::Copy($raw, $key, $n) }
+    return $key
+}
+
+# Same framing as BootSecure::encrypt: [u16 le plain len][payload], zero pad to 16, AES-128-CBC, IV prepended.
+function Protect-LmkPayload {
+    param([byte[]]$Payload, [byte[]]$Key)
+    $framed = New-Object byte[] (2 + $Payload.Length)
+    $framed[0] = [byte]($Payload.Length -band 0xFF)
+    $framed[1] = [byte](($Payload.Length -shr 8) -band 0xFF)
+    [Array]::Copy($Payload, 0, $framed, 2, $Payload.Length)
+    $pad = 0
+    if (($framed.Length % 16) -ne 0) { $pad = 16 - ($framed.Length % 16) }
+    $padded = New-Object byte[] ($framed.Length + $pad)
+    [Array]::Copy($framed, $padded, $framed.Length)
+    $iv = New-Object byte[] 16
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($iv) } finally { $rng.Dispose() }
+    $aes = [Security.Cryptography.Aes]::Create()
+    try {
+        $aes.Mode = [Security.Cryptography.CipherMode]::CBC
+        $aes.Padding = [Security.Cryptography.PaddingMode]::None
+        $aes.Key = $Key
+        $aes.IV = $iv
+        $enc = $aes.CreateEncryptor().TransformFinalBlock($padded, 0, $padded.Length)
+    } finally { $aes.Dispose() }
+    $out = New-Object byte[] (16 + $enc.Length)
+    [Array]::Copy($iv, $out, 16)
+    [Array]::Copy($enc, 0, $out, 16, $enc.Length)
+    return $out
+}
+
+function Unprotect-LmkPayload {
+    param([byte[]]$Blob, [byte[]]$Key)
+    if ($Blob.Length -lt 32 -or (($Blob.Length - 16) % 16) -ne 0) { throw 'Bad cipher length' }
+    $iv = New-Object byte[] 16
+    [Array]::Copy($Blob, 0, $iv, 0, 16)
+    $ct = New-Object byte[] ($Blob.Length - 16)
+    [Array]::Copy($Blob, 16, $ct, 0, $ct.Length)
+    $aes = [Security.Cryptography.Aes]::Create()
+    try {
+        $aes.Mode = [Security.Cryptography.CipherMode]::CBC
+        $aes.Padding = [Security.Cryptography.PaddingMode]::None
+        $aes.Key = $Key
+        $aes.IV = $iv
+        $plain = $aes.CreateDecryptor().TransformFinalBlock($ct, 0, $ct.Length)
+    } finally { $aes.Dispose() }
+    $n = [int]$plain[0] + ([int]$plain[1] -shl 8)
+    if ($n -le 0 -or (2 + $n) -gt $plain.Length) { throw 'Bad payload length' }
+    return [Text.Encoding]::ASCII.GetString($plain, 2, $n)
+}
+
+function Send-HttpBody {
+    param([string]$Url, [byte[]]$Body, [int]$TimeoutMs)
+    [System.Net.ServicePointManager]::Expect100Continue = $false
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.Method = 'POST'
+    $req.ContentType = 'application/octet-stream'
+    $req.Timeout = $TimeoutMs
+    $req.ReadWriteTimeout = $TimeoutMs
+    $req.KeepAlive = $false
+    $req.ContentLength = $Body.Length
+    $stream = $req.GetRequestStream()
+    try { $stream.Write($Body, 0, $Body.Length) } finally { $stream.Close() }
+    $code = 0
+    $resp = $null
+    try {
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode
+    } catch [System.Net.WebException] {
+        $resp = $_.Exception.Response
+        if (-not $resp) { throw $_.Exception.Message }
+        $code = [int]$resp.StatusCode
+    }
+    $ms = New-Object System.IO.MemoryStream
+    try { $resp.GetResponseStream().CopyTo($ms) } finally { $resp.Close() }
+    return @{ Code = $code; Body = $ms.ToArray() }
+}
+
 switch ($Mode) {
     'version' {
         Write-Output (Get-FwVersion -Path $IniPath)
@@ -293,5 +391,65 @@ switch ($Mode) {
         if (-not $replaced) { $lines.Add($newLine) | Out-Null }
         [System.IO.File]::WriteAllLines($RecordPath, $lines, (New-Object System.Text.UTF8Encoding $false))
         Write-Output "Recorded $EnvName -> $Version ($Port)"
+    }
+    'hubs' {
+        $all = Get-EnvSections -Path $IniPath
+        foreach ($name in @('wthrlite_OTA', 'wthrbase_OTA')) {
+            $s = $all | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if (-not $s) {
+                Write-Output "ERR|$name|not in platformio.ini"
+            } elseif ($s.Skip) {
+                Write-Output "SKIP|$name|not for automation"
+            } elseif (-not $s.Port) {
+                Write-Output "ERR|$name|no upload_port"
+            } else {
+                Write-Output "OK|$($s.Port)|$name"
+            }
+        }
+    }
+    'hubput' {
+        try {
+            if (-not $HubIp) { throw 'HubIp is required' }
+            if (-not $FirmwareName) { throw 'FirmwareName is required' }
+            if (-not $ImagePath -or -not (Test-Path -LiteralPath $ImagePath)) { throw "Firmware image not found: $ImagePath" }
+            $key = Get-LmkKeyBytes
+            $fileBytes = [System.IO.File]::ReadAllBytes($ImagePath)
+            if ($fileBytes.Length -le 0 -or $fileBytes.Length -gt 8MB) { throw 'Firmware image size is not valid' }
+            $announce = '{"msgType":"FirmwareUpload","name":"' + $FirmwareName + '","size":' + $fileBytes.Length + '}'
+            $cipher = Protect-LmkPayload -Payload ([Text.Encoding]::ASCII.GetBytes($announce)) -Key $key
+            $check = Send-HttpBody -Url ("http://{0}/POST_ENC" -f $HubIp) -Body $cipher -TimeoutMs 20000
+            if ($check.Code -lt 200 -or $check.Code -ge 300) { throw ("hub check HTTP {0}" -f $check.Code) }
+            $reply = Unprotect-LmkPayload -Blob $check.Body -Key $key
+            if ($reply -match '"error"\s*:\s*"in use"') { Write-Output 'INUSE'; exit 2 }
+            if ($reply -notmatch '"ok"\s*:\s*true') { throw ("hub refused: {0}" -f $reply) }
+
+            $chunk = 3968
+            $wire = New-Object System.IO.MemoryStream
+            for ($off = 0; $off -lt $fileBytes.Length; $off += $chunk) {
+                $n = [Math]::Min($chunk, $fileBytes.Length - $off)
+                $piece = New-Object byte[] $n
+                [Array]::Copy($fileBytes, $off, $piece, 0, $n)
+                $frame = Protect-LmkPayload -Payload $piece -Key $key
+                $lenb = [byte[]]@(
+                    [byte]($frame.Length -band 0xFF),
+                    [byte](($frame.Length -shr 8) -band 0xFF)
+                )
+                $wire.Write($lenb, 0, 2)
+                $wire.Write($frame, 0, $frame.Length)
+            }
+            $eof = [byte[]]@(0, 0)
+            $wire.Write($eof, 0, 2)
+            $put = Send-HttpBody -Url ("http://{0}/FIRMWARE_PUT" -f $HubIp) -Body $wire.ToArray() -TimeoutMs 180000
+            $text = [Text.Encoding]::ASCII.GetString($put.Body)
+            if ($text -match '"error"\s*:\s*"in use"') { Write-Output 'INUSE'; exit 2 }
+            if ($put.Code -ge 200 -and $put.Code -lt 300 -and $text -match '"ok"\s*:\s*true') {
+                Write-Output 'OK'
+                exit 0
+            }
+            throw ("hub write failed: {0} {1}" -f $put.Code, $text)
+        } catch {
+            Write-Output ("ERR|{0}" -f $_.Exception.Message)
+            exit 1
+        }
     }
 }

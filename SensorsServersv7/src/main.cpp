@@ -14,54 +14,13 @@
  * v12 - many changes. sends daa to google drive connected arduino
   */
 
-/*
-//0 - not defined/not a sensor/do not use
-//1 - temp, DHT
-//2 - RH, DHT
-//3 - soil moisture, capacitative or Resistive
-//4 -  temp, AHT21
-//5 - RH, AHT21
-//6 - 
-//7 - distance, HC-SR04
-//8 - 
-//9 - BMP pressure
-//10 - BMP temp
-//11 - BMP altitude
-//12 - Pressure derived prediction (uses an array called BAR_HX containing hourly air pressure for past 24 hours). REquires _USEBARPRED be defined
-//13 - BMe pressure
-//14 - BMe temp
-//15 - BMe humidity
-//16 - BMe altitude
-//17 - BME680 temp
-18 - BME680 rh
-19 - BME680 air press
-20  - BME680 gas sensor
-21 - 
-30 -
-40 - any binary, 1=yes/true/on
-41 = any on/off switch
-42 = any yes/no switch
-43 = any 3 way switch
-50 = total HVAC time
-55 - heat on/off {requires N DIO Pins}
-56 - a/c  on/off {requires 2 DIO pins... compressor and fan}
-57 - a/c fan on/off
-60 -  battery power
-61 - battery %
-70 - leak
-99 = any numerical value
-100-150 - server types
-200-255 - interrupt-driven sensors
-200 - human presence (mm-wave RCWL-0516)
-220 - momentary lights switch
-*/
-
-
 #include "globals.hpp"
 #include "utility.hpp"
 #include "firmwareUpdate.hpp"
 #if _HAS_LOCAL_SENSORS
 #include "interrupt_triggers.hpp"
+#include "actuators.hpp"
+#include "bryant_bus.hpp"
 #endif
 #include <esp_task_wdt.h>
 #include <esp_system.h>
@@ -364,9 +323,23 @@ void setup() {
 
         tftPrint("Loading weather data...", false, TFT_WHITE, 2, 1, false, -1, -1);
         esp_task_wdt_reset();
+        // Wrong object size or store version: delete the package now, fetch NOAA,
+        // and write a new one. Do not leave it for the hourly push.
+        const uint8_t pkgRecover = WeatherData.recoverCorruptWeatherPackage(true);
+        if (pkgRecover == 1) {
+            SerialPrint("Weather package size mismatch; rebuilt from fresh NOAA data", true);
+            tftPrint("Weather package size mismatch.", true, TFT_YELLOW);
+            tftPrint("Fresh weather downloaded. Package rebuilt.", true, TFT_GREEN);
+        } else if (pkgRecover == 2) {
+            SerialPrint("Weather package size mismatch; rebuild will retry", true);
+            tftPrint("Weather package size mismatch.", true, TFT_YELLOW);
+            tftPrint("Fresh download will retry.", true, TFT_YELLOW);
+        }
     //load weather data from SD card; forceStaleRefresh applies content freshness
     //(e.g. hourly needs 24h coverage) rather than trusting a recent fetch timestamp.
-        if (readWeatherDataSD()) {
+        if (pkgRecover == 1) {
+            SerialPrint("Weather package recovery already refreshed NOAA data", true);
+        } else if (readWeatherDataSD()) {
             byte weatherBoot = WeatherData.updateWeatherOptimized(3600, true, true);
             if (weatherBoot == 3) {
                 SerialPrint("Weather data loaded from SD card (content fresh)", true);
@@ -487,6 +460,11 @@ void setup() {
     digitalWrite((uint8_t)rcwlEn, HIGH);
   }
 #endif
+
+#if _HAS_LOCAL_SENSORS && !defined(_USELOWPOWER)
+  // After pin setup. The first loop can send on a minute boundary before its own poll.
+  readLocalSensorsAtBoot();
+#endif
     
 }
 
@@ -507,6 +485,8 @@ void loop() {
     #if _USEINTERRUPT
     serviceInterruptSensors();
     #endif
+    serviceFastActuators();
+    bryantBusPoll();
     #endif
 
     #if _SUPABASE_RUNTIME
@@ -741,18 +721,21 @@ void loop() {
             readAllSensors(false);
         #endif
 
+        #if defined(_USESSD1306) && defined(_USEBRYANT)
+        redrawOled();
+        #endif
+
         if (I.MyRandomSecond == second()) {
             // Send first so local timeLogged/timeRead clocks refresh before expiry evaluation.
             #if _HAS_LOCAL_SENSORS
             sendAllSensors(false, -1, true);
             #endif
             // once per minute at a random second.
-            // Local and critical remote: time + 1.25×SendingInt. Noncritical remote: 2×SendingInt.
-            // Hubs leave non-low-power remotes unlabeled until snsReqExpired is acked or fails.
+            // Hub remotes: critical (bit 7 after override) at 1.05×SendingInt, others at 2.05×.
+            // Local sensors stay at 1.25×. Rechecks run every second below.
             I.isExpired = Sensors.checkExpirationAllSensors(utcNow(), false, 0, true);
 
             #if _IS_SERVER_HUB
-            // Hub: start expired-peripheral data-request cycle (one device per second below)
             serviceExpiredDeviceDataRequests(true);
             if (I.makeBroadcast) { //broadcast every 10 minutes, at some random second within the 10th minute
                 broadcastServerPresence(true, 2);
@@ -765,7 +748,7 @@ void loop() {
         }
 
         #if _IS_SERVER_HUB
-        // Expired data requests: one device per second; HTTP path is async (queued worker)
+        // Expired rechecks: one peripheral per second. Critical uses HTTP/HTTPS; others use UDP.
         serviceExpiredDeviceDataRequests(false);
         #endif
 

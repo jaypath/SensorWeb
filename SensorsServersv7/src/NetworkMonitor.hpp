@@ -18,7 +18,7 @@ constexpr uint16_t NM_PING_BURST_INTERVAL_MS = 200;
 constexpr uint32_t NM_PING_MAX_DURATION_MS = 30000;
 constexpr uint32_t NM_DOWNLOAD_MIN_INTERVAL_SEC = 120;
 
-// Local sensors: snsType 81-89. Multiple snsTypes may share one underlying test (85/86 gateway, 87/88 external, 89 download).
+// Local sensors: snsType 153-161. Multiple snsTypes may share one underlying test (157/158 gateway, 159/160 external, 161 download).
 enum NetworkMonitorTestIndex : uint8_t {
     NM_TEST_BSSID = 0,
     NM_TEST_LOCAL_IP = 1,

@@ -6,6 +6,7 @@
 #include "AddESPNOW.hpp"
 #include <esp_app_format.h>
 #include "esp_ota_ops.h"
+#include <HTTPClient.h>
 
 static constexpr uint16_t FW_ENC_PLAIN_CHUNK = 3968;
 static constexpr uint16_t FW_ENC_MAX_CIPHER = 4096;
@@ -639,8 +640,109 @@ static bool parseFwBlockHttpResponse(WiFiClient& client, FwBlockHttpMeta& meta, 
 }
 
 #if defined(_USESDCARD) && _IS_SERVER_HUB
+// Recent block serves for the hub main-page firmware line. Held across the client's retry gap.
+static constexpr uint8_t FW_SERVE_NOTES = 4;
+static constexpr uint32_t FW_SERVE_NOTE_HOLD_MS = 90000;
+
+struct FwServeNote {
+    bool used = false;
+    bool success = false;
+    char name[31] = "";
+    char file[64] = "";
+    uint32_t block = 0;
+    uint32_t total = 0;
+    uint8_t attempt = 1;
+    uint32_t lastMs = 0;
+};
+
+static FwServeNote s_fwServe[FW_SERVE_NOTES];
+
+static void copyFwServeName(char* dst, size_t dstLen, const char* src) {
+    size_t j = 0;
+    if (!src) src = "";
+    for (size_t i = 0; src[i] && j + 1 < dstLen; ++i) {
+        char c = src[i];
+        if (c == '<' || c == '>' || c == '&' || c == '"' || c == '\'') c = ' ';
+        dst[j++] = c;
+    }
+    if (dstLen) dst[j] = '\0';
+}
+
+static FwServeNote* fwServeNoteFor(const char* name) {
+    FwServeNote* freeSlot = nullptr;
+    FwServeNote* oldest = &s_fwServe[0];
+    for (uint8_t i = 0; i < FW_SERVE_NOTES; ++i) {
+        FwServeNote* n = &s_fwServe[i];
+        if (n->used && strncmp(n->name, name, sizeof(n->name)) == 0) return n;
+        if (!n->used && !freeSlot) freeSlot = n;
+        if (n->lastMs < oldest->lastMs) oldest = n;
+    }
+    return freeSlot ? freeSlot : oldest;
+}
+
+static void noteFwServerBlockResult(const char* deviceName, const char* binPath, uint32_t blockIndex, uint32_t totalBlocks, bool success) {
+    char name[31];
+    copyFwServeName(name, sizeof(name), deviceName);
+    if (!name[0] || totalBlocks == 0) return;
+    const char* base = binPath ? firmwareBinBaseName(binPath) : "";
+    if (!base) base = "";
+    FwServeNote* n = fwServeNoteFor(name);
+    const bool same = n->used && strncmp(n->name, name, sizeof(n->name)) == 0 && n->block == blockIndex;
+    if (!same) {
+        n->used = true;
+        strncpy(n->name, name, sizeof(n->name) - 1);
+        n->name[sizeof(n->name) - 1] = '\0';
+        n->block = blockIndex;
+        n->attempt = 1;
+    } else if (n->attempt < 255) {
+        n->attempt++;
+    }
+    strncpy(n->file, base, sizeof(n->file) - 1);
+    n->file[sizeof(n->file) - 1] = '\0';
+    n->total = totalBlocks;
+    n->success = success;
+    n->lastMs = millis();
+}
+
+static bool firmwareBinRecentlyServed(const char* baseName) {
+    if (!baseName || !baseName[0]) return false;
+    const uint32_t now = millis();
+    for (uint8_t i = 0; i < FW_SERVE_NOTES; ++i) {
+        if (!s_fwServe[i].used || !s_fwServe[i].file[0]) continue;
+        if (strcasecmp(s_fwServe[i].file, baseName) != 0) continue;
+        if ((uint32_t)(now - s_fwServe[i].lastMs) <= FW_SERVE_NOTE_HOLD_MS) return true;
+    }
+    return false;
+}
+
+static constexpr uint32_t FW_UPLOAD_MAX_BYTES = 8UL * 1024UL * 1024UL;
+static constexpr uint32_t FW_UPLOAD_RESERVE_MS = 180000;
+
+struct FwUploadReserve {
+    bool active = false;
+    char name[64] = "";
+    char path[96] = "";
+    uint32_t expected = 0;
+    uint32_t startedMs = 0;
+};
+static FwUploadReserve s_fwUp;
+
+static bool firmwareUploadReserveFresh() {
+    if (!s_fwUp.active) return false;
+    if ((uint32_t)(millis() - s_fwUp.startedMs) > FW_UPLOAD_RESERVE_MS) {
+        s_fwUp.active = false;
+        return false;
+    }
+    return true;
+}
+
+static bool firmwareUploadHolds(const char* path) {
+    if (!path || !firmwareUploadReserveFresh()) return false;
+    return strcasecmp(s_fwUp.path, path) == 0;
+}
+
 // Server is intentionally ambiguous: any hub may offer firmware and will serve whatever
-// block the client requests. No tracking of client progress or completion.
+// block the client requests.
 
 static void logFwServerBlockSent(const char* deviceName, uint32_t blockIndex, uint32_t totalBlocks) {
     char msg[96];
@@ -693,6 +795,10 @@ void handleFirmwareBlock() {
         server.send(404, "text/plain", "Firmware not found");
         return;
     }
+    if (firmwareUploadHolds(path)) {
+        server.send(409, "text/plain", "in use");
+        return;
+    }
 
     File f = SD.open(path, FILE_READ);
     if (!f) {
@@ -704,6 +810,7 @@ void handleFirmwareBlock() {
     const uint32_t totalBlocks = (fileSize + blockSize - 1) / blockSize;
     if (blockIndex >= totalBlocks) {
         f.close();
+        noteFwServerBlockResult(senderDevice, path, blockIndex, totalBlocks, false);
         server.send(400, "text/plain", "Block index out of range");
         return;
     }
@@ -712,6 +819,7 @@ void handleFirmwareBlock() {
     const uint32_t toRead = (offset + blockSize > fileSize) ? (fileSize - offset) : blockSize;
     if (!f.seek(offset)) {
         f.close();
+        noteFwServerBlockResult(senderDevice, path, blockIndex, totalBlocks, false);
         server.send(500, "text/plain", "Seek failed");
         return;
     }
@@ -719,6 +827,7 @@ void handleFirmwareBlock() {
     uint8_t* buf = (uint8_t*)malloc(toRead);
     if (!buf) {
         f.close();
+        noteFwServerBlockResult(senderDevice, path, blockIndex, totalBlocks, false);
         server.send(500, "text/plain", "Out of memory");
         return;
     }
@@ -726,6 +835,7 @@ void handleFirmwareBlock() {
     f.close();
     if (got != toRead) {
         free(buf);
+        noteFwServerBlockResult(senderDevice, path, blockIndex, totalBlocks, false);
         server.send(500, "text/plain", "Read failed");
         return;
     }
@@ -745,6 +855,7 @@ void handleFirmwareBlock() {
     }
     server.setContentLength(got);
     server.send(200, "application/octet-stream", "");
+    bool sentOk = false;
     WiFiClient client = server.client();
     if (client) {
         size_t sent = 0;
@@ -754,10 +865,12 @@ void handleFirmwareBlock() {
             sent += (size_t)n;
             esp_task_wdt_reset();
         }
-        if (sent == got) {
+        sentOk = (sent == got);
+        if (sentOk) {
             logFwServerBlockSent(senderDevice, blockIndex, totalBlocks);
         }
     }
+    noteFwServerBlockResult(senderDevice, path, blockIndex, totalBlocks, sentOk);
     free(buf);
 }
 #else
@@ -1581,5 +1694,503 @@ String getFirmwareReceiveProgressSuffix() {
     return String(buf);
 #else
     return "";
+#endif
+}
+
+String firmwareTransferStatusForDevice(const char* deviceName) {
+#if defined(_USESDCARD) && _IS_SERVER_HUB
+    if (!deviceName || !deviceName[0]) return "";
+    const uint32_t now = millis();
+    const FwServeNote* found = nullptr;
+    for (uint8_t i = 0; i < FW_SERVE_NOTES; ++i) {
+        const FwServeNote& n = s_fwServe[i];
+        if (!n.used || !n.file[0] || !n.name[0]) continue;
+        if ((uint32_t)(now - n.lastMs) > FW_SERVE_NOTE_HOLD_MS) continue;
+        if (strcasecmp(n.name, deviceName) != 0) continue;
+        if (!found || n.lastMs > found->lastMs) found = &n;
+    }
+    if (!found || found->total == 0) return "";
+    FirmwareVersion sending;
+    if (!parseFirmwareVersionFromBinName(found->file, sending)) return "";
+    char verText[16];
+    sending.toChar(verText, sizeof(verText));
+    const unsigned long sent = found->success
+        ? (unsigned long)found->block + 1UL
+        : (unsigned long)found->block;
+    char buf[80];
+    snprintf(buf, sizeof(buf), ", sending %s (%lu / %lu blocks sent)",
+        verText, sent, (unsigned long)found->total);
+    return String(buf);
+#else
+    (void)deviceName;
+    return "";
+#endif
+}
+
+static bool firmwareNameToPath(const char* name, char* path, size_t pathLen) {
+    if (!name || !name[0] || !path || pathLen < 20) return false;
+    if (strchr(name, '/') || strchr(name, '\\') || strchr(name, ':') || strchr(name, '"')) return false;
+    char device[64];
+    FirmwareVersion ver;
+    if (!parseFirmwareDeviceAndVersionFromBinName(name, device, sizeof(device), ver)) return false;
+    if (!buildFirmwareBinPath(device, ver, path, pathLen)) return false;
+    const char* base = firmwareBinBaseName(path);
+    return base && strcasecmp(base, name) == 0;
+}
+
+static void firmwareUploadResultJson(char* out, size_t outLen, bool ok, const char* error) {
+    if (ok) {
+        snprintf(out, outLen, "{\"msgType\":\"FirmwareUploadResult\",\"ok\":true}");
+    } else {
+        snprintf(out, outLen, "{\"msgType\":\"FirmwareUploadResult\",\"ok\":false,\"error\":\"%s\"}",
+            error ? error : "write failed");
+    }
+}
+
+#if defined(_USESDCARD) && _IS_SERVER_HUB
+static File s_putFile;
+static uint8_t s_putPending[FW_ENC_MAX_CIPHER + 2];
+static uint8_t s_putPlain[FW_ENC_PLAIN_CHUNK + 8];
+static size_t s_putPendingLen = 0;
+static uint32_t s_putWritten = 0;
+static bool s_putFailed = false;
+static bool s_putEof = false;
+static bool s_putStarted = false;
+static char s_putError[24] = "write failed";
+
+static void fwPutFail(const char* err) {
+    if (!s_putFailed) {
+        s_putFailed = true;
+        strncpy(s_putError, err ? err : "write failed", sizeof(s_putError) - 1);
+        s_putError[sizeof(s_putError) - 1] = '\0';
+    }
+    if (s_putFile) s_putFile.close();
+    // Leave an in-use file on the card. A failed write removes the partial replacement.
+    if (strcmp(s_putError, "in use") != 0 && s_fwUp.path[0]) SD.remove(s_fwUp.path);
+    s_fwUp.active = false;
+}
+
+static void fwPutResetSession() {
+    if (s_putFile) s_putFile.close();
+    s_putPendingLen = 0;
+    s_putWritten = 0;
+    s_putFailed = false;
+    s_putEof = false;
+    s_putStarted = false;
+    strncpy(s_putError, "write failed", sizeof(s_putError) - 1);
+}
+
+static bool fwPutWritePlain(const uint8_t* data, uint16_t len) {
+    if (!s_putFile || s_putWritten + len > s_fwUp.expected || s_putWritten + len > FW_UPLOAD_MAX_BYTES) {
+        fwPutFail("write failed");
+        return false;
+    }
+    const size_t n = s_putFile.write(data, len);
+    if (n != len) {
+        fwPutFail("write failed");
+        return false;
+    }
+    s_putWritten += (uint32_t)n;
+    s_fwUp.startedMs = millis();
+    esp_task_wdt_reset();
+    return true;
+}
+
+// Returns true when a whole frame was consumed. False means need more bytes, or the session failed.
+static bool fwPutTakeFrame() {
+    if (s_putFailed || s_putEof || s_putPendingLen < 2) return false;
+    const uint16_t encLen = (uint16_t)s_putPending[0] | ((uint16_t)s_putPending[1] << 8);
+    if (encLen == 0) {
+        s_putEof = true;
+        s_putPendingLen -= 2;
+        if (s_putPendingLen) memmove(s_putPending, s_putPending + 2, s_putPendingLen);
+        return true;
+    }
+    if (encLen < 32 || encLen > FW_ENC_MAX_CIPHER || (encLen % 16) != 0) {
+        fwPutFail("write failed");
+        return false;
+    }
+    if (s_putPendingLen < (size_t)2 + encLen) return false;
+    uint16_t payloadLen = 0;
+    if (!decryptHttpPayload(s_putPending + 2, encLen, s_putPlain, sizeof(s_putPlain), &payloadLen)
+        || payloadLen == 0 || payloadLen > FW_ENC_PLAIN_CHUNK) {
+        fwPutFail("write failed");
+        return false;
+    }
+    if (!fwPutWritePlain(s_putPlain + 2, payloadLen)) return false;
+    const size_t used = (size_t)2 + encLen;
+    s_putPendingLen -= used;
+    if (s_putPendingLen) memmove(s_putPending, s_putPending + used, s_putPendingLen);
+    return true;
+}
+
+static void fwPutConsume(const uint8_t* data, size_t len) {
+    if (!data || s_putFailed || s_putEof || !s_putFile) return;
+    size_t off = 0;
+    while (off < len && !s_putFailed && !s_putEof) {
+        const size_t room = sizeof(s_putPending) - s_putPendingLen;
+        if (room == 0) {
+            fwPutFail("write failed");
+            return;
+        }
+        size_t n = len - off;
+        if (n > room) n = room;
+        memcpy(s_putPending + s_putPendingLen, data + off, n);
+        s_putPendingLen += n;
+        off += n;
+        while (fwPutTakeFrame()) {}
+    }
+}
+
+static bool fwPutStart() {
+    fwPutResetSession();
+    if (!firmwareUploadReserveFresh()) {
+        fwPutFail("write failed");
+        return false;
+    }
+    const char* base = firmwareBinBaseName(s_fwUp.path);
+    if (SD.exists(s_fwUp.path) && base && firmwareBinRecentlyServed(base)) {
+        fwPutFail("in use");
+        return false;
+    }
+    if (SD.exists(s_fwUp.path) && !SD.remove(s_fwUp.path)) {
+        fwPutFail("write failed");
+        return false;
+    }
+    SD.mkdir("/Firmware");
+    s_putFile = SD.open(s_fwUp.path, FILE_WRITE);
+    if (!s_putFile) {
+        fwPutFail("write failed");
+        return false;
+    }
+    s_putStarted = true;
+    return true;
+}
+
+static void fwPutFinishResponse() {
+    char body[128];
+    if (s_putFile) s_putFile.close();
+    const bool ok = !s_putFailed && s_putEof && s_putWritten == s_fwUp.expected && s_fwUp.expected > 0;
+    if (!ok) {
+        const char* err = s_putFailed ? s_putError : "write failed";
+        if (s_putStarted && strcmp(err, "in use") != 0 && s_fwUp.path[0]) SD.remove(s_fwUp.path);
+        firmwareUploadResultJson(body, sizeof(body), false, err);
+        s_fwUp.active = false;
+        server.send(strcmp(err, "in use") == 0 ? 409 : 500, "application/json", body);
+        logSystemEvent(String("FW upload failed ") + s_fwUp.name + " (" + err + ")", EVENT_FIRMWARE_UPDATED);
+        return;
+    }
+    pruneOlderSDFirmwareAfterUpload(s_fwUp.path);
+    firmwareUploadResultJson(body, sizeof(body), true, nullptr);
+    logSystemEvent(String("FW upload OK ") + s_fwUp.name, EVENT_FIRMWARE_UPDATED);
+    s_fwUp.active = false;
+    server.send(200, "application/json", body);
+}
+#endif
+
+void processJSONMessage_FirmwareUpload(JsonObject root, String& responseMsg) {
+    char body[128];
+#if !defined(_USESDCARD) || !_IS_SERVER_HUB
+    (void)root;
+    firmwareUploadResultJson(body, sizeof(body), false, "not hub");
+    responseMsg = body;
+    return;
+#else
+    if (!isValidLMKKey()) {
+        firmwareUploadResultJson(body, sizeof(body), false, "no lmk");
+        responseMsg = body;
+        return;
+    }
+    const char* name = root["name"] | "";
+    uint32_t size = 0;
+    if (root["size"].is<uint32_t>()) size = root["size"].as<uint32_t>();
+    else if (root["size"].is<int>()) size = (uint32_t)root["size"].as<int>();
+
+    char path[96];
+    if (!firmwareNameToPath(name, path, sizeof(path))) {
+        firmwareUploadResultJson(body, sizeof(body), false, "bad name");
+        responseMsg = body;
+        return;
+    }
+    if (size == 0 || size > FW_UPLOAD_MAX_BYTES) {
+        firmwareUploadResultJson(body, sizeof(body), false, "bad size");
+        responseMsg = body;
+        return;
+    }
+    if (firmwareUploadReserveFresh()) {
+        firmwareUploadResultJson(body, sizeof(body), false, "in use");
+        responseMsg = body;
+        logSystemEvent(String("FW upload rejected ") + name + " (in use)", EVENT_FIRMWARE_UPDATED);
+        return;
+    }
+    const char* base = firmwareBinBaseName(path);
+    if (SD.exists(path) && base && firmwareBinRecentlyServed(base)) {
+        firmwareUploadResultJson(body, sizeof(body), false, "in use");
+        responseMsg = body;
+        logSystemEvent(String("FW upload rejected ") + name + " (in use)", EVENT_FIRMWARE_UPDATED);
+        return;
+    }
+
+    s_fwUp.active = true;
+    strncpy(s_fwUp.name, base ? base : name, sizeof(s_fwUp.name) - 1);
+    s_fwUp.name[sizeof(s_fwUp.name) - 1] = '\0';
+    strncpy(s_fwUp.path, path, sizeof(s_fwUp.path) - 1);
+    s_fwUp.path[sizeof(s_fwUp.path) - 1] = '\0';
+    s_fwUp.expected = size;
+    s_fwUp.startedMs = millis();
+    firmwareUploadResultJson(body, sizeof(body), true, nullptr);
+    responseMsg = body;
+    logSystemEvent(String("FW upload accepted ") + s_fwUp.name, EVENT_FIRMWARE_UPDATED);
+#endif
+}
+
+#ifdef _USE32
+void handleFirmwarePutRaw() {
+#if defined(_USESDCARD) && _IS_SERVER_HUB
+    HTTPRaw& raw = server.raw();
+    if (raw.status == RAW_START) {
+        if (!fwPutStart()) return;
+        return;
+    }
+    if (raw.status == RAW_WRITE) {
+        fwPutConsume(raw.buf, raw.currentSize);
+        return;
+    }
+    if (raw.status == RAW_ABORTED) {
+        fwPutFail("write failed");
+    }
+#else
+    (void)0;
+#endif
+}
+#endif
+
+void handleFirmwarePut() {
+    registerHTTPMessage("fwPut");
+#if !defined(_USESDCARD) || !_IS_SERVER_HUB
+    server.send(404, "text/plain", "Not available");
+    return;
+#else
+#ifndef _USE32
+    if (!fwPutStart()) {
+        fwPutFinishResponse();
+        return;
+    }
+    size_t contentLen = 0;
+    if (server.hasHeader("Content-Length")) contentLen = (size_t)server.header("Content-Length").toInt();
+    WiFiClient client = server.client();
+    uint8_t buf[512];
+    size_t got = 0;
+    uint32_t idle = millis();
+    while (got < contentLen && !s_putFailed && !s_putEof && (uint32_t)(millis() - idle) < 120000UL) {
+        const int n = client.read(buf, sizeof(buf));
+        if (n > 0) {
+            fwPutConsume(buf, (size_t)n);
+            got += (size_t)n;
+            idle = millis();
+        } else {
+            delay(1);
+        }
+        esp_task_wdt_reset();
+    }
+#endif
+    fwPutFinishResponse();
+#endif
+}
+
+static uint16_t streamCipherLen(uint16_t plainLen) {
+    uint16_t framed = (uint16_t)(plainLen + 2);
+    uint16_t padded = framed;
+    if ((framed % 16) != 0) padded = (uint16_t)(padded + 16 - (framed % 16));
+    return (uint16_t)(padded + 16);
+}
+
+static bool httpsJsonExchange(IPAddress& ip, const char* json, char* reply, size_t replyLen) {
+    if (!json || !reply || replyLen == 0) return false;
+    reply[0] = '\0';
+    const uint16_t plainLen = (uint16_t)strlen(json);
+    uint8_t* enc = (uint8_t*)malloc(FW_HTTP_ENC_MAX_CIPHER);
+    if (!enc) return false;
+    uint16_t encLen = 0;
+    if (!encryptHttpPayload((const uint8_t*)json, plainLen, enc, &encLen)) {
+        free(enc);
+        return false;
+    }
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/POST_ENC", ip.toString().c_str());
+    WiFiClient client;
+    HTTPClient http;
+    client.setTimeout(20000);
+    http.setTimeout(20000);
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/octet-stream");
+    esp_task_wdt_reset();
+    const int code = http.POST(enc, encLen);
+    free(enc);
+    esp_task_wdt_reset();
+    if (code < 200 || code >= 300) {
+        http.end();
+        return false;
+    }
+    const int respSize = http.getSize();
+    if (respSize < 32 || respSize > (int)FW_HTTP_ENC_MAX_CIPHER) {
+        http.end();
+        return false;
+    }
+    uint8_t* resp = (uint8_t*)malloc((size_t)respSize);
+    if (!resp) {
+        http.end();
+        return false;
+    }
+    WiFiClient* stream = http.getStreamPtr();
+    size_t got = 0;
+    const uint32_t start = millis();
+    while (got < (size_t)respSize && (uint32_t)(millis() - start) < 10000UL) {
+        if (stream && stream->available()) {
+            const int n = stream->read(resp + got, (size_t)respSize - got);
+            if (n > 0) got += (size_t)n;
+        } else {
+            delay(1);
+        }
+        esp_task_wdt_reset();
+    }
+    http.end();
+    if (got != (size_t)respSize) {
+        free(resp);
+        return false;
+    }
+    uint8_t plain[512];
+    uint16_t payloadLen = 0;
+    const bool dec = decryptHttpPayload(resp, (uint16_t)respSize, plain, sizeof(plain), &payloadLen);
+    free(resp);
+    if (!dec || payloadLen + 1 > replyLen || payloadLen >= sizeof(plain)) return false;
+    memcpy(reply, plain + 2, payloadLen);
+    reply[payloadLen] = '\0';
+    return reply[0] == '{';
+}
+
+int8_t uploadFirmwareFileHTTPS(IPAddress& hubIP, const char* firmwareName, const char* localFilePath) {
+    if (!firmwareName || !localFilePath || hubIP == IPAddress(0, 0, 0, 0)) return -1;
+    if (!wifiReadyForNetwork() || !isValidLMKKey()) return -1;
+#ifndef _USESDCARD
+    (void)firmwareName;
+    (void)localFilePath;
+    return -1;
+#else
+    char path[96];
+    if (!firmwareNameToPath(firmwareName, path, sizeof(path))) return 0;
+
+    File src = SD.open(localFilePath, FILE_READ);
+    if (!src) return 0;
+    const uint32_t fileSize = (uint32_t)src.size();
+    if (fileSize == 0 || fileSize > 8UL * 1024UL * 1024UL) {
+        src.close();
+        return 0;
+    }
+
+    char json[192];
+    snprintf(json, sizeof(json),
+        "{\"msgType\":\"FirmwareUpload\",\"name\":\"%s\",\"size\":%lu}",
+        firmwareName, (unsigned long)fileSize);
+    char reply[192];
+    if (!httpsJsonExchange(hubIP, json, reply, sizeof(reply))) {
+        src.close();
+        return -1;
+    }
+    if (strstr(reply, "\"error\":\"in use\"")) {
+        src.close();
+        return -2;
+    }
+    if (!strstr(reply, "\"ok\":true")) {
+        src.close();
+        return 0;
+    }
+
+    uint32_t wire = 2;
+    uint32_t left = fileSize;
+    while (left) {
+        const uint16_t n = left > FW_ENC_PLAIN_CHUNK ? (uint16_t)FW_ENC_PLAIN_CHUNK : (uint16_t)left;
+        wire += 2u + streamCipherLen(n);
+        left -= n;
+    }
+
+    WiFiClient client;
+    client.setTimeout(20000);
+    if (!client.connect(hubIP, 80)) {
+        src.close();
+        return -1;
+    }
+    char hdr[160];
+    const int hdrLen = snprintf(hdr, sizeof(hdr),
+        "POST /FIRMWARE_PUT HTTP/1.1\r\nHost: %s\r\nContent-Type: application/octet-stream\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
+        hubIP.toString().c_str(), (unsigned long)wire);
+    if (hdrLen <= 0 || client.print(hdr) != hdrLen) {
+        src.close();
+        client.stop();
+        return -1;
+    }
+
+    uint8_t* plain = (uint8_t*)malloc(FW_ENC_PLAIN_CHUNK);
+    uint8_t* enc = (uint8_t*)malloc(FW_ENC_MAX_CIPHER);
+    if (!plain || !enc) {
+        free(plain);
+        free(enc);
+        src.close();
+        client.stop();
+        return -1;
+    }
+    bool sendOk = true;
+    left = fileSize;
+    while (left && sendOk) {
+        const uint16_t n = left > FW_ENC_PLAIN_CHUNK ? (uint16_t)FW_ENC_PLAIN_CHUNK : (uint16_t)left;
+        if (src.read(plain, n) != (int)n) {
+            sendOk = false;
+            break;
+        }
+        uint16_t encLen = 0;
+        if (!encryptStreamFrame(plain, n, enc, &encLen)) {
+            sendOk = false;
+            break;
+        }
+        uint8_t lenb[2] = {(uint8_t)(encLen & 0xFF), (uint8_t)((encLen >> 8) & 0xFF)};
+        if (client.write(lenb, 2) != 2 || client.write(enc, encLen) != encLen) {
+            sendOk = false;
+            break;
+        }
+        left -= n;
+        esp_task_wdt_reset();
+    }
+    uint8_t eof[2] = {0, 0};
+    if (sendOk && client.write(eof, 2) != 2) sendOk = false;
+    free(plain);
+    free(enc);
+    src.close();
+    if (!sendOk) {
+        client.stop();
+        return -1;
+    }
+
+    char resp[512];
+    size_t got = 0;
+    uint32_t idle = millis();
+    while (got + 1 < sizeof(resp) && (uint32_t)(millis() - idle) < 20000UL) {
+        if (client.available()) {
+            const int n = client.read((uint8_t*)resp + got, sizeof(resp) - 1 - got);
+            if (n > 0) {
+                got += (size_t)n;
+                idle = millis();
+            }
+        } else if (!client.connected()) {
+            break;
+        } else {
+            delay(2);
+        }
+        esp_task_wdt_reset();
+    }
+    client.stop();
+    resp[got] = '\0';
+    if (strstr(resp, "\"error\":\"in use\"")) return -2;
+    if (strstr(resp, "\"ok\":true")) return 1;
+    return 0;
 #endif
 }
