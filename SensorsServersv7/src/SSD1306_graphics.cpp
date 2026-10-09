@@ -3,29 +3,31 @@
 
 #include "SSD1306_graphics.hpp"
 #include "globals.hpp"
+#include "hardware_fault.hpp"
+#include "utility.hpp"
 #if defined(_USEBRYANT)
 #include "bryant_bus.hpp"
 #endif
 
 SSD1306AsciiWire oled;
 
-void initOled() {
+bool initOled() {
+  if (!isI2CDeviceReady(I2C_OLED)) {
+    SerialPrint("OLED not detected on I2C", true);
+    if (_I_AM_PERIPHERAL) hardwareFaultSet(HW_FAULT_OLED);
+    return false;
+  }
 
   #if RST_PIN >= 0
     oled.begin(_OLEDTYPE, I2C_OLED, RST_PIN);
-  #else // RST_PIN >= 0
+  #else
     oled.begin(_OLEDTYPE, I2C_OLED);
-  #endif // RST_PIN >= 0
-
-  #if RST_PIN >= 0
-    oled.begin(_OLEDTYPE, I2C_OLED, RST_PIN);
-  #else // RST_PIN >= 0
-    oled.begin(_OLEDTYPE, I2C_OLED);
-  #endif // RST_PIN >= 0
+  #endif
   oled.setFont(System5x7);
   oled.set1X();
   oled.clear();
   oled.setCursor(0,0);
+  return true;
 }
 
 void redrawOled() {

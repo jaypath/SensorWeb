@@ -268,6 +268,15 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead=false, bool uncalibrate
 // Type 200: nonzero limit = HIGH, zero = LOW. Swaps invalid MAX=0/MIN≠0. Returns true if swapped.
 bool normalizeHumanPresenceLimits(double& limitHigh, double& limitLow);
 void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag);
+// Monitored in-range ↔ out-of-range. Held until that sensor is marked sent.
+void markMonitoredLimitCross(const ArborysSnsType* S);
+bool monitoredLimitCrossPending(int16_t snsIndex);
+void clearMonitoredLimitCross(int16_t snsIndex);
+// Bit 7 limit cross. Pending until the sensor is marked sent. takeCriticalLimitSendNow() is one immediate send.
+void markCriticalLimitCross(const ArborysSnsType* S);
+bool criticalLimitCrossPending(const ArborysSnsType* S);
+void clearCriticalLimitCross(int16_t snsIndex);
+bool takeCriticalLimitSendNow();
 // Physical range for a reading. category (temperature, humidity, pressure, ...) wins when set.
 // Types with no feasible range return true. NaN and infinity are never plausible.
 bool sensorReadingIsPlausible(uint8_t snsType, double value, const char* category = nullptr);
@@ -280,6 +289,7 @@ void serviceInterruptSensors();
 #endif
 double peak_to_peak(int16_t pin, int ms = 50);
 void initHardwareSensors();
+bool hardwareInitFailedForI2cAddr(uint8_t addr);
 // Force one local-sensor pass at the end of setup. Registration stamps timeRead,
 // so the first loop would otherwise skip the poll and uplink the placeholder 0.
 // Returns how many sensors produced a usable sample.
@@ -288,6 +298,10 @@ int8_t readLocalSensorsAtBoot();
 // never read, NaN, infinity, or a network test that has not run.
 bool localSensorReadyToSend(const ArborysSnsType* S);
 uint8_t getPinType(int16_t pin, int8_t* correctedPin);
+// Serializes Wire when the TF-Luna focus task and the sensor poll share the bus.
+void i2cBusPrepare();
+void i2cBusLock();
+void i2cBusUnlock();
 int8_t readAllSensors(bool forceRead=false);
 float readAnalogVoltage(ArborysSnsType* P, byte nsamps);
 float readAnalogVoltage(int16_t pin, byte nsamps=1);

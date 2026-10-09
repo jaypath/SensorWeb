@@ -135,6 +135,53 @@ static bool setupTimeFromEspNowServerPing() {
   return false;
 }
 
+bool ensureLocationAndTimezoneSaved() {
+  if (!wifiReadyForNetwork()) return false;
+  const bool locationMissing = (Prefs.LATITUDE == 0.0 && Prefs.LONGITUDE == 0.0);
+  const bool tzMissing = !timezonePrefsValid();
+  if (!locationMissing && !tzMissing) return true;
+
+  static uint32_t s_nextAttemptMs = 0;
+  const uint32_t nowMs = millis();
+  if (s_nextAttemptMs != 0 && (int32_t)(nowMs - s_nextAttemptMs) < 0) return false;
+  s_nextAttemptMs = nowMs + 300000UL;
+
+  bool savePrefs = false;
+  if (locationMissing) {
+    #ifdef _USETFT
+    tftPrint("IP location... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+    #endif
+    const bool locOk = lookupCoordinatesFromPublicIp(TIMEZONE_BOOT_HTTP_TIMEOUT_MS);
+    if (locOk) savePrefs = true;
+    #ifdef _USETFT
+    tftPrint(locOk ? " OK." : " FAIL.", true, locOk ? TFT_GREEN : TFT_RED);
+    #endif
+  }
+
+  if (!timezonePrefsValid()) {
+    #ifdef _USETFT
+    tftPrint("Timezone lookup... ", false, TFT_WHITE, 2, 1, false, -1, -1);
+    #endif
+    const bool tzOk = getTimezoneInfo(TIMEZONE_BOOT_HTTP_TIMEOUT_MS);
+    applyLocalTimeFromPrefs();
+    if (tzOk) {
+      I.lastTimezoneRefresh = (time_t)utcNow();
+      savePrefs = true;
+    }
+    #ifdef _USETFT
+    tftPrint(tzOk ? " OK." : " FAIL.", true, tzOk ? TFT_GREEN : TFT_RED);
+    #endif
+  }
+
+  if (savePrefs) {
+    Prefs.isUpToDate = false;
+    BootSecure bootSecure;
+    const int8_t saved = bootSecure.setPrefs();
+    SerialPrint(saved > 0 ? "Saved location and timezone to Prefs" : "Location/timezone Prefs save returned " + String(saved), true, 5);
+  }
+  return (Prefs.LATITUDE != 0.0 || Prefs.LONGITUDE != 0.0) && timezonePrefsValid();
+}
+
 bool timezonePrefsValid() {
   if (Prefs.TimeZoneOffset > 50400) return false; // includes sentinel 90000 = unset
   if (Prefs.DST == 0) return true;
@@ -188,25 +235,15 @@ bool setupTime(void) {
     #endif
   }
 
-  #ifdef _USETFT
-  if (timezonePrefsValid()) {
+  if ((Prefs.LATITUDE != 0.0 || Prefs.LONGITUDE != 0.0) && timezonePrefsValid()) {
+    #ifdef _USETFT
     tftPrint("Timezone: using cached prefs.", true, TFT_WHITE, 2, 1, false, -1, -1);
-  } else {
-    tftPrint("Timezone lookup... ", false, TFT_WHITE, 2, 1, false, -1, -1);
-  }
-  #endif
-
-  if (timezonePrefsValid()) {
+    #endif
     DSTsetup();
     applyLocalTimeFromPrefs();
     if (I.lastTimezoneRefresh == 0) I.lastTimezoneRefresh = (time_t)utcNow();
   } else {
-    bool tzOk = getTimezoneInfo(TIMEZONE_BOOT_HTTP_TIMEOUT_MS);
-    applyLocalTimeFromPrefs();
-    if (tzOk) I.lastTimezoneRefresh = (time_t)utcNow();
-    #ifdef _USETFT
-    tftPrint(tzOk ? " OK." : " FAIL.", true, tzOk ? TFT_GREEN : TFT_RED);
-    #endif
+    ensureLocationAndTimezoneSaved();
   }
 
   I.isUpToDate = false;

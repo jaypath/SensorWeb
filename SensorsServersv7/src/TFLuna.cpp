@@ -4,11 +4,19 @@
 #include "globals.hpp"
 #include "Devices.hpp"
 #include "timesetup.hpp"
+#include "sensors.hpp"
 
 extern STRUCT_SNSHISTORY SensorHistory;
 
  TFLunaType LocalTF;
  TFLI2C tflI2C;
+
+// Written by the focus task, read by loop(). Same core, yielded between the two.
+static volatile bool s_tflunaFocus = false;
+
+bool TFLunaFocusActive() {
+  return s_tflunaFocus;
+}
 
 bool setupTFLuna() {
 
@@ -63,11 +71,25 @@ uint32_t checkTFLuna(int16_t snsindex) {
 
     //get sensor number of TFLUNA   if it is not found, return
   ArborysSnsType* P = Sensors.getSensorBySnsIndex(LocalTF.TFLUNASNS);
+  if (P == NULL || !P->IsSet) return -9999;
 
-  int16_t tempval;
-  if (tflI2C.getData(tempval, _USETFLUNA)) {
+  int16_t tempval = 0;
+  bool readOk = false;
+  {
+    // Wi-Fi is stopped while focused, so the bus can run at the TF-Luna's 400 kHz rate.
+    // Idle reads stay at 100 kHz, which is what the AHT and BMP use.
+    i2cBusLock();
+    if (s_tflunaFocus) Wire.setClock(400000L);
+    readOk = tflI2C.getData(tempval, _USETFLUNA);
+    if (s_tflunaFocus) Wire.setClock(100000L);
+    i2cBusUnlock();
+  }
+  if (readOk) {
     if (tempval <= 0)           P->snsValue = -3000; //negative reading, but not failed
     else           P->snsValue = tempval ; //in actual cm, apply offsets later
+    // Keeps the distance row fresh during a long approach. The 600s poll below
+    // still records history; it does not use this stamp as its only clock.
+    P->timeRead = (uint32_t)utcNow();
   } else {
     P->snsValue = -5000; //failed
     storeError("TFLuna read failed", ERROR_SENSOR_READ, true);
@@ -86,7 +108,7 @@ bool TFLunaUpdateMAX() {
   if (m<LocalTF.FASTMODEEXPIRES) {
     isfastmode = true;
   }
-  if (m>LocalTF.LAST_DISTANCE_TIME+LocalTF.REFRESH_INTERVAL) {
+  if (m >= LocalTF.LAST_DISTANCE_TIME + LocalTF.REFRESH_INTERVAL) {
     double distance_change=0;
     double actualdistance=0;
     ArborysSnsType* P = NULL;
@@ -177,6 +199,28 @@ bool DrawNow(uint32_t m) {
 
   LocalTF.LAST_DRAW = Matrix_Draw(LocalTF.INVERTED, (const char*) LocalTF.MSG);  
   return true;
+}
+
+static void tflunaFocusTask(void*) {
+  TickType_t wake = xTaskGetTickCount();
+  const TickType_t period = pdMS_TO_TICKS(LocalTF.REFRESH_INTERVAL ? LocalTF.REFRESH_INTERVAL : 33);
+  for (;;) {
+    s_tflunaFocus = TFLunaUpdateMAX();
+    vTaskDelayUntil(&wake, period);
+  }
+}
+
+void TFLunaStartFocusTask() {
+  static bool started = false;
+  if (started) return;
+  i2cBusPrepare();
+  // Above the Arduino loop (priority 1). Below the Wi-Fi task, which is stopped during focus.
+  if (xTaskCreatePinnedToCore(tflunaFocusTask, "tfluna", 8192, nullptr, 4, nullptr, 1) == pdPASS) {
+    started = true;
+    SerialPrint("TF-Luna focus task started", true);
+  } else {
+    storeError("TF-Luna focus task failed to start", ERROR_SENSOR_READ, true);
+  }
 }
 
     

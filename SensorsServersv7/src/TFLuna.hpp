@@ -24,7 +24,7 @@
     int32_t LAST_DISTANCE_TIME=0; //time of last distance measure in ms
     int32_t LAST_DISTANCE_CHANGE_TIME=0; //time of last distance change in ms
     uint8_t MIN_DIST_CHANGE = 5; //this is how many cm must have changed to register movement
-    uint16_t FASTMODE_INTERVAL = 7000; //in ms, time to stay in fast mode
+    uint16_t FASTMODE_INTERVAL = 10000; //ms of stable distance before Wi-Fi and normal loop work resume
     uint32_t FASTMODEEXPIRES = 0; //time when fast mode expires
     bool INVERTED = false; //sjhould  the screen be inverted now?
     uint32_t SCREENRATE = 500; //in ms
@@ -43,6 +43,10 @@ bool TFLunaFailed();
 uint32_t checkTFLuna(int16_t snsindex=-1);
 bool TFLunaUpdateMAX();
 bool DrawNow(uint32_t m=0);
+// True while distance is changing and for FASTMODE_INTERVAL ms after it settles.
+bool TFLunaFocusActive();
+// Samples and draws above the Arduino loop. Call once after sensors are initialized.
+void TFLunaStartFocusTask();
 
 extern Devices_Sensors Sensors;
 extern STRUCT_CORE I;

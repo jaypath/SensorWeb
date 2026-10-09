@@ -1,5 +1,6 @@
 #include "globals.hpp"
 #include "server.hpp"
+#include "hardware_fault.hpp"
 #include "Devices.hpp"
 #include "SDCard.hpp"
 #include "agg_links.hpp"
@@ -239,6 +240,11 @@ static bool isHttpUiBrowseMessage(const char* messageType) {
 
 static void syncWifiDownFlags(bool connected);
 
+// Set before esp_wifi_stop so the Wi-Fi task's disconnect event is not a failure.
+static volatile bool s_wifiFocusHold = false;
+static bool s_wifiStoppedForFocus = false;
+static bool s_wifiResumePending = false;
+
 //wifi event registration 
 void WiFiEvent(WiFiEvent_t event) {
   I.WiFiLastEvent = event;
@@ -260,11 +266,13 @@ void WiFiEvent(WiFiEvent_t event) {
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+      if (s_wifiFocusHold) break;
       logSystemEvent("STA lost IP (still may be associated)", EVENT_WIFI_DISCONNECTED);
       syncWifiDownFlags(false);
       syncDeviceIPFromWifi();
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      if (s_wifiFocusHold) break;
       logSystemEvent("STA disconnected from AP", EVENT_WIFI_DISCONNECTED);
       syncWifiDownFlags(false);
       syncDeviceIPFromWifi();
@@ -917,6 +925,7 @@ void syncDeviceIPFromWifi() {
 }
 
 static void syncWifiDownFlags(bool connected) {
+  if (s_wifiFocusHold) return;
   if (connected) {
     I.wifiDownSince = 0;
     I.wifiFailCount = 0;
@@ -1275,7 +1284,53 @@ void reconcileWifiStateAfterCoreLoad() {
   CheckWifiStatus(WIFI_CHECK_NORMAL);
 }
 
+void holdWifiForLocalFocus() {
+  if (s_wifiFocusHold) return;
+  if (softApRunning()) return;
+  const wifi_mode_t mode = WiFi.getMode();
+  s_wifiFocusHold = true;
+  __sync_synchronize();
+  I.wifiDownSince = 0;
+  I.wifiFailCount = 0;
+  s_staDownSinceMs = 0;
+  s_staDownRetryMs = 0;
+  if (mode == WIFI_MODE_NULL) return;
+  if (esp_wifi_stop() == ESP_OK) {
+    s_wifiStoppedForFocus = true;
+    SerialPrint("Garage focus: Wi-Fi paused for distance", true);
+  } else {
+    SerialPrint("Garage focus: Wi-Fi pause failed", true);
+  }
+}
+
+void releaseWifiFromLocalFocus() {
+  if (s_wifiFocusHold) {
+    s_wifiFocusHold = false;
+    I.wifiDownSince = 0;
+    I.wifiFailCount = 0;
+    s_staDownSinceMs = 0;
+    // A fresh reconnect is already in flight. Do not start a second join this pass.
+    s_staDownRetryMs = millis();
+    if (s_staDownRetryMs == 0) s_staDownRetryMs = 1;
+    if (s_wifiStoppedForFocus) {
+      s_wifiStoppedForFocus = false;
+      if (esp_wifi_start() == ESP_OK) {
+        esp_wifi_connect();
+        s_wifiResumePending = true;
+        SerialPrint("Garage focus ended: Wi-Fi resuming", true);
+      }
+    }
+  }
+  if (s_wifiResumePending && wifiReadyForNetwork()) {
+    s_wifiResumePending = false;
+#ifdef _USEUDP
+    connectUDP();
+#endif
+  }
+}
+
 int8_t CheckWifiStatus(WifiCheckMode mode) {
+  if (s_wifiFocusHold) return 0;
   const int8_t linkStatus = measureWifiLinkStatus();
   const bool connected = (linkStatus >= 1);
 
@@ -1780,11 +1835,8 @@ void enterAPStationMode() {
 
   SerialPrint("Init non-blocking AP Station Mode... ", false);
 
-  #ifdef _USELEDMATRIX
-  Matrix_Init();
-  Matrix_Draw(false, "WiFi?");
-  #endif
-
+  // Start the setup network before any matrix or sensor init. A missing MAX7219
+  // has no ACK, and blocking here would also skip BLE (it waits for the soft AP).
   connectSoftAP(&wifiID, &wifiPWD, &apIP);
   if (!softApRunning()) {
     SerialPrint("Failed to start soft AP", true);
@@ -3022,6 +3074,15 @@ void handleInitialSetup() {
   WEBHTML = "";
   serverTextHeader("Initial Setup");
   serverTextStreamBegin(200, true);
+
+  if (hardwareFaultMask() != 0) {
+    char failed[96];
+    hardwareFaultSummary(failed, sizeof(failed));
+    WEBHTML += "<div style=\"max-width:900px;margin:12px auto;padding:12px 16px;background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;border-radius:4px;font-weight:bold;\">";
+    WEBHTML += failed;
+    WEBHTML += " failed. The system will boot into error mode and will not send sensor data.</div>";
+    serverTextFlush(true);
+  }
   
   serverTextAppend(R"===(
 <style>
@@ -6903,6 +6964,54 @@ String getPublicIP(uint16_t timeoutMs) {
   return "";
 }
 
+static bool readIpLatLon(JsonDocument& doc, const char* latKey, const char* lonKey, double& lat, double& lon) {
+  if (doc["success"].is<bool>() && !doc["success"].as<bool>()) return false;
+  if (doc["status"].is<const char*>() && strcmp(doc["status"].as<const char*>(), "success") != 0) return false;
+  if (doc[latKey].isNull() || doc[lonKey].isNull()) return false;
+  lat = doc[latKey].as<double>();
+  lon = doc[lonKey].as<double>();
+  if (!isfinite(lat) || !isfinite(lon)) return false;
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
+  if (lat == 0.0 && lon == 0.0) return false;
+  return true;
+}
+
+static bool fetchIpLatLon(const char* url, const char* latKey, const char* lonKey, bool https, uint16_t timeoutMs, double& lat, double& lon) {
+  JsonDocument doc;
+  HTTPMessage M;
+  M.usePSRAM = false;
+  M.timeout = timeoutMs;
+  M.setUrl(url);
+  M.setMethod("GET");
+  M.setContentType("application/json");
+  M.responseDoc = &doc;
+  if (https) M.setCacert("bundle");
+  else M.allowInsecure = true;
+  if (!SendHTTPMessage(M)) return false;
+  return readIpLatLon(doc, latKey, lonKey, lat, lon);
+}
+
+bool lookupCoordinatesFromPublicIp(uint16_t timeoutMs) {
+  if (!wifiReadyForNetwork()) return false;
+  if (Prefs.LATITUDE != 0.0 || Prefs.LONGITUDE != 0.0) return true;
+
+  double lat = 0;
+  double lon = 0;
+  const bool found =
+      fetchIpLatLon("https://ipwho.is/", "latitude", "longitude", true, timeoutMs, lat, lon) ||
+      fetchIpLatLon("http://ip-api.com/json/?fields=status,lat,lon", "lat", "lon", false, timeoutMs, lat, lon);
+  if (!found) {
+    SerialPrint("IP location lookup failed", true);
+    return false;
+  }
+
+  Prefs.LATITUDE = lat;
+  Prefs.LONGITUDE = lon;
+  Prefs.isUpToDate = false;
+  SerialPrint("IP location: " + String(lat, 6) + ", " + String(lon, 6), true);
+  return true;
+}
+
 
 
 void handleWeather() {
@@ -8592,6 +8701,8 @@ static uint8_t s_jsonPingReplyViaDepth = 0;
 static uint8_t s_jsonPingReplyViaStack[4];
 static IPAddress s_jsonPingReplyUdpIpStack[4];
 static String s_lastIncomingHttpMsgType;
+static uint16_t s_snsAckWaitId = 0;
+static bool s_snsAckOk = false;
 
 static void pushJsonPingReplyContext(uint8_t via, IPAddress udpReplyIp = IPAddress(0, 0, 0, 0)) {
   if (s_jsonPingReplyViaDepth < (uint8_t)(sizeof(s_jsonPingReplyViaStack) / sizeof(s_jsonPingReplyViaStack[0]))) {
@@ -10164,7 +10275,7 @@ void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBuf
    return;
 }
 
-static String JSONbuildSensorMSGString(const int16_t* snsIndices, uint8_t count, bool forHTTP) {
+static String JSONbuildSensorMSGString(const int16_t* snsIndices, uint8_t count, bool forHTTP, bool ackReq, uint16_t ackId) {
   if (!snsIndices || count == 0) {
     return "";
   }
@@ -10175,16 +10286,21 @@ static String JSONbuildSensorMSGString(const int16_t* snsIndices, uint8_t count,
     return "";
   }
 
+  String ackPrefix = "";
+  if (ackReq) {
+    ackPrefix = "\"ackReq\":1,\"ackId\":" + String(ackId) + ",";
+  }
+
   String tempJSON;
   if (count == 1) {
     ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[0]);
     if (!S) {
       return "";
     }
-    tempJSON = "{\"msgType\":\"snsData\"," + JSONbuilder_device(device) + "," + JSONbuilder_sensorData(S) + "}";
+    tempJSON = "{\"msgType\":\"snsData\"," + ackPrefix + JSONbuilder_device(device) + "," + JSONbuilder_sensorData(S) + "}";
   } else {
     tempJSON.reserve(256 + (size_t)count * 96u);
-    tempJSON = "{\"msgType\":\"snsData\"," + JSONbuilder_device(device) + ",\"sensors\":[";
+    tempJSON = "{\"msgType\":\"snsData\"," + ackPrefix + JSONbuilder_device(device) + ",\"sensors\":[";
     bool first = true;
     for (uint8_t i = 0; i < count; ++i) {
       ArborysSnsType* S = Sensors.snsIndexToPointer(snsIndices[i]);
@@ -10206,17 +10322,17 @@ static String JSONbuildSensorMSGString(const int16_t* snsIndices, uint8_t count,
   return tempJSON;
 }
 
-static bool sensorMSGFitsBuffer(const int16_t* snsIndices, uint8_t count, uint16_t jsonBufferSize, bool forHTTP) {
-  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP);
+static bool sensorMSGFitsBuffer(const int16_t* snsIndices, uint8_t count, uint16_t jsonBufferSize, bool forHTTP, bool ackReq = false, uint16_t ackId = 0) {
+  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP, ackReq, ackId);
   return tempJSON.length() > 0 && tempJSON.length() < jsonBufferSize;
 }
 
-bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP) {
+bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, bool ackReq, uint16_t ackId) {
   if (!snsIndices || count == 0 || !jsonBuffer || jsonBufferSize == 0) {
     return false;
   }
 
-  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP);
+  String tempJSON = JSONbuildSensorMSGString(snsIndices, count, forHTTP, ackReq, ackId);
   if (tempJSON.isEmpty()) {
     SerialPrint("JSONbuilder_sensorMSG_list: buffer empty", true);
     storeError("JSONbuilder_sensorMSG_list: buffer empty", ERROR_JSON_PARSE, true);
@@ -10499,6 +10615,66 @@ static void processJSONMessage_errorLog(JsonObject root, String& responseMsg) {
 #endif
 }
 
+static void stripAckErrText(char* s, size_t cap) {
+  if (!s || cap == 0) return;
+  size_t j = 0;
+  for (size_t i = 0; s[i] != '\0' && j + 1 < cap; ++i) {
+    char c = s[i];
+    if (c == '"' || c == '\\' || c == '\n' || c == '\r') c = ' ';
+    s[j++] = c;
+  }
+  s[j] = '\0';
+}
+
+static uint16_t ackIdFromRawJson(const String& raw) {
+  int p = raw.indexOf("\"ackId\"");
+  if (p < 0) return 0;
+  p = raw.indexOf(':', p);
+  if (p < 0) return 0;
+  return (uint16_t)raw.substring(p + 1).toInt();
+}
+
+// Hub reply to snsData with ackReq. UDP goes back to the sender. HTTP/HTTPS is the POST body.
+// A non-hub stays silent. No reply means the hub did not hear the packet.
+static void replySnsDataAck(uint16_t ackId, bool ok, const char* err, String& responseMsg) {
+#if !_IS_SERVER_HUB
+  (void)ackId;
+  (void)ok;
+  (void)err;
+  (void)responseMsg;
+  return;
+#else
+  char errBuf[48];
+  errBuf[0] = '\0';
+  if (!ok && err) {
+    strncpy(errBuf, err, sizeof(errBuf) - 1);
+    errBuf[sizeof(errBuf) - 1] = '\0';
+    stripAckErrText(errBuf, sizeof(errBuf));
+  }
+  char buf[160];
+  if (ok) {
+    snprintf(buf, sizeof(buf), "{\"msgType\":\"ackSnsData\",\"ackId\":%u,\"ok\":1}", (unsigned)ackId);
+  } else {
+    snprintf(buf, sizeof(buf), "{\"msgType\":\"ackSnsData\",\"ackId\":%u,\"ok\":0,\"err\":\"%s\"}", (unsigned)ackId, errBuf);
+  }
+  if (s_jsonPingReplyVia == JSON_PING_REPLY_UDP) {
+    if (s_jsonPingReplyUdpIp != IPAddress(0, 0, 0, 0)) {
+      sendUDPMessage((uint8_t*)buf, s_jsonPingReplyUdpIp, (uint16_t)strlen(buf), "ackSnsData");
+    }
+    return;
+  }
+  if (isJsonInlineHttpReply()) responseMsg = buf;
+#endif
+}
+
+static void noteSnsDataAck(JsonObject root) {
+  if (s_snsAckWaitId == 0) return;
+  uint16_t id = (uint16_t)(root["ackId"] | 0);
+  if (id != s_snsAckWaitId) return;
+  if ((int)(root["ok"] | 0) == 0) return;
+  s_snsAckOk = true;
+}
+
 //json handlers for receiving data
 void processJSONMessage(String& postData, String& responseMsg) {
  //this is called when json data is received.
@@ -10512,6 +10688,9 @@ void processJSONMessage(String& postData, String& responseMsg) {
       SerialPrint("Error deserializing JSON: " + String(err.c_str()),true);
       storeError("Error deserializing JSON: " + String(err.c_str()), ERROR_JSON_PARSE, true);
       responseMsg = "Error deserializing JSON: " + String(err.c_str());
+      if (postData.indexOf("\"ackReq\"") >= 0) {
+        replySnsDataAck(ackIdFromRawJson(postData), false, responseMsg.c_str(), responseMsg);
+      }
       return;
     }
 
@@ -10525,9 +10704,16 @@ void processJSONMessage(String& postData, String& responseMsg) {
   s_lastIncomingHttpMsgType = msgType;
   JsonObject root = doc.as<JsonObject>();   
 
-  if (msgType == "snsData") {
-    //we have received sensor data
+  if (msgType == "ackSnsData") {
+    noteSnsDataAck(root);
+    responseMsg = "OK";
+  }
+  else if (msgType == "snsData") {
     processJSONMessage_sensorData(root, responseMsg);
+    if ((int)(root["ackReq"] | 0) != 0) {
+      uint16_t ackId = (uint16_t)(root["ackId"] | 0);
+      replySnsDataAck(ackId, responseMsg == "OK", responseMsg.c_str(), responseMsg);
+    }
   } 
   else if (msgType == "sendSensorDataNow") {
     //we have received a request to send a single sensor
@@ -11616,6 +11802,10 @@ bool checkThisSensorTime(ArborysSnsType* Si) {
   const bool monitored = bitRead(Si->Flags, 1);
   const bool critical = bitRead(Si->Flags, 7);
   const bool changed = bitRead(Si->Flags, 6) == 1;
+#if _HAS_LOCAL_SENSORS
+  // A critical limit cross does not wait for SendingInt, including interrupt rate limits.
+  if (critical && criticalLimitCrossPending(Si)) return true;
+#endif
 #if _USEINTERRUPT
   if (IS_INTERRUPT_SENSOR_TYPE(Si->snsType)) {
     // Unmonitored: bit 6 is only a bounds or expiry edge (activity does not latch it).
@@ -11687,6 +11877,10 @@ void wrapupSendData(ArborysSnsType* S) {
       if (!S) continue;
       if (S->deviceIndex != I.MY_DEVICE_INDEX) continue; //don't send others sensors
       bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
+#if _HAS_LOCAL_SENSORS
+      clearMonitoredLimitCross(i);
+      clearCriticalLimitCross(i);
+#endif
       S->timeLogged = utcNow();
       // Leave expired as-is. Clearing it here looks like an expired → fresh
       // edge and would send a critical sensor again on the next pass.
@@ -11694,6 +11888,13 @@ void wrapupSendData(ArborysSnsType* S) {
     return;
   }
   bitWrite(S->Flags,6,0); //even if there was no change in the flag status, I sent the value so this is the new baseline. Set bit 6 (change in flag) to zero
+#if _HAS_LOCAL_SENSORS
+  {
+    const int16_t sentIndex = Sensors.findSensor(S->deviceIndex, S->snsType, S->snsID);
+    clearMonitoredLimitCross(sentIndex);
+    clearCriticalLimitCross(sentIndex);
+  }
+#endif
   S->timeLogged = utcNow();
 }
 
@@ -11737,7 +11938,7 @@ int16_t sendHTTPJSON(IPAddress& ip, const char* jsonBuffer, const char* msgType,
   return -1000; //failed to send message
 }
 
-static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, uint16_t payloadLen, const char* msgType, uint16_t timeoutMs = 0) {
+static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, uint16_t payloadLen, const char* msgType, uint16_t timeoutMs = 0, String* replyOut = nullptr) {
   if (!payload || payloadLen == 0) return -1002;
   if (payloadLen > LMK_HTTP_MAX_PLAINTEXT) return -1005;
   if (!isValidLMKKey()) {
@@ -11788,6 +11989,17 @@ static int16_t sendHTTPEncryptedPayload(IPAddress& ip, const uint8_t* payload, u
 
   if (httpCode >= 200 && httpCode < 400) {
     registerHTTPSend(ip, msgType);
+    if (replyOut) {
+      *replyOut = "";
+      uint8_t* respEnc = (uint8_t*)malloc(512);
+      if (respEnc) {
+        size_t respLen = readHttpEncResponseBody(http, respEnc, 512, clientTimeoutMs);
+        if (respLen >= 32 && respLen <= 512) {
+          decryptHttpCipherToPlain(respEnc, (uint16_t)respLen, *replyOut);
+        }
+        free(respEnc);
+      }
+    }
     http.end();
     free(encBuf);
     return httpCode;
@@ -12374,9 +12586,9 @@ static void pauseBetweenSensorJsonMessages() {
 }
 
 // Prefix of list that fits in the JSON buffer. Sensor text length varies, so this builds the real string.
-static uint8_t countSensorsThatFitJson(const int16_t* list, uint8_t count, uint16_t jsonBufferSize) {
+static uint8_t countSensorsThatFitJson(const int16_t* list, uint8_t count, uint16_t jsonBufferSize, bool ackReq = false, uint16_t ackId = 0) {
   uint8_t n = 0;
-  while (n < count && sensorMSGFitsBuffer(list, (uint8_t)(n + 1), jsonBufferSize, false)) {
+  while (n < count && sensorMSGFitsBuffer(list, (uint8_t)(n + 1), jsonBufferSize, false, ackReq, ackId)) {
     n++;
   }
   return n;
@@ -12406,7 +12618,7 @@ static bool postSensorJsonToTargets(const char* jsonBuffer, bool forceSend, Arbo
 // oneDevice null: each known hub. Otherwise that device only.
 // Successful chunks are marked sent. A sensor that cannot fit alone is logged and skipped.
 static bool sendSensorJsonInFittingMessages(const int16_t* sendList, uint8_t sendCount, bool forceSend,
-    char* jsonBuffer, uint16_t jsonBufferSize, ArborysDevType* oneDevice) {
+    char* jsonBuffer, uint16_t jsonBufferSize, ArborysDevType* oneDevice, bool markSent = true) {
   if (!sendList || sendCount == 0 || !jsonBuffer || jsonBufferSize == 0) return false;
   uint8_t offset = 0;
   bool any = false;
@@ -12427,7 +12639,7 @@ static bool sendSensorJsonInFittingMessages(const int16_t* sendList, uint8_t sen
       continue;
     }
     if (postSensorJsonToTargets(jsonBuffer, forceSend, oneDevice)) {
-      wrapupSendDataList(sendList + offset, n);
+      if (markSent) wrapupSendDataList(sendList + offset, n);
       any = true;
     }
     sentOne = true;
@@ -12436,13 +12648,13 @@ static bool sendSensorJsonInFittingMessages(const int16_t* sendList, uint8_t sen
   return any;
 }
 
-static bool sendListedSensorsHttpToHubs(const int16_t* sendList, uint8_t sendCount, bool forceSend, char* jsonBuffer, uint16_t jsonBufferSize) {
-  return sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, jsonBufferSize, nullptr);
+static bool sendListedSensorsHttpToHubs(const int16_t* sendList, uint8_t sendCount, bool forceSend, char* jsonBuffer, uint16_t jsonBufferSize, bool markSent = true) {
+  return sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, jsonBufferSize, nullptr, markSent);
 }
 
 // ip 0.0.0.0 is the presence multicast. Chunks that fit the JSON buffer go out back to back.
 static bool sendSensorJsonViaUdp(const int16_t* sendList, uint8_t sendCount,
-    char* jsonBuffer, uint16_t jsonBufferSize, IPAddress ip) {
+    char* jsonBuffer, uint16_t jsonBufferSize, IPAddress ip, bool markSent = true) {
   if (!sendList || sendCount == 0 || !jsonBuffer || jsonBufferSize == 0) return false;
   uint8_t offset = 0;
   bool any = false;
@@ -12457,7 +12669,7 @@ static bool sendSensorJsonViaUdp(const int16_t* sendList, uint8_t sendCount,
       continue;
     }
     if (sendUDPMessage((uint8_t*)jsonBuffer, ip, (uint16_t)strlen(jsonBuffer), "snsData")) {
-      wrapupSendDataList(sendList + offset, n);
+      if (markSent) wrapupSendDataList(sendList + offset, n);
       any = true;
     }
     offset += n;
@@ -12645,8 +12857,163 @@ static uint8_t packSensorsForSend(int16_t* outIndices, uint8_t maxOut, bool forc
   return outCount;
 }
 
+#if _I_AM_PERIPHERAL && _HAS_LOCAL_SENSORS
+static bool sensorIsAckComponent(int16_t idx) {
+  ArborysSnsType* S = Sensors.snsIndexToPointer(idx);
+  if (!S) return false;
+  if (bitRead(S->Flags, 7)) return true;
+  return bitRead(S->Flags, 1) && monitoredLimitCrossPending(idx);
+}
+
+static bool peripheralSendNeedsAck(const int16_t* list, uint8_t count) {
+  if (!list) return false;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (sensorIsAckComponent(list[i])) return true;
+  }
+  return false;
+}
+
+static bool snsAckBodyOk(const String& reply, uint16_t ackId) {
+  StaticJsonDocument<192> doc;
+  if (deserializeJson(doc, reply) != DeserializationError::Ok) return false;
+  if (String(doc["msgType"] | "") != "ackSnsData") return false;
+  if ((uint16_t)(doc["ackId"] | 0) != ackId) return false;
+  return (int)(doc["ok"] | 0) != 0;
+}
+
+static uint16_t nextSnsAckId() {
+  static uint16_t s_next = 1;
+  uint16_t id = s_next++;
+  if (s_next == 0) s_next = 1;
+  return id;
+}
+
+static bool waitUdpSnsAck(uint16_t ackId) {
+  s_snsAckWaitId = ackId;
+  s_snsAckOk = false;
+  uint16_t waitMs = meshParams().ackTimeoutMs;
+  if (waitMs < 2000) waitMs = 2000;
+  const uint32_t t0 = millis();
+  while ((int32_t)(millis() - (t0 + waitMs)) < 0) {
+    receiveUDPMessage();
+    if (s_snsAckOk) {
+      s_snsAckWaitId = 0;
+      return true;
+    }
+    delay(20);
+    esp_task_wdt_reset();
+  }
+  s_snsAckWaitId = 0;
+  return false;
+}
+
+static bool httpsAckOneServer(IPAddress ip, const char* json, uint16_t ackId) {
+  if (!json || !isValidLMKKey()) return false;
+  String reply;
+  int16_t code = sendHTTPEncryptedPayload(ip, (const uint8_t*)json, (uint16_t)strlen(json), "snsDataAck", 4000, &reply);
+  if (code < 200 || code >= 400) return false;
+  return snsAckBodyOk(reply, ackId);
+}
+
+// After the normal send: multicast UDP snsData with ackReq. One hub ack is enough.
+// Otherwise HTTPS the same packet to each known server, and each must ack.
+static bool deliverCriticalSensorAck(const int16_t* sendList, uint8_t sendCount, char* jsonBuffer, uint16_t jsonBufferSize) {
+  int16_t ordered[NUMSENSORS];
+  uint8_t nOrd = 0;
+  for (uint8_t pass = 0; pass < 2; ++pass) {
+    for (uint8_t i = 0; i < sendCount; ++i) {
+      const bool crit = sensorIsAckComponent(sendList[i]);
+      if ((pass == 0 && crit) || (pass == 1 && !crit)) ordered[nOrd++] = sendList[i];
+    }
+  }
+
+  struct AckSlice { uint8_t off; uint8_t n; uint16_t ackId; };
+  AckSlice failed[8];
+  uint8_t nFail = 0;
+  bool udpOk = true;
+  uint8_t offset = 0;
+  while (offset < nOrd && nFail < 8) {
+    const uint16_t ackId = nextSnsAckId();
+    const uint8_t n = countSensorsThatFitJson(ordered + offset, (uint8_t)(nOrd - offset), jsonBufferSize, true, ackId);
+    if (n == 0) {
+      udpOk = false;
+      break;
+    }
+    bool hasCrit = false;
+    for (uint8_t i = 0; i < n; ++i) {
+      if (sensorIsAckComponent(ordered[offset + i])) hasCrit = true;
+    }
+    if (!hasCrit) break;
+    if (!JSONbuilder_sensorMSG_list(ordered + offset, n, jsonBuffer, jsonBufferSize, false, true, ackId)) {
+      udpOk = false;
+      break;
+    }
+    SerialPrint("SendData: UDP snsData ackId " + String(ackId), true);
+    const bool sent = sendUDPMessage((uint8_t*)jsonBuffer, IPAddress(0, 0, 0, 0), (uint16_t)strlen(jsonBuffer), "snsDataAck");
+    if (sent && waitUdpSnsAck(ackId)) {
+      wrapupSendDataList(ordered + offset, n);
+    } else {
+      if (nFail < 8) failed[nFail++] = AckSlice{offset, n, ackId};
+      udpOk = false;
+    }
+    offset += n;
+  }
+  if (udpOk) return true;
+
+  SerialPrint("SendData: UDP snsData ack missed; HTTPS to each server", true);
+  if (nFail == 0) return false;
+  bool anyServer = false;
+  bool allHttps = true;
+  for (int16_t di = 0; di < NUMDEVICES; ++di) {
+    ArborysDevType* d = Sensors.getDeviceByDevIndex(di);
+    if (!d || !d->IsSet || !IS_SERVER_DEVICE_TYPE(d->devType)) continue;
+    if (d->MAC == ESP.getEfuseMac()) continue;
+    if (d->IP == IPAddress(0, 0, 0, 0) || d->IP == WiFi.localIP()) continue;
+    anyServer = true;
+    for (uint8_t f = 0; f < nFail; ++f) {
+      esp_task_wdt_reset();
+      if (!JSONbuilder_sensorMSG_list(ordered + failed[f].off, failed[f].n, jsonBuffer, jsonBufferSize, false, true, failed[f].ackId)) {
+        allHttps = false;
+        continue;
+      }
+      SerialPrint("SendData: HTTPS snsData ack to " + String(d->devName), true);
+      if (!httpsAckOneServer(d->IP, jsonBuffer, failed[f].ackId)) allHttps = false;
+    }
+  }
+  if (anyServer && allHttps) {
+    for (uint8_t f = 0; f < nFail; ++f) {
+      wrapupSendDataList(ordered + failed[f].off, failed[f].n);
+    }
+  }
+  return anyServer && allHttps;
+}
+#endif
+
+static bool finishSensorSend(bool normalOk, bool holdWrap, bool haveWifi,
+    const int16_t* sendList, uint8_t sendCount, char* jsonBuffer) {
+#if _I_AM_PERIPHERAL && _HAS_LOCAL_SENSORS
+  if (holdWrap) {
+    bool acked = false;
+    if (haveWifi) {
+      acked = deliverCriticalSensorAck(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE);
+    }
+    if (acked && normalOk) wrapupSendDataList(sendList, sendCount);
+    else if (!acked) I.makeBroadcast = true;
+    return acked;
+  }
+#else
+  (void)holdWrap;
+  (void)haveWifi;
+  (void)sendList;
+  (void)sendCount;
+  (void)jsonBuffer;
+#endif
+  return normalOk;
+}
+
 bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool useUDP) {
   (void)useUDP;
+  if (hardwareFaultBlocksLocalSensors()) return false;
   if (snsIndex >= 0 && !forceSend && !isSensorSendTime(snsIndex)) {
     return false;
   }
@@ -12666,6 +13033,12 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
     return false;
   }
 
+#if _I_AM_PERIPHERAL && _HAS_LOCAL_SENSORS
+  const bool holdWrap = peripheralSendNeedsAck(sendList, sendCount);
+#else
+  const bool holdWrap = false;
+#endif
+  const bool markSent = !holdWrap;
   bool isGood = false;
 
   // Mesh ACK failed at boot: JSON over UDP until reboot. No mesh, and midnight does not undo this.
@@ -12678,7 +13051,7 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
       if (d->IP != IPAddress(0, 0, 0, 0)) dest = d->IP;
     }
     SerialPrint("SendData: UDP (ArborysMesh skipped until reboot)", true);
-    isGood = sendSensorJsonViaUdp(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, dest);
+    isGood = sendSensorJsonViaUdp(sendList, sendCount, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, dest, markSent);
     if (isGood) {
       if (sendToDeviceIndex >= 0) {
         ArborysDevType* d = Sensors.getDeviceByDevIndex(sendToDeviceIndex);
@@ -12688,10 +13061,10 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
         markAllServersDataSent();
 #endif
       }
-    } else {
+    } else if (!holdWrap) {
       I.makeBroadcast = true;
     }
-    return isGood;
+    return finishSensorSend(isGood, holdWrap, haveWifi, sendList, sendCount, jsonBuffer);
   }
 
   // Directed HTTP response to one device (data-request)
@@ -12704,15 +13077,15 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
       isGood = sendSensorDataMeshBundle(sendList, sendCount, haveWifi && expiredSendLadder() == 1);
       if (isGood) {
         d->dataSent = utcNow();
-        wrapupSendDataList(sendList, sendCount);
+        if (markSent) wrapupSendDataList(sendList, sendCount);
       }
     } else {
-      isGood = sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, d);
+      isGood = sendSensorJsonInFittingMessages(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, d, markSent);
     }
-    if (!isGood) {
+    if (!isGood && !holdWrap) {
       I.makeBroadcast = true;
     }
-    return isGood;
+    return finishSensorSend(isGood, holdWrap, haveWifi, sendList, sendCount, jsonBuffer);
   }
 
   // 0: mesh broadcast. 1: mesh + UDP broadcast. 2: mesh + HTTP to each hub.
@@ -12731,19 +13104,19 @@ bool SendData(int16_t snsIndex, bool forceSend, int16_t sendToDeviceIndex, bool 
 
   bool httpOk = false;
   if (ladder == 2 && haveWifi) {
-    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE);
+    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, markSent);
   } else if (!meshOk && haveWifi && ladder == 0) {
     // Radio send failed before the daily ladder has added a second path.
-    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE);
+    httpOk = sendListedSensorsHttpToHubs(sendList, sendCount, forceSend, jsonBuffer, SNSDATA_JSON_BUFFER_SIZE, markSent);
   }
 
   // Mesh already carried every sensor. HTTP marks only the chunks that were posted.
-  if (meshOk) {
+  if (meshOk && markSent) {
     wrapupSendDataList(sendList, sendCount);
-  } else if (!httpOk) {
+  } else if (!meshOk && !httpOk && !holdWrap) {
     I.makeBroadcast = true;
   }
-  return meshOk || httpOk;
+  return finishSensorSend(meshOk || httpOk, holdWrap, haveWifi, sendList, sendCount, jsonBuffer);
 }
 
 

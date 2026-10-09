@@ -1,6 +1,7 @@
 #include "device_roles.hpp"
 #if _HAS_LOCAL_SENSORS
 #include "globals.hpp"
+#include "hardware_fault.hpp"
 #include "sensors.hpp"
 #include <SensorEffectors.hpp>
 #include "interrupt_triggers.hpp"
@@ -204,6 +205,58 @@ bool sensorReadingIsPlausible(uint8_t snsType, double value, const char* categor
   return true;
 }
 
+static uint8_t s_limitCrossBits[(NUMSENSORS + 7) / 8];
+static uint8_t s_critLimitBits[(NUMSENSORS + 7) / 8];
+static bool s_critLimitSendNow = false;
+
+static int16_t indexOfLocalSensor(const ArborysSnsType* S) {
+  if (!S) return -1;
+  for (int16_t i = 0; i < NUMSENSORS; ++i) {
+    if (Sensors.snsIndexToPointer(i) == S) return i;
+  }
+  return -1;
+}
+
+void markMonitoredLimitCross(const ArborysSnsType* S) {
+  int16_t i = indexOfLocalSensor(S);
+  if (i < 0) return;
+  s_limitCrossBits[i / 8] |= (uint8_t)(1u << (i % 8));
+}
+
+bool monitoredLimitCrossPending(int16_t snsIndex) {
+  if (snsIndex < 0 || snsIndex >= NUMSENSORS) return false;
+  return (s_limitCrossBits[snsIndex / 8] & (uint8_t)(1u << (snsIndex % 8))) != 0;
+}
+
+void clearMonitoredLimitCross(int16_t snsIndex) {
+  if (snsIndex < 0 || snsIndex >= NUMSENSORS) return;
+  s_limitCrossBits[snsIndex / 8] &= (uint8_t)~(1u << (snsIndex % 8));
+}
+
+void markCriticalLimitCross(const ArborysSnsType* S) {
+  int16_t i = indexOfLocalSensor(S);
+  if (i < 0) return;
+  s_critLimitBits[i / 8] |= (uint8_t)(1u << (i % 8));
+  s_critLimitSendNow = true;
+}
+
+bool criticalLimitCrossPending(const ArborysSnsType* S) {
+  int16_t i = indexOfLocalSensor(S);
+  if (i < 0) return false;
+  return (s_critLimitBits[i / 8] & (uint8_t)(1u << (i % 8))) != 0;
+}
+
+void clearCriticalLimitCross(int16_t snsIndex) {
+  if (snsIndex < 0 || snsIndex >= NUMSENSORS) return;
+  s_critLimitBits[snsIndex / 8] &= (uint8_t)~(1u << (snsIndex % 8));
+}
+
+bool takeCriticalLimitSendNow() {
+  bool due = s_critLimitSendNow;
+  s_critLimitSendNow = false;
+  return due;
+}
+
 void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8_t lastflag) {
   if (!P) return;
 
@@ -248,8 +301,13 @@ void applyAlarmFlags(ArborysSnsType* P, double limitHigh, double limitLow, uint8
   }
 
   if (bitRead(lastflag, 0) != bitRead(P->Flags, 0)) {
-    // In range ↔ out of range. Critical (bit 7) sends that edge. Monitored does not.
-    if (bitRead(P->Flags, 7)) bitWrite(P->Flags, 6, 1);
+    // In range ↔ out of range. Critical (bit 7) sends on this read, not at SendingInt.
+    // Monitored waits for its normal interval, then the send must be acknowledged.
+    if (bitRead(P->Flags, 7)) {
+      bitWrite(P->Flags, 6, 1);
+      markCriticalLimitCross(P);
+    }
+    if (bitRead(P->Flags, 1)) markMonitoredLimitCross(P);
     SensorEffectors_onAlarmChange(P->snsType, P->snsID, P->snsValue, P->Flags, lastflag);
   }
 }
@@ -630,6 +688,7 @@ static bool readOneLocalSensorAtBoot(ArborysSnsType* sensor) {
 // registration value before any minute-boundary send. Unusable results become NaN
 // with no history entry, so hubs and ArborysNet never average a placeholder.
 int8_t readLocalSensorsAtBoot() {
+  if (hardwareFaultBlocksLocalSensors()) return 0;
   SerialPrint("Boot: reading local sensors", true);
   esp_task_wdt_reset();
   updateRSSI(true);
@@ -675,6 +734,7 @@ bool localSensorReadyToSend(const ArborysSnsType* S) {
 
 int8_t readAllSensors(bool forceRead) {
 //returns the number of sensors that were read successfully
+  if (hardwareFaultBlocksLocalSensors()) return 0;
   int8_t numGood = 0;
   for (int16_t i = 0; i < _SENSORNUM; i++) {
     ArborysSnsType* sensor = Sensors.getSensorBySnsIndex(SensorHistory.sensorIndex[i]);
@@ -760,6 +820,37 @@ static bool isI2cInitFailed(uint8_t addr) {
   return s_i2cInitFailed[addr & 0x7F];
 }
 
+bool hardwareInitFailedForI2cAddr(uint8_t addr) {
+  return isI2cInitFailed(addr);
+}
+
+#ifdef _USETFLUNA
+static SemaphoreHandle_t s_i2cMux = nullptr;
+#endif
+
+void i2cBusPrepare() {
+#ifdef _USETFLUNA
+  if (!s_i2cMux) s_i2cMux = xSemaphoreCreateMutex();
+#endif
+}
+
+void i2cBusLock() {
+#ifdef _USETFLUNA
+  if (s_i2cMux) xSemaphoreTake(s_i2cMux, portMAX_DELAY);
+#endif
+}
+
+void i2cBusUnlock() {
+#ifdef _USETFLUNA
+  if (s_i2cMux) xSemaphoreGive(s_i2cMux);
+#endif
+}
+
+struct I2cBusGuard {
+  I2cBusGuard() { i2cBusLock(); }
+  ~I2cBusGuard() { i2cBusUnlock(); }
+};
+
 static bool isI2cSensorPin(int16_t snsPin, uint8_t* outAddr) {
   int8_t corrected = -1;
   const uint8_t pt = getPinType(snsPin, &corrected);
@@ -789,9 +880,24 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
   //is it time to read?
   const uint32_t nowUtc = (uint32_t)utcNow();
+#ifdef _USETFLUNA
+  // The focus task refreshes timeRead on every sample. Gate the heavier history
+  // and alarm path on the prefs poll interval so that stamp does not suppress it.
+  if (P->snsType == 7) {
+    if (!forceRead) {
+      static uint32_t s_tflunaPollAt = 0;
+      const uint32_t poll = Prefs.SNS_INTERVAL_POLL[prefs_index];
+      const bool due = (poll > 0) && (s_tflunaPollAt == 0 || nowUtc < s_tflunaPollAt || nowUtc >= s_tflunaPollAt + poll);
+      if (!due) return 0;
+      s_tflunaPollAt = nowUtc;
+    }
+  } else
+#endif
+  {
   // Poll interval 0 = never auto-update (forceRead still allowed).
   if (forceRead == false && Prefs.SNS_INTERVAL_POLL[prefs_index] == 0) return 0;
   if (forceRead==false && !(P->timeRead==0 || P->timeRead>nowUtc || P->timeRead + Prefs.SNS_INTERVAL_POLL[prefs_index] < nowUtc || nowUtc - P->timeRead >60*60*24 )) return 0;
+  }
 
   bool turnOffPinAtEnd = false;
   int8_t correctedPin=-1;
@@ -962,6 +1068,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
 
     case 4: //AHT Temp
       {
+        I2cBusGuard i2cGuard;
         #ifdef _USEAHT
         //aht temperature
           val = aht.readTemperature();
@@ -1005,6 +1112,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       }
     case 5: //AHT RH
       {
+      I2cBusGuard i2cGuard;
       //aht humidity
         #ifdef _USEAHTADA
           //AHT
@@ -1101,6 +1209,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       }
     case 9: //BMP pres
       {
+        I2cBusGuard i2cGuard;
         #ifdef _USEBMP
          P->snsValue = bmp.readPressure()/100; //in hPa
          
@@ -1129,6 +1238,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       }
     case 10: //BMP temp
       {
+        I2cBusGuard i2cGuard;
         #ifdef _USEBMP
         P->snsValue = ( bmp.readTemperature()*9/5+32);
         const bool allowHot = prefs_index >= 0 && Prefs.SNS_LIMIT_MAX[prefs_index] > 125.0;
@@ -1142,6 +1252,7 @@ int8_t ReadData(struct ArborysSnsType *P, bool forceRead, bool uncalibrated) {
       }
     case 11: //BMP alt
       {
+        I2cBusGuard i2cGuard;
         #ifdef _USEBMP
          P->snsValue = (bmp.readAltitude(1013.25)); //meters
          if (isnan(P->snsValue)) {
@@ -1676,6 +1787,11 @@ void read_BME680() {
  * @brief Initialize hardware sensors (BME, BMP, DHT, etc.)
  */
 void initHardwareSensors() {
+#ifdef _USEI2C
+  // Bound a missing device before the probe loops. AHTxx::begin() later sets this to 1 ms.
+  Wire.setTimeout(50);
+  Wire.setTimeOut(50);
+#endif
   #ifdef _USESSD1306
     oled.clear();
     oled.setCursor(0,0);
@@ -1761,9 +1877,10 @@ void initHardwareSensors() {
   byte retry = 0;
   #ifdef _USEADS1115
     retry = 0;
-    while (!isI2CDeviceReady(_USEADS1115) && retry < 100)  {
+    while (!isI2CDeviceReady(_USEADS1115) && retry < 5)  {
       SerialPrint("ADS1115 not ready or connected. Retry number " + String(retry),true);
-      delay(100);
+      esp_task_wdt_reset();
+      delay(20);
       retry++;
     }
     retry = 0;
@@ -1792,15 +1909,21 @@ void initHardwareSensors() {
     #else
       const byte ahtAddr = 0x38;
     #endif
-    while (!isI2CDeviceReady(ahtAddr) && retry < 100) {
+    while (!isI2CDeviceReady(ahtAddr) && retry < 5) {
       SerialPrint("AHT not ready or connected. Retry number " + String(retry),true);
+      esp_task_wdt_reset();
       retry++;
     }
+    if (!isI2CDeviceReady(ahtAddr)) {
+      SerialPrint("AHT not detected (will report hardware fault)", true);
+      storeError("AHT not detected", ERROR_SENSOR_READ, true);
+      setI2cInitFailed(ahtAddr, true);
+    } else {
     retry = 0;
 
-    while (aht.begin() != true && retry < 10) {
-      
+    while (aht.begin() != true && retry < 3) {
       SerialPrint("AHT not connected. Retry number " + String(retry),true);
+      esp_task_wdt_reset();
 
       #ifdef _USESSD1306  
         oled.clear();
@@ -1809,13 +1932,14 @@ void initHardwareSensors() {
       #endif
       retry++;
     }
-    if (retry >= 10) {
-      SerialPrint("AHT failed to connect after 10 attempts (will report -999 on read)",true);
-      storeError("AHT failed to connect after 10 attempts", ERROR_SENSOR_READ, true);
+    if (retry >= 3) {
+      SerialPrint("AHT failed to connect after 3 attempts (will report -999 on read)",true);
+      storeError("AHT failed to connect after 3 attempts", ERROR_SENSOR_READ, true);
       setI2cInitFailed(ahtAddr, true);
     } else {
       SerialPrint("AHT connected after " + String(retry) + " attempts",true);
       setI2cInitFailed(ahtAddr, false);
+    }
     }
   #endif
 
@@ -1830,8 +1954,9 @@ void initHardwareSensors() {
     else if (isI2CDeviceReady(0x77)) BMPaddress = 0x77;
     else BMPaddress = _USEBMP;
 
-    while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
+    while (!isI2CDeviceReady(BMPaddress) && retry < 5) {
       SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
+      esp_task_wdt_reset();
       retry++;
     }
 
@@ -1841,8 +1966,9 @@ void initHardwareSensors() {
       else BMPaddress = 0x76;
       SerialPrint(" " + String(BMPaddress), true);
       retry = 0;
-      while (!isI2CDeviceReady(BMPaddress) && retry < 50) {
+      while (!isI2CDeviceReady(BMPaddress) && retry < 5) {
         SerialPrint("BMP not ready at address " + String(BMPaddress) + ". Retry number " + String(retry),true);
+        esp_task_wdt_reset();
         retry++;
       }
       if (!isI2CDeviceReady(BMPaddress)) {
@@ -1859,7 +1985,8 @@ void initHardwareSensors() {
     retry = 0;
 
     if (isBMPgood) {
-      while (bmp.begin(BMPaddress) != true && retry < 20) {
+      while (bmp.begin(BMPaddress) != true && retry < 3) {
+        esp_task_wdt_reset();
         SerialPrint("BMP failed to connect at " + String(BMPaddress) + ".\nRetry number " + String(retry) + "\n",true);
 
         #ifdef _USESSD1306  
@@ -1870,9 +1997,9 @@ void initHardwareSensors() {
 
         retry++;
       }
-      if (retry >= 20) {
-        SerialPrint("BMP failed to connect after 20 attempts (will report -999 on read)",true);
-        storeError("BMP failed to connect after 20 attempts", ERROR_SENSOR_READ, true);
+      if (retry >= 3) {
+        SerialPrint("BMP failed to connect after 3 attempts (will report -999 on read)",true);
+        storeError("BMP failed to connect after 3 attempts", ERROR_SENSOR_READ, true);
         setI2cInitFailed(BMPaddress, true);
         setI2cInitFailed(0x76, true);
         setI2cInitFailed(0x77, true);
@@ -1901,8 +2028,9 @@ void initHardwareSensors() {
     else if (isI2CDeviceReady(0x77)) BMEaddress = 0x77;
     else BMEaddress = 0x76;
 
-    while (!isI2CDeviceReady(BMEaddress) && retry < 50) {
+    while (!isI2CDeviceReady(BMEaddress) && retry < 5) {
       SerialPrint("BME not ready at address " + String(BMEaddress) + ". Retry number " + String(retry),true);
+      esp_task_wdt_reset();
       retry++;
     }
     if (!isI2CDeviceReady(BMEaddress)) {
@@ -1910,14 +2038,23 @@ void initHardwareSensors() {
       SerialPrint("BME not at " + String(BMEaddress) + ", trying " + String(alt), true);
       BMEaddress = alt;
       retry = 0;
-      while (!isI2CDeviceReady(BMEaddress) && retry < 50) {
+      while (!isI2CDeviceReady(BMEaddress) && retry < 5) {
         SerialPrint("BME not ready at address " + String(BMEaddress) + ". Retry number " + String(retry),true);
+        esp_task_wdt_reset();
         retry++;
       }
     }
 
     retry = 0;
-    while (!bme.begin(BMEaddress) && retry < 20) {
+    if (!isI2CDeviceReady(BMEaddress)) {
+      SerialPrint("BME not detected at known addresses", true);
+      storeError("BME not detected at known addresses", ERROR_SENSOR_READ, true);
+      setI2cInitFailed(0x76, true);
+      setI2cInitFailed(0x77, true);
+      retry = 3;
+    }
+    while (!bme.begin(BMEaddress) && retry < 3) {
+      esp_task_wdt_reset();
       #ifdef _USESSD1306
         oled.clear();
         oled.setCursor(0,0);
@@ -1927,9 +2064,9 @@ void initHardwareSensors() {
       #endif
       retry++;
     }
-    if (retry >= 20) {
-      SerialPrint("BME failed to connect after 20 attempts (will report -999 on read)", true);
-      storeError("BME failed to connect after 20 attempts", ERROR_SENSOR_READ, true);
+    if (retry >= 3) {
+      SerialPrint("BME failed to connect after 3 attempts (will report -999 on read)", true);
+      storeError("BME failed to connect after 3 attempts", ERROR_SENSOR_READ, true);
       setI2cInitFailed(BMEaddress, true);
       setI2cInitFailed(0x76, true);
       setI2cInitFailed(0x77, true);
@@ -1983,6 +2120,8 @@ void initHardwareSensors() {
       }
     }
   }
+
+  auditLocalHardwareInit();
 }
 
 

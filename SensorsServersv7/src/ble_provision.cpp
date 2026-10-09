@@ -13,9 +13,17 @@
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_ble.h"
 
-#if !defined(CONFIG_NIMBLE_ENABLED)
+#if !defined(CONFIG_BT_NIMBLE_ENABLED) && !defined(CONFIG_NIMBLE_ENABLED)
 #error "_USE_BLE_PROV requires the NimBLE host; classic ESP32 envs need custom_sdkconfig = ${nimble_esp32.custom_sdkconfig}"
 #endif
+
+// Arduino releases all Bluetooth RAM at startup when btInUse() is false.
+// The strong copy lives in esp32-hal-bt.c, which this image does not link,
+// so the weak copy in esp32-hal-misc.c wins and NimBLE init returns
+// ESP_ERR_INVALID_STATE (259).
+extern "C" bool btInUse() {
+  return true;
+}
 
 namespace {
 
@@ -28,6 +36,7 @@ static char s_pendingSsid[33] = {0};
 static char s_pendingPass[65] = {0};
 static char s_serviceName[32] = {0};
 static char s_pop[32] = {0};
+static uint32_t s_nextStartMs = 0;
 
 static void onProvEvent(arduino_event_t* sys_event);
 
@@ -91,6 +100,7 @@ static bool ensureManager() {
 static void startAdvertising() {
   if (s_advertising) return;
   if (!softApRunning()) return;
+  if ((int32_t)(millis() - s_nextStartMs) < 0) return;
   if (!ensureManager()) return;
 
   buildPopAndName();
@@ -121,6 +131,9 @@ static void startAdvertising() {
   }
   if (err != ESP_OK) {
     SerialPrint("BLE prov: start failed (" + String((int)err) + "); will retry", true);
+    // A failed start stops the soft AP. Put it back, and don't spin the radio.
+    s_nextStartMs = millis() + 5000;
+    restoreSoftApIfDown();
     return;
   }
 

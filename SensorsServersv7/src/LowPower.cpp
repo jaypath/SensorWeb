@@ -2,6 +2,7 @@
 #include "LowPower.hpp"
 #include "firmwareUpdate.hpp"
 #include "server.hpp"
+#include "hardware_fault.hpp"
 #include "AddESPNOW.hpp"
 #include "sensors.hpp"
 #include <esp_task_wdt.h>
@@ -46,6 +47,10 @@ static void LOWPOWER_doSensorCycle() {
     if (!wifiReadyForNetwork()) {
         SerialPrint("LP: WiFi not ready — skip sensors", true);
         storeError("Low power wake skipped sensor read: WiFi not ready", ERROR_SENSOR_READ, true);
+        return;
+    }
+    if (hardwareFaultBlocksLocalSensors()) {
+        hardwareFaultAnnounceToHubs(true);
         return;
     }
     // Same boot pass as setup: send only sensors that returned a usable sample.

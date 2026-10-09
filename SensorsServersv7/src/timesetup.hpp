@@ -22,6 +22,9 @@ static constexpr uint16_t TIMEZONE_REFRESH_HTTP_TIMEOUT_MS = 10000;
 static constexpr uint32_t TIMEZONE_REFRESH_INTERVAL_SEC = 3600;
 
 bool timezonePrefsValid();
+// When Wi-Fi is up and coordinates or DST rules are missing, look up lat/lon from the
+// public IP, then DST from those coordinates, and write Prefs to NVS.
+bool ensureLocationAndTimezoneSaved();
 bool getTimezoneInfo(uint16_t timeoutMs = TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
 bool refreshTimezoneFromNetwork(uint16_t timeoutMs = TIMEZONE_REFRESH_HTTP_TIMEOUT_MS);
 bool updateTime();

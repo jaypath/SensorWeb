@@ -16,7 +16,7 @@ extern SSD1306AsciiWire oled;
 
 void redrawOled();
 void invertOled();
-void initOled();
+bool initOled();
 
 
 

@@ -200,6 +200,10 @@ enum WifiCheckMode : uint8_t {
 
 int8_t measureWifiLinkStatus();
 int8_t CheckWifiStatus(WifiCheckMode mode = WIFI_CHECK_NORMAL);
+// Stop the Wi-Fi driver while a local high-rate sensor owns the CPU. Not a link failure.
+void holdWifiForLocalFocus();
+// Start the driver again. Safe to call every loop; it finishes UDP rebind once the IP is back.
+void releaseWifiFromLocalFocus();
 // Single gate for HTTP/LAN/internet traffic (STA usable: non-zero IP + gateway).
 bool wifiReadyForNetwork();
 bool softApRunning();
@@ -234,6 +238,8 @@ void connectSoftAP(String* wifiID, String* wifiPWD, IPAddress* apIP);
 String WiFiEventtoString(WiFiEvent_t event);
 String urlEncode(const String& str);
 String getPublicIP(uint16_t timeoutMs = 10000);
+// Fills Prefs.LATITUDE/LONGITUDE from the public IP when both are still 0. Does not write NVS.
+bool lookupCoordinatesFromPublicIp(uint16_t timeoutMs = 10000);
 
 bool SendHTTPMessage(HTTPMessage& M);
 // cacert: SD path (e.g. "/Certificates/NOAA.crt") or "" / "*" / "bundle" to use embedded CA bundle (requires sdkconfig.defaults)
@@ -399,7 +405,7 @@ void JSONbuilder_pingMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP
 void JSONbuilder_DataRequestMSG(char* jsonBuffer, uint16_t jsonBufferSize, bool viaHTTP, int16_t snsIndex, bool expiredRequest = false);
 void JSONbuilder_sensorMSG(ArborysSnsType* S, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
 void JSONbuilder_sensorMSG_all(char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
-bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP);
+bool JSONbuilder_sensorMSG_list(const int16_t* snsIndices, uint8_t count, char* jsonBuffer, uint16_t jsonBufferSize, bool forHTTP, bool ackReq = false, uint16_t ackId = 0);
 void wrapupSendDataList(const int16_t* snsIndices, uint8_t count);
 String JSONbuilder_device(ArborysDevType* device);
 String JSONbuilder_sensorObject(ArborysSnsType* S);

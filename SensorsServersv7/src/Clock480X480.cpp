@@ -4,6 +4,7 @@
 #include "Clock480X480.hpp"
 #include "globals.hpp"
 #include "utility.hpp"
+#include "hardware_fault.hpp"
 
 LGFX tft;
 
@@ -60,14 +61,13 @@ void initClock480X480Graphics() {
     tft.printf("SD Card mounting...");
     
     if(!SD.begin(42, SPI, 4000000)){ 
-
       tft.setTextColor(TFT_RED);
-      tft.println("SD Mount Failed. Halted!");
-      while(true);
+      tft.println("SD Mount Failed.");
+      hardwareFaultSet(HW_FAULT_SPI_SD);
+      storeError("Clock SD mount failed; hardware fault mode", ERROR_SD_FILEWRITE, true);
       #ifdef _DEBUG
         Serial.println("SD mount failed... ");
       #endif
-  
     } 
     else {
       #ifdef _DEBUG

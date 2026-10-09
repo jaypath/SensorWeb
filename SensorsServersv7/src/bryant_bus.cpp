@@ -243,6 +243,7 @@ static void consume() {
 }
 
 void bryantBusBegin() {
+  Serial1.setRxBufferSize(2048);
   Serial1.begin(BRYANT_BAUD, SERIAL_8N1, BRYANT_UART_RX, -1);
   SerialPrint("Bryant bus listen-only " + String(BRYANT_BAUD) + " RX " + String(BRYANT_UART_RX), true);
 }

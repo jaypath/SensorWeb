@@ -1,5 +1,6 @@
 #include "globals.hpp"
 #include "utility.hpp"
+#include "hardware_fault.hpp"
 #include "agg_links.hpp"
 #include "BootSecure.hpp"
 #include "ble_provision.hpp"
@@ -175,6 +176,8 @@ void systemHousekeeping(bool fullHousekeeping) {
 
     if (isTimeValid(I.lastResetTime)==false) I.lastResetTime = utcNow(); //if lastResetTime is not valid, set it to the current time
 
+    ensureLocationAndTimezoneSaved();
+
     if (wifiReadyForNetwork() && I.UTCTime >= TIMEZERO) {
       if (I.lastTimezoneRefresh == 0
           || ((uint32_t)utcNow() >= (uint32_t)I.lastTimezoneRefresh
@@ -341,7 +344,7 @@ bool initSystem() {
   #endif
 
   #if defined(_USESDCARD) && !defined(_ISCLOCK480X480)
-  if (initSDCard() == 0) return false;
+  if (initSDCard() == 0 && !_I_AM_PERIPHERAL) return false;
   #endif
 
   SerialPrint("Check core data ...", true);
@@ -600,8 +603,15 @@ bool initSystem() {
 
 bool isI2CDeviceReady(byte address) {
   #ifdef _USEI2C
+  #ifdef _USETFLUNA
+  i2cBusLock();
+  #endif
   Wire.beginTransmission(address);
-  return Wire.endTransmission() == 0;
+  const bool ready = Wire.endTransmission() == 0;
+  #ifdef _USETFLUNA
+  i2cBusUnlock();
+  #endif
+  return ready;
   #endif
   return false;
 }
@@ -614,9 +624,12 @@ int8_t initSDCard() {
   #endif
   if (!SD.begin(41)) {
       displaySetupProgress(false);
-      
       SerialPrint("SD mount failed... ",true);
-      
+      if (_I_AM_PERIPHERAL) {
+        hardwareFaultSet(HW_FAULT_SPI_SD);
+        storeError("SD mount failed; hardware fault mode", ERROR_SD_FILEWRITE, true);
+        return 0;
+      }
       delay(5000);
       I.resetInfo = RESET_SD;
       I.lastResetTime = utcNow();

@@ -16,6 +16,7 @@
 
 #include "globals.hpp"
 #include "utility.hpp"
+#include "hardware_fault.hpp"
 #include "firmwareUpdate.hpp"
 #if _HAS_LOCAL_SENSORS
 #include "interrupt_triggers.hpp"
@@ -462,8 +463,18 @@ void setup() {
 #endif
 
 #if _HAS_LOCAL_SENSORS && !defined(_USELOWPOWER)
-  // After pin setup. The first loop can send on a minute boundary before its own poll.
-  readLocalSensorsAtBoot();
+  if (!hardwareFaultBlocksLocalSensors()) {
+    readLocalSensorsAtBoot();
+  } else {
+    SerialPrint("Hardware fault mode: skipping boot sensor read", true);
+    hardwareFaultAnnounceToHubs(true);
+  }
+#endif
+
+#ifdef _USETFLUNA
+  if (!hardwareFaultBlocksLocalSensors()) {
+    TFLunaStartFocusTask();
+  }
 #endif
     
 }
@@ -477,6 +488,20 @@ void loop() {
     #ifndef _USELOWPOWER
     if (serviceArduinoOtaFocusMode()) return;
     #endif
+
+    if (serviceHardwareFaultMode()) return;
+
+#ifdef _USETFLUNA
+    // The focus task owns ranging and the matrix. While distance is changing, and for
+    // 10s after it settles, leave the radio off so it cannot preempt that work.
+    if (TFLunaFocusActive() && !softApRunning()) {
+      esp_task_wdt_reset();
+      holdWifiForLocalFocus();
+      esp_task_wdt_reset();
+      return;
+    }
+    releaseWifiFromLocalFocus();
+#endif
 
     systemHousekeeping();
 
@@ -497,16 +522,6 @@ void loop() {
     esp_task_wdt_reset();
     supabaseServiceCloudSync(false);
     esp_task_wdt_reset();
-    #endif
-
-    #ifdef _USETFLUNA    
-//    note that a tfluna device will operate even without wifi, but it will not be able to send/update data other than distance
-    
-    if (TFLunaUpdateMAX()) {
-        server.handleClient();
-        ArduinoOTA.handle();
-        return; //if tfluna is reading, then skip everything else        
-    }
     #endif
 
     #ifdef _ISCLOCK480X480
@@ -719,6 +734,8 @@ void loop() {
 
         #if _HAS_LOCAL_SENSORS
             readAllSensors(false);
+            // Critical (bit 7) limit cross: send on this second, not at the minute slot.
+            if (takeCriticalLimitSendNow()) sendAllSensors(false, -1, true);
         #endif
 
         #if defined(_USESSD1306) && defined(_USEBRYANT)
